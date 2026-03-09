@@ -120,13 +120,45 @@ cargo install zeroclaw
 zeroclaw gateway
 
 # Open the dashboard URL shown in startup logs
-# (default: http://127.0.0.1:3000/)
+# (default: http://127.0.0.1:42617/)
 
 # Or chat directly
 zeroclaw chat "Hello!"
 ```
 
 For detailed setup options, see [docs/one-click-bootstrap.md](docs/one-click-bootstrap.md).
+
+### Power Local Profile
+
+`dev/config.power.toml` is the high-power local engineering/operator profile. It keeps ZeroClaw in supervised mode, auto-approves normal coding and host-ops tools, enables browser/HTTP/web search/delegation/workspaces/agent IPC, allows `apt install` and full Docker control, and preserves audit logging plus estop. Filesystem access is intentionally broad inside your home directory and the dev data root, while more-specific secret-path denies still block `~/.ssh`, `~/.gnupg`, `~/.aws`, and `~/.config`.
+
+It still hard-blocks kernel, driver, firmware, initramfs, bootloader, raw disk, filesystem-wipe, and privileged-container paths. That includes commands such as `modprobe`, `update-initramfs`, `grub-install`, `dd`, `mkfs*`, and Docker flags like `--privileged`, `--pid host`, `--ipc host`, unrestricted `--device`, and read-write mounts of `/`.
+
+Host launch:
+
+```bash
+mkdir -p ~/.zeroclaw-power
+cp dev/config.power.toml ~/.zeroclaw-power/config.toml
+sed -i 's#http://host.docker.internal:11434#http://127.0.0.1:11434#' ~/.zeroclaw-power/config.toml
+zeroclaw --config-dir ~/.zeroclaw-power gateway
+```
+
+Use the host launch path when you want real host access for commands like
+`lsblk`, `lsusb`, `nvidia-smi`, Docker daemon control, or direct work in your
+local project directories. The dev-container profile remains container-scoped.
+
+Web UI:
+
+```text
+http://127.0.0.1:42617/
+```
+
+Dev container bootstrap:
+
+```bash
+rm -f target/.zeroclaw/config.toml
+ZEROCLAW_DEV_PROFILE=power ./dev/cli.sh up
+```
 
 ### Installation Docs (Canonical Source)
 
@@ -201,3 +233,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [CLA.md](CLA.md). Implement a trait, 
     </picture>
   </a>
 </p>
+# LlamaFarm
