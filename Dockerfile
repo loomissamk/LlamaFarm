@@ -89,6 +89,7 @@ FROM debian:trixie-slim@sha256:f6e2cfac5cf956ea044b4bd75e6397b4372ad88fe00908045
 
 # Install essential runtime dependencies only (use docker-compose.override.yml for dev tools)
 RUN apt-get update && apt-get install -y \
+    bash \
     ca-certificates \
     curl \
     && rm -rf /var/lib/apt/lists/*
@@ -104,9 +105,8 @@ RUN chown 65534:65534 /zeroclaw-data/.zeroclaw/config.toml
 # Use consistent workspace path
 ENV ZEROCLAW_WORKSPACE=/zeroclaw-data/workspace
 ENV HOME=/zeroclaw-data
-# Defaults for local dev (Ollama) - matches config.template.toml
-ENV PROVIDER="ollama"
-ENV ZEROCLAW_MODEL="llama3.2"
+# Provider/model selection comes from the mounted config so local stacks do not
+# silently drift away from the chosen Ollama model.
 ENV ZEROCLAW_GATEWAY_PORT=42617
 
 # Note: API_KEY is intentionally NOT set here to avoid confusion.

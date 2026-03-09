@@ -25,7 +25,8 @@ Run all commands from the repository root using the helper script:
 ./dev/cli.sh up
 ```
 
-Builds the agent from source and starts both containers.
+Builds the agent from source and starts the local stack with the power profile by
+default, including the Chromium WebDriver sidecar for the `browser` tool.
 
 ### 2. Enter Agent Container (`zeroclaw-dev`)
 
@@ -72,7 +73,8 @@ The local `playground/` directory (in repo root) is mounted as the shared worksp
 
 Files created by the agent are visible to the sandbox user, and vice versa.
 
-The agent configuration lives in `target/.zeroclaw` (mounted to `/zeroclaw-data/.zeroclaw`), so settings persist across container rebuilds.
+The agent configuration lives in `.dev-state/.zeroclaw` (mounted to
+`/zeroclaw-data/.zeroclaw`), so settings persist across container rebuilds.
 
 ### 6. Cleanup
 
@@ -82,7 +84,9 @@ Stop containers and remove volumes and generated config:
 ./dev/cli.sh clean
 ```
 
-**Note:** This removes `target/.zeroclaw` (config/DB) but leaves the `playground/` directory intact. To fully wipe everything, manually delete `playground/`.
+**Note:** This removes `.dev-state/.zeroclaw` (config/DB) but leaves the
+`playground/` directory intact. To fully wipe everything, manually delete
+`playground/`.
 
 ## WASM Security Profiles
 
@@ -103,7 +107,7 @@ Recommended path:
 Example apply flow:
 
 ```bash
-cp dev/config.wasm.staging.toml target/.zeroclaw/config.toml
+cp dev/config.wasm.staging.toml .dev-state/.zeroclaw/config.toml
 ```
 
 Example SHA-256 pin generation:
@@ -119,6 +123,25 @@ Then copy each digest into:
 calc = "<64-char sha256>"
 formatter = "<64-char sha256>"
 ```
+
+## Power Local Profile
+
+Use `dev/config.power.toml` when you want the dev stack to behave like a strong local engineering/operator agent while keeping hard blocks on kernel, firmware, bootloader, raw-disk, and privileged-container actions. The profile now allows broad home-directory access plus the dev data root, but still denies secret subdirectories and anti-brick system paths.
+
+For real host access to `lsblk`, `lsusb`, `nvidia-smi`, the local Docker
+daemon, and your Pop!_OS project directories, launch ZeroClaw directly on the
+host with `dev/config.power.toml` instead of using the containerized dev stack.
+
+Fresh bootstrap:
+
+```bash
+rm -f .dev-state/.zeroclaw/config.toml
+./dev/cli.sh up
+```
+
+This now uses the power profile by default. To go back, remove
+`.dev-state/.zeroclaw/config.toml` and start again with
+`LLAMAFARM_DEV_PROFILE=default ./dev/cli.sh up`.
 
 ## Local CI/CD (Docker-Only)
 
