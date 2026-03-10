@@ -103,6 +103,29 @@ pub(crate) fn scrub_credentials(input: &str) -> String {
         .to_string()
 }
 
+pub(crate) fn configured_native_tools_enabled(
+    tool_dispatcher: &str,
+    provider_supports_native_tools: bool,
+) -> bool {
+    !tool_dispatcher.trim().eq_ignore_ascii_case("xml") && provider_supports_native_tools
+}
+
+pub(crate) async fn with_tool_loop_settings<F>(
+    parallel_tools: bool,
+    native_tools: bool,
+    future: F,
+) -> F::Output
+where
+    F: std::future::Future,
+{
+    TOOL_LOOP_PARALLEL_TOOLS_ENABLED
+        .scope(
+            parallel_tools,
+            TOOL_LOOP_NATIVE_TOOLS_ENABLED.scope(Some(native_tools), future),
+        )
+        .await
+}
+
 /// Default trigger for auto-compaction when non-system message count exceeds this threshold.
 /// Prefer passing the config-driven value via `run_tool_call_loop`; this constant is only
 /// used when callers omit the parameter.
@@ -121,6 +144,14 @@ pub(crate) const DRAFT_PROGRESS_SENTINEL: &str = "\x00PROGRESS\x00";
 
 tokio::task_local! {
     static TOOL_LOOP_REPLY_TARGET: Option<String>;
+}
+
+tokio::task_local! {
+    static TOOL_LOOP_PARALLEL_TOOLS_ENABLED: bool;
+}
+
+tokio::task_local! {
+    static TOOL_LOOP_NATIVE_TOOLS_ENABLED: Option<bool>;
 }
 
 const AUTO_CRON_DELIVERY_CHANNELS: &[&str] = &["telegram", "discord", "slack", "mattermost"];
@@ -161,15 +192,10 @@ static TOOL_UNAVAILABLE_CLAIM_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"(?ix)
         \b(
-            i\s+(?:do\s+not|don't)\s+have\s+access|
-            i\s+(?:cannot|can't)\s+(?:access|use|perform|create|edit|write)|
+            i\s+(?:do\s+not|don't)\s+have\s+access(?:\s+to)?|
+            i\s+(?:cannot|can't)(?:\s+\w+){0,3}\s+(?:access|use|perform|create|edit|write|read|run|execute|open|browse)|
             i\s+am\s+unable\s+to|
             no\s+(?:tool|tools|function|functions)\s+(?:available|access)
-        )\b
-        [^.!?\n]{0,220}
-        \b(
-            tool|tools|function|functions|file|file_write|file_edit|
-            create|write|edit|delete
         )\b",
     )
     .unwrap()
@@ -455,9 +481,36 @@ fn looks_like_tool_unavailability_claim(text: &str, tool_specs: &[crate::tools::
         return false;
     }
 
-    tool_specs
+    let lowered = trimmed.to_ascii_lowercase();
+    let has_file_tool = tool_specs.iter().any(|spec| {
+        matches!(
+            spec.name.as_str(),
+            "file_write" | "file_edit" | "file_read" | "glob_search"
+        )
+    });
+    let has_shell_tool = tool_specs
         .iter()
-        .any(|spec| matches!(spec.name.as_str(), "file_write" | "file_edit"))
+        .any(|spec| matches!(spec.name.as_str(), "shell" | "process"));
+    let has_browser_tool = tool_specs
+        .iter()
+        .any(|spec| matches!(spec.name.as_str(), "browser" | "browser_open"));
+    let claims_file = ["file", "write", "edit", "read"]
+        .iter()
+        .any(|needle| lowered.contains(needle));
+    let claims_shell = ["shell", "command", "commands", "run", "execute", "terminal"]
+        .iter()
+        .any(|needle| lowered.contains(needle));
+    let claims_browser = ["browser", "browse", "open", "page", "website"]
+        .iter()
+        .any(|needle| lowered.contains(needle));
+    let claims_generic_tool_access = ["tool", "tools", "function", "functions"]
+        .iter()
+        .any(|needle| lowered.contains(needle));
+
+    (claims_file && has_file_tool)
+        || (claims_shell && has_shell_tool)
+        || (claims_browser && has_browser_tool)
+        || (claims_generic_tool_access && !tool_specs.is_empty())
 }
 
 fn build_tool_unavailable_retry_prompt(tool_specs: &[crate::tools::ToolSpec]) -> String {
@@ -807,13 +860,21 @@ pub(crate) async fn run_tool_call_loop(
     } else {
         max_tool_iterations
     };
+    let parallel_tools_enabled = TOOL_LOOP_PARALLEL_TOOLS_ENABLED
+        .try_with(|enabled| *enabled)
+        .unwrap_or(true);
 
     let tool_specs: Vec<crate::tools::ToolSpec> = tools_registry
         .iter()
         .filter(|tool| !excluded_tools.iter().any(|ex| ex == tool.name()))
         .map(|tool| tool.spec())
         .collect();
-    let use_native_tools = provider.supports_native_tools() && !tool_specs.is_empty();
+    let use_native_tools = TOOL_LOOP_NATIVE_TOOLS_ENABLED
+        .try_with(|enabled| *enabled)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| provider.supports_native_tools())
+        && !tool_specs.is_empty();
     let turn_id = Uuid::new_v4().to_string();
     let mut seen_tool_signatures: HashSet<(String, String)> = HashSet::new();
     let mut missing_tool_call_retry_used = false;
@@ -1277,7 +1338,8 @@ pub(crate) async fn run_tool_call_loop(
         let mut individual_results: Vec<(Option<String>, String)> = Vec::new();
         let mut ordered_results: Vec<Option<(String, Option<String>, ToolExecutionOutcome)>> =
             (0..tool_calls.len()).map(|_| None).collect();
-        let allow_parallel_execution = should_execute_tools_in_parallel(&tool_calls, approval);
+        let allow_parallel_execution =
+            parallel_tools_enabled && should_execute_tools_in_parallel(&tool_calls, approval);
         let mut executable_indices: Vec<usize> = Vec::new();
         let mut executable_calls: Vec<ParsedToolCall> = Vec::new();
 
@@ -1692,6 +1754,9 @@ pub(crate) fn build_shell_policy_instructions(autonomy: &crate::config::Autonomy
     instructions.push_str("\n## Shell Policy\n\n");
     instructions
         .push_str("When using the `shell` tool, follow these runtime constraints exactly.\n\n");
+    instructions.push_str(
+        "- If the user asks you to run a local command (for example `lsusb`, `git status`, `cargo test`, or `./script.sh`), emit a `shell` tool call instead of explaining how to run it.\n",
+    );
 
     let autonomy_label = match autonomy.level {
         crate::security::AutonomyLevel::ReadOnly => "read_only",
@@ -1756,7 +1821,7 @@ pub(crate) fn build_shell_policy_instructions(autonomy: &crate::config::Autonomy
     instructions
 }
 
-fn build_runtime_tool_availability_notice(tools_registry: &[Box<dyn Tool>]) -> String {
+pub(crate) fn build_runtime_tool_availability_notice(tools_registry: &[Box<dyn Tool>]) -> String {
     const MAX_LISTED_TOOLS: usize = 40;
     let names = tools_registry
         .iter()
@@ -2021,7 +2086,10 @@ pub async fn run(
     } else {
         None
     };
-    let native_tools = provider.supports_native_tools();
+    let native_tools = configured_native_tools_enabled(
+        &config.agent.tool_dispatcher,
+        provider.supports_native_tools(),
+    );
     let mut system_prompt = crate::channels::build_system_prompt_with_mode(
         &config.workspace_dir,
         model_name,
@@ -2083,23 +2151,27 @@ pub async fn run(
             ChatMessage::user(&enriched),
         ];
 
-        let response = run_tool_call_loop(
-            provider.as_ref(),
-            &mut history,
-            &tools_registry,
-            observer.as_ref(),
-            provider_name,
-            model_name,
-            temperature,
-            false,
-            approval_manager.as_ref(),
-            channel_name,
-            &config.multimodal,
-            config.agent.max_tool_iterations,
-            None,
-            None,
-            None,
-            &[],
+        let response = with_tool_loop_settings(
+            config.agent.parallel_tools,
+            native_tools,
+            run_tool_call_loop(
+                provider.as_ref(),
+                &mut history,
+                &tools_registry,
+                observer.as_ref(),
+                provider_name,
+                model_name,
+                temperature,
+                false,
+                approval_manager.as_ref(),
+                channel_name,
+                &config.multimodal,
+                config.agent.max_tool_iterations,
+                None,
+                None,
+                None,
+                &[],
+            ),
         )
         .await?;
         final_output = response.clone();
@@ -2203,23 +2275,27 @@ pub async fn run(
 
             history.push(ChatMessage::user(&enriched));
 
-            let response = match run_tool_call_loop(
-                provider.as_ref(),
-                &mut history,
-                &tools_registry,
-                observer.as_ref(),
-                provider_name,
-                model_name,
-                temperature,
-                false,
-                approval_manager.as_ref(),
-                channel_name,
-                &config.multimodal,
-                config.agent.max_tool_iterations,
-                None,
-                None,
-                None,
-                &[],
+            let response = match with_tool_loop_settings(
+                config.agent.parallel_tools,
+                native_tools,
+                run_tool_call_loop(
+                    provider.as_ref(),
+                    &mut history,
+                    &tools_registry,
+                    observer.as_ref(),
+                    provider_name,
+                    model_name,
+                    temperature,
+                    false,
+                    approval_manager.as_ref(),
+                    channel_name,
+                    &config.multimodal,
+                    config.agent.max_tool_iterations,
+                    None,
+                    None,
+                    None,
+                    &[],
+                ),
             )
             .await
             {
@@ -2420,7 +2496,10 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
     } else {
         None
     };
-    let native_tools = provider.supports_native_tools();
+    let native_tools = configured_native_tools_enabled(
+        &config.agent.tool_dispatcher,
+        provider.supports_native_tools(),
+    );
     let mut system_prompt = crate::channels::build_system_prompt_with_mode(
         &config.workspace_dir,
         &model_name,
@@ -2456,17 +2535,21 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
         ChatMessage::user(&enriched),
     ];
 
-    agent_turn(
-        provider.as_ref(),
-        &mut history,
-        &tools_registry,
-        observer.as_ref(),
-        provider_name,
-        &model_name,
-        config.default_temperature,
-        true,
-        &config.multimodal,
-        config.agent.max_tool_iterations,
+    with_tool_loop_settings(
+        config.agent.parallel_tools,
+        native_tools,
+        agent_turn(
+            provider.as_ref(),
+            &mut history,
+            &tools_registry,
+            observer.as_ref(),
+            provider_name,
+            &model_name,
+            config.default_temperature,
+            true,
+            &config.multimodal,
+            config.agent.max_tool_iterations,
+        ),
     )
     .await
 }
@@ -2490,6 +2573,17 @@ mod tests {
         assert!(scrubbed.contains("password=\"secr*[REDACTED]\""));
         assert!(!scrubbed.contains("abcdef"));
         assert!(!scrubbed.contains("secret123456"));
+    }
+
+    #[test]
+    fn configured_native_tools_enabled_honors_xml_override() {
+        assert!(!configured_native_tools_enabled("xml", true));
+    }
+
+    #[test]
+    fn configured_native_tools_enabled_uses_provider_capability_outside_xml_mode() {
+        assert!(configured_native_tools_enabled("auto", true));
+        assert!(!configured_native_tools_enabled("native", false));
     }
 
     #[test]
@@ -3956,6 +4050,33 @@ mod tests {
     }
 
     #[test]
+    fn looks_like_tool_unavailability_claim_detects_false_missing_shell_replies() {
+        let shell_tools = vec![crate::tools::ToolSpec {
+            name: "shell".to_string(),
+            description: "Run shell".to_string(),
+            parameters: serde_json::json!({"type":"object"}),
+        }];
+        let browser_tools = vec![crate::tools::ToolSpec {
+            name: "browser".to_string(),
+            description: "Use browser".to_string(),
+            parameters: serde_json::json!({"type":"object"}),
+        }];
+
+        assert!(looks_like_tool_unavailability_claim(
+            "I can't directly run `lsusb` for you, but I can explain what it does.",
+            &shell_tools
+        ));
+        assert!(looks_like_tool_unavailability_claim(
+            "I cannot execute terminal commands from here.",
+            &shell_tools
+        ));
+        assert!(!looks_like_tool_unavailability_claim(
+            "I can't directly run `lsusb` for you, but I can explain what it does.",
+            &browser_tools
+        ));
+    }
+
+    #[test]
     fn parse_tool_calls_extracts_single_call() {
         let response = r#"Let me check that.
 <tool_call>
@@ -4253,6 +4374,33 @@ I will now call the tool with this payload:
         assert_eq!(
             calls[0].arguments.get("command").unwrap().as_str().unwrap(),
             "pwd"
+        );
+    }
+
+    #[test]
+    fn parse_tool_calls_handles_bracketed_tool_call_syntax() {
+        let response = r#"I'll run that now.[TOOL_CALLS]shell[ARGS]{"command":"lsusb"}"#;
+
+        let (text, calls) = parse_tool_calls(response);
+        assert_eq!(text, "I'll run that now.");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(
+            calls[0].arguments.get("command").unwrap().as_str().unwrap(),
+            "lsusb"
+        );
+    }
+
+    #[test]
+    fn parse_tool_calls_handles_split_bracket_shell_args() {
+        let response = r#"[TOOL_CALLS]shell[ARGS]{}[ARGS]"command" "lsusb""#;
+
+        let (_, calls) = parse_tool_calls(response);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(
+            calls[0].arguments.get("command").unwrap().as_str().unwrap(),
+            "lsusb"
         );
     }
 

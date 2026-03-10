@@ -52,7 +52,7 @@ function ensure_config {
 
         # Copy template
         cat "$TEMPLATE_FILE" > "$CONFIG_FILE"
-        chmod 644 "$CONFIG_FILE"
+        chmod 600 "$CONFIG_FILE"
     fi
 }
 

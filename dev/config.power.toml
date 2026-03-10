@@ -25,7 +25,9 @@ compact_context = false
 max_tool_iterations = 40
 max_history_messages = 80
 parallel_tools = false
-tool_dispatcher = "auto"
+# Devstral via Ollama is more reliable with the XML dispatcher than native
+# function-calling in this local stack.
+tool_dispatcher = "xml"
 
 [autonomy]
 level = "supervised"

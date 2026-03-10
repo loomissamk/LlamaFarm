@@ -1,6 +1,17 @@
 # syntax=docker/dockerfile:1.7
 
-# ── Stage 1: Build ────────────────────────────────────────────
+# ── Stage 1: Build Web UI ─────────────────────────────────────
+FROM node:22-bookworm-slim AS web_builder
+
+WORKDIR /web
+
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+
+COPY web/ ./
+RUN npm run build
+
+# ── Stage 2: Build Rust Binary ────────────────────────────────
 FROM rust:1.93-slim@sha256:7e6fa79cf81be23fd45d857f75f583d80cfdbb11c91fa06180fd747fda37a61d AS builder
 
 WORKDIR /app
@@ -38,24 +49,8 @@ COPY crates/ crates/
 COPY firmware/ firmware/
 COPY data/ data/
 COPY skills/ skills/
-COPY web/ web/
-# Keep release builds resilient when frontend dist assets are not prebuilt in Git.
-RUN mkdir -p web/dist && \
-    if [ ! -f web/dist/index.html ]; then \
-      printf '%s\n' \
-        '<!doctype html>' \
-        '<html lang="en">' \
-        '  <head>' \
-        '    <meta charset="utf-8" />' \
-        '    <meta name="viewport" content="width=device-width,initial-scale=1" />' \
-        '    <title>ZeroClaw Dashboard</title>' \
-        '  </head>' \
-        '  <body>' \
-        '    <h1>ZeroClaw Dashboard Unavailable</h1>' \
-        '    <p>Frontend assets are not bundled in this build. Build the web UI to populate <code>web/dist</code>.</p>' \
-        '  </body>' \
-        '</html>' > web/dist/index.html; \
-    fi
+RUN mkdir -p web/dist
+COPY --from=web_builder /web/dist/ web/dist/
 RUN --mount=type=cache,id=zeroclaw-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=zeroclaw-cargo-git,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,id=zeroclaw-target,target=/app/target,sharing=locked \
@@ -92,6 +87,17 @@ RUN apt-get update && apt-get install -y \
     bash \
     ca-certificates \
     curl \
+    file \
+    git \
+    iproute2 \
+    iputils-ping \
+    jq \
+    net-tools \
+    pciutils \
+    procps \
+    ripgrep \
+    usbutils \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /zeroclaw-data /zeroclaw-data

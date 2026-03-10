@@ -254,29 +254,62 @@ pub async fn handle_ws_chat(
 }
 
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
-    // Maintain conversation history for this WebSocket session
     let mut history: Vec<ChatMessage> = Vec::new();
-
-    // Build system prompt once for the session
-    let system_prompt = {
+    let (provider_label, parallel_tools, native_tools, approval_manager, system_prompt) = {
         let config_guard = state.config.lock();
-        crate::channels::build_system_prompt(
+        let provider_label = config_guard
+            .default_provider
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        let tool_descs: Vec<(&str, &str)> = state
+            .tools_registry
+            .iter()
+            .map(|spec| (spec.name.as_str(), spec.description.as_str()))
+            .collect();
+        let skills =
+            crate::skills::load_skills_with_config(&config_guard.workspace_dir, &config_guard);
+        let bootstrap_max_chars = if config_guard.agent.compact_context {
+            Some(6000)
+        } else {
+            None
+        };
+        let native_tools = crate::agent::loop_::configured_native_tools_enabled(
+            &config_guard.agent.tool_dispatcher,
+            state.provider.supports_native_tools(),
+        );
+        let mut system_prompt = crate::channels::build_system_prompt_with_mode(
             &config_guard.workspace_dir,
             &state.model,
-            &[],
-            &[],
+            &tool_descs,
+            &skills,
             Some(&config_guard.identity),
-            None,
+            bootstrap_max_chars,
+            native_tools,
+            config_guard.skills.prompt_injection_mode,
+        );
+        if !native_tools {
+            system_prompt.push_str(&crate::agent::loop_::build_tool_instructions(
+                state.tools_registry_exec.as_ref(),
+            ));
+        }
+        system_prompt.push_str(&crate::agent::loop_::build_shell_policy_instructions(
+            &config_guard.autonomy,
+        ));
+        system_prompt.push_str(
+            &crate::agent::loop_::build_runtime_tool_availability_notice(
+                state.tools_registry_exec.as_ref(),
+            ),
+        );
+
+        (
+            provider_label,
+            config_guard.agent.parallel_tools,
+            native_tools,
+            ApprovalManager::from_config(&config_guard.autonomy),
+            system_prompt,
         )
     };
-
-    // Add system message to history
     history.push(ChatMessage::system(&system_prompt));
-
-    let approval_manager = {
-        let config_guard = state.config.lock();
-        ApprovalManager::from_config(&config_guard.autonomy)
-    };
 
     while let Some(msg) = socket.recv().await {
         let msg = match msg {
@@ -305,16 +338,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             continue;
         }
 
-        // Add user message to history
         history.push(ChatMessage::user(&content));
-
-        // Get provider info
-        let provider_label = state
-            .config
-            .lock()
-            .default_provider
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string());
 
         // Broadcast agent_start event
         let _ = state.event_tx.send(serde_json::json!({
@@ -323,56 +347,56 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             "model": state.model,
         }));
 
-        // Run the agent loop with real-time delta streaming for web clients.
-        let result = {
-            let (delta_tx, mut delta_rx) = tokio::sync::mpsc::channel::<String>(128);
-            let mut loop_future = std::pin::pin!(run_tool_call_loop(
-                state.provider.as_ref(),
-                &mut history,
-                state.tools_registry_exec.as_ref(),
-                state.observer.as_ref(),
-                &provider_label,
-                &state.model,
-                state.temperature,
-                true, // silent - no console output
-                Some(&approval_manager),
-                "webchat",
-                &state.multimodal,
-                state.max_tool_iterations,
-                None,           // cancellation token
-                Some(delta_tx), // delta streaming
-                None,           // hooks
-                &[],            // excluded tools
-            ));
+        let result =
+            crate::agent::loop_::with_tool_loop_settings(parallel_tools, native_tools, async {
+                let (delta_tx, mut delta_rx) = tokio::sync::mpsc::channel::<String>(128);
+                let mut loop_future = std::pin::pin!(run_tool_call_loop(
+                    state.provider.as_ref(),
+                    &mut history,
+                    state.tools_registry_exec.as_ref(),
+                    state.observer.as_ref(),
+                    &provider_label,
+                    &state.model,
+                    state.temperature,
+                    true,
+                    Some(&approval_manager),
+                    "webchat",
+                    &state.multimodal,
+                    state.max_tool_iterations,
+                    None,
+                    Some(delta_tx),
+                    None,
+                    &[],
+                ));
 
-            loop {
-                tokio::select! {
-                    maybe_delta = delta_rx.recv() => {
-                        if let Some(delta) = maybe_delta {
-                            if let Some(event) = parse_ws_delta_event(&delta) {
-                                emit_ws_delta_event(&mut socket, event).await;
-                            }
-                        } else {
-                            break loop_future.await;
-                        }
-                    }
-                    response = &mut loop_future => {
-                        while let Ok(delta) = delta_rx.try_recv() {
-                            if let Some(event) = parse_ws_delta_event(&delta) {
-                                emit_ws_delta_event(&mut socket, event).await;
+                loop {
+                    tokio::select! {
+                        maybe_delta = delta_rx.recv() => {
+                            if let Some(delta) = maybe_delta {
+                                if let Some(event) = parse_ws_delta_event(&delta) {
+                                    emit_ws_delta_event(&mut socket, event).await;
+                                }
+                            } else {
+                                break loop_future.await;
                             }
                         }
-                        break response;
+                        response = &mut loop_future => {
+                            while let Ok(delta) = delta_rx.try_recv() {
+                                if let Some(event) = parse_ws_delta_event(&delta) {
+                                    emit_ws_delta_event(&mut socket, event).await;
+                                }
+                            }
+                            break response;
+                        }
                     }
                 }
-            }
-        };
+            })
+            .await;
 
         match result {
             Ok(response) => {
                 let safe_response =
                     finalize_ws_response(&response, &history, state.tools_registry_exec.as_ref());
-                // Add assistant response to history
                 history.push(ChatMessage::assistant(&safe_response));
 
                 // Send the full response as a done message
