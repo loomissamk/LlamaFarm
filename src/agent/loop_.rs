@@ -4405,6 +4405,19 @@ I will now call the tool with this payload:
     }
 
     #[test]
+    fn parse_tool_calls_keeps_bracket_browser_tool_name() {
+        let response = r#"[TOOL_CALLS]browser[ARGS]{"url":"https://example.com"}"#;
+
+        let (_, calls) = parse_tool_calls(response);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "browser");
+        assert_eq!(
+            calls[0].arguments.get("url").unwrap().as_str().unwrap(),
+            "https://example.com"
+        );
+    }
+
+    #[test]
     fn parse_tool_calls_handles_markdown_tool_call_fence() {
         let response = r#"I'll check that.
 ```tool_call

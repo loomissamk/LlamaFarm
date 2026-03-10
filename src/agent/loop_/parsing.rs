@@ -1185,7 +1185,10 @@ fn parse_bracket_tool_calls(response: &str) -> Option<(String, Vec<ParsedToolCal
             break;
         }
 
-        let tool_name = map_tool_name_alias(tool_raw).to_string();
+        let tool_name = match tool_raw {
+            "browser" | "browser_open" => tool_raw.to_string(),
+            _ => map_tool_name_alias(tool_raw).to_string(),
+        };
         let args_input = &after_marker[args_pos + ARGS_MARKER.len()..];
         let trimmed_args = args_input.trim_start();
         let leading_ws = args_input.len() - trimmed_args.len();
