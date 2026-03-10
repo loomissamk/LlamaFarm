@@ -9,6 +9,12 @@ const SCHEDULER_STALE_SECONDS: i64 = 120;
 const CHANNEL_STALE_SECONDS: i64 = 300;
 const COMMAND_VERSION_PREVIEW_CHARS: usize = 60;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeMode {
+    ExpectDaemonState,
+    GatewayOnly,
+}
+
 // ── Diagnostic item ──────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -77,11 +83,20 @@ impl DiagItem {
 
 /// Run diagnostics and return structured results (for API/web dashboard).
 pub fn diagnose(config: &Config) -> Vec<DiagResult> {
+    diagnose_with_mode(config, RuntimeMode::ExpectDaemonState)
+}
+
+/// Run diagnostics for a live gateway-only runtime.
+pub fn diagnose_gateway(config: &Config) -> Vec<DiagResult> {
+    diagnose_with_mode(config, RuntimeMode::GatewayOnly)
+}
+
+fn diagnose_with_mode(config: &Config, runtime_mode: RuntimeMode) -> Vec<DiagResult> {
     let mut items: Vec<DiagItem> = Vec::new();
 
     check_config_semantics(config, &mut items);
     check_workspace(config, &mut items);
-    check_daemon_state(config, &mut items);
+    check_daemon_state(config, runtime_mode, &mut items);
     check_environment(&mut items);
     check_cli_tools(&mut items);
 
@@ -768,18 +783,25 @@ fn workspace_probe_path(workspace_dir: &Path) -> std::path::PathBuf {
 
 // ── Daemon state (original logic, preserved) ─────────────────────
 
-fn check_daemon_state(config: &Config, items: &mut Vec<DiagItem>) {
+fn check_daemon_state(config: &Config, runtime_mode: RuntimeMode, items: &mut Vec<DiagItem>) {
     let cat = "daemon";
     let state_file = crate::daemon::state_file_path(config);
 
     if !state_file.exists() {
-        items.push(DiagItem::error(
-            cat,
-            format!(
-                "state file not found: {} — is the daemon running?",
-                state_file.display()
-            ),
-        ));
+        let message = format!(
+            "state file not found: {}",
+            state_file.display()
+        );
+        match runtime_mode {
+            RuntimeMode::ExpectDaemonState => items.push(DiagItem::error(
+                cat,
+                format!("{message} — is the daemon running?"),
+            )),
+            RuntimeMode::GatewayOnly => items.push(DiagItem::ok(
+                cat,
+                format!("{message} — gateway-only mode does not use daemon state"),
+            )),
+        }
         return;
     }
 
@@ -1311,5 +1333,35 @@ mod tests {
         assert_eq!(agent_messages.len(), 2);
         assert!(agent_messages[0].contains("agent \"alpha\""));
         assert!(agent_messages[1].contains("agent \"zeta\""));
+    }
+
+    #[test]
+    fn daemon_check_accepts_missing_state_file_in_gateway_only_mode() {
+        let tmp = TempDir::new().unwrap();
+        let mut config = Config::default();
+        config.config_path = tmp.path().join("config.toml");
+
+        let mut items = Vec::new();
+        check_daemon_state(&config, RuntimeMode::GatewayOnly, &mut items);
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].severity, Severity::Ok);
+        assert!(items[0]
+            .message
+            .contains("gateway-only mode does not use daemon state"));
+    }
+
+    #[test]
+    fn daemon_check_errors_on_missing_state_file_when_daemon_expected() {
+        let tmp = TempDir::new().unwrap();
+        let mut config = Config::default();
+        config.config_path = tmp.path().join("config.toml");
+
+        let mut items = Vec::new();
+        check_daemon_state(&config, RuntimeMode::ExpectDaemonState, &mut items);
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].severity, Severity::Error);
+        assert!(items[0].message.contains("is the daemon running?"));
     }
 }

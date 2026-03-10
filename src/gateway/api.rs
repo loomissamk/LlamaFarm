@@ -203,6 +203,7 @@ const OLLAMA_FALLBACK_MODELS: &[&str] = &["llama3.2", "qwen2.5-coder:7b", "phi4"
 #[derive(Debug, Default, Clone)]
 struct OllamaDashboardInfo {
     endpoint: String,
+    reachable: bool,
     installed_models: Vec<String>,
     loaded_models: Vec<String>,
     active_model_loaded: bool,
@@ -257,7 +258,7 @@ async fn fetch_ollama_dashboard_info(
         endpoint: &str,
         auth_token: Option<&str>,
         suffix: &str,
-    ) -> Vec<String> {
+    ) -> Option<Vec<String>> {
         let url = format!("{endpoint}{suffix}");
         let mut request = client.get(url);
         if let Some(token) = auth_token {
@@ -265,10 +266,13 @@ async fn fetch_ollama_dashboard_info(
         }
 
         let Ok(response) = request.send().await else {
-            return Vec::new();
+            return None;
         };
+        if !response.status().is_success() {
+            return None;
+        }
         let Ok(payload) = response.json::<OllamaModelListResponse>().await else {
-            return Vec::new();
+            return None;
         };
 
         let mut names: Vec<String> = payload
@@ -279,15 +283,21 @@ async fn fetch_ollama_dashboard_info(
             .collect();
         names.sort();
         names.dedup();
-        names
+        Some(names)
     }
 
-    let installed_models = fetch_model_names(&client, &endpoint, auth_token.as_deref(), "/api/tags").await;
-    let loaded_models = fetch_model_names(&client, &endpoint, auth_token.as_deref(), "/api/ps").await;
+    let installed_models =
+        fetch_model_names(&client, &endpoint, auth_token.as_deref(), "/api/tags").await;
+    let loaded_models =
+        fetch_model_names(&client, &endpoint, auth_token.as_deref(), "/api/ps").await;
+    let reachable = installed_models.is_some() || loaded_models.is_some();
+    let installed_models = installed_models.unwrap_or_default();
+    let loaded_models = loaded_models.unwrap_or_default();
     let active_model = config.default_model.as_deref().unwrap_or_default().trim();
 
     OllamaDashboardInfo {
         endpoint,
+        reachable,
         active_model_loaded: !active_model.is_empty()
             && loaded_models.iter().any(|model| model == active_model),
         installed_models,
@@ -482,6 +492,7 @@ pub async fn handle_api_status(
         "health": health,
         "ollama": {
             "endpoint": ollama.endpoint,
+            "reachable": ollama.reachable,
             "installed_models": ollama.installed_models,
             "loaded_models": ollama.loaded_models,
             "active_model_loaded": ollama.active_model_loaded,
@@ -1001,7 +1012,7 @@ pub async fn handle_api_doctor(
     }
 
     let config = state.config.lock().clone();
-    let results = crate::doctor::diagnose(&config);
+    let results = crate::doctor::diagnose_gateway(&config);
 
     let ok_count = results
         .iter()

@@ -112,6 +112,7 @@ RUN chown 65534:65534 /zeroclaw-data/.zeroclaw/config.toml
 # Use consistent workspace path
 ENV ZEROCLAW_WORKSPACE=/zeroclaw-data/workspace
 ENV HOME=/zeroclaw-data
+ENV SHELL=/bin/bash
 # Provider/model selection comes from the mounted config so local stacks do not
 # silently drift away from the chosen Ollama model.
 ENV ZEROCLAW_GATEWAY_PORT=42617

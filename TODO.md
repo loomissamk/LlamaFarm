@@ -27,7 +27,7 @@ Finish turning this repo into a local-first, Ollama-only `LlamaFarm` deployment.
   - if ZEROCLAW then LLAMAFARM, elif zeroclaw llamafarm, else Zero_Claw then Llama_Farm and so on
 
 - [ ] Fix shell/runtime diagnostics for the local deployment.
-  - Set a sane default `SHELL` inside the container/runtime.
+  - Set a sane default `SHELL` inside the container/runtime add users shell by defualt. add space to add other in text box that will run.
   - Stop showing daemon-state errors in gateway-only mode.
   - Fix CLI discovery so `sh --version` does not show `Illegal option --` as a fake version.
 
@@ -38,20 +38,27 @@ Finish turning this repo into a local-first, Ollama-only `LlamaFarm` deployment.
 
 - [ ] Fix web agent tool execution.
   - The live agent should execute shell/tool calls instead of only describing JSON calls.
-  - Revisit the local autonomy/tool allowlist defaults.
-  - Retest `lsusb`, shell, scheduler, and file tools end-to-end in the live app.
+  - Revisit the local autonomy/tool allowlist defaults. Allow everything!!! or just most linux, mac, windows 
+  - Retest `lsusb`, shell, scheduler, and file tools end-to-end in the live app. ensure real outputs
+
+- [ ] Replace the stale local config/TOML with a clean local-operator profile.
+  - Remove foreign/non-ASCII characters from the live TOML path and keep the local config ASCII-only.
+  - Prune outdated config sections that no longer help the local-first deployment.
+  - Expand the practical tool/autonomy defaults toward the intended full local "god mode" agent profile.
+  - Verify the refreshed config is what the running app actually uses after reload/redeploy.
 
 - [ ] Add a simple UI editor for `SOUL.md` and `AGENTS.md`.
-  - Add a dedicated page with tabs for both files.
-  - Load and save the workspace copies live from the UI.
-  - Keep the scope limited to those two files.
+  - Add a dedicated page with tabs for both files. More if it makes sense....
+  - Load and save the workspace copies live from the UI. These need to work instantly on save
+  - Keep the scope limited to those two files. Unless more make sense
+
 
 - [ ] Decide and implement Ollama model unload behavior on model switch.
-  - Verify the actual Ollama unload/stop path first.
+  - Verify the actual Ollama unload/stop path first. Literally tell ollamas to stop old model if able...
   - Make switching prefer the selected model being the only loaded one if the runtime supports it cleanly.
 
 - [ ] Remove GitHub CI/workflow overhead that is not needed for this local-only deployment.
-  - Drop hosted/cloud-oriented workflow noise.
+  - Drop hosted/cloud-oriented workflow noise. Reduce noise in ui about local as well, just Ollama.
   - Keep local Docker build/run/smoke flow as the primary path.
 
 - [ ] Run a final local smoke pass after the above fixes.
@@ -61,6 +68,6 @@ Finish turning this repo into a local-first, Ollama-only `LlamaFarm` deployment.
 
 ## Notes
 
-- Rust test/CI cleanup is intentionally deferred until the local runtime/tooling path is stable. We just want to remove CI if able as it is no longer truly needed for local deploymenet we just want all tools not gitlab junk calls
+- Rust test/CI cleanup is intentionally deferred until the local runtime/tooling path is stable. We just want to remove CI if able as it is no longer truly needed for local deploymenet we just want all tools not gitlab junk calls and dumb emails about github runners failing ci since we are never going to use that (for now)
 - Do not reopen older branding/pairing cleanup tasks unless a live page still shows them.
 - ensure all functionality works with smoke tests for accuracy, ollama -> LlamaFarm tool -> expected accurate result

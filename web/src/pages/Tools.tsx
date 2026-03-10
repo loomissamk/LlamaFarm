@@ -9,78 +9,156 @@ import {
   CircleCheck,
   CircleAlert,
 } from 'lucide-react';
-import type { ToolSpec, CliTool } from '@/types/api';
-import { getTools, getCliTools } from '@/lib/api';
+import type { ToolSpec, CliTool, StatusResponse } from '@/types/api';
+import { getTools, getCliTools, getStatus } from '@/lib/api';
 
-const localChecks = [
+const commandChecks = [
   {
     id: 'shell',
     label: 'Shell runtime',
     detail: 'Needed for scheduler and shell tools',
     matches: ['bash', 'sh'],
+    optional: false,
   },
   {
-    id: 'ollama',
+    id: 'ollama-cli',
     label: 'Ollama CLI',
-    detail: 'Useful for local model inspection and smoke checks',
+    detail: 'Optional inside this container; useful for manual smoke checks',
     matches: ['ollama'],
+    optional: true,
   },
   {
     id: 'browser',
     label: 'Browser binary',
-    detail: 'Needed for browser and Chromium-backed tools',
+    detail: 'Optional until you need Chromium-backed browser tools',
     matches: ['chromium', 'chromium-browser', 'google-chrome', 'google-chrome-stable'],
+    optional: true,
   },
   {
     id: 'ripgrep',
     label: 'Ripgrep',
     detail: 'Helps file/content search tools behave well',
     matches: ['rg'],
+    optional: false,
   },
   {
     id: 'sqlite',
     label: 'SQLite CLI',
-    detail: 'Useful for local data inspection',
+    detail: 'Optional; useful for direct local database inspection',
     matches: ['sqlite3'],
+    optional: true,
   },
   {
     id: 'curl',
     label: 'HTTP CLI',
     detail: 'Useful for endpoint and local network checks',
     matches: ['curl'],
+    optional: false,
   },
 ];
+
+type CheckTone = 'ok' | 'warn' | 'error';
+
+type LocalCheckCard = {
+  id: string;
+  label: string;
+  detail: string;
+  status: string;
+  tone: CheckTone;
+};
+
+function formatCliCategory(category: string): string {
+  return category.replace(/([a-z])([A-Z])/g, '$1 $2');
+}
+
+function cardToneClasses(tone: CheckTone): string {
+  switch (tone) {
+    case 'ok':
+      return 'border-green-700/40 bg-green-950/20';
+    case 'warn':
+      return 'border-yellow-700/40 bg-yellow-950/20';
+    case 'error':
+      return 'border-red-700/40 bg-red-950/20';
+  }
+}
+
+function cardIcon(tone: CheckTone) {
+  switch (tone) {
+    case 'ok':
+      return <CircleCheck className="h-4 w-4 text-green-400" />;
+    case 'warn':
+      return <CircleAlert className="h-4 w-4 text-yellow-400" />;
+    case 'error':
+      return <CircleAlert className="h-4 w-4 text-red-400" />;
+  }
+}
+
+function buildCommandCheckCard(
+  check: (typeof commandChecks)[number],
+  availableCli: Set<string>,
+): LocalCheckCard {
+  const found = check.matches.some((name) => availableCli.has(name));
+  if (found) {
+    return {
+      id: check.id,
+      label: check.label,
+      detail: check.detail,
+      status: check.optional ? 'Installed locally' : 'Available locally',
+      tone: 'ok',
+    };
+  }
+
+  return {
+    id: check.id,
+    label: check.label,
+    detail: check.detail,
+    status: check.optional ? 'Optional locally' : 'Missing locally',
+    tone: check.optional ? 'warn' : 'error',
+  };
+}
+
+function buildOllamaRuntimeCard(status: StatusResponse): LocalCheckCard {
+  if (status.ollama.reachable) {
+    const runtimeState = status.ollama.active_model_loaded
+      ? 'Configured model is loaded in Ollama right now'
+      : 'Ollama API is reachable even though the configured model is not loaded yet';
+    return {
+      id: 'ollama-runtime',
+      label: 'Ollama runtime',
+      detail: `${runtimeState}. Endpoint: ${status.ollama.endpoint}`,
+      status: 'Runtime reachable',
+      tone: 'ok',
+    };
+  }
+
+  return {
+    id: 'ollama-runtime',
+    label: 'Ollama runtime',
+    detail: `LlamaFarm cannot reach the Ollama API at ${status.ollama.endpoint} right now.`,
+    status: 'Runtime unreachable',
+    tone: 'error',
+  };
+}
 
 export default function Tools() {
   const [tools, setTools] = useState<ToolSpec[]>([]);
   const [cliTools, setCliTools] = useState<CliTool[]>([]);
+  const [status, setStatus] = useState<StatusResponse | null>(null);
   const [search, setSearch] = useState('');
   const [expandedTool, setExpandedTool] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([getTools(), getCliTools()])
-      .then(([t, c]) => {
+    Promise.all([getTools(), getCliTools(), getStatus()])
+      .then(([t, c, s]) => {
         setTools(t);
         setCliTools(c);
+        setStatus(s);
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
-
-  const filtered = tools.filter(
-    (t) =>
-      t.name.toLowerCase().includes(search.toLowerCase()) ||
-      t.description.toLowerCase().includes(search.toLowerCase()),
-  );
-
-  const filteredCli = cliTools.filter(
-    (t) =>
-      t.name.toLowerCase().includes(search.toLowerCase()) ||
-      t.category.toLowerCase().includes(search.toLowerCase()),
-  );
-  const availableCli = new Set(cliTools.map((tool) => tool.name.toLowerCase()));
 
   if (error) {
     return (
@@ -92,13 +170,31 @@ export default function Tools() {
     );
   }
 
-  if (loading) {
+  if (loading || !status) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-500 border-t-transparent" />
       </div>
     );
   }
+
+  const searchTerm = search.toLowerCase();
+
+  const filtered = tools.filter(
+    (t) =>
+      t.name.toLowerCase().includes(searchTerm) || t.description.toLowerCase().includes(searchTerm),
+  );
+
+  const filteredCli = cliTools.filter(
+    (t) =>
+      t.name.toLowerCase().includes(searchTerm) ||
+      formatCliCategory(t.category).toLowerCase().includes(searchTerm),
+  );
+  const availableCli = new Set(cliTools.map((tool) => tool.name.toLowerCase()));
+  const localChecks = [
+    buildOllamaRuntimeCard(status),
+    ...commandChecks.map((check) => buildCommandCheckCard(check, availableCli)),
+  ];
 
   return (
     <div className="p-6 space-y-6">
@@ -108,34 +204,25 @@ export default function Tools() {
           <h2 className="text-base font-semibold text-white">Local Tooling</h2>
         </div>
         <p className="mt-2 text-sm text-gray-400">
-          Review the registered agent tools and the local command binaries this deployment can
-          actually see on the host.
+          Review the registered agent tools and the binaries this running LlamaFarm deployment can
+          actually see inside its local runtime.
         </p>
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         {localChecks.map((check) => {
-          const ok = check.matches.some((name) => availableCli.has(name));
           return (
             <div
               key={check.id}
-              className={`rounded-xl border p-4 ${
-                ok
-                  ? 'border-green-700/40 bg-green-950/20'
-                  : 'border-red-700/40 bg-red-950/20'
-              }`}
+              className={`rounded-xl border p-4 ${cardToneClasses(check.tone)}`}
             >
               <div className="flex items-center gap-2">
-                {ok ? (
-                  <CircleCheck className="h-4 w-4 text-green-400" />
-                ) : (
-                  <CircleAlert className="h-4 w-4 text-red-400" />
-                )}
+                {cardIcon(check.tone)}
                 <h3 className="text-sm font-semibold text-white">{check.label}</h3>
               </div>
               <p className="mt-2 text-sm text-gray-400">{check.detail}</p>
               <p className="mt-2 text-xs uppercase tracking-[0.18em] text-gray-500">
-                {ok ? 'Available locally' : 'Missing locally'}
+                {check.status}
               </p>
             </div>
           );
@@ -257,7 +344,7 @@ export default function Tools() {
                     </td>
                     <td className="px-4 py-3">
                       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-800 text-gray-300 capitalize">
-                        {tool.category}
+                        {formatCliCategory(tool.category)}
                       </span>
                     </td>
                   </tr>

@@ -13,6 +13,7 @@ export interface StatusResponse {
 
 export interface OllamaStatus {
   endpoint: string;
+  reachable: boolean;
   installed_models: string[];
   loaded_models: string[];
   active_model_loaded: boolean;

@@ -251,6 +251,10 @@ fn get_version(name: &str, args: &[&str]) -> Option<String> {
         .output()
         .ok()?;
 
+    if !output.status.success() {
+        return None;
+    }
+
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
@@ -302,5 +306,19 @@ mod tests {
         assert_eq!(CliCategory::Browser.to_string(), "Browser");
         assert_eq!(CliCategory::Utility.to_string(), "Utility");
         assert_eq!(CliCategory::AiRuntime.to_string(), "AI Runtime");
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn failed_version_probe_returns_none() {
+        let version = get_version("sh", &["-c", "echo nope >&2; exit 2"]);
+        assert!(version.is_none());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn successful_stderr_version_probe_is_preserved() {
+        let version = get_version("sh", &["-c", "echo stderr-version >&2"]);
+        assert_eq!(version.as_deref(), Some("stderr-version"));
     }
 }
