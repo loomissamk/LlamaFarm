@@ -2,12 +2,13 @@
 //!
 //! All `/api/*` routes require bearer token authentication (PairingGuard).
 
-use super::AppState;
+use super::{build_gateway_runtime_snapshot, AppState};
 use axum::{
     extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Json},
 };
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -46,6 +47,71 @@ fn require_auth(
     }
 }
 
+fn parse_memory_category(raw: &str) -> crate::memory::MemoryCategory {
+    match raw {
+        "core" => crate::memory::MemoryCategory::Core,
+        "daily" => crate::memory::MemoryCategory::Daily,
+        "conversation" => crate::memory::MemoryCategory::Conversation,
+        other => crate::memory::MemoryCategory::Custom(other.to_string()),
+    }
+}
+
+fn parse_cron_schedule(
+    schedule_kind: Option<&str>,
+    schedule: Option<&str>,
+    run_at: Option<&str>,
+    every_ms: Option<u64>,
+) -> Result<crate::cron::Schedule, String> {
+    match schedule_kind.unwrap_or("cron").trim().to_ascii_lowercase().as_str() {
+        "cron" => {
+            let expr = schedule
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "schedule is required for cron jobs".to_string())?;
+            Ok(crate::cron::Schedule::Cron {
+                expr: expr.to_string(),
+                tz: None,
+            })
+        }
+        "at" => {
+            let raw = run_at
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "run_at is required for one-time jobs".to_string())?;
+            let at = chrono::DateTime::parse_from_rfc3339(raw)
+                .map_err(|error| format!("run_at must be RFC3339: {error}"))?
+                .with_timezone(&Utc);
+            Ok(crate::cron::Schedule::At { at })
+        }
+        "every" => {
+            let every_ms =
+                every_ms.ok_or_else(|| "every_ms is required for interval jobs".to_string())?;
+            if every_ms == 0 {
+                return Err("every_ms must be greater than 0".to_string());
+            }
+            Ok(crate::cron::Schedule::Every { every_ms })
+        }
+        other => Err(format!(
+            "unsupported schedule_kind '{other}' (expected cron, at, or every)"
+        )),
+    }
+}
+
+fn cron_job_json(job: &crate::cron::CronJob) -> serde_json::Value {
+    serde_json::json!({
+        "id": job.id,
+        "name": job.name,
+        "command": job.command,
+        "expression": job.expression,
+        "schedule": job.schedule,
+        "next_run": job.next_run.to_rfc3339(),
+        "last_run": job.last_run.map(|t| t.to_rfc3339()),
+        "last_status": job.last_status,
+        "last_output": job.last_output,
+        "enabled": job.enabled,
+    })
+}
+
 // ── Query parameters ─────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -64,8 +130,28 @@ pub struct MemoryStoreBody {
 #[derive(Deserialize)]
 pub struct CronAddBody {
     pub name: Option<String>,
-    pub schedule: String,
+    pub schedule_kind: Option<String>,
+    pub schedule: Option<String>,
+    pub run_at: Option<String>,
+    pub every_ms: Option<u64>,
     pub command: String,
+    pub enabled: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub struct CronUpdateBody {
+    pub name: Option<String>,
+    pub schedule_kind: Option<String>,
+    pub schedule: Option<String>,
+    pub run_at: Option<String>,
+    pub every_ms: Option<u64>,
+    pub command: Option<String>,
+    pub enabled: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub struct MemoryClearBody {
+    pub scope: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -110,148 +196,28 @@ struct IntegrationSettingsPayload {
     integrations: Vec<IntegrationSettingsEntry>,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct DashboardAiIntegrationSpec {
-    id: &'static str,
-    integration_name: &'static str,
-    provider_id: &'static str,
-    requires_api_key: bool,
-    supports_api_url: bool,
-    model_options: &'static [&'static str],
+const OLLAMA_INTEGRATION_ID: &str = "ollama";
+const OLLAMA_INTEGRATION_NAME: &str = "Ollama";
+const OLLAMA_FALLBACK_MODELS: &[&str] = &["llama3.2", "qwen2.5-coder:7b", "phi4"];
+
+#[derive(Debug, Default, Clone)]
+struct OllamaDashboardInfo {
+    endpoint: String,
+    reachable: bool,
+    installed_models: Vec<String>,
+    loaded_models: Vec<String>,
+    active_model_loaded: bool,
 }
 
-const DASHBOARD_AI_INTEGRATION_SPECS: &[DashboardAiIntegrationSpec] = &[
-    DashboardAiIntegrationSpec {
-        id: "openrouter",
-        integration_name: "OpenRouter",
-        provider_id: "openrouter",
-        requires_api_key: true,
-        supports_api_url: false,
-        model_options: &[
-            "anthropic/claude-sonnet-4-6",
-            "openai/gpt-5.2",
-            "google/gemini-3.1-pro",
-        ],
-    },
-    DashboardAiIntegrationSpec {
-        id: "anthropic",
-        integration_name: "Anthropic",
-        provider_id: "anthropic",
-        requires_api_key: true,
-        supports_api_url: false,
-        model_options: &["claude-sonnet-4-6", "claude-opus-4-6"],
-    },
-    DashboardAiIntegrationSpec {
-        id: "openai",
-        integration_name: "OpenAI",
-        provider_id: "openai",
-        requires_api_key: true,
-        supports_api_url: false,
-        model_options: &["gpt-5.2", "gpt-5.2-codex", "gpt-4o"],
-    },
-    DashboardAiIntegrationSpec {
-        id: "google",
-        integration_name: "Google",
-        provider_id: "gemini",
-        requires_api_key: true,
-        supports_api_url: false,
-        model_options: &["google/gemini-3.1-pro", "google/gemini-3-flash"],
-    },
-    DashboardAiIntegrationSpec {
-        id: "deepseek",
-        integration_name: "DeepSeek",
-        provider_id: "deepseek",
-        requires_api_key: true,
-        supports_api_url: false,
-        model_options: &["deepseek/deepseek-reasoner", "deepseek/deepseek-chat"],
-    },
-    DashboardAiIntegrationSpec {
-        id: "xai",
-        integration_name: "xAI",
-        provider_id: "xai",
-        requires_api_key: true,
-        supports_api_url: false,
-        model_options: &["x-ai/grok-4", "x-ai/grok-3"],
-    },
-    DashboardAiIntegrationSpec {
-        id: "mistral",
-        integration_name: "Mistral",
-        provider_id: "mistral",
-        requires_api_key: true,
-        supports_api_url: false,
-        model_options: &["mistral-large-latest", "codestral-latest"],
-    },
-    DashboardAiIntegrationSpec {
-        id: "ollama",
-        integration_name: "Ollama",
-        provider_id: "ollama",
-        requires_api_key: false,
-        supports_api_url: true,
-        model_options: &["llama3.2", "qwen2.5-coder:7b", "phi4"],
-    },
-    DashboardAiIntegrationSpec {
-        id: "perplexity",
-        integration_name: "Perplexity",
-        provider_id: "perplexity",
-        requires_api_key: true,
-        supports_api_url: false,
-        model_options: &["sonar-pro", "sonar-reasoning-pro", "sonar"],
-    },
-    DashboardAiIntegrationSpec {
-        id: "venice",
-        integration_name: "Venice",
-        provider_id: "venice",
-        requires_api_key: true,
-        supports_api_url: false,
-        model_options: &["zai-org-glm-5", "venice-uncensored"],
-    },
-    DashboardAiIntegrationSpec {
-        id: "vercel",
-        integration_name: "Vercel AI",
-        provider_id: "vercel",
-        requires_api_key: true,
-        supports_api_url: false,
-        model_options: &[
-            "openai/gpt-5.2",
-            "anthropic/claude-sonnet-4-6",
-            "google/gemini-3.1-pro",
-        ],
-    },
-    DashboardAiIntegrationSpec {
-        id: "cloudflare",
-        integration_name: "Cloudflare AI",
-        provider_id: "cloudflare",
-        requires_api_key: true,
-        supports_api_url: false,
-        model_options: &[
-            "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-            "@cf/qwen/qwen3-32b",
-        ],
-    },
-];
-
-fn find_dashboard_spec(id: &str) -> Option<&'static DashboardAiIntegrationSpec> {
-    DASHBOARD_AI_INTEGRATION_SPECS
-        .iter()
-        .find(|spec| spec.id.eq_ignore_ascii_case(id))
+#[derive(Debug, Deserialize)]
+struct OllamaModelListResponse {
+    #[serde(default)]
+    models: Vec<OllamaModelListEntry>,
 }
 
-fn provider_alias_matches(spec: &DashboardAiIntegrationSpec, provider: &str) -> bool {
-    let normalized = provider.trim().to_ascii_lowercase();
-    match spec.id {
-        "google" => matches!(normalized.as_str(), "google" | "google-gemini" | "gemini"),
-        "xai" => matches!(normalized.as_str(), "xai" | "grok"),
-        "vercel" => matches!(normalized.as_str(), "vercel" | "vercel-ai"),
-        "cloudflare" => matches!(normalized.as_str(), "cloudflare" | "cloudflare-ai"),
-        _ => normalized == spec.provider_id,
-    }
-}
-
-fn is_spec_active(config: &crate::config::Config, spec: &DashboardAiIntegrationSpec) -> bool {
-    config
-        .default_provider
-        .as_deref()
-        .is_some_and(|provider| provider_alias_matches(spec, provider))
+#[derive(Debug, Deserialize)]
+struct OllamaModelListEntry {
+    name: String,
 }
 
 fn has_non_empty(value: Option<&str>) -> bool {
@@ -264,114 +230,177 @@ fn config_revision(config: &crate::config::Config) -> String {
     format!("{digest:x}")
 }
 
-fn active_dashboard_provider_id(config: &crate::config::Config) -> Option<String> {
-    DASHBOARD_AI_INTEGRATION_SPECS.iter().find_map(|spec| {
-        if is_spec_active(config, spec) {
-            Some(spec.id.to_string())
-        } else {
-            None
+fn normalize_ollama_base_url(config: &crate::config::Config) -> String {
+    let raw = config.api_url.as_deref().unwrap_or("http://localhost:11434");
+    let trimmed = raw.trim().trim_end_matches('/');
+    let trimmed = trimmed.strip_suffix("/api").unwrap_or(trimmed);
+    if trimmed.is_empty() {
+        "http://localhost:11434".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+async fn fetch_ollama_dashboard_info(
+    config: &crate::config::Config,
+) -> OllamaDashboardInfo {
+    let endpoint = normalize_ollama_base_url(config);
+    let client = crate::config::build_runtime_proxy_client_with_timeouts("provider.ollama", 30, 5);
+    let auth_token = config
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+
+    async fn fetch_model_names(
+        client: &reqwest::Client,
+        endpoint: &str,
+        auth_token: Option<&str>,
+        suffix: &str,
+    ) -> Option<Vec<String>> {
+        let url = format!("{endpoint}{suffix}");
+        let mut request = client.get(url);
+        if let Some(token) = auth_token {
+            request = request.bearer_auth(token);
         }
-    })
+
+        let Ok(response) = request.send().await else {
+            return None;
+        };
+        if !response.status().is_success() {
+            return None;
+        }
+        let Ok(payload) = response.json::<OllamaModelListResponse>().await else {
+            return None;
+        };
+
+        let mut names: Vec<String> = payload
+            .models
+            .into_iter()
+            .map(|model| model.name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .collect();
+        names.sort();
+        names.dedup();
+        Some(names)
+    }
+
+    let installed_models =
+        fetch_model_names(&client, &endpoint, auth_token.as_deref(), "/api/tags").await;
+    let loaded_models =
+        fetch_model_names(&client, &endpoint, auth_token.as_deref(), "/api/ps").await;
+    let reachable = installed_models.is_some() || loaded_models.is_some();
+    let installed_models = installed_models.unwrap_or_default();
+    let loaded_models = loaded_models.unwrap_or_default();
+    let active_model = config.default_model.as_deref().unwrap_or_default().trim();
+
+    OllamaDashboardInfo {
+        endpoint,
+        reachable,
+        active_model_loaded: !active_model.is_empty()
+            && loaded_models.iter().any(|model| model == active_model),
+        installed_models,
+        loaded_models,
+    }
+}
+
+fn active_dashboard_provider_id(config: &crate::config::Config) -> Option<String> {
+    config
+        .default_provider
+        .as_deref()
+        .is_some_and(|provider| provider.trim().eq_ignore_ascii_case(OLLAMA_INTEGRATION_ID))
+        .then(|| OLLAMA_INTEGRATION_ID.to_string())
 }
 
 fn build_integration_settings_payload(
     config: &crate::config::Config,
+    ollama: &OllamaDashboardInfo,
 ) -> IntegrationSettingsPayload {
     let all_integrations = crate::integrations::registry::all_integrations();
-    let mut entries = Vec::new();
-
-    for spec in DASHBOARD_AI_INTEGRATION_SPECS {
-        let Some(registry_entry) = all_integrations
+    let registry_entry = all_integrations
+        .iter()
+        .find(|entry| entry.name == OLLAMA_INTEGRATION_NAME);
+    let is_active_provider = config
+        .default_provider
+        .as_deref()
+        .is_some_and(|provider| provider.trim().eq_ignore_ascii_case(OLLAMA_INTEGRATION_ID));
+    let has_key = has_non_empty(config.api_key.as_deref());
+    let has_model = has_non_empty(config.default_model.as_deref());
+    let has_api_url = has_non_empty(config.api_url.as_deref());
+    let model_options = if ollama.installed_models.is_empty() {
+        OLLAMA_FALLBACK_MODELS
             .iter()
-            .find(|entry| entry.name == spec.integration_name)
-        else {
-            continue;
-        };
-
-        let status = (registry_entry.status_fn)(config);
-        let is_active_provider = is_spec_active(config, spec);
-        let has_key = has_non_empty(config.api_key.as_deref());
-        let has_model = is_active_provider && has_non_empty(config.default_model.as_deref());
-        let has_api_url = is_active_provider && has_non_empty(config.api_url.as_deref());
-
-        let mut fields = vec![
-            IntegrationCredentialsField {
-                key: "api_key".to_string(),
-                label: "API Key".to_string(),
-                required: spec.requires_api_key,
-                has_value: has_key,
-                input_type: "secret",
-                options: Vec::new(),
-                current_value: None,
-                masked_value: has_key.then(|| "••••••••".to_string()),
-            },
-            IntegrationCredentialsField {
-                key: "default_model".to_string(),
-                label: "Default Model".to_string(),
-                required: false,
-                has_value: has_model,
-                input_type: "select",
-                options: spec
-                    .model_options
-                    .iter()
-                    .map(|value| (*value).to_string())
-                    .collect(),
-                current_value: if is_active_provider {
-                    config
-                        .default_model
-                        .as_deref()
-                        .filter(|value| !value.trim().is_empty())
-                        .map(std::string::ToString::to_string)
-                } else {
-                    None
-                },
-                masked_value: None,
-            },
-        ];
-
-        if spec.supports_api_url {
-            fields.push(IntegrationCredentialsField {
-                key: "api_url".to_string(),
-                label: "Base URL".to_string(),
-                required: false,
-                has_value: has_api_url,
-                input_type: "text",
-                options: Vec::new(),
-                current_value: if is_active_provider {
-                    config
-                        .api_url
-                        .as_deref()
-                        .filter(|value| !value.trim().is_empty())
-                        .map(std::string::ToString::to_string)
-                } else {
-                    None
-                },
-                masked_value: None,
-            });
-        }
-
-        let configured = if spec.requires_api_key {
-            is_active_provider && has_key
+            .map(|value| (*value).to_string())
+            .collect()
+    } else {
+        ollama.installed_models.clone()
+    };
+    let fields = vec![
+        IntegrationCredentialsField {
+            key: "default_model".to_string(),
+            label: "Installed Model".to_string(),
+            required: false,
+            has_value: has_model,
+            input_type: "select",
+            options: model_options,
+            current_value: config
+                .default_model
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .map(std::string::ToString::to_string),
+            masked_value: None,
+        },
+        IntegrationCredentialsField {
+            key: "api_url".to_string(),
+            label: "Ollama Endpoint".to_string(),
+            required: false,
+            has_value: has_api_url,
+            input_type: "text",
+            options: Vec::new(),
+            current_value: config
+                .api_url
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .map(std::string::ToString::to_string),
+            masked_value: None,
+        },
+        IntegrationCredentialsField {
+            key: "api_key".to_string(),
+            label: "API Key".to_string(),
+            required: false,
+            has_value: has_key,
+            input_type: "secret",
+            options: Vec::new(),
+            current_value: None,
+            masked_value: has_key.then(|| "••••••••".to_string()),
+        },
+    ];
+    let entry = IntegrationSettingsEntry {
+        id: OLLAMA_INTEGRATION_ID.to_string(),
+        name: registry_entry
+            .map(|entry| entry.name.to_string())
+            .unwrap_or_else(|| OLLAMA_INTEGRATION_NAME.to_string()),
+        description: registry_entry
+            .map(|entry| entry.description.to_string())
+            .unwrap_or_else(|| "Local Ollama runtime and model selection".to_string()),
+        category: registry_entry
+            .map(|entry| entry.category)
+            .unwrap_or(crate::integrations::IntegrationCategory::AiModel),
+        status: if is_active_provider {
+            crate::integrations::IntegrationStatus::Active
         } else {
-            is_active_provider
-        };
-
-        entries.push(IntegrationSettingsEntry {
-            id: spec.id.to_string(),
-            name: registry_entry.name.to_string(),
-            description: registry_entry.description.to_string(),
-            category: registry_entry.category,
-            status,
-            configured,
-            activates_default_provider: true,
-            fields,
-        });
-    }
+            crate::integrations::IntegrationStatus::Available
+        },
+        configured: is_active_provider,
+        activates_default_provider: true,
+        fields,
+    };
 
     IntegrationSettingsPayload {
         revision: config_revision(config),
         active_default_provider_integration_id: active_dashboard_provider_id(config),
-        integrations: entries,
+        integrations: vec![entry],
     }
 }
 
@@ -380,11 +409,10 @@ fn apply_integration_credentials_update(
     integration_id: &str,
     fields: &BTreeMap<String, String>,
 ) -> Result<crate::config::Config, String> {
-    let Some(spec) = find_dashboard_spec(integration_id) else {
+    if !integration_id.eq_ignore_ascii_case(OLLAMA_INTEGRATION_ID) {
         return Err(format!("Unknown integration id: {integration_id}"));
-    };
+    }
 
-    let was_active_provider = is_spec_active(config, spec);
     let mut updated = config.clone();
 
     for (key, value) in fields {
@@ -405,12 +433,6 @@ fn apply_integration_credentials_update(
                 };
             }
             "api_url" => {
-                if !spec.supports_api_url {
-                    return Err(format!(
-                        "Integration '{}' does not support api_url",
-                        spec.integration_name
-                    ));
-                }
                 updated.api_url = if trimmed.is_empty() {
                     None
                 } else {
@@ -425,15 +447,9 @@ fn apply_integration_credentials_update(
         }
     }
 
-    updated.default_provider = Some(spec.provider_id.to_string());
-    if !fields.contains_key("default_model") && !was_active_provider {
-        updated.default_model = spec.model_options.first().map(|value| (*value).to_string());
-    }
-
-    if !spec.supports_api_url && !was_active_provider {
-        updated.api_url = None;
-    } else if spec.supports_api_url && !fields.contains_key("api_url") && !was_active_provider {
-        updated.api_url = None;
+    updated.default_provider = Some(OLLAMA_INTEGRATION_ID.to_string());
+    if !fields.contains_key("default_model") && !has_non_empty(updated.default_model.as_deref()) {
+        updated.default_model = Some(OLLAMA_FALLBACK_MODELS[0].to_string());
     }
 
     updated
@@ -453,8 +469,10 @@ pub async fn handle_api_status(
         return e.into_response();
     }
 
+    let runtime = state.runtime_snapshot();
     let config = state.config.lock().clone();
     let health = crate::health::snapshot();
+    let ollama = fetch_ollama_dashboard_info(&config).await;
 
     let mut channels = serde_json::Map::new();
 
@@ -463,16 +481,22 @@ pub async fn handle_api_status(
     }
 
     let body = serde_json::json!({
-        "provider": config.default_provider,
-        "model": state.model,
-        "temperature": state.temperature,
+        "provider": "ollama",
+        "model": runtime.model,
+        "temperature": runtime.temperature,
         "uptime_seconds": health.uptime_seconds,
         "gateway_port": config.gateway.port,
         "locale": "en",
-        "memory_backend": state.mem.name(),
-        "paired": state.pairing.is_paired(),
+        "memory_backend": runtime.mem.name(),
         "channels": channels,
         "health": health,
+        "ollama": {
+            "endpoint": ollama.endpoint,
+            "reachable": ollama.reachable,
+            "installed_models": ollama.installed_models,
+            "loaded_models": ollama.loaded_models,
+            "active_model_loaded": ollama.active_model_loaded,
+        },
     });
 
     Json(body).into_response()
@@ -553,6 +577,17 @@ pub async fn handle_api_config_put(
             .into_response();
     }
 
+    let runtime_snapshot = match build_gateway_runtime_snapshot(&new_config) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": format!("Config cannot be applied live: {error}")})),
+            )
+                .into_response();
+        }
+    };
+
     // Save to disk
     if let Err(e) = new_config.save().await {
         return (
@@ -564,6 +599,7 @@ pub async fn handle_api_config_put(
 
     // Update in-memory config
     *state.config.lock() = new_config;
+    state.replace_runtime_snapshot(runtime_snapshot);
 
     Json(serde_json::json!({"status": "ok"})).into_response()
 }
@@ -577,7 +613,8 @@ pub async fn handle_api_tools(
         return e.into_response();
     }
 
-    let tools: Vec<serde_json::Value> = state
+    let runtime = state.runtime_snapshot();
+    let tools: Vec<serde_json::Value> = runtime
         .tools_registry
         .iter()
         .map(|spec| {
@@ -604,20 +641,7 @@ pub async fn handle_api_cron_list(
     let config = state.config.lock().clone();
     match crate::cron::list_jobs(&config) {
         Ok(jobs) => {
-            let jobs_json: Vec<serde_json::Value> = jobs
-                .iter()
-                .map(|job| {
-                    serde_json::json!({
-                        "id": job.id,
-                        "name": job.name,
-                        "command": job.command,
-                        "next_run": job.next_run.to_rfc3339(),
-                        "last_run": job.last_run.map(|t| t.to_rfc3339()),
-                        "last_status": job.last_status,
-                        "enabled": job.enabled,
-                    })
-                })
-                .collect();
+            let jobs_json: Vec<serde_json::Value> = jobs.iter().map(cron_job_json).collect();
             Json(serde_json::json!({"jobs": jobs_json})).into_response()
         }
         Err(e) => (
@@ -639,22 +663,52 @@ pub async fn handle_api_cron_add(
     }
 
     let config = state.config.lock().clone();
-    let schedule = crate::cron::Schedule::Cron {
-        expr: body.schedule,
-        tz: None,
+    let schedule = match parse_cron_schedule(
+        body.schedule_kind.as_deref(),
+        body.schedule.as_deref(),
+        body.run_at.as_deref(),
+        body.every_ms,
+    ) {
+        Ok(schedule) => schedule,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": error})),
+            )
+                .into_response();
+        }
     };
 
     match crate::cron::add_shell_job(&config, body.name, schedule, &body.command) {
-        Ok(job) => Json(serde_json::json!({
-            "status": "ok",
-            "job": {
-                "id": job.id,
-                "name": job.name,
-                "command": job.command,
-                "enabled": job.enabled,
-            }
-        }))
-        .into_response(),
+        Ok(job) => {
+            let job = if body.enabled == Some(false) {
+                match crate::cron::update_job(
+                    &config,
+                    &job.id,
+                    crate::cron::CronJobPatch {
+                        enabled: Some(false),
+                        ..crate::cron::CronJobPatch::default()
+                    },
+                ) {
+                    Ok(updated) => updated,
+                    Err(error) => {
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({"error": format!("Failed to disable new cron job: {error}")})),
+                        )
+                            .into_response();
+                    }
+                }
+            } else {
+                job
+            };
+
+            Json(serde_json::json!({
+                "status": "ok",
+                "job": cron_job_json(&job),
+            }))
+            .into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": format!("Failed to add cron job: {e}")})),
@@ -684,6 +738,129 @@ pub async fn handle_api_cron_delete(
     }
 }
 
+/// PUT /api/cron/:id — update an existing cron job
+pub async fn handle_api_cron_update(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<CronUpdateBody>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let schedule = if body.schedule_kind.is_some()
+        || body.schedule.is_some()
+        || body.run_at.is_some()
+        || body.every_ms.is_some()
+    {
+        match parse_cron_schedule(
+            body.schedule_kind.as_deref(),
+            body.schedule.as_deref(),
+            body.run_at.as_deref(),
+            body.every_ms,
+        ) {
+            Ok(schedule) => Some(schedule),
+            Err(error) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": error})),
+                )
+                    .into_response();
+            }
+        }
+    } else {
+        None
+    };
+
+    let config = state.config.lock().clone();
+    match crate::cron::update_job(
+        &config,
+        &id,
+        crate::cron::CronJobPatch {
+            schedule,
+            command: body.command,
+            name: body.name,
+            enabled: body.enabled,
+            ..crate::cron::CronJobPatch::default()
+        },
+    ) {
+        Ok(job) => Json(serde_json::json!({
+            "status": "ok",
+            "job": cron_job_json(&job),
+        }))
+        .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to update cron job: {error}")})),
+        )
+            .into_response(),
+    }
+}
+
+/// POST /api/cron/:id/run — execute a cron job immediately
+pub async fn handle_api_cron_run(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let config = state.config.lock().clone();
+    let job = match crate::cron::get_job(&config, &id) {
+        Ok(job) => job,
+        Err(error) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": format!("Failed to load cron job: {error}")})),
+            )
+                .into_response();
+        }
+    };
+
+    let started_at = Utc::now();
+    let (success, output) = crate::cron::scheduler::execute_job_now(&config, &job).await;
+    let finished_at = Utc::now();
+    let duration_ms = (finished_at - started_at).num_milliseconds();
+    let _ = crate::cron::record_run(
+        &config,
+        &job.id,
+        started_at,
+        finished_at,
+        if success { "ok" } else { "error" },
+        Some(&output),
+        duration_ms,
+    );
+
+    if job.delete_after_run && matches!(job.schedule, crate::cron::Schedule::At { .. }) {
+        if success {
+            let _ = crate::cron::remove_job(&config, &job.id);
+        } else {
+            let _ = crate::cron::record_last_run(&config, &job.id, finished_at, false, &output);
+            let _ = crate::cron::update_job(
+                &config,
+                &job.id,
+                crate::cron::CronJobPatch {
+                    enabled: Some(false),
+                    ..crate::cron::CronJobPatch::default()
+                },
+            );
+        }
+    } else {
+        let _ = crate::cron::reschedule_after_run(&config, &job, success, &output);
+    }
+
+    let refreshed = crate::cron::get_job(&config, &id).ok();
+    Json(serde_json::json!({
+        "status": if success { "ok" } else { "error" },
+        "output": output,
+        "job": refreshed.as_ref().map(cron_job_json),
+    }))
+    .into_response()
+}
+
 /// GET /api/integrations — list all integrations with status
 pub async fn handle_api_integrations(
     State(state): State<AppState>,
@@ -694,20 +871,22 @@ pub async fn handle_api_integrations(
     }
 
     let config = state.config.lock().clone();
-    let entries = crate::integrations::registry::all_integrations();
+    let ollama_status = if config
+        .default_provider
+        .as_deref()
+        .is_some_and(|provider| provider.trim().eq_ignore_ascii_case(OLLAMA_INTEGRATION_ID))
+    {
+        crate::integrations::IntegrationStatus::Active
+    } else {
+        crate::integrations::IntegrationStatus::Available
+    };
 
-    let integrations: Vec<serde_json::Value> = entries
-        .iter()
-        .map(|entry| {
-            let status = (entry.status_fn)(&config);
-            serde_json::json!({
-                "name": entry.name,
-                "description": entry.description,
-                "category": entry.category,
-                "status": status,
-            })
-        })
-        .collect();
+    let integrations = vec![serde_json::json!({
+        "name": OLLAMA_INTEGRATION_NAME,
+        "description": "Local Ollama runtime and model selection",
+        "category": crate::integrations::IntegrationCategory::AiModel,
+        "status": ollama_status,
+    })];
 
     Json(serde_json::json!({"integrations": integrations})).into_response()
 }
@@ -722,7 +901,8 @@ pub async fn handle_api_integrations_settings(
     }
 
     let config = state.config.lock().clone();
-    let payload = build_integration_settings_payload(&config);
+    let ollama = fetch_ollama_dashboard_info(&config).await;
+    let payload = build_integration_settings_payload(&config, &ollama);
     Json(payload).into_response()
 }
 
@@ -794,6 +974,17 @@ pub async fn handle_api_integration_credentials_put(
         .into_response();
     }
 
+    let runtime_snapshot = match build_gateway_runtime_snapshot(&updated) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": format!("Integration config cannot be applied live: {error}")})),
+            )
+                .into_response();
+        }
+    };
+
     if let Err(error) = updated.save().await {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -803,6 +994,7 @@ pub async fn handle_api_integration_credentials_put(
     }
 
     *state.config.lock() = updated;
+    state.replace_runtime_snapshot(runtime_snapshot);
     Json(serde_json::json!({
         "status": "ok",
         "revision": updated_revision,
@@ -820,7 +1012,7 @@ pub async fn handle_api_doctor(
     }
 
     let config = state.config.lock().clone();
-    let results = crate::doctor::diagnose(&config);
+    let results = crate::doctor::diagnose_gateway(&config);
 
     let ok_count = results
         .iter()
@@ -856,9 +1048,10 @@ pub async fn handle_api_memory_list(
         return e.into_response();
     }
 
+    let runtime = state.runtime_snapshot();
     if let Some(ref query) = params.query {
         // Search mode
-        match state.mem.recall(query, 50, None).await {
+        match runtime.mem.recall(query, 50, None).await {
             Ok(entries) => Json(serde_json::json!({"entries": entries})).into_response(),
             Err(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -868,14 +1061,9 @@ pub async fn handle_api_memory_list(
         }
     } else {
         // List mode
-        let category = params.category.as_deref().map(|cat| match cat {
-            "core" => crate::memory::MemoryCategory::Core,
-            "daily" => crate::memory::MemoryCategory::Daily,
-            "conversation" => crate::memory::MemoryCategory::Conversation,
-            other => crate::memory::MemoryCategory::Custom(other.to_string()),
-        });
+        let category = params.category.as_deref().map(parse_memory_category);
 
-        match state.mem.list(category.as_ref(), None).await {
+        match runtime.mem.list(category.as_ref(), None).await {
             Ok(entries) => Json(serde_json::json!({"entries": entries})).into_response(),
             Err(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -896,18 +1084,14 @@ pub async fn handle_api_memory_store(
         return e.into_response();
     }
 
+    let runtime = state.runtime_snapshot();
     let category = body
         .category
         .as_deref()
-        .map(|cat| match cat {
-            "core" => crate::memory::MemoryCategory::Core,
-            "daily" => crate::memory::MemoryCategory::Daily,
-            "conversation" => crate::memory::MemoryCategory::Conversation,
-            other => crate::memory::MemoryCategory::Custom(other.to_string()),
-        })
+        .map(parse_memory_category)
         .unwrap_or(crate::memory::MemoryCategory::Core);
 
-    match state
+    match runtime
         .mem
         .store(&body.key, &body.content, category, None)
         .await
@@ -931,7 +1115,8 @@ pub async fn handle_api_memory_delete(
         return e.into_response();
     }
 
-    match state.mem.forget(&key).await {
+    let runtime = state.runtime_snapshot();
+    match runtime.mem.forget(&key).await {
         Ok(deleted) => {
             Json(serde_json::json!({"status": "ok", "deleted": deleted})).into_response()
         }
@@ -941,6 +1126,67 @@ pub async fn handle_api_memory_delete(
         )
             .into_response(),
     }
+}
+
+/// POST /api/memory/clear — clear conversation or all memory entries
+pub async fn handle_api_memory_clear(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<MemoryClearBody>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let runtime = state.runtime_snapshot();
+    let scope = body.scope.unwrap_or_else(|| "conversation".to_string());
+    let normalized_scope = scope.trim().to_ascii_lowercase();
+    let category = match normalized_scope.as_str() {
+        "all" => None,
+        "conversation" => Some(crate::memory::MemoryCategory::Conversation),
+        "core" => Some(crate::memory::MemoryCategory::Core),
+        "daily" => Some(crate::memory::MemoryCategory::Daily),
+        other => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": format!("Unsupported memory clear scope: {other}")})),
+            )
+                .into_response();
+        }
+    };
+
+    let entries = match runtime.mem.list(category.as_ref(), None).await {
+        Ok(entries) => entries,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Memory list failed: {error}")})),
+            )
+                .into_response();
+        }
+    };
+
+    let mut deleted = 0usize;
+    for entry in entries {
+        match runtime.mem.forget(&entry.key).await {
+            Ok(true) => deleted += 1,
+            Ok(false) => {}
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": format!("Memory clear failed: {error}")})),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "scope": normalized_scope,
+        "deleted": deleted,
+    }))
+    .into_response()
 }
 
 /// GET /api/cost — cost summary

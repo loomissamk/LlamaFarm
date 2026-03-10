@@ -4,7 +4,7 @@
 //! - Proper HTTP/1.1 parsing and compliance
 //! - Content-Length validation (handled by hyper)
 //! - Request body size limits (64KB max)
-//! - Request timeouts (30s) to prevent slow-loris attacks
+//! - Request timeouts (default 30s, configurable) to prevent slow-loris attacks
 //! - Header sanitization (handled by axum/hyper)
 
 pub mod api;
@@ -37,7 +37,7 @@ use axum::{
     routing::{delete, get, post, put},
     Router,
 };
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -48,8 +48,8 @@ use uuid::Uuid;
 
 /// Maximum request body size (64KB) — prevents memory exhaustion
 pub const MAX_BODY_SIZE: usize = 65_536;
-/// Request timeout (30s) — prevents slow-loris attacks
-pub const REQUEST_TIMEOUT_SECS: u64 = 30;
+/// Default request timeout (30s) — prevents slow-loris attacks
+pub const REQUEST_TIMEOUT_SECS_DEFAULT: u64 = 30;
 /// Sliding window used by gateway rate limiting.
 pub const RATE_LIMIT_WINDOW_SECS: u64 = 60;
 /// Fallback max distinct client keys tracked in gateway rate limiter.
@@ -286,6 +286,97 @@ fn normalize_max_keys(configured: usize, fallback: usize) -> usize {
 
 /// Shared state for all axum handlers
 #[derive(Clone)]
+pub struct GatewayRuntimeSnapshot {
+    pub provider: Arc<dyn Provider>,
+    pub model: String,
+    pub temperature: f64,
+    pub mem: Arc<dyn Memory>,
+    pub tools_registry: Arc<Vec<ToolSpec>>,
+    pub tools_registry_exec: Arc<Vec<Box<dyn Tool>>>,
+}
+
+fn default_gateway_model(config: &Config) -> String {
+    config
+        .default_model
+        .clone()
+        .unwrap_or_else(|| "llama3.2".to_string())
+}
+
+fn build_provider_runtime_options(config: &Config) -> providers::ProviderRuntimeOptions {
+    providers::ProviderRuntimeOptions {
+        auth_profile_override: None,
+        provider_api_url: config.api_url.clone(),
+        zeroclaw_dir: config.config_path.parent().map(std::path::PathBuf::from),
+        secrets_encrypt: config.secrets.encrypt,
+        reasoning_enabled: config.runtime.reasoning_enabled,
+        reasoning_level: config.effective_provider_reasoning_level(),
+        custom_provider_api_mode: config.provider_api.map(|mode| mode.as_compatible_mode()),
+        max_tokens_override: None,
+        model_support_vision: config.model_support_vision,
+    }
+}
+
+pub(crate) fn build_gateway_runtime_snapshot(config: &Config) -> Result<GatewayRuntimeSnapshot> {
+    let provider_name = config.default_provider.as_deref().unwrap_or("ollama");
+    let provider: Arc<dyn Provider> = Arc::from(providers::create_resilient_provider_with_options(
+        provider_name,
+        config.api_key.as_deref(),
+        config.api_url.as_deref(),
+        &config.reliability,
+        &build_provider_runtime_options(config),
+    )?);
+
+    let mem: Arc<dyn Memory> = Arc::from(memory::create_memory_with_storage(
+        &config.memory,
+        Some(&config.storage.provider.config),
+        &config.workspace_dir,
+        config.api_key.as_deref(),
+    )?);
+    let runtime: Arc<dyn runtime::RuntimeAdapter> =
+        Arc::from(runtime::create_runtime(&config.runtime)?);
+    let security = Arc::new(SecurityPolicy::from_config(
+        &config.autonomy,
+        &config.workspace_dir,
+    ));
+
+    let (composio_key, composio_entity_id) = if config.composio.enabled {
+        (
+            config.composio.api_key.as_deref(),
+            Some(config.composio.entity_id.as_str()),
+        )
+    } else {
+        (None, None)
+    };
+
+    let tools_registry_exec: Arc<Vec<Box<dyn Tool>>> = Arc::new(tools::all_tools_with_runtime(
+        Arc::new(config.clone()),
+        &security,
+        runtime,
+        Arc::clone(&mem),
+        composio_key,
+        composio_entity_id,
+        &config.browser,
+        &config.http_request,
+        &config.web_fetch,
+        &config.workspace_dir,
+        &config.agents,
+        config.api_key.as_deref(),
+        config,
+    ));
+    let tools_registry: Arc<Vec<ToolSpec>> =
+        Arc::new(tools_registry_exec.iter().map(|tool| tool.spec()).collect());
+
+    Ok(GatewayRuntimeSnapshot {
+        provider,
+        model: default_gateway_model(config),
+        temperature: config.default_temperature,
+        mem,
+        tools_registry,
+        tools_registry_exec,
+    })
+}
+
+#[derive(Clone)]
 pub struct AppState {
     pub config: Arc<Mutex<Config>>,
     pub provider: Arc<dyn Provider>,
@@ -325,6 +416,31 @@ pub struct AppState {
     pub cost_tracker: Option<Arc<CostTracker>>,
     /// SSE broadcast channel for real-time events
     pub event_tx: tokio::sync::broadcast::Sender<serde_json::Value>,
+    /// Live provider/model/tool snapshot for hot-reload after config edits.
+    pub runtime_state: Option<Arc<RwLock<Arc<GatewayRuntimeSnapshot>>>>,
+}
+
+impl AppState {
+    pub(crate) fn runtime_snapshot(&self) -> Arc<GatewayRuntimeSnapshot> {
+        if let Some(runtime_state) = &self.runtime_state {
+            return runtime_state.read().clone();
+        }
+
+        Arc::new(GatewayRuntimeSnapshot {
+            provider: Arc::clone(&self.provider),
+            model: self.model.clone(),
+            temperature: self.temperature,
+            mem: Arc::clone(&self.mem),
+            tools_registry: Arc::clone(&self.tools_registry),
+            tools_registry_exec: Arc::clone(&self.tools_registry_exec),
+        })
+    }
+
+    pub(crate) fn replace_runtime_snapshot(&self, snapshot: GatewayRuntimeSnapshot) {
+        if let Some(runtime_state) = &self.runtime_state {
+            *runtime_state.write() = Arc::new(snapshot);
+        }
+    }
 }
 
 /// Run the HTTP gateway using axum with proper HTTP/1.1 compliance.
@@ -353,67 +469,13 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
     let actual_port = listener.local_addr()?.port();
     let display_addr = format!("{host}:{actual_port}");
 
-    let provider: Arc<dyn Provider> = Arc::from(providers::create_resilient_provider_with_options(
-        config.default_provider.as_deref().unwrap_or("openrouter"),
-        config.api_key.as_deref(),
-        config.api_url.as_deref(),
-        &config.reliability,
-        &providers::ProviderRuntimeOptions {
-            auth_profile_override: None,
-            provider_api_url: config.api_url.clone(),
-            zeroclaw_dir: config.config_path.parent().map(std::path::PathBuf::from),
-            secrets_encrypt: config.secrets.encrypt,
-            reasoning_enabled: config.runtime.reasoning_enabled,
-            reasoning_level: config.effective_provider_reasoning_level(),
-            custom_provider_api_mode: config.provider_api.map(|mode| mode.as_compatible_mode()),
-            max_tokens_override: None,
-            model_support_vision: config.model_support_vision,
-        },
-    )?);
-    let model = config
-        .default_model
-        .clone()
-        .unwrap_or_else(|| "anthropic/claude-sonnet-4".into());
-    let temperature = config.default_temperature;
-    let mem: Arc<dyn Memory> = Arc::from(memory::create_memory_with_storage(
-        &config.memory,
-        Some(&config.storage.provider.config),
-        &config.workspace_dir,
-        config.api_key.as_deref(),
-    )?);
-    let runtime: Arc<dyn runtime::RuntimeAdapter> =
-        Arc::from(runtime::create_runtime(&config.runtime)?);
-    let security = Arc::new(SecurityPolicy::from_config(
-        &config.autonomy,
-        &config.workspace_dir,
-    ));
-
-    let (composio_key, composio_entity_id) = if config.composio.enabled {
-        (
-            config.composio.api_key.as_deref(),
-            Some(config.composio.entity_id.as_str()),
-        )
-    } else {
-        (None, None)
-    };
-
-    let tools_registry_exec: Arc<Vec<Box<dyn Tool>>> = Arc::new(tools::all_tools_with_runtime(
-        Arc::new(config.clone()),
-        &security,
-        runtime,
-        Arc::clone(&mem),
-        composio_key,
-        composio_entity_id,
-        &config.browser,
-        &config.http_request,
-        &config.web_fetch,
-        &config.workspace_dir,
-        &config.agents,
-        config.api_key.as_deref(),
-        &config,
-    ));
-    let tools_registry: Arc<Vec<ToolSpec>> =
-        Arc::new(tools_registry_exec.iter().map(|t| t.spec()).collect());
+    let runtime_snapshot = Arc::new(build_gateway_runtime_snapshot(&config)?);
+    let provider = Arc::clone(&runtime_snapshot.provider);
+    let model = runtime_snapshot.model.clone();
+    let temperature = runtime_snapshot.temperature;
+    let mem = Arc::clone(&runtime_snapshot.mem);
+    let tools_registry = Arc::clone(&runtime_snapshot.tools_registry);
+    let tools_registry_exec = Arc::clone(&runtime_snapshot.tools_registry_exec);
     let max_tool_iterations = config.agent.max_tool_iterations;
     let multimodal_config = config.multimodal.clone();
 
@@ -694,7 +756,9 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         max_tool_iterations,
         cost_tracker,
         event_tx,
+        runtime_state: Some(Arc::new(RwLock::new(runtime_snapshot))),
     };
+    let request_timeout_secs = config.gateway.request_timeout_secs.max(1);
 
     // Config PUT needs larger body limit (1MB)
     let config_put_router = Router::new()
@@ -737,7 +801,9 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .route("/api/tools", get(api::handle_api_tools))
         .route("/api/cron", get(api::handle_api_cron_list))
         .route("/api/cron", post(api::handle_api_cron_add))
+        .route("/api/cron/{id}", put(api::handle_api_cron_update))
         .route("/api/cron/{id}", delete(api::handle_api_cron_delete))
+        .route("/api/cron/{id}/run", post(api::handle_api_cron_run))
         .route("/api/integrations", get(api::handle_api_integrations))
         .route(
             "/api/integrations/settings",
@@ -753,6 +819,7 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         )
         .route("/api/memory", get(api::handle_api_memory_list))
         .route("/api/memory", post(api::handle_api_memory_store))
+        .route("/api/memory/clear", post(api::handle_api_memory_clear))
         .route("/api/memory/{key}", delete(api::handle_api_memory_delete))
         .route("/api/cost", get(api::handle_api_cost))
         .route("/api/cli-tools", get(api::handle_api_cli_tools))
@@ -770,7 +837,7 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .layer(RequestBodyLimitLayer::new(MAX_BODY_SIZE))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
-            Duration::from_secs(REQUEST_TIMEOUT_SECS),
+            Duration::from_secs(request_timeout_secs),
         ))
         // ── SPA fallback: non-API GET requests serve index.html ──
         .fallback(get(static_files::handle_spa_fallback));
@@ -933,6 +1000,7 @@ async fn persist_pairing_tokens(config: Arc<Mutex<Config>>, pairing: &PairingGua
 
 /// Simple chat for webhook endpoint (no tools, for backward compatibility and testing).
 async fn run_gateway_chat_simple(state: &AppState, message: &str) -> anyhow::Result<String> {
+    let runtime = state.runtime_snapshot();
     let user_messages = vec![ChatMessage::user(message)];
 
     // Keep webhook/gateway prompts aligned with channel behavior by injecting
@@ -941,7 +1009,7 @@ async fn run_gateway_chat_simple(state: &AppState, message: &str) -> anyhow::Res
         let config_guard = state.config.lock();
         crate::channels::build_system_prompt(
             &config_guard.workspace_dir,
-            &state.model,
+            &runtime.model,
             &[], // tools - empty for simple chat
             &[], // skills
             Some(&config_guard.identity),
@@ -957,9 +1025,9 @@ async fn run_gateway_chat_simple(state: &AppState, message: &str) -> anyhow::Res
     let prepared =
         crate::multimodal::prepare_messages_for_provider(&messages, &multimodal_config).await?;
 
-    state
+    runtime
         .provider
-        .chat_with_history(&prepared.messages, &state.model, state.temperature)
+        .chat_with_history(&prepared.messages, &runtime.model, runtime.temperature)
         .await
 }
 
@@ -1184,6 +1252,7 @@ async fn handle_agent(
     headers: HeaderMap,
     body: Result<Json<AgentBody>, axum::extract::rejection::JsonRejection>,
 ) -> impl IntoResponse {
+    let runtime = state.runtime_snapshot();
     let rate_key =
         client_key_from_request(Some(peer_addr), &headers, state.trust_forwarded_headers);
     if !state.rate_limiter.allow_webhook(&rate_key) {
@@ -1228,9 +1297,10 @@ async fn handle_agent(
         return (StatusCode::BAD_REQUEST, Json(err));
     }
 
-    if state.auto_save {
+    if state.config.lock().memory.auto_save {
         let key = webhook_memory_key();
         let _ = state
+            .runtime_snapshot()
             .mem
             .store(&key, message, MemoryCategory::Conversation, None)
             .await;
@@ -1242,7 +1312,7 @@ async fn handle_agent(
         .default_provider
         .clone()
         .unwrap_or_else(|| "unknown".to_string());
-    let model_label = state.model.clone();
+    let model_label = runtime.model.clone();
     let started_at = Instant::now();
 
     state
@@ -1261,7 +1331,7 @@ async fn handle_agent(
 
     let response = match run_gateway_chat_with_tools(&state, message).await {
         Ok(response) => {
-            let safe = sanitize_gateway_response(&response, state.tools_registry_exec.as_ref());
+            let safe = sanitize_gateway_response(&response, runtime.tools_registry_exec.as_ref());
             state
                 .observer
                 .record_event(&crate::observability::ObserverEvent::LlmResponse {
@@ -1445,6 +1515,7 @@ async fn handle_whatsapp_message(
 
     // Process each message
     for msg in &messages {
+        let runtime = state.runtime_snapshot();
         tracing::info!(
             "WhatsApp message from {}: {}",
             msg.sender,
@@ -1455,6 +1526,7 @@ async fn handle_whatsapp_message(
         if state.auto_save {
             let key = whatsapp_memory_key(msg);
             let _ = state
+                .runtime_snapshot()
                 .mem
                 .store(&key, &msg.content, MemoryCategory::Conversation, None)
                 .await;
@@ -1463,7 +1535,7 @@ async fn handle_whatsapp_message(
         match run_gateway_chat_with_tools(&state, &msg.content).await {
             Ok(response) => {
                 let safe_response =
-                    sanitize_gateway_response(&response, state.tools_registry_exec.as_ref());
+                    sanitize_gateway_response(&response, runtime.tools_registry_exec.as_ref());
                 // Send reply via WhatsApp
                 if let Err(e) = wa
                     .send(&SendMessage::new(safe_response, &msg.reply_target))
@@ -1563,6 +1635,7 @@ async fn handle_linq_webhook(
 
     // Process each message
     for msg in &messages {
+        let runtime = state.runtime_snapshot();
         tracing::info!(
             "Linq message from {}: {}",
             msg.sender,
@@ -1573,6 +1646,7 @@ async fn handle_linq_webhook(
         if state.auto_save {
             let key = linq_memory_key(msg);
             let _ = state
+                .runtime_snapshot()
                 .mem
                 .store(&key, &msg.content, MemoryCategory::Conversation, None)
                 .await;
@@ -1582,7 +1656,7 @@ async fn handle_linq_webhook(
         match run_gateway_chat_with_tools(&state, &msg.content).await {
             Ok(response) => {
                 let safe_response =
-                    sanitize_gateway_response(&response, state.tools_registry_exec.as_ref());
+                    sanitize_gateway_response(&response, runtime.tools_registry_exec.as_ref());
                 // Send reply via Linq
                 if let Err(e) = linq
                     .send(&SendMessage::new(safe_response, &msg.reply_target))
@@ -1657,6 +1731,7 @@ async fn handle_wati_webhook(State(state): State<AppState>, body: Bytes) -> impl
 
     // Process each message
     for msg in &messages {
+        let runtime = state.runtime_snapshot();
         tracing::info!(
             "WATI message from {}: {}",
             msg.sender,
@@ -1667,6 +1742,7 @@ async fn handle_wati_webhook(State(state): State<AppState>, body: Bytes) -> impl
         if state.auto_save {
             let key = wati_memory_key(msg);
             let _ = state
+                .runtime_snapshot()
                 .mem
                 .store(&key, &msg.content, MemoryCategory::Conversation, None)
                 .await;
@@ -1676,7 +1752,7 @@ async fn handle_wati_webhook(State(state): State<AppState>, body: Bytes) -> impl
         match run_gateway_chat_with_tools(&state, &msg.content).await {
             Ok(response) => {
                 let safe_response =
-                    sanitize_gateway_response(&response, state.tools_registry_exec.as_ref());
+                    sanitize_gateway_response(&response, runtime.tools_registry_exec.as_ref());
                 // Send reply via WATI
                 if let Err(e) = wati
                     .send(&SendMessage::new(safe_response, &msg.reply_target))
@@ -1765,6 +1841,7 @@ async fn handle_nextcloud_talk_webhook(
     }
 
     for msg in &messages {
+        let runtime = state.runtime_snapshot();
         tracing::info!(
             "Nextcloud Talk message from {}: {}",
             msg.sender,
@@ -1774,6 +1851,7 @@ async fn handle_nextcloud_talk_webhook(
         if state.auto_save {
             let key = nextcloud_talk_memory_key(msg);
             let _ = state
+                .runtime_snapshot()
                 .mem
                 .store(&key, &msg.content, MemoryCategory::Conversation, None)
                 .await;
@@ -1782,7 +1860,7 @@ async fn handle_nextcloud_talk_webhook(
         match run_gateway_chat_with_tools(&state, &msg.content).await {
             Ok(response) => {
                 let safe_response =
-                    sanitize_gateway_response(&response, state.tools_registry_exec.as_ref());
+                    sanitize_gateway_response(&response, runtime.tools_registry_exec.as_ref());
                 if let Err(e) = nextcloud_talk
                     .send(&SendMessage::new(safe_response, &msg.reply_target))
                     .await
@@ -1856,6 +1934,7 @@ async fn handle_qq_webhook(
     }
 
     for msg in &messages {
+        let runtime = state.runtime_snapshot();
         tracing::info!(
             "QQ webhook message from {}: {}",
             msg.sender,
@@ -1865,6 +1944,7 @@ async fn handle_qq_webhook(
         if state.auto_save {
             let key = qq_memory_key(msg);
             let _ = state
+                .runtime_snapshot()
                 .mem
                 .store(&key, &msg.content, MemoryCategory::Conversation, None)
                 .await;
@@ -1873,7 +1953,7 @@ async fn handle_qq_webhook(
         match run_gateway_chat_with_tools(&state, &msg.content).await {
             Ok(response) => {
                 let safe_response =
-                    sanitize_gateway_response(&response, state.tools_registry_exec.as_ref());
+                    sanitize_gateway_response(&response, runtime.tools_registry_exec.as_ref());
                 if let Err(e) = qq
                     .send(
                         &SendMessage::new(safe_response, &msg.reply_target)
@@ -1928,7 +2008,11 @@ mod tests {
 
     #[test]
     fn security_timeout_is_30_seconds() {
-        assert_eq!(REQUEST_TIMEOUT_SECS, 30);
+        assert_eq!(REQUEST_TIMEOUT_SECS_DEFAULT, 30);
+        assert_eq!(
+            crate::config::GatewayConfig::default().request_timeout_secs,
+            30
+        );
     }
 
     #[test]

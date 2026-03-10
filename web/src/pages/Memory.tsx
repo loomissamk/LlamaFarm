@@ -6,9 +6,10 @@ import {
   Trash2,
   X,
   Filter,
+  Eraser,
 } from 'lucide-react';
 import type { MemoryEntry } from '@/types/api';
-import { getMemory, storeMemory, deleteMemory } from '@/lib/api';
+import { clearMemory, deleteMemory, getMemory, storeMemory } from '@/lib/api';
 
 function truncate(text: string, max: number): string {
   if (text.length <= max) return text;
@@ -28,6 +29,8 @@ export default function Memory() {
   const [categoryFilter, setCategoryFilter] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [clearingScope, setClearingScope] = useState<'conversation' | 'all' | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
 
   // Form state
   const [formKey, setFormKey] = useState('');
@@ -47,6 +50,12 @@ export default function Memory() {
   useEffect(() => {
     fetchEntries();
   }, []);
+
+  useEffect(() => {
+    if (!success) return;
+    const timer = window.setTimeout(() => setSuccess(null), 3500);
+    return () => window.clearTimeout(timer);
+  }, [success]);
 
   const handleSearch = () => {
     fetchEntries(search, categoryFilter);
@@ -94,6 +103,33 @@ export default function Memory() {
     }
   };
 
+  const handleClear = async (scope: 'conversation' | 'all') => {
+    const confirmed = window.confirm(
+      scope === 'conversation'
+        ? 'Clear conversation history from memory?'
+        : 'Clear all memory entries? This cannot be undone.',
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setClearingScope(scope);
+    setError(null);
+    try {
+      const result = await clearMemory(scope);
+      await getMemory(search || undefined, categoryFilter || undefined).then(setEntries);
+      setSuccess(
+        scope === 'conversation'
+          ? `Cleared ${result.deleted} conversation memory entries.`
+          : `Cleared ${result.deleted} memory entries.`,
+      );
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to clear memory');
+    } finally {
+      setClearingScope(null);
+    }
+  };
+
   if (error && entries.length === 0) {
     return (
       <div className="p-6">
@@ -114,14 +150,38 @@ export default function Memory() {
             Memory ({entries.length})
           </h2>
         </div>
-        <button
-          onClick={() => setShowForm(true)}
-          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-        >
-          <Plus className="h-4 w-4" />
-          Add Memory
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => void handleClear('conversation')}
+            disabled={clearingScope !== null}
+            className="inline-flex items-center gap-2 rounded-lg border border-amber-700/60 bg-amber-900/20 px-4 py-2 text-sm font-medium text-amber-300 transition-colors hover:bg-amber-900/30 disabled:opacity-50"
+          >
+            <Eraser className="h-4 w-4" />
+            {clearingScope === 'conversation' ? 'Clearing...' : 'Clear Chat History'}
+          </button>
+          <button
+            onClick={() => void handleClear('all')}
+            disabled={clearingScope !== null}
+            className="inline-flex items-center gap-2 rounded-lg border border-red-700/60 bg-red-900/20 px-4 py-2 text-sm font-medium text-red-300 transition-colors hover:bg-red-900/30 disabled:opacity-50"
+          >
+            <Trash2 className="h-4 w-4" />
+            {clearingScope === 'all' ? 'Clearing...' : 'Clear All'}
+          </button>
+          <button
+            onClick={() => setShowForm(true)}
+            className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+          >
+            <Plus className="h-4 w-4" />
+            Add Memory
+          </button>
+        </div>
       </div>
+
+      {success && (
+        <div className="rounded-lg border border-green-700 bg-green-900/30 p-3 text-sm text-green-300">
+          {success}
+        </div>
+      )}
 
       {/* Search and Filter */}
       <div className="flex flex-col sm:flex-row gap-3">

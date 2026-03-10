@@ -278,6 +278,7 @@ Lưu ý:
 | `port` | `3000` | Cổng lắng nghe gateway |
 | `require_pairing` | `true` | Yêu cầu ghép nối trước khi xác thực bearer |
 | `allow_public_bind` | `false` | Chặn lộ public do vô ý |
+| `request_timeout_secs` | `30` | Timeout HTTP cho các route của gateway |
 
 ## `[gateway.node_control]` (thử nghiệm)
 
@@ -307,6 +308,10 @@ Lưu ý:
 - `level = "full"` bỏ qua phê duyệt rủi ro trung bình cho shell execution, nhưng vẫn áp dụng guardrail đã cấu hình.
 - Phân tích toán tử/dấu phân cách shell nhận biết dấu ngoặc kép. Ký tự như `;` trong đối số được trích dẫn được xử lý là ký tự, không phải dấu phân cách lệnh.
 - Toán tử chuỗi shell không trích dẫn vẫn được kiểm tra bởi policy (`;`, `|`, `&&`, `||`, chạy nền và chuyển hướng).
+
+Mẫu hồ sơ cục bộ:
+
+- `dev/config.power.toml` bật hồ sơ local/operator mạnh hơn: mở rộng userland, Docker, web, memory và delegation, nhưng vẫn chặn cứng thao tác kernel, driver, firmware, initramfs, bootloader và phá hủy đĩa.
 
 ## `[memory]`
 

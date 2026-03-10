@@ -4,10 +4,10 @@ set -e
 # Detect execution context (root or dev/)
 if [ -f "dev/docker-compose.yml" ]; then
     BASE_DIR="dev"
-    HOST_TARGET_DIR="target"
+    HOST_TARGET_DIR=".dev-state"
 elif [ -f "docker-compose.yml" ] && [ "$(basename "$(pwd)")" == "dev" ]; then
     BASE_DIR="."
-    HOST_TARGET_DIR="../target"
+    HOST_TARGET_DIR="../.dev-state"
 else
     echo "❌ Error: Run this script from the project root or dev/ directory."
     exit 1
@@ -36,16 +36,23 @@ function load_env {
 }
 
 function ensure_config {
+    PROFILE="${LLAMAFARM_DEV_PROFILE:-${ZEROCLAW_DEV_PROFILE:-power}}"
     CONFIG_DIR="$HOST_TARGET_DIR/.zeroclaw"
     CONFIG_FILE="$CONFIG_DIR/config.toml"
     WORKSPACE_DIR="$CONFIG_DIR/workspace"
+    TEMPLATE_FILE="$BASE_DIR/config.template.toml"
+
+    if [ "$PROFILE" = "power" ]; then
+        TEMPLATE_FILE="$BASE_DIR/config.power.toml"
+    fi
 
     if [ ! -f "$CONFIG_FILE" ]; then
-        echo -e "${YELLOW}⚙️  Config file missing in target/.zeroclaw. Creating default dev config from template...${NC}"
+        echo -e "${YELLOW}⚙️  Config file missing in .dev-state/.zeroclaw. Creating '${PROFILE}' dev config from template...${NC}"
         mkdir -p "$WORKSPACE_DIR"
 
         # Copy template
-        cat "$BASE_DIR/config.template.toml" > "$CONFIG_FILE"
+        cat "$TEMPLATE_FILE" > "$CONFIG_FILE"
+        chmod 600 "$CONFIG_FILE"
     fi
 }
 
@@ -62,6 +69,10 @@ function print_help {
     echo -e "  ${GREEN}build${NC}   Rebuild images"
     echo -e "  ${GREEN}ci${NC}      Run local CI checks in Docker (see ./dev/ci.sh)"
     echo -e "  ${GREEN}clean${NC}   Stop and wipe workspace data"
+    echo ""
+    echo "Profiles:"
+    echo -e "  ${GREEN}./dev/cli.sh up${NC}                                Bootstrap the power local operator profile"
+    echo -e "  ${GREEN}LLAMAFARM_DEV_PROFILE=default ./dev/cli.sh up${NC} Bootstrap the default locked-down profile"
 }
 
 if [ -z "$1" ]; then
@@ -70,6 +81,8 @@ if [ -z "$1" ]; then
 fi
 
 load_env
+export LLAMAFARM_UID="${LLAMAFARM_UID:-$(id -u)}"
+export LLAMAFARM_GID="${LLAMAFARM_GID:-$(id -g)}"
 
 case "$1" in
     up)
@@ -79,8 +92,9 @@ case "$1" in
         docker compose -f "$COMPOSE_FILE" up -d
         echo -e "${GREEN}✅ Environment is running!${NC}"
         echo -e "   - Agent: http://127.0.0.1:42617"
+        echo -e "   - Chromium WebDriver: http://127.0.0.1:4444"
         echo -e "   - Sandbox: running (background)"
-        echo -e "   - Config: target/.zeroclaw/config.toml (Edit locally to apply changes)"
+        echo -e "   - Config: .dev-state/.zeroclaw/config.toml (Edit locally to apply changes)"
         ;;
 
     down)
@@ -121,7 +135,7 @@ case "$1" in
         ;;
 
     clean)
-        echo -e "${RED}⚠️  WARNING: This will delete 'target/.zeroclaw' data and Docker volumes.${NC}"
+        echo -e "${RED}⚠️  WARNING: This will delete '.dev-state/.zeroclaw' data and Docker volumes.${NC}"
         read -p "Are you sure? (y/N) " -n 1 -r
         echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then

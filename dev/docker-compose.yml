@@ -17,30 +17,43 @@ services:
       context: ..
       dockerfile: Dockerfile
       target: dev
+      args:
+        ZEROCLAW_CARGO_FEATURES: browser-native
     container_name: zeroclaw-dev
     restart: unless-stopped
+    user: "${LLAMAFARM_UID:-1000}:${LLAMAFARM_GID:-1000}"
+    depends_on:
+      - chromium
+      - sandbox
     environment:
       - ZEROCLAW_GATEWAY_PORT=42617
+      - ZEROCLAW_GATEWAY_HOST=0.0.0.0
+      - ZEROCLAW_REQUIRE_PAIRING=false
+      - ZEROCLAW_ALLOW_PUBLIC_BIND=true
       - SANDBOX_HOST=zeroclaw-sandbox
-    secrets:
-      - source: zeroclaw_env
-        target: zeroclaw_env
     entrypoint: ["/bin/bash", "-lc"]
     command:
       - |
-        if [ -f /run/secrets/zeroclaw_env ]; then
-          set -a
-          . /run/secrets/zeroclaw_env
-          set +a
-        fi
-        exec zeroclaw gateway --port "${ZEROCLAW_GATEWAY_PORT:-42617}" --host "[::]"
+        exec zeroclaw gateway
     volumes:
-      # Mount single config file (avoids shadowing other files in .zeroclaw)
-      - ../target/.zeroclaw/config.toml:/zeroclaw-data/.zeroclaw/config.toml
+      # Mount the full local state directory so pairing, IPC, and memory files persist.
+      - ../.dev-state/.zeroclaw:/zeroclaw-data/.zeroclaw
       # Mount shared workspace
       - ../playground:/zeroclaw-data/workspace
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "127.0.0.1:42617:42617"
+    networks:
+      - dev-net
+
+  chromium:
+    image: selenium/standalone-chromium:latest
+    container_name: llamafarm-chromium
+    restart: unless-stopped
+    shm_size: 2gb
+    ports:
+      - "127.0.0.1:4444:4444"
     networks:
       - dev-net
 
@@ -66,7 +79,3 @@ services:
 networks:
   dev-net:
     driver: bridge
-
-secrets:
-  zeroclaw_env:
-    file: ../.env

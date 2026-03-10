@@ -1,15 +1,7 @@
-import { useState, useEffect } from 'react';
-import {
-  Cpu,
-  Clock,
-  Globe,
-  Database,
-  Activity,
-  DollarSign,
-  Radio,
-} from 'lucide-react';
-import type { StatusResponse, CostSummary } from '@/types/api';
-import { getStatus, getCost } from '@/lib/api';
+import { useEffect, useState } from 'react';
+import { Activity, Cpu, Database, Radio, Server } from 'lucide-react';
+import type { StatusResponse } from '@/types/api';
+import { getStatus } from '@/lib/api';
 
 function formatUptime(seconds: number): string {
   const d = Math.floor(seconds / 86400);
@@ -18,10 +10,6 @@ function formatUptime(seconds: number): string {
   if (d > 0) return `${d}d ${h}h ${m}m`;
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m`;
-}
-
-function formatUSD(value: number): string {
-  return `$${value.toFixed(4)}`;
 }
 
 function healthColor(status: string): string {
@@ -54,15 +42,11 @@ function healthBorder(status: string): string {
 
 export default function Dashboard() {
   const [status, setStatus] = useState<StatusResponse | null>(null);
-  const [cost, setCost] = useState<CostSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([getStatus(), getCost()])
-      .then(([s, c]) => {
-        setStatus(s);
-        setCost(c);
-      })
+    getStatus()
+      .then(setStatus)
       .catch((err) => setError(err.message));
   }, []);
 
@@ -76,7 +60,7 @@ export default function Dashboard() {
     );
   }
 
-  if (!status || !cost) {
+  if (!status) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-500 border-t-transparent" />
@@ -84,49 +68,34 @@ export default function Dashboard() {
     );
   }
 
-  const maxCost = Math.max(cost.session_cost_usd, cost.daily_cost_usd, cost.monthly_cost_usd, 0.001);
+  const installedModels = status.ollama.installed_models;
+  const loadedModels = status.ollama.loaded_models;
 
   return (
     <div className="p-6 space-y-6">
-      {/* Status Cards Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-gray-900 rounded-xl p-5 border border-gray-800">
           <div className="flex items-center gap-3 mb-3">
             <div className="p-2 bg-blue-600/20 rounded-lg">
               <Cpu className="h-5 w-5 text-blue-400" />
             </div>
-            <span className="text-sm text-gray-400">Provider / Model</span>
+            <span className="text-sm text-gray-400">Current Model</span>
           </div>
-          <p className="text-lg font-semibold text-white truncate">
-            {status.provider ?? 'Unknown'}
+          <p className="text-lg font-semibold text-white truncate">{status.model}</p>
+          <p className="text-sm text-gray-400">
+            {status.ollama.active_model_loaded ? 'Loaded in Ollama' : 'Configured, not loaded'}
           </p>
-          <p className="text-sm text-gray-400 truncate">{status.model}</p>
         </div>
 
         <div className="bg-gray-900 rounded-xl p-5 border border-gray-800">
           <div className="flex items-center gap-3 mb-3">
-            <div className="p-2 bg-green-600/20 rounded-lg">
-              <Clock className="h-5 w-5 text-green-400" />
+            <div className="p-2 bg-emerald-600/20 rounded-lg">
+              <Server className="h-5 w-5 text-emerald-400" />
             </div>
-            <span className="text-sm text-gray-400">Uptime</span>
+            <span className="text-sm text-gray-400">Ollama Endpoint</span>
           </div>
-          <p className="text-lg font-semibold text-white">
-            {formatUptime(status.uptime_seconds)}
-          </p>
-          <p className="text-sm text-gray-400">Since last restart</p>
-        </div>
-
-        <div className="bg-gray-900 rounded-xl p-5 border border-gray-800">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="p-2 bg-purple-600/20 rounded-lg">
-              <Globe className="h-5 w-5 text-purple-400" />
-            </div>
-            <span className="text-sm text-gray-400">Gateway Port</span>
-          </div>
-          <p className="text-lg font-semibold text-white">
-            :{status.gateway_port}
-          </p>
-          <p className="text-sm text-gray-400">Locale: {status.locale}</p>
+          <p className="text-sm font-semibold text-white break-all">{status.ollama.endpoint}</p>
+          <p className="text-sm text-gray-400">Gateway :{status.gateway_port}</p>
         </div>
 
         <div className="bg-gray-900 rounded-xl p-5 border border-gray-800">
@@ -136,85 +105,71 @@ export default function Dashboard() {
             </div>
             <span className="text-sm text-gray-400">Memory Backend</span>
           </div>
-          <p className="text-lg font-semibold text-white capitalize">
-            {status.memory_backend}
+          <p className="text-lg font-semibold text-white capitalize">{status.memory_backend}</p>
+          <p className="text-sm text-gray-400">Installed models: {installedModels.length}</p>
+        </div>
+
+        <div className="bg-gray-900 rounded-xl p-5 border border-gray-800">
+          <div className="flex items-center gap-3 mb-3">
+            <div className="p-2 bg-violet-600/20 rounded-lg">
+              <Activity className="h-5 w-5 text-violet-400" />
+            </div>
+            <span className="text-sm text-gray-400">Uptime</span>
+          </div>
+          <p className="text-lg font-semibold text-white">
+            {formatUptime(status.uptime_seconds)}
           </p>
-          <p className="text-sm text-gray-400">
-            Paired: {status.paired ? 'Yes' : 'No'}
-          </p>
+          <p className="text-sm text-gray-400">English-only local UI</p>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Cost Widget */}
         <div className="bg-gray-900 rounded-xl p-5 border border-gray-800">
           <div className="flex items-center gap-2 mb-4">
-            <DollarSign className="h-5 w-5 text-blue-400" />
-            <h2 className="text-base font-semibold text-white">Cost Overview</h2>
+            <Server className="h-5 w-5 text-blue-400" />
+            <h2 className="text-base font-semibold text-white">Installed Models</h2>
           </div>
-          <div className="space-y-4">
-            {[
-              { label: 'Session', value: cost.session_cost_usd, color: 'bg-blue-500' },
-              { label: 'Daily', value: cost.daily_cost_usd, color: 'bg-green-500' },
-              { label: 'Monthly', value: cost.monthly_cost_usd, color: 'bg-purple-500' },
-            ].map(({ label, value, color }) => (
-              <div key={label}>
-                <div className="flex justify-between text-sm mb-1">
-                  <span className="text-gray-400">{label}</span>
-                  <span className="text-white font-medium">{formatUSD(value)}</span>
-                </div>
-                <div className="w-full h-2 bg-gray-800 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full rounded-full ${color}`}
-                    style={{ width: `${Math.max((value / maxCost) * 100, 2)}%` }}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="mt-4 pt-3 border-t border-gray-800 flex justify-between text-sm">
-            <span className="text-gray-400">Total Tokens</span>
-            <span className="text-white">{cost.total_tokens.toLocaleString()}</span>
-          </div>
-          <div className="flex justify-between text-sm mt-1">
-            <span className="text-gray-400">Requests</span>
-            <span className="text-white">{cost.request_count.toLocaleString()}</span>
-          </div>
-        </div>
-
-        {/* Active Channels */}
-        <div className="bg-gray-900 rounded-xl p-5 border border-gray-800">
-          <div className="flex items-center gap-2 mb-4">
-            <Radio className="h-5 w-5 text-blue-400" />
-            <h2 className="text-base font-semibold text-white">Active Channels</h2>
-          </div>
-          <div className="space-y-2">
-            {Object.entries(status.channels).length === 0 ? (
-              <p className="text-sm text-gray-500">No channels configured</p>
+          <div className="space-y-2 max-h-80 overflow-y-auto">
+            {installedModels.length === 0 ? (
+              <p className="text-sm text-gray-500">No installed models reported by Ollama.</p>
             ) : (
-              Object.entries(status.channels).map(([name, active]) => (
+              installedModels.map((model) => (
                 <div
-                  key={name}
-                  className="flex items-center justify-between py-2 px-3 rounded-lg bg-gray-800/50"
+                  key={model}
+                  className={`rounded-lg border px-3 py-2 text-sm ${
+                    model === status.model
+                      ? 'border-emerald-700/70 bg-emerald-950/30 text-emerald-200'
+                      : 'border-gray-800 bg-gray-800/50 text-gray-200'
+                  }`}
                 >
-                  <span className="text-sm text-white capitalize">{name}</span>
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`inline-block h-2.5 w-2.5 rounded-full ${
-                        active ? 'bg-green-500' : 'bg-gray-500'
-                      }`}
-                    />
-                    <span className="text-xs text-gray-400">
-                      {active ? 'Active' : 'Inactive'}
-                    </span>
-                  </div>
+                  {model}
                 </div>
               ))
             )}
           </div>
         </div>
 
-        {/* Health Grid */}
+        <div className="bg-gray-900 rounded-xl p-5 border border-gray-800">
+          <div className="flex items-center gap-2 mb-4">
+            <Radio className="h-5 w-5 text-blue-400" />
+            <h2 className="text-base font-semibold text-white">Loaded Models</h2>
+          </div>
+          <div className="space-y-2 max-h-80 overflow-y-auto">
+            {loadedModels.length === 0 ? (
+              <p className="text-sm text-gray-500">No models are currently loaded in Ollama.</p>
+            ) : (
+              loadedModels.map((model) => (
+                <div
+                  key={model}
+                  className="rounded-lg border border-gray-800 bg-gray-800/50 px-3 py-2 text-sm text-gray-200"
+                >
+                  {model}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
         <div className="bg-gray-900 rounded-xl p-5 border border-gray-800">
           <div className="flex items-center gap-2 mb-4">
             <Activity className="h-5 w-5 text-blue-400" />
@@ -222,7 +177,7 @@ export default function Dashboard() {
           </div>
           <div className="grid grid-cols-2 gap-3">
             {Object.entries(status.health.components).length === 0 ? (
-              <p className="text-sm text-gray-500 col-span-2">No components reporting</p>
+              <p className="text-sm text-gray-500 col-span-2">No components reporting.</p>
             ) : (
               Object.entries(status.health.components).map(([name, comp]) => (
                 <div
@@ -236,11 +191,6 @@ export default function Dashboard() {
                     </span>
                   </div>
                   <p className="text-xs text-gray-400 capitalize">{comp.status}</p>
-                  {comp.restart_count > 0 && (
-                    <p className="text-xs text-yellow-400 mt-1">
-                      Restarts: {comp.restart_count}
-                    </p>
-                  )}
                 </div>
               ))
             )}

@@ -168,10 +168,84 @@ pub(super) fn canonicalize_json_for_tool_signature(value: &serde_json::Value) ->
     }
 }
 
-pub(super) fn tool_call_signature(name: &str, arguments: &serde_json::Value) -> (String, String) {
+fn normalize_browser_action_for_signature(action: &str) -> String {
+    action.trim().to_ascii_lowercase().replace('-', "_")
+}
+
+fn canonicalize_browser_signature(arguments: &serde_json::Value) -> serde_json::Value {
     let canonical_args = canonicalize_json_for_tool_signature(arguments);
+    let serde_json::Value::Object(mut map) = canonical_args else {
+        return canonical_args;
+    };
+
+    let action = map
+        .get("action")
+        .and_then(serde_json::Value::as_str)
+        .map(normalize_browser_action_for_signature)
+        .or_else(|| {
+            map.get("url")
+                .and_then(serde_json::Value::as_str)
+                .map(|_| "open".to_string())
+        });
+
+    if let Some(action) = action {
+        map.insert(
+            "action".to_string(),
+            serde_json::Value::String(action.clone()),
+        );
+
+        if action == "open" {
+            let mut reduced = serde_json::Map::new();
+            reduced.insert("action".to_string(), serde_json::Value::String(action));
+            if let Some(url) = map
+                .get("url")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|url| !url.is_empty())
+            {
+                reduced.insert(
+                    "url".to_string(),
+                    serde_json::Value::String(url.to_string()),
+                );
+            }
+            return serde_json::Value::Object(reduced);
+        }
+    }
+
+    serde_json::Value::Object(map)
+}
+
+fn canonicalize_browser_open_signature(arguments: &serde_json::Value) -> serde_json::Value {
+    let canonical_args = canonicalize_json_for_tool_signature(arguments);
+    let serde_json::Value::Object(map) = canonical_args else {
+        return canonical_args;
+    };
+
+    let mut reduced = serde_json::Map::new();
+    if let Some(url) = map
+        .get("url")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+    {
+        reduced.insert(
+            "url".to_string(),
+            serde_json::Value::String(url.to_string()),
+        );
+    }
+
+    serde_json::Value::Object(reduced)
+}
+
+pub(super) fn tool_call_signature(name: &str, arguments: &serde_json::Value) -> (String, String) {
+    let normalized_name = name.trim().to_ascii_lowercase();
+    let canonical_args = match normalized_name.as_str() {
+        "browser" => canonicalize_browser_signature(arguments),
+        "browser_open" => canonicalize_browser_open_signature(arguments),
+        _ => canonicalize_json_for_tool_signature(arguments),
+    };
     let args_json = serde_json::to_string(&canonical_args).unwrap_or_else(|_| "{}".to_string());
-    (name.trim().to_ascii_lowercase(), args_json)
+    (normalized_name, args_json)
 }
 
 pub(super) fn parse_tool_call_value(value: &serde_json::Value) -> Option<ParsedToolCall> {
@@ -562,6 +636,14 @@ pub(super) fn matching_tool_call_close_tag(open_tag: &str) -> Option<&'static st
 pub(super) fn extract_first_json_value_with_end(input: &str) -> Option<(serde_json::Value, usize)> {
     let trimmed = input.trim_start();
     let trim_offset = input.len().saturating_sub(trimmed.len());
+
+    let mut stream = serde_json::Deserializer::from_str(trimmed).into_iter::<serde_json::Value>();
+    if let Some(Ok(value)) = stream.next() {
+        let consumed = stream.byte_offset();
+        if consumed > 0 {
+            return Some((value, trim_offset + consumed));
+        }
+    }
 
     for (byte_idx, ch) in trimmed.char_indices() {
         if ch != '{' && ch != '[' {
@@ -1149,6 +1231,122 @@ pub(super) fn parse_glm_shortened_body(body: &str) -> Option<ParsedToolCall> {
     None
 }
 
+fn parse_bracket_tool_calls(response: &str) -> Option<(String, Vec<ParsedToolCall>)> {
+    const TOOL_CALL_MARKER: &str = "[TOOL_CALLS]";
+    const ARGS_MARKER: &str = "[ARGS]";
+
+    if !response.contains(TOOL_CALL_MARKER) {
+        return None;
+    }
+
+    let mut text_parts = Vec::new();
+    let mut calls = Vec::new();
+    let mut remaining = response;
+
+    while let Some(start) = remaining.find(TOOL_CALL_MARKER) {
+        let before = &remaining[..start];
+        if !before.trim().is_empty() {
+            text_parts.push(before.trim().to_string());
+        }
+
+        let after_marker = &remaining[start + TOOL_CALL_MARKER.len()..];
+        let Some(args_pos) = after_marker.find(ARGS_MARKER) else {
+            break;
+        };
+
+        let tool_raw = after_marker[..args_pos].trim();
+        if tool_raw.is_empty() || !tool_raw.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            break;
+        }
+
+        let tool_name = match tool_raw {
+            "browser" | "browser_open" => tool_raw.to_string(),
+            _ => map_tool_name_alias(tool_raw).to_string(),
+        };
+        let args_input = &after_marker[args_pos + ARGS_MARKER.len()..];
+        let trimmed_args = args_input.trim_start();
+        let leading_ws = args_input.len() - trimmed_args.len();
+        let Some((value, consumed_end)) = extract_first_json_value_with_end(trimmed_args) else {
+            break;
+        };
+
+        let mut arguments_value = value.clone();
+        let extra_consumed = merge_repeated_bracket_arg_pairs(
+            &args_input[leading_ws + consumed_end..],
+            &mut arguments_value,
+        );
+        let arguments = normalize_tool_arguments(
+            &tool_name,
+            arguments_value,
+            raw_string_argument_hint(Some(&value)),
+        );
+        calls.push(ParsedToolCall {
+            name: tool_name,
+            arguments,
+            tool_call_id: None,
+        });
+
+        remaining = &args_input[leading_ws + consumed_end + extra_consumed..];
+    }
+
+    if !remaining.trim().is_empty() {
+        text_parts.push(remaining.trim().to_string());
+    }
+
+    (!calls.is_empty()).then(|| (text_parts.join("\n"), calls))
+}
+
+fn merge_repeated_bracket_arg_pairs(rest: &str, arguments: &mut serde_json::Value) -> usize {
+    const ARGS_MARKER: &str = "[ARGS]";
+
+    let Some(args_map) = arguments.as_object_mut() else {
+        return 0;
+    };
+
+    let mut consumed_total = 0;
+    let mut remaining = rest;
+
+    loop {
+        let trimmed = remaining.trim_start();
+        let leading_ws = remaining.len() - trimmed.len();
+        if !trimmed.starts_with(ARGS_MARKER) {
+            break;
+        }
+
+        let after_marker = &trimmed[ARGS_MARKER.len()..];
+        let trimmed_after_marker = after_marker.trim_start();
+        let marker_ws = after_marker.len() - trimmed_after_marker.len();
+        let Some((key_value, key_consumed)) =
+            extract_first_json_value_with_end(trimmed_after_marker)
+        else {
+            break;
+        };
+        let Some(key) = key_value
+            .as_str()
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+        else {
+            break;
+        };
+
+        let after_key = &trimmed_after_marker[key_consumed..];
+        let trimmed_after_key = after_key.trim_start();
+        let value_ws = after_key.len() - trimmed_after_key.len();
+        let Some((arg_value, value_consumed)) =
+            extract_first_json_value_with_end(trimmed_after_key)
+        else {
+            break;
+        };
+
+        args_map.insert(key.to_string(), arg_value);
+        consumed_total +=
+            leading_ws + ARGS_MARKER.len() + marker_ws + key_consumed + value_ws + value_consumed;
+        remaining = &trimmed_after_key[value_consumed..];
+    }
+
+    consumed_total
+}
+
 // ── Tool-Call Parsing ─────────────────────────────────────────────────────
 // LLM responses may contain tool calls in multiple formats depending on
 // the provider. Parsing follows a priority chain:
@@ -1195,6 +1393,12 @@ pub(super) fn parse_tool_calls(response: &str) -> (String, Vec<ParsedToolCall>) 
     if let Some((minimax_text, minimax_calls)) = parse_minimax_invoke_calls(response) {
         if !minimax_calls.is_empty() {
             return (minimax_text, minimax_calls);
+        }
+    }
+
+    if let Some((bracket_text, bracket_calls)) = parse_bracket_tool_calls(response) {
+        if !bracket_calls.is_empty() {
+            return (bracket_text, bracket_calls);
         }
     }
 

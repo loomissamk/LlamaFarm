@@ -5,6 +5,8 @@ use crate::security::SyscallAnomalyDetector;
 use async_trait::async_trait;
 use serde_json::json;
 use std::collections::HashSet;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -41,6 +43,12 @@ impl ShellTool {
             syscall_detector,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ShellExecutionPlan {
+    pub command: String,
+    pub cwd: PathBuf,
 }
 
 fn is_valid_env_var_name(name: &str) -> bool {
@@ -82,6 +90,7 @@ fn extract_command_argument(args: &serde_json::Value) -> Option<String> {
     }
 
     for alias in [
+        "hint",
         "cmd",
         "script",
         "shell_command",
@@ -106,6 +115,200 @@ fn extract_command_argument(args: &serde_json::Value) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn command_has_shell_operators(command: &str) -> bool {
+    command.chars().any(|ch| {
+        matches!(
+            ch,
+            ' ' | '\t' | '\n' | ';' | '|' | '&' | '<' | '>' | '(' | ')' | '$' | '`'
+        )
+    })
+}
+
+fn resolve_script_path(command: &str, workspace_dir: &Path) -> PathBuf {
+    if command == "~" {
+        return std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(command));
+    }
+
+    if let Some(stripped) = command.strip_prefix("~/") {
+        return std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join(stripped))
+            .unwrap_or_else(|| PathBuf::from(command));
+    }
+
+    let path = PathBuf::from(command);
+    if path.is_absolute() {
+        path
+    } else {
+        workspace_dir.join(path)
+    }
+}
+
+fn infer_script_interpreter(path: &Path) -> Option<&'static str> {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("sh" | "bash" | "zsh") => return Some("bash"),
+        Some("py") => return Some("python3"),
+        Some("js" | "mjs" | "cjs") => return Some("node"),
+        _ => {}
+    }
+
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut prefix = [0_u8; 256];
+    let bytes_read = file.read(&mut prefix).ok()?;
+    let shebang = String::from_utf8_lossy(&prefix[..bytes_read]).to_ascii_lowercase();
+    if !shebang.starts_with("#!") {
+        return None;
+    }
+
+    if shebang.contains("python") {
+        Some("python3")
+    } else if shebang.contains("node") {
+        Some("node")
+    } else if shebang.contains("bash") || shebang.contains("zsh") {
+        Some("bash")
+    } else if shebang.contains("sh") {
+        Some("sh")
+    } else {
+        None
+    }
+}
+
+fn shell_quote_single(token: &str) -> String {
+    format!("'{}'", token.replace('\'', "'\"'\"'"))
+}
+
+fn resolve_working_dir(path: &str, base_dir: &Path) -> PathBuf {
+    if path == "~" {
+        return std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| base_dir.join(path));
+    }
+
+    if let Some(stripped) = path.strip_prefix("~/") {
+        return std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join(stripped))
+            .unwrap_or_else(|| base_dir.join(path));
+    }
+
+    let candidate = PathBuf::from(path);
+    if candidate.is_absolute() {
+        candidate
+    } else {
+        base_dir.join(candidate)
+    }
+}
+
+fn parse_quoted_token(input: &str) -> Option<(String, usize)> {
+    let trimmed = input.trim_start();
+    let leading_ws = input.len() - trimmed.len();
+    let first = trimmed.chars().next()?;
+
+    if matches!(first, '\'' | '"') {
+        let mut token = String::new();
+        let mut consumed = leading_ws + first.len_utf8();
+        let mut closed = false;
+
+        for ch in trimmed[first.len_utf8()..].chars() {
+            consumed += ch.len_utf8();
+            if ch == first {
+                closed = true;
+                break;
+            }
+            token.push(ch);
+        }
+
+        if !closed {
+            return None;
+        }
+
+        return Some((token, consumed));
+    }
+
+    let end = trimmed
+        .find(|ch: char| ch.is_whitespace() || ch == ';' || ch == '&')
+        .unwrap_or(trimmed.len());
+    if end == 0 {
+        return None;
+    }
+
+    Some((trimmed[..end].to_string(), leading_ws + end))
+}
+
+fn extract_leading_cd_prefix(command: &str) -> Option<(String, String)> {
+    let trimmed = command.trim();
+    let rest = trimmed.strip_prefix("cd")?;
+    if !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+
+    let (path, consumed) = parse_quoted_token(rest)?;
+    let remainder = rest[consumed..].trim_start();
+    let nested_command = if let Some(rest) = remainder.strip_prefix("&&") {
+        rest
+    } else if let Some(rest) = remainder.strip_prefix(';') {
+        rest
+    } else {
+        return None;
+    };
+
+    let nested_command = nested_command.trim();
+    if nested_command.is_empty() {
+        return None;
+    }
+
+    Some((path, nested_command.to_string()))
+}
+
+pub(crate) fn normalize_shell_command_input(command: &str, workspace_dir: &Path) -> String {
+    let trimmed = command.trim();
+    if trimmed.is_empty() || command_has_shell_operators(trimmed) {
+        return trimmed.to_string();
+    }
+
+    let resolved_path = resolve_script_path(trimmed, workspace_dir);
+    if !resolved_path.is_file() {
+        return trimmed.to_string();
+    }
+
+    let Some(interpreter) = infer_script_interpreter(&resolved_path) else {
+        return trimmed.to_string();
+    };
+
+    let rendered_path = if trimmed == "~" || trimmed.starts_with("~/") {
+        resolved_path.to_string_lossy().into_owned()
+    } else {
+        trimmed.to_string()
+    };
+
+    format!("{interpreter} {}", shell_quote_single(&rendered_path))
+}
+
+pub(crate) fn build_shell_execution_plan(
+    command: &str,
+    workspace_dir: &Path,
+) -> ShellExecutionPlan {
+    if let Some((raw_cwd, nested_command)) = extract_leading_cd_prefix(command) {
+        let cwd = resolve_working_dir(raw_cwd.trim(), workspace_dir);
+        return ShellExecutionPlan {
+            command: normalize_shell_command_input(&nested_command, &cwd),
+            cwd,
+        };
+    }
+
+    ShellExecutionPlan {
+        command: normalize_shell_command_input(command, workspace_dir),
+        cwd: workspace_dir.to_path_buf(),
+    }
+}
+
 #[async_trait]
 impl Tool for ShellTool {
     fn name(&self) -> &str {
@@ -113,7 +316,7 @@ impl Tool for ShellTool {
     }
 
     fn description(&self) -> &str {
-        "Execute a shell command in the workspace directory"
+        "Execute a shell command in the workspace directory. Bare local script paths are accepted and normalized to an explicit interpreter when possible. Leading forms like `cd /path && ./script.sh` are supported."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -122,7 +325,7 @@ impl Tool for ShellTool {
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "The shell command to execute"
+                    "description": "The shell command to execute. Bare local script paths like ./test.sh or script.py are supported, as are leading forms like `cd /path && ./script.sh`."
                 },
                 "approved": {
                     "type": "boolean",
@@ -138,7 +341,13 @@ impl Tool for ShellTool {
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
         let command = extract_command_argument(&args)
             .ok_or_else(|| anyhow::anyhow!("Missing 'command' parameter"))?;
-        let effective_command = self.security.apply_shell_redirect_policy(&command);
+        let ShellExecutionPlan {
+            command: normalized_command,
+            cwd: working_dir,
+        } = build_shell_execution_plan(&command, &self.security.workspace_dir);
+        let effective_command = self
+            .security
+            .apply_shell_redirect_policy(&normalized_command);
         let approved = args
             .get("approved")
             .and_then(|v| v.as_bool())
@@ -152,7 +361,10 @@ impl Tool for ShellTool {
             });
         }
 
-        match self.security.validate_command_execution(&command, approved) {
+        match self
+            .security
+            .validate_command_execution(&normalized_command, approved)
+        {
             Ok(_) => {}
             Err(reason) => {
                 return Ok(ToolResult {
@@ -161,6 +373,18 @@ impl Tool for ShellTool {
                     error: Some(reason),
                 });
             }
+        }
+
+        let working_dir_str = working_dir.to_string_lossy().to_string();
+        if !self.security.is_path_allowed(&working_dir_str) {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!(
+                    "Working directory blocked by security policy: {}",
+                    working_dir.display()
+                )),
+            });
         }
 
         if let Some(path) = self.security.forbidden_path_argument(&effective_command) {
@@ -184,7 +408,7 @@ impl Tool for ShellTool {
         // (CWE-200), then re-add only safe, functional variables.
         let mut cmd = match self
             .runtime
-            .build_shell_command(&effective_command, &self.security.workspace_dir)
+            .build_shell_command(&effective_command, &working_dir)
         {
             Ok(cmd) => cmd,
             Err(e) => {
@@ -339,6 +563,10 @@ mod tests {
     #[test]
     fn extract_command_argument_supports_aliases() {
         assert_eq!(
+            extract_command_argument(&json!({"hint": "echo from-hint"})).as_deref(),
+            Some("echo from-hint")
+        );
+        assert_eq!(
             extract_command_argument(&json!({"cmd": "echo from-cmd"})).as_deref(),
             Some("echo from-cmd")
         );
@@ -350,6 +578,48 @@ mod tests {
             extract_command_argument(&json!("echo from-string")).as_deref(),
             Some("echo from-string")
         );
+    }
+
+    #[test]
+    fn normalize_shell_command_input_rewrites_shell_script_path() {
+        let tmp = TempDir::new().expect("temp dir");
+        let script = tmp.path().join("test.sh");
+        std::fs::write(&script, "#!/usr/bin/env bash\necho ok\n").expect("write script");
+
+        let normalized = normalize_shell_command_input("./test.sh", tmp.path());
+        assert_eq!(normalized, "bash './test.sh'");
+    }
+
+    #[test]
+    fn normalize_shell_command_input_keeps_plain_commands() {
+        let tmp = TempDir::new().expect("temp dir");
+        assert_eq!(normalize_shell_command_input("ls", tmp.path()), "ls");
+        assert_eq!(
+            normalize_shell_command_input("echo hello", tmp.path()),
+            "echo hello"
+        );
+    }
+
+    #[test]
+    fn build_shell_execution_plan_extracts_leading_cd_prefix() {
+        let tmp = TempDir::new().expect("temp dir");
+        let cwd = tmp.path().join("nested");
+        std::fs::create_dir_all(&cwd).expect("create nested dir");
+        std::fs::write(cwd.join("clean.sh"), "#!/usr/bin/env bash\necho clean\n")
+            .expect("write script");
+
+        let plan =
+            build_shell_execution_plan(&format!("cd {} && ./clean.sh", cwd.display()), tmp.path());
+        assert_eq!(plan.command, "bash './clean.sh'");
+        assert_eq!(plan.cwd, cwd);
+    }
+
+    #[test]
+    fn build_shell_execution_plan_keeps_default_workspace_without_cd_prefix() {
+        let tmp = TempDir::new().expect("temp dir");
+        let plan = build_shell_execution_plan("python3 bench.py", tmp.path());
+        assert_eq!(plan.command, "python3 bench.py");
+        assert_eq!(plan.cwd, tmp.path());
     }
 
     #[tokio::test]

@@ -14,10 +14,10 @@ const translations: Record<Locale, Record<string, string>> = {
     'nav.agent': 'Agent',
     'nav.tools': 'Tools',
     'nav.cron': 'Scheduled Jobs',
-    'nav.integrations': 'Integrations',
+    'nav.integrations': 'Ollama',
     'nav.memory': 'Memory',
     'nav.config': 'Configuration',
-    'nav.cost': 'Cost Tracker',
+    'nav.cost': 'Models',
     'nav.logs': 'Logs',
     'nav.doctor': 'Doctor',
 

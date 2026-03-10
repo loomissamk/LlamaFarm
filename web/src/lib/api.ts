@@ -169,13 +169,47 @@ export function getCronJobs(): Promise<CronJob[]> {
 export function addCronJob(body: {
   name?: string;
   command: string;
-  schedule: string;
+  schedule_kind?: 'cron' | 'at' | 'every';
+  schedule?: string;
+  run_at?: string;
+  every_ms?: number;
   enabled?: boolean;
 }): Promise<CronJob> {
   return apiFetch<CronJob | { status: string; job: CronJob }>('/api/cron', {
     method: 'POST',
     body: JSON.stringify(body),
   }).then((data) => (typeof (data as { job?: CronJob }).job === 'object' ? (data as { job: CronJob }).job : (data as CronJob)));
+}
+
+export function updateCronJob(
+  id: string,
+  body: {
+    name?: string;
+    command?: string;
+    schedule_kind?: 'cron' | 'at' | 'every';
+    schedule?: string;
+    run_at?: string;
+    every_ms?: number;
+    enabled?: boolean;
+  },
+): Promise<CronJob> {
+  return apiFetch<CronJob | { status: string; job: CronJob }>(
+    `/api/cron/${encodeURIComponent(id)}`,
+    {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    },
+  ).then((data) => (typeof (data as { job?: CronJob }).job === 'object' ? (data as { job: CronJob }).job : (data as CronJob)));
+}
+
+export function runCronJob(id: string): Promise<{ status: string; output: string; job?: CronJob | null }> {
+  return apiFetch<{ status: string; output: string; job?: CronJob | null }>(
+    `/api/cron/${encodeURIComponent(id)}/run`,
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+    },
+  );
 }
 
 export function deleteCronJob(id: string): Promise<void> {
@@ -253,6 +287,13 @@ export function storeMemory(
 export function deleteMemory(key: string): Promise<void> {
   return apiFetch<void>(`/api/memory/${encodeURIComponent(key)}`, {
     method: 'DELETE',
+  });
+}
+
+export function clearMemory(scope: 'conversation' | 'all'): Promise<{ status: string; deleted: number }> {
+  return apiFetch<{ status: string; deleted: number }>('/api/memory/clear', {
+    method: 'POST',
+    body: JSON.stringify({ scope }),
   });
 }
 

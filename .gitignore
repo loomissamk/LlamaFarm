@@ -1,4 +1,8 @@
 /target
+/.dev-state/
+/target-jammy
+/target-jammy-debug
+/target-jammy-fast
 firmware/*/target
 *.db
 *.db-journal
@@ -41,6 +45,12 @@ venv/
 *.pem
 credentials.json
 .worktrees/
+/memory/
+/state/
+/wt/
+/power_agent_smoke*.txt
+.cache/buildx-smoke/
+/playground/
 
 # Nix
 result

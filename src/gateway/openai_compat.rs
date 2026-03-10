@@ -127,6 +127,7 @@ pub async fn handle_v1_chat_completions(
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
+    let runtime = state.runtime_snapshot();
     // ── Rate limit ──
     let rate_key =
         super::client_key_from_request(Some(peer_addr), &headers, state.trust_forwarded_headers);
@@ -205,9 +206,9 @@ pub async fn handle_v1_chat_completions(
         .model
         .as_deref()
         .filter(|m| !m.is_empty())
-        .unwrap_or(&state.model)
+        .unwrap_or(&runtime.model)
         .to_string();
-    let temperature = request.temperature.unwrap_or(state.temperature);
+    let temperature = request.temperature.unwrap_or(runtime.temperature);
     let stream = request.stream.unwrap_or(false);
 
     // Convert messages to provider format
@@ -239,6 +240,7 @@ pub async fn handle_v1_chat_completions(
     if stream {
         handle_streaming(
             state,
+            runtime,
             messages,
             model,
             temperature,
@@ -249,6 +251,7 @@ pub async fn handle_v1_chat_completions(
     } else {
         handle_non_streaming(
             state,
+            runtime,
             messages,
             model,
             temperature,
@@ -263,17 +266,14 @@ pub async fn handle_v1_chat_completions(
 /// Non-streaming chat completions.
 async fn handle_non_streaming(
     state: AppState,
+    runtime: std::sync::Arc<super::GatewayRuntimeSnapshot>,
     messages: Vec<ChatMessage>,
     model: String,
     temperature: f64,
     provider_label: String,
     started_at: Instant,
 ) -> impl IntoResponse {
-    match state
-        .provider
-        .chat_with_history(&messages, &model, temperature)
-        .await
-    {
+    match runtime.provider.chat_with_history(&messages, &model, temperature).await {
         Ok(response_text) => {
             let duration = started_at.elapsed();
             record_success(&state, &provider_label, &model, duration);
@@ -330,6 +330,7 @@ async fn handle_non_streaming(
 /// Streaming chat completions via SSE.
 fn handle_streaming(
     state: AppState,
+    runtime: std::sync::Arc<super::GatewayRuntimeSnapshot>,
     messages: Vec<ChatMessage>,
     model: String,
     temperature: f64,
@@ -339,17 +340,14 @@ fn handle_streaming(
     let request_id = format!("chatcmpl-{}", Uuid::new_v4());
     let created = unix_timestamp();
 
-    if !state.provider.supports_streaming() {
+    if !runtime.provider.supports_streaming() {
         // Provider doesn't support streaming — fall back to a single-chunk response
         let model_clone = model.clone();
         let id = request_id.clone();
+        let provider = std::sync::Arc::clone(&runtime.provider);
 
         let stream = futures_util::stream::once(async move {
-            match state
-                .provider
-                .chat_with_history(&messages, &model_clone, temperature)
-                .await
-            {
+            match provider.chat_with_history(&messages, &model_clone, temperature).await {
                 Ok(text) => {
                     let duration = started_at.elapsed();
                     record_success(&state, &provider_label, &model_clone, duration);
@@ -396,7 +394,7 @@ fn handle_streaming(
     }
 
     // Provider supports native streaming
-    let provider_stream = state.provider.stream_chat_with_history(
+    let provider_stream = runtime.provider.stream_chat_with_history(
         &messages,
         &model,
         temperature,
@@ -501,13 +499,14 @@ pub async fn handle_v1_models(
         }
     }
 
+    let runtime = state.runtime_snapshot();
     let response = ModelsResponse {
         object: "list",
         data: vec![ModelObject {
-            id: state.model.clone(),
+            id: runtime.model.clone(),
             object: "model",
             created: unix_timestamp(),
-            owned_by: "zeroclaw".to_string(),
+            owned_by: "llamafarm".to_string(),
         }],
     };
 

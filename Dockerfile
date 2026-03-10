@@ -1,6 +1,17 @@
 # syntax=docker/dockerfile:1.7
 
-# ── Stage 1: Build ────────────────────────────────────────────
+# ── Stage 1: Build Web UI ─────────────────────────────────────
+FROM node:22-bookworm-slim AS web_builder
+
+WORKDIR /web
+
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+
+COPY web/ ./
+RUN npm run build
+
+# ── Stage 2: Build Rust Binary ────────────────────────────────
 FROM rust:1.93-slim@sha256:7e6fa79cf81be23fd45d857f75f583d80cfdbb11c91fa06180fd747fda37a61d AS builder
 
 WORKDIR /app
@@ -38,24 +49,8 @@ COPY crates/ crates/
 COPY firmware/ firmware/
 COPY data/ data/
 COPY skills/ skills/
-COPY web/ web/
-# Keep release builds resilient when frontend dist assets are not prebuilt in Git.
-RUN mkdir -p web/dist && \
-    if [ ! -f web/dist/index.html ]; then \
-      printf '%s\n' \
-        '<!doctype html>' \
-        '<html lang="en">' \
-        '  <head>' \
-        '    <meta charset="utf-8" />' \
-        '    <meta name="viewport" content="width=device-width,initial-scale=1" />' \
-        '    <title>ZeroClaw Dashboard</title>' \
-        '  </head>' \
-        '  <body>' \
-        '    <h1>ZeroClaw Dashboard Unavailable</h1>' \
-        '    <p>Frontend assets are not bundled in this build. Build the web UI to populate <code>web/dist</code>.</p>' \
-        '  </body>' \
-        '</html>' > web/dist/index.html; \
-    fi
+RUN mkdir -p web/dist
+COPY --from=web_builder /web/dist/ web/dist/
 RUN --mount=type=cache,id=zeroclaw-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=zeroclaw-cargo-git,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,id=zeroclaw-target,target=/app/target,sharing=locked \
@@ -73,15 +68,16 @@ RUN mkdir -p /zeroclaw-data/.zeroclaw /zeroclaw-data/workspace && \
     chown -R 65534:65534 /zeroclaw-data
 workspace_dir = "/zeroclaw-data/workspace"
 config_path = "/zeroclaw-data/.zeroclaw/config.toml"
-api_key = ""
-default_provider = "openrouter"
-default_model = "anthropic/claude-sonnet-4-20250514"
+api_url = "http://host.docker.internal:11434"
+default_provider = "ollama"
+default_model = "llama3.2"
 default_temperature = 0.7
 
 [gateway]
 port = 42617
-host = "127.0.0.1"
-allow_public_bind = false
+host = "0.0.0.0"
+require_pairing = false
+allow_public_bind = true
 EOF
 
 # ── Stage 2: Development Runtime (Debian) ────────────────────
@@ -89,8 +85,20 @@ FROM debian:trixie-slim@sha256:f6e2cfac5cf956ea044b4bd75e6397b4372ad88fe00908045
 
 # Install essential runtime dependencies only (use docker-compose.override.yml for dev tools)
 RUN apt-get update && apt-get install -y \
+    bash \
     ca-certificates \
     curl \
+    file \
+    git \
+    iproute2 \
+    iputils-ping \
+    jq \
+    net-tools \
+    pciutils \
+    procps \
+    ripgrep \
+    usbutils \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /zeroclaw-data /zeroclaw-data
@@ -104,9 +112,9 @@ RUN chown 65534:65534 /zeroclaw-data/.zeroclaw/config.toml
 # Use consistent workspace path
 ENV ZEROCLAW_WORKSPACE=/zeroclaw-data/workspace
 ENV HOME=/zeroclaw-data
-# Defaults for local dev (Ollama) - matches config.template.toml
-ENV PROVIDER="ollama"
-ENV ZEROCLAW_MODEL="llama3.2"
+ENV SHELL=/bin/bash
+# Provider/model selection comes from the mounted config so local stacks do not
+# silently drift away from the chosen Ollama model.
 ENV ZEROCLAW_GATEWAY_PORT=42617
 
 # Note: API_KEY is intentionally NOT set here to avoid confusion.

@@ -1042,6 +1042,9 @@ pub struct GatewayConfig {
     /// Allow binding to non-localhost without a tunnel (default: false)
     #[serde(default)]
     pub allow_public_bind: bool,
+    /// HTTP request timeout in seconds for gateway routes (default: 30)
+    #[serde(default = "default_gateway_request_timeout_secs")]
+    pub request_timeout_secs: u64,
     /// Paired bearer tokens (managed automatically, not user-edited)
     #[serde(default)]
     pub paired_tokens: Vec<String>,
@@ -1106,6 +1109,10 @@ fn default_pair_rate_limit() -> u32 {
     10
 }
 
+fn default_gateway_request_timeout_secs() -> u64 {
+    30
+}
+
 fn default_webhook_rate_limit() -> u32 {
     60
 }
@@ -1133,6 +1140,7 @@ impl Default for GatewayConfig {
             host: default_gateway_host(),
             require_pairing: true,
             allow_public_bind: false,
+            request_timeout_secs: default_gateway_request_timeout_secs(),
             paired_tokens: Vec::new(),
             pair_rate_limit_per_minute: default_pair_rate_limit(),
             webhook_rate_limit_per_minute: default_webhook_rate_limit(),
@@ -6488,6 +6496,11 @@ impl Config {
             }
         }
 
+        // Pairing requirement: ZEROCLAW_REQUIRE_PAIRING
+        if let Ok(val) = std::env::var("ZEROCLAW_REQUIRE_PAIRING") {
+            self.gateway.require_pairing = val == "1" || val.eq_ignore_ascii_case("true");
+        }
+
         // Allow public bind: ZEROCLAW_ALLOW_PUBLIC_BIND
         if let Ok(val) = std::env::var("ZEROCLAW_ALLOW_PUBLIC_BIND") {
             self.gateway.allow_public_bind = val == "1" || val.eq_ignore_ascii_case("true");
@@ -7538,6 +7551,32 @@ calc = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             parsed.runtime.wasm.security.capability_escalation_mode,
             WasmCapabilityEscalationMode::Deny
         );
+    }
+
+    #[test]
+    async fn power_profile_template_deserializes() {
+        let raw = include_str!("../../dev/config.power.toml");
+        let parsed: Config = toml::from_str(raw).expect("power profile template should parse");
+
+        assert_eq!(parsed.default_provider.as_deref(), Some("ollama"));
+        assert_eq!(parsed.autonomy.level, AutonomyLevel::Supervised);
+        assert!(!parsed.autonomy.workspace_only);
+        assert!(parsed
+            .autonomy
+            .allowed_commands
+            .contains(&"docker".to_string()));
+        assert!(parsed.autonomy.allowed_roots.contains(&"~".to_string()));
+        assert!(parsed.browser.enabled);
+        assert!(parsed.http_request.enabled);
+        assert!(parsed.web_fetch.enabled);
+        assert!(parsed.web_search.enabled);
+        assert!(parsed.workspaces.enabled);
+        assert!(parsed.agents_ipc.enabled);
+        assert!(parsed.security.estop.enabled);
+        assert!(parsed
+            .autonomy
+            .auto_approve
+            .contains(&"delegate".to_string()));
     }
 
     #[test]
@@ -8715,6 +8754,7 @@ channel_id = "C123"
             host: "127.0.0.1".into(),
             require_pairing: true,
             allow_public_bind: false,
+            request_timeout_secs: default_gateway_request_timeout_secs(),
             paired_tokens: vec!["zc_test_token".into()],
             pair_rate_limit_per_minute: 12,
             webhook_rate_limit_per_minute: 80,
@@ -9855,6 +9895,19 @@ default_model = "legacy-model"
         assert_eq!(config.gateway.host, "0.0.0.0");
 
         std::env::remove_var("HOST");
+    }
+
+    #[test]
+    async fn env_override_require_pairing() {
+        let _env_guard = env_override_lock().await;
+        let mut config = Config::default();
+        assert!(config.gateway.require_pairing);
+
+        std::env::set_var("ZEROCLAW_REQUIRE_PAIRING", "false");
+        config.apply_env_overrides();
+        assert!(!config.gateway.require_pairing);
+
+        std::env::remove_var("ZEROCLAW_REQUIRE_PAIRING");
     }
 
     #[test]

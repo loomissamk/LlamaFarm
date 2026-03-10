@@ -1007,6 +1007,8 @@ impl Tool for BrowserTool {
     fn description(&self) -> &str {
         concat!(
             "Web/browser automation with pluggable backends (agent-browser, rust-native, computer_use). ",
+            "Use this tool when you need to inspect page titles or content, click elements, fill forms, ",
+            "take snapshots, or otherwise interact with the page. Do not use browser_open for those tasks. ",
             "Supports DOM actions plus optional OS-level actions (mouse_move, mouse_click, mouse_drag, ",
             "key_type, key_press, screen_capture) through a computer-use sidecar. Use 'snapshot' to map ",
             "interactive elements to refs (@e1, @e2). Enforces browser.allowed_domains for open actions."
@@ -1156,33 +1158,33 @@ impl Tool for BrowserTool {
             }
         };
 
-        // Parse action from args
-        let action_str = args
-            .get("action")
-            .and_then(|v| v.as_str())
+        // Some local models emit incomplete browser tool payloads (for example,
+        // `{"url":"https://example.com"}` without an explicit action). Infer
+        // the common open case so the first browser step does not fail.
+        let action_name = infer_browser_action(&args)
             .ok_or_else(|| anyhow::anyhow!("Missing 'action' parameter"))?;
 
-        if !is_supported_browser_action(action_str) {
+        if !is_supported_browser_action(&action_name) {
             return Ok(ToolResult {
                 success: false,
                 output: String::new(),
-                error: Some(format!("Unknown action: {action_str}")),
+                error: Some(format!("Unknown action: {action_name}")),
             });
         }
 
         if backend == ResolvedBackend::ComputerUse {
-            return self.execute_computer_use_action(action_str, &args).await;
+            return self.execute_computer_use_action(&action_name, &args).await;
         }
 
-        if is_computer_use_only_action(action_str) {
+        if is_computer_use_only_action(&action_name) {
             return Ok(ToolResult {
                 success: false,
                 output: String::new(),
-                error: Some(unavailable_action_for_backend_error(action_str, backend)),
+                error: Some(unavailable_action_for_backend_error(&action_name, backend)),
             });
         }
 
-        let action = match parse_browser_action(action_str, &args) {
+        let action = match parse_browser_action(&action_name, &args) {
             Ok(a) => a,
             Err(e) => {
                 return Ok(ToolResult {
@@ -2234,6 +2236,42 @@ fn is_supported_browser_action(action: &str) -> bool {
     )
 }
 
+fn normalize_browser_action_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_ascii_lowercase().replace('-', "_"))
+}
+
+fn infer_browser_action(args: &Value) -> Option<String> {
+    if let Some(explicit) = args
+        .get("action")
+        .and_then(Value::as_str)
+        .and_then(normalize_browser_action_name)
+    {
+        return Some(explicit);
+    }
+
+    for alias in ["tool_action", "operation", "verb", "command"] {
+        if let Some(candidate) = args
+            .get(alias)
+            .and_then(Value::as_str)
+            .and_then(normalize_browser_action_name)
+        {
+            if is_supported_browser_action(&candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+
+    args.get("url")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .map(|_| "open".to_string())
+}
+
 fn is_computer_use_only_action(action: &str) -> bool {
     matches!(
         action,
@@ -2765,6 +2803,35 @@ mod tests {
         let security = Arc::new(SecurityPolicy::default());
         let tool = BrowserTool::new(security, vec![], None);
         assert!(tool.validate_url("https://example.com").is_err());
+    }
+
+    #[test]
+    fn infer_browser_action_uses_explicit_action_when_present() {
+        let args = serde_json::json!({
+            "action": "get-title",
+            "url": "https://example.com"
+        });
+
+        assert_eq!(infer_browser_action(&args).as_deref(), Some("get_title"));
+    }
+
+    #[test]
+    fn infer_browser_action_accepts_supported_alias_field() {
+        let args = serde_json::json!({
+            "command": "snapshot"
+        });
+
+        assert_eq!(infer_browser_action(&args).as_deref(), Some("snapshot"));
+    }
+
+    #[test]
+    fn infer_browser_action_treats_url_only_calls_as_open() {
+        let args = serde_json::json!({
+            "command": "curl -s 'https://example.com'",
+            "url": "https://example.com"
+        });
+
+        assert_eq!(infer_browser_action(&args).as_deref(), Some("open"));
     }
 
     #[test]

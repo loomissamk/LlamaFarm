@@ -12,6 +12,10 @@ pub enum CliCategory {
     Container,
     Build,
     Cloud,
+    Shell,
+    Browser,
+    Utility,
+    AiRuntime,
 }
 
 impl std::fmt::Display for CliCategory {
@@ -23,6 +27,10 @@ impl std::fmt::Display for CliCategory {
             Self::Container => write!(f, "Container"),
             Self::Build => write!(f, "Build"),
             Self::Cloud => write!(f, "Cloud"),
+            Self::Shell => write!(f, "Shell"),
+            Self::Browser => write!(f, "Browser"),
+            Self::Utility => write!(f, "Utility"),
+            Self::AiRuntime => write!(f, "AI Runtime"),
         }
     }
 }
@@ -48,6 +56,16 @@ const KNOWN_CLIS: &[KnownCli] = &[
         name: "git",
         version_args: &["--version"],
         category: CliCategory::VersionControl,
+    },
+    KnownCli {
+        name: "bash",
+        version_args: &["--version"],
+        category: CliCategory::Shell,
+    },
+    KnownCli {
+        name: "sh",
+        version_args: &["--version"],
+        category: CliCategory::Shell,
     },
     KnownCli {
         name: "python",
@@ -88,6 +106,51 @@ const KNOWN_CLIS: &[KnownCli] = &[
         name: "cargo",
         version_args: &["--version"],
         category: CliCategory::Build,
+    },
+    KnownCli {
+        name: "rg",
+        version_args: &["--version"],
+        category: CliCategory::Utility,
+    },
+    KnownCli {
+        name: "curl",
+        version_args: &["--version"],
+        category: CliCategory::Utility,
+    },
+    KnownCli {
+        name: "jq",
+        version_args: &["--version"],
+        category: CliCategory::Utility,
+    },
+    KnownCli {
+        name: "sqlite3",
+        version_args: &["--version"],
+        category: CliCategory::Utility,
+    },
+    KnownCli {
+        name: "ollama",
+        version_args: &["--version"],
+        category: CliCategory::AiRuntime,
+    },
+    KnownCli {
+        name: "chromium",
+        version_args: &["--version"],
+        category: CliCategory::Browser,
+    },
+    KnownCli {
+        name: "chromium-browser",
+        version_args: &["--version"],
+        category: CliCategory::Browser,
+    },
+    KnownCli {
+        name: "google-chrome",
+        version_args: &["--version"],
+        category: CliCategory::Browser,
+    },
+    KnownCli {
+        name: "google-chrome-stable",
+        version_args: &["--version"],
+        category: CliCategory::Browser,
     },
     KnownCli {
         name: "make",
@@ -188,6 +251,10 @@ fn get_version(name: &str, args: &[&str]) -> Option<String> {
         .output()
         .ok()?;
 
+    if !output.status.success() {
+        return None;
+    }
+
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
@@ -235,5 +302,23 @@ mod tests {
         assert_eq!(CliCategory::Container.to_string(), "Container");
         assert_eq!(CliCategory::Build.to_string(), "Build");
         assert_eq!(CliCategory::Cloud.to_string(), "Cloud");
+        assert_eq!(CliCategory::Shell.to_string(), "Shell");
+        assert_eq!(CliCategory::Browser.to_string(), "Browser");
+        assert_eq!(CliCategory::Utility.to_string(), "Utility");
+        assert_eq!(CliCategory::AiRuntime.to_string(), "AI Runtime");
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn failed_version_probe_returns_none() {
+        let version = get_version("sh", &["-c", "echo nope >&2; exit 2"]);
+        assert!(version.is_none());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn successful_stderr_version_probe_is_preserved() {
+        let version = get_version("sh", &["-c", "echo stderr-version >&2"]);
+        assert_eq!(version.as_deref(), Some("stderr-version"));
     }
 }

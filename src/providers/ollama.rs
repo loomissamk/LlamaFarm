@@ -483,6 +483,128 @@ impl OllamaProvider {
         // Pattern 3: Normal tool call
         (name.clone(), args.clone())
     }
+
+    fn strip_json_code_fence(content: &str) -> &str {
+        let trimmed = content.trim();
+        if let Some(inner) = trimmed.strip_prefix("```") {
+            let inner = inner
+                .strip_prefix("json")
+                .or_else(|| inner.strip_prefix("JSON"))
+                .unwrap_or(inner);
+            if let Some(inner) = inner.strip_suffix("```") {
+                return inner.trim();
+            }
+        }
+        trimmed
+    }
+
+    fn parse_content_tool_calls(&self, content: &str) -> Vec<ToolCall> {
+        let trimmed = Self::strip_json_code_fence(content);
+        if trimmed.is_empty() {
+            return Vec::new();
+        }
+
+        fn parse_one(
+            provider: &OllamaProvider,
+            value: &serde_json::Value,
+            fallback_id: usize,
+        ) -> Option<ToolCall> {
+            let function = value.get("function").unwrap_or(value);
+            let name = function
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())?;
+            let arguments = function
+                .get("arguments")
+                .or_else(|| function.get("parameters"))
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            let wrapped = OllamaToolCall {
+                id: value
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToString::to_string),
+                function: OllamaFunction {
+                    name: name.to_string(),
+                    arguments,
+                },
+            };
+            let (name, args) = provider.extract_tool_name_and_args(&wrapped);
+            Some(ToolCall {
+                id: wrapped
+                    .id
+                    .unwrap_or_else(|| format!("content-tool-call-{fallback_id}")),
+                name,
+                arguments: serde_json::to_string(&args).unwrap_or_else(|_| "{}".to_string()),
+            })
+        }
+
+        fn parse_value(
+            provider: &OllamaProvider,
+            value: &serde_json::Value,
+            start_idx: usize,
+        ) -> Vec<ToolCall> {
+            let mut calls = Vec::new();
+
+            if let Some(tool_calls) = value
+                .get("tool_calls")
+                .and_then(serde_json::Value::as_array)
+            {
+                for (idx, call) in tool_calls.iter().enumerate() {
+                    if let Some(parsed) = parse_one(provider, call, start_idx + idx) {
+                        calls.push(parsed);
+                    }
+                }
+                return calls;
+            }
+
+            if let Some(call) = parse_one(provider, value, start_idx) {
+                calls.push(call);
+                return calls;
+            }
+
+            if let Some(array) = value.as_array() {
+                for (idx, call) in array.iter().enumerate() {
+                    if let Some(parsed) = parse_one(provider, call, start_idx + idx) {
+                        calls.push(parsed);
+                    }
+                }
+            }
+
+            calls
+        }
+
+        let mut stream =
+            serde_json::Deserializer::from_str(trimmed).into_iter::<serde_json::Value>();
+        let mut parsed_values = Vec::new();
+        while let Some(item) = stream.next() {
+            match item {
+                Ok(value) => parsed_values.push(value),
+                Err(_) => {
+                    parsed_values.clear();
+                    break;
+                }
+            }
+        }
+
+        let mut calls = Vec::new();
+        if !parsed_values.is_empty() {
+            let mut next_idx = 0;
+            for value in &parsed_values {
+                let parsed = parse_value(self, value, next_idx);
+                next_idx += parsed.len().max(1);
+                calls.extend(parsed);
+            }
+            return calls;
+        }
+
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            return Vec::new();
+        };
+        calls.extend(parse_value(self, &value, 0));
+        calls
+    }
 }
 
 #[async_trait]
@@ -652,6 +774,22 @@ impl Provider for OllamaProvider {
             });
         }
 
+        // Some Ollama models advertise tool support but emit prompt-style JSON
+        // tool calls in `message.content` instead of native `message.tool_calls`.
+        let prompt_tool_calls = self.parse_content_tool_calls(&response.message.content);
+        if !prompt_tool_calls.is_empty() {
+            tracing::debug!(
+                "Ollama returned {} prompt-style tool call(s) in content, promoting to native tool calls",
+                prompt_tool_calls.len()
+            );
+            return Ok(ChatResponse {
+                text: None,
+                tool_calls: prompt_tool_calls,
+                usage,
+                reasoning_content: response.message.thinking.clone(),
+            });
+        }
+
         // Plain text response.
         let content = response.message.content;
         let text = if let Some(content) = Self::normalize_response_text(content) {
@@ -666,7 +804,7 @@ impl Provider for OllamaProvider {
             text: Some(text),
             tool_calls: vec![],
             usage,
-            reasoning_content: None,
+            reasoning_content: response.message.thinking.clone(),
         })
     }
 
@@ -858,6 +996,52 @@ mod tests {
         let json = r#"{"message":{"role":"assistant","content":""}}"#;
         let resp: ApiChatResponse = serde_json::from_str(json).unwrap();
         assert!(resp.message.content.is_empty());
+    }
+
+    #[test]
+    fn parse_content_tool_calls_handles_top_level_tool_object() {
+        let provider = OllamaProvider::new(None, None);
+        let calls = provider
+            .parse_content_tool_calls(r#"{"name":"shell","arguments":{"command":"printf ok"}}"#);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(calls[0].arguments, r#"{"command":"printf ok"}"#);
+    }
+
+    #[test]
+    fn parse_content_tool_calls_handles_native_tool_calls_payload() {
+        let provider = OllamaProvider::new(None, None);
+        let calls = provider.parse_content_tool_calls(
+            r#"{"tool_calls":[{"id":"call_1","function":{"name":"file_read","arguments":{"path":"README.md"}}}]}"#,
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call_1");
+        assert_eq!(calls[0].name, "file_read");
+        assert_eq!(calls[0].arguments, r#"{"path":"README.md"}"#);
+    }
+
+    #[test]
+    fn parse_content_tool_calls_handles_json_fence() {
+        let provider = OllamaProvider::new(None, None);
+        let calls = provider.parse_content_tool_calls(
+            "```json\n{\"name\":\"shell\",\"arguments\":{\"command\":\"date\"}}\n```",
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(calls[0].arguments, r#"{"command":"date"}"#);
+    }
+
+    #[test]
+    fn parse_content_tool_calls_handles_multiple_json_objects() {
+        let provider = OllamaProvider::new(None, None);
+        let calls = provider.parse_content_tool_calls(
+            "{\"name\":\"file_write\",\"arguments\":{\"path\":\"a.txt\",\"content\":\"ok\"}}\n{\"name\":\"file_read\",\"arguments\":{\"path\":\"a.txt\"}}",
+        );
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].name, "file_write");
+        assert_eq!(calls[0].arguments, r#"{"content":"ok","path":"a.txt"}"#);
+        assert_eq!(calls[1].name, "file_read");
+        assert_eq!(calls[1].arguments, r#"{"path":"a.txt"}"#);
     }
 
     #[test]

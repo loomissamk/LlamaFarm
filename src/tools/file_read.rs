@@ -63,7 +63,7 @@ impl Tool for FileReadTool {
         }
 
         // Security check: validate path is within workspace
-        if !self.security.is_path_allowed(path) {
+        if !self.security.is_read_path_allowed(path) {
             return Ok(ToolResult {
                 success: false,
                 output: String::new(),
@@ -96,7 +96,7 @@ impl Tool for FileReadTool {
             }
         };
 
-        if !self.security.is_resolved_path_allowed(&resolved_path) {
+        if !self.security.is_resolved_read_path_allowed(&resolved_path) {
             return Ok(ToolResult {
                 success: false,
                 output: String::new(),
@@ -339,6 +339,35 @@ mod tests {
         let result = tool.execute(json!({"path": "/etc/passwd"})).await.unwrap();
         assert!(!result.success);
         assert!(result.error.as_ref().unwrap().contains("not allowed"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn file_read_allows_proc_inspection_when_workspace_only_disabled() {
+        let security = Arc::new(SecurityPolicy {
+            autonomy: AutonomyLevel::Supervised,
+            workspace_dir: std::env::temp_dir(),
+            workspace_only: false,
+            ..SecurityPolicy::default()
+        });
+        let tool = FileReadTool::new(security);
+
+        let result = tool
+            .execute(json!({"path": "/proc/cpuinfo"}))
+            .await
+            .unwrap();
+
+        assert!(
+            result.success,
+            "expected /proc read to succeed: {:?}",
+            result
+        );
+        assert!(result.error.is_none());
+        assert!(
+            result.output.contains("processor") || result.output.contains("model name"),
+            "unexpected /proc output: {}",
+            result.output
+        );
     }
 
     #[tokio::test]

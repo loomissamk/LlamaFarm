@@ -6,9 +6,17 @@ export interface StatusResponse {
   gateway_port: number;
   locale: string;
   memory_backend: string;
-  paired: boolean;
   channels: Record<string, boolean>;
   health: HealthSnapshot;
+  ollama: OllamaStatus;
+}
+
+export interface OllamaStatus {
+  endpoint: string;
+  reachable: boolean;
+  installed_models: string[];
+  loaded_models: string[];
+  active_model_loaded: boolean;
 }
 
 export interface HealthSnapshot {
@@ -36,9 +44,17 @@ export interface CronJob {
   id: string;
   name: string | null;
   command: string;
+  expression: string;
+  schedule: {
+    kind: 'cron' | 'at' | 'every';
+    expr?: string;
+    at?: string;
+    every_ms?: number;
+  };
   next_run: string;
   last_run: string | null;
   last_status: string | null;
+  last_output: string | null;
   enabled: boolean;
 }
 
