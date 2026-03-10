@@ -6,9 +6,50 @@ import {
   ChevronRight,
   Terminal,
   Package,
+  CircleCheck,
+  CircleAlert,
 } from 'lucide-react';
 import type { ToolSpec, CliTool } from '@/types/api';
 import { getTools, getCliTools } from '@/lib/api';
+
+const localChecks = [
+  {
+    id: 'shell',
+    label: 'Shell runtime',
+    detail: 'Needed for scheduler and shell tools',
+    matches: ['bash', 'sh'],
+  },
+  {
+    id: 'ollama',
+    label: 'Ollama CLI',
+    detail: 'Useful for local model inspection and smoke checks',
+    matches: ['ollama'],
+  },
+  {
+    id: 'browser',
+    label: 'Browser binary',
+    detail: 'Needed for browser and Chromium-backed tools',
+    matches: ['chromium', 'chromium-browser', 'google-chrome', 'google-chrome-stable'],
+  },
+  {
+    id: 'ripgrep',
+    label: 'Ripgrep',
+    detail: 'Helps file/content search tools behave well',
+    matches: ['rg'],
+  },
+  {
+    id: 'sqlite',
+    label: 'SQLite CLI',
+    detail: 'Useful for local data inspection',
+    matches: ['sqlite3'],
+  },
+  {
+    id: 'curl',
+    label: 'HTTP CLI',
+    detail: 'Useful for endpoint and local network checks',
+    matches: ['curl'],
+  },
+];
 
 export default function Tools() {
   const [tools, setTools] = useState<ToolSpec[]>([]);
@@ -39,6 +80,7 @@ export default function Tools() {
       t.name.toLowerCase().includes(search.toLowerCase()) ||
       t.category.toLowerCase().includes(search.toLowerCase()),
   );
+  const availableCli = new Set(cliTools.map((tool) => tool.name.toLowerCase()));
 
   if (error) {
     return (
@@ -60,7 +102,46 @@ export default function Tools() {
 
   return (
     <div className="p-6 space-y-6">
-      {/* Search */}
+      <div>
+        <div className="flex items-center gap-2">
+          <Wrench className="h-5 w-5 text-blue-400" />
+          <h2 className="text-base font-semibold text-white">Local Tooling</h2>
+        </div>
+        <p className="mt-2 text-sm text-gray-400">
+          Review the registered agent tools and the local command binaries this deployment can
+          actually see on the host.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {localChecks.map((check) => {
+          const ok = check.matches.some((name) => availableCli.has(name));
+          return (
+            <div
+              key={check.id}
+              className={`rounded-xl border p-4 ${
+                ok
+                  ? 'border-green-700/40 bg-green-950/20'
+                  : 'border-red-700/40 bg-red-950/20'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                {ok ? (
+                  <CircleCheck className="h-4 w-4 text-green-400" />
+                ) : (
+                  <CircleAlert className="h-4 w-4 text-red-400" />
+                )}
+                <h3 className="text-sm font-semibold text-white">{check.label}</h3>
+              </div>
+              <p className="mt-2 text-sm text-gray-400">{check.detail}</p>
+              <p className="mt-2 text-xs uppercase tracking-[0.18em] text-gray-500">
+                {ok ? 'Available locally' : 'Missing locally'}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+
       <div className="relative max-w-md">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-500" />
         <input
@@ -72,12 +153,11 @@ export default function Tools() {
         />
       </div>
 
-      {/* Agent Tools Grid */}
       <div>
         <div className="flex items-center gap-2 mb-4">
           <Wrench className="h-5 w-5 text-blue-400" />
           <h2 className="text-base font-semibold text-white">
-            Agent Tools ({filtered.length})
+            Registered Agent Tools ({filtered.length})
           </h2>
         </div>
 
@@ -133,13 +213,12 @@ export default function Tools() {
         )}
       </div>
 
-      {/* CLI Tools Section */}
       {filteredCli.length > 0 && (
         <div>
           <div className="flex items-center gap-2 mb-4">
             <Terminal className="h-5 w-5 text-green-400" />
             <h2 className="text-base font-semibold text-white">
-              CLI Tools ({filteredCli.length})
+              Discovered Local Commands ({filteredCli.length})
             </h2>
           </div>
 

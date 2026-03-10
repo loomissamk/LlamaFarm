@@ -20,7 +20,7 @@ interface PersistedChatMessage {
 let fallbackMessageIdCounter = 0;
 const EMPTY_DONE_FALLBACK =
   'Tool execution completed, but no final response text was returned.';
-const CHAT_HISTORY_STORAGE_KEY = 'zeroclaw.agent_chat.messages.v1';
+const CHAT_HISTORY_STORAGE_KEY = 'llamafarm.agent_chat.messages.v1';
 const MAX_PERSISTED_MESSAGES = 500;
 
 function makeMessageId(): string {
@@ -258,7 +258,7 @@ export default function AgentChat() {
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-gray-500">
             <Bot className="h-12 w-12 mb-3 text-gray-600" />
-            <p className="text-lg font-medium">ZeroClaw Agent</p>
+            <p className="text-lg font-medium">LlamaFarm Agent</p>
             <p className="text-sm mt-1">Send a message to start the conversation</p>
           </div>
         )}

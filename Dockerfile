@@ -68,15 +68,16 @@ RUN mkdir -p /zeroclaw-data/.zeroclaw /zeroclaw-data/workspace && \
     chown -R 65534:65534 /zeroclaw-data
 workspace_dir = "/zeroclaw-data/workspace"
 config_path = "/zeroclaw-data/.zeroclaw/config.toml"
-api_key = ""
-default_provider = "openrouter"
-default_model = "anthropic/claude-sonnet-4-20250514"
+api_url = "http://host.docker.internal:11434"
+default_provider = "ollama"
+default_model = "llama3.2"
 default_temperature = 0.7
 
 [gateway]
 port = 42617
-host = "127.0.0.1"
-allow_public_bind = false
+host = "0.0.0.0"
+require_pairing = false
+allow_public_bind = true
 EOF
 
 # ── Stage 2: Development Runtime (Debian) ────────────────────

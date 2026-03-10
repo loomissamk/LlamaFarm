@@ -22,13 +22,14 @@ struct WebhookTelemetry {
 
 impl WebhookTelemetry {
     fn start(state: &AppState) -> Self {
+        let runtime = state.runtime_snapshot();
         let provider_label = state
             .config
             .lock()
             .default_provider
             .clone()
             .unwrap_or_else(|| "unknown".to_string());
-        let model_label = state.model.clone();
+        let model_label = runtime.model.clone();
         let started_at = Instant::now();
 
         state
@@ -142,13 +143,14 @@ pub(super) async fn handle_webhook_inner(
     maybe_persist_inbound_message(&state, &webhook_body.message).await;
 
     let telemetry = WebhookTelemetry::start(&state);
+    let runtime = state.runtime_snapshot();
 
     match run_gateway_chat_simple(&state, &webhook_body.message).await {
         Ok(response) => {
             let safe_response =
-                sanitize_gateway_response(&response, state.tools_registry_exec.as_ref());
+                sanitize_gateway_response(&response, runtime.tools_registry_exec.as_ref());
             telemetry.finish_success(&state);
-            let body = serde_json::json!({"response": safe_response, "model": state.model});
+            let body = serde_json::json!({"response": safe_response, "model": runtime.model});
             (StatusCode::OK, Json(body))
         }
         Err(error) => {

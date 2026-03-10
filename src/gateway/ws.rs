@@ -255,13 +255,15 @@ pub async fn handle_ws_chat(
 
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
     let mut history: Vec<ChatMessage> = Vec::new();
-    let (provider_label, parallel_tools, native_tools, approval_manager, system_prompt) = {
+    while let Some(msg) = socket.recv().await {
+        let runtime = state.runtime_snapshot();
+        let (provider_label, parallel_tools, native_tools, approval_manager, system_prompt) = {
         let config_guard = state.config.lock();
         let provider_label = config_guard
             .default_provider
             .clone()
             .unwrap_or_else(|| "unknown".to_string());
-        let tool_descs: Vec<(&str, &str)> = state
+        let tool_descs: Vec<(&str, &str)> = runtime
             .tools_registry
             .iter()
             .map(|spec| (spec.name.as_str(), spec.description.as_str()))
@@ -275,11 +277,11 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         };
         let native_tools = crate::agent::loop_::configured_native_tools_enabled(
             &config_guard.agent.tool_dispatcher,
-            state.provider.supports_native_tools(),
+            runtime.provider.supports_native_tools(),
         );
         let mut system_prompt = crate::channels::build_system_prompt_with_mode(
             &config_guard.workspace_dir,
-            &state.model,
+            &runtime.model,
             &tool_descs,
             &skills,
             Some(&config_guard.identity),
@@ -289,7 +291,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         );
         if !native_tools {
             system_prompt.push_str(&crate::agent::loop_::build_tool_instructions(
-                state.tools_registry_exec.as_ref(),
+                runtime.tools_registry_exec.as_ref(),
             ));
         }
         system_prompt.push_str(&crate::agent::loop_::build_shell_policy_instructions(
@@ -297,7 +299,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         ));
         system_prompt.push_str(
             &crate::agent::loop_::build_runtime_tool_availability_notice(
-                state.tools_registry_exec.as_ref(),
+                runtime.tools_registry_exec.as_ref(),
             ),
         );
 
@@ -309,9 +311,16 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             system_prompt,
         )
     };
-    history.push(ChatMessage::system(&system_prompt));
+        if let Some(first) = history.first_mut() {
+            if first.role == "system" {
+                *first = ChatMessage::system(&system_prompt);
+            } else {
+                history.insert(0, ChatMessage::system(&system_prompt));
+            }
+        } else {
+            history.push(ChatMessage::system(&system_prompt));
+        }
 
-    while let Some(msg) = socket.recv().await {
         let msg = match msg {
             Ok(Message::Text(text)) => text,
             Ok(Message::Close(_)) | Err(_) => break,
@@ -344,20 +353,20 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         let _ = state.event_tx.send(serde_json::json!({
             "type": "agent_start",
             "provider": provider_label,
-            "model": state.model,
+            "model": runtime.model,
         }));
 
         let result =
             crate::agent::loop_::with_tool_loop_settings(parallel_tools, native_tools, async {
                 let (delta_tx, mut delta_rx) = tokio::sync::mpsc::channel::<String>(128);
                 let mut loop_future = std::pin::pin!(run_tool_call_loop(
-                    state.provider.as_ref(),
+                    runtime.provider.as_ref(),
                     &mut history,
-                    state.tools_registry_exec.as_ref(),
+                    runtime.tools_registry_exec.as_ref(),
                     state.observer.as_ref(),
                     &provider_label,
-                    &state.model,
-                    state.temperature,
+                    &runtime.model,
+                    runtime.temperature,
                     true,
                     Some(&approval_manager),
                     "webchat",
@@ -396,7 +405,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         match result {
             Ok(response) => {
                 let safe_response =
-                    finalize_ws_response(&response, &history, state.tools_registry_exec.as_ref());
+                    finalize_ws_response(&response, &history, runtime.tools_registry_exec.as_ref());
                 history.push(ChatMessage::assistant(&safe_response));
 
                 // Send the full response as a done message
@@ -410,7 +419,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                 let _ = state.event_tx.send(serde_json::json!({
                     "type": "agent_end",
                     "provider": provider_label,
-                    "model": state.model,
+                    "model": runtime.model,
                 }));
             }
             Err(e) => {
