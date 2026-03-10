@@ -61,5 +61,6 @@ Finish turning this repo into a local-first, Ollama-only `LlamaFarm` deployment.
 
 ## Notes
 
-- Rust test/CI cleanup is intentionally deferred until the local runtime/tooling path is stable.
+- Rust test/CI cleanup is intentionally deferred until the local runtime/tooling path is stable. We just want to remove CI if able as it is no longer truly needed for local deploymenet we just want all tools not gitlab junk calls
 - Do not reopen older branding/pairing cleanup tasks unless a live page still shows them.
+- ensure all functionality works with smoke tests for accuracy, ollama -> LlamaFarm tool -> expected accurate result
