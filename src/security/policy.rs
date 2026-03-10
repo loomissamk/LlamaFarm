@@ -204,6 +204,121 @@ fn expand_user_path(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
+const READ_ONLY_INSPECTION_ROOTS: &[&str] = &["/proc", "/sys"];
+const HARD_DENIED_COMMANDS: &[&str] = &[
+    "modprobe",
+    "insmod",
+    "rmmod",
+    "depmod",
+    "dkms",
+    "dracut",
+    "mkinitcpio",
+    "update-initramfs",
+    "grub-install",
+    "update-grub",
+    "grubby",
+    "efibootmgr",
+    "flashrom",
+    "dd",
+    "fdisk",
+    "cfdisk",
+    "sfdisk",
+    "parted",
+    "gdisk",
+    "sgdisk",
+    "mkfs",
+    "mkswap",
+    "wipefs",
+    "mdadm",
+    "cryptsetup",
+    "badblocks",
+];
+const SUDO_ALLOWED_BASES: &[&str] = &["apt", "apt-get", "systemctl", "journalctl"];
+const SYSTEMCTL_DENIED_VERBS: &[&str] = &[
+    "daemon-reexec",
+    "daemon-reload",
+    "default",
+    "edit",
+    "emergency",
+    "halt",
+    "hibernate",
+    "hybrid-sleep",
+    "isolate",
+    "kexec",
+    "link",
+    "mask",
+    "poweroff",
+    "preset",
+    "reenable",
+    "rescue",
+    "revert",
+    "set-default",
+    "suspend",
+    "suspend-then-hibernate",
+    "switch-root",
+    "unmask",
+];
+const APT_DENIED_VERBS: &[&str] = &[
+    "autoremove",
+    "dist-upgrade",
+    "dselect-upgrade",
+    "full-upgrade",
+    "purge",
+    "remove",
+];
+const APT_DENIED_PACKAGE_PREFIXES: &[&str] = &[
+    "dracut",
+    "firmware-",
+    "grub",
+    "initramfs-tools",
+    "linux-firmware",
+    "linux-generic",
+    "linux-headers",
+    "linux-image",
+    "linux-modules",
+    "linux-signed",
+    "mkinitcpio",
+    "nvidia-dkms",
+    "nvidia-driver",
+    "nvidia-firmware",
+    "nvidia-kernel",
+    "shim",
+];
+const APT_DENIED_PACKAGE_NAMES: &[&str] = &[
+    "badblocks",
+    "cryptsetup",
+    "ddrescue",
+    "dkms",
+    "dracut-core",
+    "efibootmgr",
+    "fdisk",
+    "flashrom",
+    "fwupd",
+    "gdisk",
+    "grub-common",
+    "grub-efi",
+    "grub-pc",
+    "lvm2",
+    "mdadm",
+    "mkinitcpio",
+    "parted",
+    "sgdisk",
+    "wipefs",
+];
+const BASH_DENIED_FLAGS: &[&str] = &["-c", "-ec", "-ic", "-lc", "-xc"];
+const NODE_DENIED_FLAGS: &[&str] = &["-e", "--eval", "-p"];
+const PYTHON_DENIED_FLAGS: &[&str] = &["-c"];
+const DOCKER_DANGEROUS_CAPS: &[&str] = &["all", "sys_admin", "sysadmin"];
+
+#[derive(Debug, Clone)]
+struct ParsedCommandSegment {
+    uses_sudo: bool,
+    sudo_args: Vec<String>,
+    executable: String,
+    base: String,
+    args: Vec<String>,
+}
+
 // ── Shell Command Parsing Utilities ───────────────────────────────────────
 // These helpers implement a minimal quote-aware shell lexer. They exist
 // because security validation must reason about the *structure* of a
@@ -772,6 +887,173 @@ fn is_allowlist_entry_match(allowed: &str, executable: &str, executable_base: &s
     allowed == executable_base
 }
 
+fn path_is_under(path: &Path, root: &str) -> bool {
+    path.starts_with(Path::new(root))
+}
+
+fn path_match_depth(path: &Path, root: &Path) -> Option<usize> {
+    path.starts_with(root).then(|| root.components().count())
+}
+
+fn token_base(token: &str) -> &str {
+    strip_wrapping_quotes(token)
+        .trim()
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+}
+
+fn parse_segment_command(segment: &str) -> Option<ParsedCommandSegment> {
+    let cmd_part = skip_env_assignments(segment).trim();
+    if cmd_part.is_empty() {
+        return None;
+    }
+
+    let tokens: Vec<String> = cmd_part
+        .split_whitespace()
+        .map(strip_wrapping_quotes)
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    if tokens.is_empty() {
+        return None;
+    }
+
+    let mut index = 0usize;
+    let mut uses_sudo = false;
+    let mut sudo_args = Vec::new();
+
+    if token_base(&tokens[0]) == "sudo" {
+        uses_sudo = true;
+        index = 1;
+        while index < tokens.len() {
+            let token = tokens[index].trim();
+            if token == "--" {
+                index += 1;
+                break;
+            }
+            if !token.starts_with('-') {
+                break;
+            }
+            sudo_args.push(token.to_ascii_lowercase());
+            index += 1;
+        }
+    }
+
+    let executable = tokens.get(index)?.trim().to_string();
+    let base = token_base(&executable).to_ascii_lowercase();
+    let args = tokens[index + 1..]
+        .iter()
+        .map(|token| token.to_ascii_lowercase())
+        .collect();
+
+    Some(ParsedCommandSegment {
+        uses_sudo,
+        sudo_args,
+        executable,
+        base,
+        args,
+    })
+}
+
+fn first_non_option_arg(args: &[String]) -> Option<&str> {
+    args.iter()
+        .find(|arg| !arg.starts_with('-'))
+        .map(String::as_str)
+}
+
+fn docker_mounts_root_rw(spec: &str) -> bool {
+    let normalized = spec.trim();
+    if normalized.is_empty() {
+        return false;
+    }
+
+    if let Some(rest) = normalized.strip_prefix("/:") {
+        let mode = rest.split(':').nth(1).unwrap_or("");
+        return mode.is_empty() || !mode.split(',').any(|flag| flag == "ro");
+    }
+
+    if normalized.contains("src=/") || normalized.contains("source=/") {
+        let read_only = normalized
+            .split(',')
+            .any(|entry| matches!(entry.trim(), "ro" | "readonly"));
+        return !read_only;
+    }
+
+    false
+}
+
+fn is_denied_apt_package(package: &str) -> bool {
+    let normalized = package.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return false;
+    }
+
+    if APT_DENIED_PACKAGE_NAMES.contains(&normalized.as_str()) {
+        return true;
+    }
+
+    APT_DENIED_PACKAGE_PREFIXES
+        .iter()
+        .any(|prefix| normalized.starts_with(prefix))
+}
+
+fn apt_upgrade_denied_packages_from_output(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            let package = trimmed.strip_prefix("Inst ")?.split_whitespace().next()?;
+            is_denied_apt_package(package).then(|| package.to_string())
+        })
+        .collect()
+}
+
+fn apt_upgrade_is_simulation(args: &[String]) -> bool {
+    args.iter().any(|arg| {
+        matches!(
+            arg.as_str(),
+            "-s" | "--simulate" | "--dry-run" | "--just-print" | "--print-uris"
+        )
+    })
+}
+
+#[cfg(not(target_os = "windows"))]
+fn inspect_apt_upgrade_for_denied_packages(args: &[String]) -> Result<Vec<String>, String> {
+    if apt_upgrade_is_simulation(args) {
+        return Ok(Vec::new());
+    }
+
+    let output = std::process::Command::new("apt-get")
+        .arg("-s")
+        .arg("-o")
+        .arg("Debug::NoLocking=1")
+        .args(args)
+        .output()
+        .map_err(|e| format!("Command blocked: unable to inspect apt upgrade plan safely ({e})"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}\n{stderr}");
+
+    if !output.status.success() {
+        let detail = stderr.trim();
+        return Err(if detail.is_empty() {
+            "Command blocked: unable to inspect apt upgrade plan safely".into()
+        } else {
+            format!("Command blocked: unable to inspect apt upgrade plan safely ({detail})")
+        });
+    }
+
+    Ok(apt_upgrade_denied_packages_from_output(&combined))
+}
+
+#[cfg(target_os = "windows")]
+fn inspect_apt_upgrade_for_denied_packages(_args: &[String]) -> Result<Vec<String>, String> {
+    Err("Command blocked: apt upgrade inspection is only supported on Linux hosts".into())
+}
+
 impl SecurityPolicy {
     /// Apply configured redirect policy to a shell command before validation/execution.
     pub fn apply_shell_redirect_policy(&self, command: &str) -> String {
@@ -779,6 +1061,304 @@ impl SecurityPolicy {
             ShellRedirectPolicy::Block => command.to_string(),
             ShellRedirectPolicy::Strip => strip_supported_redirects(command),
         }
+    }
+
+    fn hard_denied_apt_reason(&self, args: &[String]) -> Option<String> {
+        let verb = first_non_option_arg(args)?;
+        if APT_DENIED_VERBS.contains(&verb) {
+            return Some(format!(
+                "Command blocked: apt verb '{verb}' is denied by the local-host safety policy"
+            ));
+        }
+
+        if verb == "upgrade" {
+            let denied_packages = match inspect_apt_upgrade_for_denied_packages(args) {
+                Ok(packages) => packages,
+                Err(reason) => return Some(reason),
+            };
+
+            if !denied_packages.is_empty() {
+                return Some(format!(
+                    "Command blocked: apt upgrade would modify denied packages: {}",
+                    denied_packages.join(", ")
+                ));
+            }
+
+            return None;
+        }
+
+        if verb != "install" {
+            return None;
+        }
+
+        for package in args {
+            if package.starts_with('-') {
+                continue;
+            }
+            if package == verb {
+                continue;
+            }
+            if package.ends_with(".deb") || looks_like_path(package) {
+                return Some(
+                    "Command blocked: local .deb installs are denied by the local-host safety policy"
+                        .into(),
+                );
+            }
+            if is_denied_apt_package(package) {
+                return Some(format!(
+                    "Command blocked: package '{package}' is denied by the local-host safety policy"
+                ));
+            }
+        }
+
+        None
+    }
+
+    fn hard_denied_docker_reason(&self, args: &[String]) -> Option<String> {
+        for (idx, arg) in args.iter().enumerate() {
+            match arg.as_str() {
+                "--privileged" => {
+                    return Some(
+                        "Command blocked: privileged Docker containers require explicit operator review outside this profile"
+                            .into(),
+                    );
+                }
+                "--pid" if args.get(idx + 1).is_some_and(|next| next == "host") => {
+                    return Some(
+                        "Command blocked: Docker host PID namespace is denied by policy".into(),
+                    );
+                }
+                "--ipc" if args.get(idx + 1).is_some_and(|next| next == "host") => {
+                    return Some(
+                        "Command blocked: Docker host IPC namespace is denied by policy".into(),
+                    );
+                }
+                "--device" => {
+                    return Some(
+                        "Command blocked: Docker device passthrough is denied by policy".into(),
+                    );
+                }
+                "--cap-add" => {
+                    return Some(
+                        "Command blocked: Docker capability escalation is denied by policy".into(),
+                    );
+                }
+                "--security-opt"
+                    if args
+                        .get(idx + 1)
+                        .is_some_and(|next| next.contains("unconfined")) =>
+                {
+                    return Some(
+                        "Command blocked: unconfined Docker security options are denied by policy"
+                            .into(),
+                    );
+                }
+                "--mount"
+                    if args
+                        .get(idx + 1)
+                        .is_some_and(|next| docker_mounts_root_rw(next)) =>
+                {
+                    return Some(
+                        "Command blocked: mounting filesystem root (/) into a container as read-write is denied by policy"
+                            .into(),
+                    );
+                }
+                "--volume"
+                    if args
+                        .get(idx + 1)
+                        .is_some_and(|next| docker_mounts_root_rw(next)) =>
+                {
+                    return Some(
+                        "Command blocked: mounting filesystem root (/) into a container as read-write is denied by policy"
+                            .into(),
+                    );
+                }
+                _ => {}
+            }
+
+            if matches!(arg.as_str(), "--pid=host" | "--ipc=host" | "--userns=host") {
+                return Some(format!(
+                    "Command blocked: Docker flag '{arg}' is denied by policy"
+                ));
+            }
+            if arg.starts_with("--device=") {
+                return Some(
+                    "Command blocked: Docker device passthrough is denied by policy".into(),
+                );
+            }
+            if arg.starts_with("--cap-add=") {
+                let cap = arg
+                    .split_once('=')
+                    .map(|(_, value)| value)
+                    .unwrap_or_default();
+                let normalized = cap.replace('-', "_");
+                if DOCKER_DANGEROUS_CAPS.contains(&normalized.as_str()) || !normalized.is_empty() {
+                    return Some(
+                        "Command blocked: Docker capability escalation is denied by policy".into(),
+                    );
+                }
+            }
+            if arg.starts_with("--security-opt=") && arg.contains("unconfined") {
+                return Some(
+                    "Command blocked: unconfined Docker security options are denied by policy"
+                        .into(),
+                );
+            }
+            if let Some(spec) = arg.strip_prefix("--mount=") {
+                if docker_mounts_root_rw(spec) {
+                    return Some(
+                        "Command blocked: mounting filesystem root (/) into a container as read-write is denied by policy"
+                            .into(),
+                    );
+                }
+            }
+            if let Some(spec) = arg.strip_prefix("--volume=") {
+                if docker_mounts_root_rw(spec) {
+                    return Some(
+                        "Command blocked: mounting filesystem root (/) into a container as read-write is denied by policy"
+                            .into(),
+                    );
+                }
+            }
+            if let Some(spec) = arg.strip_prefix("-v") {
+                if docker_mounts_root_rw(spec) {
+                    return Some(
+                        "Command blocked: mounting filesystem root (/) into a container as read-write is denied by policy"
+                            .into(),
+                    );
+                }
+            }
+        }
+
+        None
+    }
+
+    fn hard_denied_systemctl_reason(&self, args: &[String]) -> Option<String> {
+        let verb = first_non_option_arg(args)?;
+        if SYSTEMCTL_DENIED_VERBS.contains(&verb) {
+            return Some(format!(
+                "Command blocked: systemctl verb '{verb}' is denied by the local-host safety policy"
+            ));
+        }
+        None
+    }
+
+    fn hard_denied_interpreter_reason(&self, base: &str, args: &[String]) -> Option<String> {
+        let denied = match base {
+            "bash" | "sh" => BASH_DENIED_FLAGS,
+            "node" => NODE_DENIED_FLAGS,
+            "python" | "python3" => PYTHON_DENIED_FLAGS,
+            _ => &[],
+        };
+
+        if args.iter().any(|arg| denied.contains(&arg.as_str())) {
+            return Some(format!(
+                "Command blocked: inline {base} evaluation flags are denied by policy"
+            ));
+        }
+
+        None
+    }
+
+    fn hard_denied_command_reason(&self, command: &str) -> Option<String> {
+        let normalized = command.to_ascii_lowercase();
+        for needle in [
+            "|bash",
+            "| bash",
+            "|sh",
+            "| sh",
+            "|python",
+            "| python",
+            "|python3",
+            "| python3",
+            "|node",
+            "| node",
+        ] {
+            if normalized.contains(needle) {
+                return Some(
+                    "Command blocked: piping command output directly into an interpreter is denied by policy"
+                        .into(),
+                );
+            }
+        }
+
+        for segment in split_unquoted_segments(command) {
+            let Some(parsed) = parse_segment_command(&segment) else {
+                continue;
+            };
+
+            if parsed.uses_sudo {
+                let sudo_args_allowed = parsed
+                    .sudo_args
+                    .iter()
+                    .all(|arg| matches!(arg.as_str(), "-n" | "--non-interactive"));
+                if !sudo_args_allowed {
+                    return Some(
+                        "Command blocked: only non-interactive sudo is allowed in this profile"
+                            .into(),
+                    );
+                }
+                if !SUDO_ALLOWED_BASES.contains(&parsed.base.as_str()) {
+                    return Some(format!(
+                        "Command blocked: sudo is only allowed for {} in this profile",
+                        SUDO_ALLOWED_BASES.join(", ")
+                    ));
+                }
+            }
+
+            if HARD_DENIED_COMMANDS.contains(&parsed.base.as_str())
+                || parsed.base.starts_with("mkfs.")
+            {
+                return Some(format!(
+                    "Command blocked: '{}' is denied by the local-host safety policy",
+                    parsed.base
+                ));
+            }
+
+            if parsed.base == "fwupdmgr" {
+                return Some(
+                    "Command blocked: firmware update commands are denied by the local-host safety policy"
+                        .into(),
+                );
+            }
+
+            if parsed.base == "fsck"
+                && parsed.args.iter().any(|arg| {
+                    matches!(
+                        arg.as_str(),
+                        "-a" | "-p" | "-r" | "-y" | "--yes" | "--repair"
+                    )
+                })
+            {
+                return Some(
+                    "Command blocked: destructive fsck repair flags are denied by policy".into(),
+                );
+            }
+
+            if matches!(parsed.base.as_str(), "apt" | "apt-get") {
+                if let Some(reason) = self.hard_denied_apt_reason(&parsed.args) {
+                    return Some(reason);
+                }
+            }
+
+            if parsed.base == "systemctl" {
+                if let Some(reason) = self.hard_denied_systemctl_reason(&parsed.args) {
+                    return Some(reason);
+                }
+            }
+
+            if matches!(parsed.base.as_str(), "docker" | "docker-compose") {
+                if let Some(reason) = self.hard_denied_docker_reason(&parsed.args) {
+                    return Some(reason);
+                }
+            }
+
+            if let Some(reason) = self.hard_denied_interpreter_reason(&parsed.base, &parsed.args) {
+                return Some(reason);
+            }
+        }
+
+        None
     }
 
     // ── Risk Classification ──────────────────────────────────────────────
@@ -791,31 +1371,21 @@ impl SecurityPolicy {
         let mut saw_medium = false;
 
         for segment in split_unquoted_segments(command) {
-            let cmd_part = skip_env_assignments(&segment);
-            let mut words = cmd_part.split_whitespace();
-            let Some(base_raw) = words.next() else {
+            let Some(parsed) = parse_segment_command(&segment) else {
                 continue;
             };
 
-            let base = base_raw
-                .rsplit('/')
-                .next()
-                .unwrap_or("")
-                .to_ascii_lowercase();
-
-            let args: Vec<String> = words.map(|w| w.to_ascii_lowercase()).collect();
-            let joined_segment = cmd_part.to_ascii_lowercase();
+            let joined_segment = skip_env_assignments(&segment).to_ascii_lowercase();
 
             // High-risk commands
             if matches!(
-                base.as_str(),
+                parsed.base.as_str(),
                 "rm" | "mkfs"
                     | "dd"
                     | "shutdown"
                     | "reboot"
                     | "halt"
                     | "poweroff"
-                    | "sudo"
                     | "su"
                     | "chown"
                     | "chmod"
@@ -828,8 +1398,6 @@ impl SecurityPolicy {
                     | "iptables"
                     | "ufw"
                     | "firewall-cmd"
-                    | "curl"
-                    | "wget"
                     | "nc"
                     | "ncat"
                     | "netcat"
@@ -849,8 +1417,8 @@ impl SecurityPolicy {
             }
 
             // Medium-risk commands (state-changing, but not inherently destructive)
-            let medium = match base.as_str() {
-                "git" => args.first().is_some_and(|verb| {
+            let medium = match parsed.base.as_str() {
+                "git" => parsed.args.first().is_some_and(|verb| {
                     matches!(
                         verb.as_str(),
                         "commit"
@@ -867,16 +1435,35 @@ impl SecurityPolicy {
                             | "tag"
                     )
                 }),
-                "npm" | "pnpm" | "yarn" => args.first().is_some_and(|verb| {
+                "npm" | "pnpm" | "yarn" => parsed.args.first().is_some_and(|verb| {
                     matches!(
                         verb.as_str(),
                         "install" | "add" | "remove" | "uninstall" | "update" | "publish"
                     )
                 }),
-                "cargo" => args.first().is_some_and(|verb| {
+                "cargo" => parsed.args.first().is_some_and(|verb| {
                     matches!(
                         verb.as_str(),
                         "add" | "remove" | "install" | "clean" | "publish"
+                    )
+                }),
+                "apt" | "apt-get" => parsed.args.iter().any(|arg| {
+                    matches!(
+                        arg.as_str(),
+                        "install" | "search" | "show" | "update" | "upgrade"
+                    )
+                }),
+                "docker" | "docker-compose" | "curl" | "wget" => true,
+                "pip" | "pip3" => parsed.args.first().is_some_and(|verb| {
+                    matches!(
+                        verb.as_str(),
+                        "install" | "uninstall" | "download" | "wheel" | "freeze" | "list"
+                    )
+                }),
+                "systemctl" => parsed.args.first().is_some_and(|verb| {
+                    matches!(
+                        verb.as_str(),
+                        "reload" | "restart" | "start" | "status" | "stop"
                     )
                 }),
                 "touch" | "mkdir" | "mv" | "cp" | "ln" => true,
@@ -909,6 +1496,10 @@ impl SecurityPolicy {
         approved: bool,
     ) -> Result<CommandRiskLevel, String> {
         let effective_command = self.apply_shell_redirect_policy(command);
+
+        if let Some(reason) = self.hard_denied_command_reason(&effective_command) {
+            return Err(reason);
+        }
 
         if !self.is_command_allowed(&effective_command) {
             return Err(format!("Command not allowed by security policy: {command}"));
@@ -1002,28 +1593,18 @@ impl SecurityPolicy {
         // Split on unquoted command separators and validate each sub-command.
         let segments = split_unquoted_segments(command);
         for segment in &segments {
-            // Strip leading env var assignments (e.g. FOO=bar cmd)
-            let cmd_part = skip_env_assignments(segment);
-
-            let mut words = cmd_part.split_whitespace();
-            let executable = strip_wrapping_quotes(words.next().unwrap_or("")).trim();
-            let base_cmd = executable.rsplit('/').next().unwrap_or("");
-
-            if base_cmd.is_empty() {
+            let Some(parsed) = parse_segment_command(segment) else {
                 continue;
-            }
+            };
 
-            if !self
-                .allowed_commands
-                .iter()
-                .any(|allowed| is_allowlist_entry_match(allowed, executable, base_cmd))
-            {
+            if !self.allowed_commands.iter().any(|allowed| {
+                is_allowlist_entry_match(allowed, &parsed.executable, parsed.base.as_str())
+            }) {
                 return false;
             }
 
             // Validate arguments for the command
-            let args: Vec<String> = words.map(|w| w.to_ascii_lowercase()).collect();
-            if !self.is_args_safe(base_cmd, &args) {
+            if !self.is_args_safe(parsed.base.as_str(), &parsed.args) {
                 return false;
             }
         }
@@ -1041,6 +1622,9 @@ impl SecurityPolicy {
     fn is_args_safe(&self, base: &str, args: &[String]) -> bool {
         let base = base.to_ascii_lowercase();
         match base.as_str() {
+            "bash" | "sh" => !args
+                .iter()
+                .any(|arg| BASH_DENIED_FLAGS.contains(&arg.as_str())),
             "find" => {
                 // find -exec and find -ok allow arbitrary command execution
                 !args.iter().any(|arg| arg == "-exec" || arg == "-ok")
@@ -1056,6 +1640,12 @@ impl SecurityPolicy {
                         || arg == "-c"
                 })
             }
+            "node" => !args
+                .iter()
+                .any(|arg| NODE_DENIED_FLAGS.contains(&arg.as_str())),
+            "python" | "python3" => !args
+                .iter()
+                .any(|arg| PYTHON_DENIED_FLAGS.contains(&arg.as_str())),
             _ => true,
         }
     }
@@ -1133,6 +1723,53 @@ impl SecurityPolicy {
     // forbidden-prefix match. Each layer addresses a distinct escape
     // technique; together they enforce workspace confinement.
 
+    fn best_allowed_path_match_depth(
+        &self,
+        path: &Path,
+        include_workspace_root: bool,
+    ) -> Option<usize> {
+        let workspace_match = if include_workspace_root {
+            let workspace_root = self
+                .workspace_dir
+                .canonicalize()
+                .unwrap_or_else(|_| self.workspace_dir.clone());
+            path_match_depth(path, &workspace_root)
+        } else {
+            None
+        };
+
+        self.allowed_roots
+            .iter()
+            .map(|root| root.canonicalize().unwrap_or_else(|_| root.clone()))
+            .filter_map(|root| path_match_depth(path, &root))
+            .chain(workspace_match)
+            .max()
+    }
+
+    fn best_forbidden_path_match_depth(&self, path: &Path) -> Option<usize> {
+        self.forbidden_paths
+            .iter()
+            .map(|forbidden| expand_user_path(forbidden))
+            .filter_map(|forbidden_path| path_match_depth(path, &forbidden_path))
+            .max()
+    }
+
+    fn prefix_path_access_decision(
+        &self,
+        path: &Path,
+        include_workspace_root: bool,
+    ) -> Option<bool> {
+        match (
+            self.best_allowed_path_match_depth(path, include_workspace_root),
+            self.best_forbidden_path_match_depth(path),
+        ) {
+            (Some(allowed), Some(forbidden)) => Some(allowed > forbidden),
+            (Some(_), None) => Some(true),
+            (None, Some(_)) => Some(false),
+            (None, None) => None,
+        }
+    }
+
     /// Check if a file path is allowed (no path traversal, within workspace)
     pub fn is_path_allowed(&self, path: &str) -> bool {
         // Block null bytes (can truncate paths in C-backed syscalls)
@@ -1168,47 +1805,58 @@ impl SecurityPolicy {
             return false;
         }
 
-        // Block forbidden paths using path-component-aware matching
-        for forbidden in &self.forbidden_paths {
-            let forbidden_path = expand_user_path(forbidden);
-            if expanded_path.starts_with(forbidden_path) {
-                return false;
-            }
+        if let Some(decision) = self.prefix_path_access_decision(&expanded_path, false) {
+            return decision;
         }
 
         true
     }
 
-    /// Validate that a resolved path is inside the workspace or an allowed root.
-    /// Call this AFTER joining `workspace_dir` + relative path and canonicalizing.
-    pub fn is_resolved_path_allowed(&self, resolved: &Path) -> bool {
-        // Prefer canonical workspace root so `/a/../b` style config paths don't
-        // cause false positives or negatives.
-        let workspace_root = self
-            .workspace_dir
-            .canonicalize()
-            .unwrap_or_else(|_| self.workspace_dir.clone());
-        if resolved.starts_with(&workspace_root) {
+    /// Check whether a read-only file path is allowed.
+    ///
+    /// This preserves the normal path policy while allowing explicit inspection
+    /// of `/proc` and `/sys` through the dedicated `file_read` tool.
+    pub fn is_read_path_allowed(&self, path: &str) -> bool {
+        if self.is_path_allowed(path) {
             return true;
         }
 
-        // Check extra allowed roots (e.g. shared skills directories) before
-        // forbidden checks so explicit allowlists can coexist with broad
-        // default forbidden roots such as `/home` and `/tmp`.
-        for root in &self.allowed_roots {
-            let canonical = root.canonicalize().unwrap_or_else(|_| root.clone());
-            if resolved.starts_with(&canonical) {
-                return true;
-            }
+        if path.contains('\0') {
+            return false;
         }
 
-        // For paths outside workspace/allowlist, block forbidden roots to
-        // prevent symlink escapes and sensitive directory access.
-        for forbidden in &self.forbidden_paths {
-            let forbidden_path = expand_user_path(forbidden);
-            if resolved.starts_with(&forbidden_path) {
-                return false;
-            }
+        if Path::new(path)
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return false;
+        }
+
+        let lower = path.to_lowercase();
+        if lower.contains("..%2f") || lower.contains("%2f..") {
+            return false;
+        }
+
+        if path.starts_with('~') && path != "~" && !path.starts_with("~/") {
+            return false;
+        }
+
+        let expanded_path = expand_user_path(path);
+
+        if self.workspace_only && expanded_path.is_absolute() {
+            return false;
+        }
+
+        READ_ONLY_INSPECTION_ROOTS
+            .iter()
+            .any(|root| path_is_under(&expanded_path, root))
+    }
+
+    /// Validate that a resolved path is inside the workspace or an allowed root.
+    /// Call this AFTER joining `workspace_dir` + relative path and canonicalizing.
+    pub fn is_resolved_path_allowed(&self, resolved: &Path) -> bool {
+        if let Some(decision) = self.prefix_path_access_decision(resolved, true) {
+            return decision;
         }
 
         // When workspace_only is disabled the user explicitly opted out of
@@ -1218,6 +1866,17 @@ impl SecurityPolicy {
         }
 
         false
+    }
+
+    /// Read-only companion to `is_resolved_path_allowed`.
+    pub fn is_resolved_read_path_allowed(&self, resolved: &Path) -> bool {
+        if self.is_resolved_path_allowed(resolved) {
+            return true;
+        }
+
+        READ_ONLY_INSPECTION_ROOTS
+            .iter()
+            .any(|root| path_is_under(resolved, root))
     }
 
     pub fn resolved_path_violation_message(&self, resolved: &Path) -> String {
@@ -1599,6 +2258,136 @@ mod tests {
         assert!(result.unwrap_err().contains("not allowed"));
     }
 
+    #[test]
+    fn validate_command_execution_allows_sudo_apt_install_for_safe_packages() {
+        let p = SecurityPolicy {
+            allowed_commands: vec!["apt".into(), "apt-get".into()],
+            autonomy: AutonomyLevel::Full,
+            require_approval_for_medium_risk: false,
+            ..SecurityPolicy::default()
+        };
+
+        let risk = p
+            .validate_command_execution("sudo apt install ripgrep", false)
+            .expect("safe apt install should be allowed");
+        assert_eq!(risk, CommandRiskLevel::Medium);
+    }
+
+    #[test]
+    fn apt_upgrade_plan_detects_denied_packages() {
+        let output = "\
+Inst ripgrep [14.1.1-1] (14.1.1-2 Ubuntu:24.04/noble [amd64])\n\
+Inst linux-image-generic [6.8.0] (6.8.1 Ubuntu:24.04/noble [amd64])\n\
+Inst fwupd [1.9.0] (1.9.1 Ubuntu:24.04/noble [amd64])\n";
+
+        assert_eq!(
+            apt_upgrade_denied_packages_from_output(output),
+            vec!["linux-image-generic".to_string(), "fwupd".to_string()]
+        );
+    }
+
+    #[test]
+    fn validate_command_execution_allows_simulated_sudo_apt_upgrade() {
+        let p = SecurityPolicy {
+            allowed_commands: vec!["apt".into(), "apt-get".into()],
+            autonomy: AutonomyLevel::Full,
+            require_approval_for_medium_risk: false,
+            ..SecurityPolicy::default()
+        };
+
+        let risk = p
+            .validate_command_execution("sudo apt -s upgrade", false)
+            .expect("simulated apt upgrade should be allowed");
+        assert_eq!(risk, CommandRiskLevel::Medium);
+    }
+
+    #[test]
+    fn validate_command_execution_denies_modprobe() {
+        let p = SecurityPolicy {
+            allowed_commands: vec!["modprobe".into()],
+            autonomy: AutonomyLevel::Full,
+            ..SecurityPolicy::default()
+        };
+
+        let err = p
+            .validate_command_execution("modprobe loop", true)
+            .unwrap_err();
+        assert!(err.contains("local-host safety policy"));
+    }
+
+    #[test]
+    fn validate_command_execution_denies_update_initramfs() {
+        let p = SecurityPolicy {
+            allowed_commands: vec!["update-initramfs".into()],
+            autonomy: AutonomyLevel::Full,
+            ..SecurityPolicy::default()
+        };
+
+        let err = p
+            .validate_command_execution("update-initramfs -u", true)
+            .unwrap_err();
+        assert!(err.contains("local-host safety policy"));
+    }
+
+    #[test]
+    fn validate_command_execution_denies_grub_install() {
+        let p = SecurityPolicy {
+            allowed_commands: vec!["grub-install".into()],
+            autonomy: AutonomyLevel::Full,
+            ..SecurityPolicy::default()
+        };
+
+        let err = p
+            .validate_command_execution("grub-install /dev/sda", true)
+            .unwrap_err();
+        assert!(err.contains("local-host safety policy"));
+    }
+
+    #[test]
+    fn validate_command_execution_denies_apt_kernel_package() {
+        let p = SecurityPolicy {
+            allowed_commands: vec!["apt".into()],
+            autonomy: AutonomyLevel::Full,
+            require_approval_for_medium_risk: false,
+            ..SecurityPolicy::default()
+        };
+
+        let err = p
+            .validate_command_execution("apt install linux-image-generic", false)
+            .unwrap_err();
+        assert!(err.contains("package 'linux-image-generic'"));
+    }
+
+    #[test]
+    fn validate_command_execution_denies_privileged_docker() {
+        let p = SecurityPolicy {
+            allowed_commands: vec!["docker".into()],
+            autonomy: AutonomyLevel::Full,
+            require_approval_for_medium_risk: false,
+            ..SecurityPolicy::default()
+        };
+
+        let err = p
+            .validate_command_execution("docker run --privileged alpine:latest", false)
+            .unwrap_err();
+        assert!(err.contains("privileged Docker containers"));
+    }
+
+    #[test]
+    fn validate_command_execution_denies_host_pid_docker() {
+        let p = SecurityPolicy {
+            allowed_commands: vec!["docker".into()],
+            autonomy: AutonomyLevel::Full,
+            require_approval_for_medium_risk: false,
+            ..SecurityPolicy::default()
+        };
+
+        let err = p
+            .validate_command_execution("docker run --pid host alpine:latest", false)
+            .unwrap_err();
+        assert!(err.contains("host PID namespace"));
+    }
+
     // ── is_path_allowed ─────────────────────────────────────
 
     #[test]
@@ -1652,6 +2441,19 @@ mod tests {
     fn empty_path_allowed() {
         let p = default_policy();
         assert!(p.is_path_allowed(""));
+    }
+
+    #[test]
+    fn read_path_allows_proc_and_sys_inspection() {
+        let p = SecurityPolicy {
+            workspace_only: false,
+            ..SecurityPolicy::default()
+        };
+
+        assert!(p.is_read_path_allowed("/proc/cpuinfo"));
+        assert!(p.is_read_path_allowed("/sys/kernel/uevent_helper"));
+        assert!(!p.is_path_allowed("/proc/cpuinfo"));
+        assert!(!p.is_path_allowed("/sys/kernel/uevent_helper"));
     }
 
     #[test]
@@ -2305,6 +3107,53 @@ mod tests {
     }
 
     #[test]
+    fn absolute_path_under_allowed_root_passes_even_when_parent_is_forbidden() {
+        let allowed_root = std::env::temp_dir().join("zeroclaw_allowed_root");
+        let policy = SecurityPolicy {
+            workspace_only: false,
+            forbidden_paths: vec![
+                "/home".into(),
+                allowed_root
+                    .parent()
+                    .unwrap_or(Path::new("/"))
+                    .to_string_lossy()
+                    .into_owned(),
+            ],
+            allowed_roots: vec![allowed_root.clone()],
+            ..SecurityPolicy::default()
+        };
+
+        let allowed_path = allowed_root.join("project").join("notes.txt");
+        assert!(policy.is_path_allowed(&allowed_path.to_string_lossy()));
+
+        let blocked_path = allowed_root
+            .parent()
+            .unwrap_or(Path::new("/"))
+            .join("elsewhere")
+            .join("notes.txt");
+        assert!(!policy.is_path_allowed(&blocked_path.to_string_lossy()));
+    }
+
+    #[test]
+    fn forbidden_subpath_beats_broad_allowed_root() {
+        let root = std::env::temp_dir().join("zeroclaw_prefix_allowlist");
+        let allowed_root = root.join("home").join("zeroclaw_user");
+        let secret_root = allowed_root.join(".ssh");
+        let policy = SecurityPolicy {
+            workspace_only: false,
+            forbidden_paths: vec![secret_root.to_string_lossy().into_owned()],
+            allowed_roots: vec![allowed_root.clone()],
+            ..SecurityPolicy::default()
+        };
+
+        let allowed_path = allowed_root.join("projects").join("notes.txt");
+        assert!(policy.is_path_allowed(&allowed_path.to_string_lossy()));
+
+        let blocked_path = secret_root.join("id_rsa");
+        assert!(!policy.is_path_allowed(&blocked_path.to_string_lossy()));
+    }
+
+    #[test]
     fn workspace_only_false_allows_resolved_outside_workspace() {
         let workspace = std::env::temp_dir().join("zeroclaw_test_ws_only_false");
         let _ = std::fs::create_dir_all(&workspace);
@@ -2374,6 +3223,30 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn resolved_forbidden_subpath_beats_workspace_root() {
+        let root = std::env::temp_dir().join("zeroclaw_resolved_prefix_precedence");
+        let workspace = root.join("workspace");
+        let secret_dir = workspace.join(".ssh");
+        let allowed_path = workspace.join("src").join("main.rs");
+        let blocked_path = secret_dir.join("id_rsa");
+
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(allowed_path.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(&secret_dir).unwrap();
+
+        let policy = SecurityPolicy {
+            workspace_dir: workspace.clone(),
+            forbidden_paths: vec![secret_dir.to_string_lossy().into_owned()],
+            ..SecurityPolicy::default()
+        };
+
+        assert!(policy.is_resolved_path_allowed(&allowed_path));
+        assert!(!policy.is_resolved_path_allowed(&blocked_path));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     // ── Edge cases: from_config preserves tracker ────────────

@@ -1,4 +1,4 @@
-use super::shell::collect_allowed_shell_env_vars;
+use super::shell::{build_shell_execution_plan, collect_allowed_shell_env_vars};
 use super::traits::{Tool, ToolResult};
 use crate::runtime::RuntimeAdapter;
 use crate::security::policy::ToolOperation;
@@ -82,7 +82,11 @@ impl ProcessTool {
             .get("command")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'command' parameter for spawn action"))?;
-        let effective_command = self.security.apply_shell_redirect_policy(command);
+        let execution_plan = build_shell_execution_plan(command, &self.security.workspace_dir);
+        let normalized_command = execution_plan.command.clone();
+        let effective_command = self
+            .security
+            .apply_shell_redirect_policy(&normalized_command);
 
         // Check concurrent running process count.
         {
@@ -121,7 +125,10 @@ impl ProcessTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        if let Err(reason) = self.security.validate_command_execution(command, approved) {
+        if let Err(reason) = self
+            .security
+            .validate_command_execution(&normalized_command, approved)
+        {
             return Ok(ToolResult {
                 success: false,
                 output: String::new(),
@@ -137,6 +144,18 @@ impl ProcessTool {
             });
         }
 
+        let working_dir = execution_plan.cwd.to_string_lossy().to_string();
+        if !self.security.is_path_allowed(&working_dir) {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!(
+                    "Working directory blocked by security policy: {}",
+                    execution_plan.cwd.display()
+                )),
+            });
+        }
+
         if !self.security.record_action() {
             return Ok(ToolResult {
                 success: false,
@@ -148,7 +167,7 @@ impl ProcessTool {
         // Build command via runtime adapter.
         let mut cmd = match self
             .runtime
-            .build_shell_command(&effective_command, &self.security.workspace_dir)
+            .build_shell_command(&effective_command, &execution_plan.cwd)
         {
             Ok(cmd) => cmd,
             Err(e) => {

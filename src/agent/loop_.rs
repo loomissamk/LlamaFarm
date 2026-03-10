@@ -159,6 +159,7 @@ const AUTO_CRON_DELIVERY_CHANNELS: &[&str] = &["telegram", "discord", "slack", "
 const NON_CLI_APPROVAL_WAIT_TIMEOUT_SECS: u64 = 300;
 const NON_CLI_APPROVAL_POLL_INTERVAL_MS: u64 = 250;
 const MISSING_TOOL_CALL_RETRY_PROMPT: &str = "Internal correction: your last reply implied a follow-up action or claimed action completion, but no valid tool call was emitted. If a tool is needed, emit it now using the required <tool_call>...</tool_call> format. If no tool is needed, provide the complete final answer now and do not defer action.";
+const DUPLICATE_TOOL_CALL_RETRY_PROMPT: &str = "Internal correction: the requested tool action was already completed earlier in this turn. Do not repeat the same tool call. Use the existing tool results and provide the final answer now.";
 const TOOL_UNAVAILABLE_RETRY_PROMPT_PREFIX: &str = "Internal correction: your prior reply claimed required tools were unavailable. Use only the runtime-allowed tools listed below. If file changes are requested and `file_write`/`file_edit` are listed, call them directly.";
 
 /// Detect completion claims that imply state-changing work already happened
@@ -878,7 +879,9 @@ pub(crate) async fn run_tool_call_loop(
     let turn_id = Uuid::new_v4().to_string();
     let mut seen_tool_signatures: HashSet<(String, String)> = HashSet::new();
     let mut missing_tool_call_retry_used = false;
+    let mut duplicate_tool_call_retry_used = false;
     let mut missing_tool_call_retry_prompt: Option<String> = None;
+    let mut successful_tool_execution_seen = false;
     let bypass_non_cli_approval_for_turn =
         approval.is_some_and(|mgr| channel_name != "cli" && mgr.consume_non_cli_allow_all_once());
     if bypass_non_cli_approval_for_turn {
@@ -1342,6 +1345,7 @@ pub(crate) async fn run_tool_call_loop(
             parallel_tools_enabled && should_execute_tools_in_parallel(&tool_calls, approval);
         let mut executable_indices: Vec<usize> = Vec::new();
         let mut executable_calls: Vec<ParsedToolCall> = Vec::new();
+        let mut duplicate_tool_call_count = 0usize;
 
         for (idx, call) in tool_calls.iter().enumerate() {
             // ── Hook: before_tool_call (modifying) ──────────
@@ -1508,6 +1512,7 @@ pub(crate) async fn run_tool_call_loop(
 
             let signature = tool_call_signature(&tool_name, &tool_args);
             if !seen_tool_signatures.insert(signature) {
+                duplicate_tool_call_count += 1;
                 let duplicate = format!(
                     "Skipped duplicate tool call '{tool_name}' with identical arguments in this turn."
                 );
@@ -1599,6 +1604,9 @@ pub(crate) async fn run_tool_call_loop(
             .zip(executable_calls.iter())
             .zip(executed_outcomes.into_iter())
         {
+            if outcome.success {
+                successful_tool_execution_seen = true;
+            }
             runtime_trace::record_event(
                 "tool_call_result",
                 Some(channel_name),
@@ -1688,6 +1696,37 @@ pub(crate) async fn run_tool_call_loop(
                 });
                 history.push(ChatMessage::tool(tool_msg.to_string()));
             }
+        }
+
+        let duplicate_only_followthrough = successful_tool_execution_seen
+            && !duplicate_tool_call_retry_used
+            && iteration + 1 < max_iterations
+            && duplicate_tool_call_count > 0
+            && duplicate_tool_call_count == tool_calls.len();
+        if duplicate_only_followthrough {
+            duplicate_tool_call_retry_used = true;
+            missing_tool_call_retry_prompt = Some(DUPLICATE_TOOL_CALL_RETRY_PROMPT.to_string());
+            runtime_trace::record_event(
+                "tool_call_duplicate_followthrough_retry",
+                Some(channel_name),
+                Some(provider_name),
+                Some(model),
+                Some(&turn_id),
+                Some(false),
+                Some("model repeated an already-completed tool call"),
+                serde_json::json!({
+                    "iteration": iteration + 1,
+                    "duplicate_tool_call_count": duplicate_tool_call_count,
+                }),
+            );
+            if let Some(ref tx) = on_delta {
+                let _ = tx
+                    .send(format!(
+                        "{DRAFT_PROGRESS_SENTINEL}\u{21bb} Retrying: model repeated a tool call that already succeeded\n"
+                    ))
+                    .await;
+            }
+            continue;
         }
     }
 
@@ -3565,6 +3604,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_tool_call_loop_retries_after_semantic_duplicate_browser_open_call() {
+        let provider = ScriptedProvider::from_text_responses(vec![
+            r#"{"content":"opening browser","tool_calls":[{"id":"call_1","name":"browser","arguments":"{\"action\":\"open\",\"url\":\"https://example.com\"}"}]}"#,
+            r#"{"content":"opening browser again","tool_calls":[{"id":"call_2","name":"browser","arguments":"{\"url\":\"https://example.com\",\"backend\":\"rust_native\",\"command\":\"curl -s 'https://example.com'\"}"}]}"#,
+            "done after prior browser result",
+        ])
+        .with_native_tool_support();
+
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(CountingTool::new(
+            "browser",
+            Arc::clone(&invocations),
+        ))];
+
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("open example.com"),
+        ];
+        let observer = NoopObserver;
+
+        let result = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None,
+            "cli",
+            &crate::config::MultimodalConfig::default(),
+            5,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .await
+        .expect("loop should recover from semantically duplicate browser-open calls");
+
+        assert_eq!(result, "done after prior browser result");
+        assert_eq!(
+            invocations.load(Ordering::SeqCst),
+            1,
+            "browser open should execute once when the second call is semantically identical"
+        );
+        assert!(
+            history
+                .iter()
+                .any(|msg| msg.role == "user" && msg.content == DUPLICATE_TOOL_CALL_RETRY_PROMPT),
+            "loop should inject a corrective prompt after duplicate-only follow-up rounds"
+        );
+    }
+
+    #[tokio::test]
     async fn run_tool_call_loop_shell_strip_policy_handles_repeated_redirect_calls() {
         let provider = ScriptedProvider::from_text_responses(vec![
             r#"<tool_call>
@@ -4415,6 +4510,24 @@ I will now call the tool with this payload:
             calls[0].arguments.get("url").unwrap().as_str().unwrap(),
             "https://example.com"
         );
+    }
+
+    #[test]
+    fn tool_call_signature_normalizes_browser_open_variants() {
+        let explicit = tool_call_signature(
+            "browser",
+            &serde_json::json!({"action":"open","url":"https://example.com"}),
+        );
+        let inferred = tool_call_signature(
+            "browser",
+            &serde_json::json!({
+                "url":"https://example.com",
+                "backend":"rust_native",
+                "command":"curl -s 'https://example.com'"
+            }),
+        );
+
+        assert_eq!(explicit, inferred);
     }
 
     #[test]

@@ -322,6 +322,10 @@ WASM profile templates:
 - `dev/config.wasm.staging.toml`
 - `dev/config.wasm.prod.toml`
 
+Local host/operator profile template:
+
+- `dev/config.power.toml` — supervised high-power local profile with broad userland, Docker, web, memory, and delegation access, plus hard-deny guardrails for kernel/driver/firmware/initramfs/bootloader/disk-destructive actions.
+
 ## `[provider]`
 
 | Key | Default | Purpose |
@@ -479,6 +483,7 @@ Notes:
 | `port` | `42617` | gateway listen port |
 | `require_pairing` | `true` | require pairing before bearer auth |
 | `allow_public_bind` | `false` | block accidental public exposure |
+| `request_timeout_secs` | `30` | HTTP request timeout for gateway routes |
 
 ## `[gateway.node_control]` (experimental)
 

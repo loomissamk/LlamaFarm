@@ -168,10 +168,84 @@ pub(super) fn canonicalize_json_for_tool_signature(value: &serde_json::Value) ->
     }
 }
 
-pub(super) fn tool_call_signature(name: &str, arguments: &serde_json::Value) -> (String, String) {
+fn normalize_browser_action_for_signature(action: &str) -> String {
+    action.trim().to_ascii_lowercase().replace('-', "_")
+}
+
+fn canonicalize_browser_signature(arguments: &serde_json::Value) -> serde_json::Value {
     let canonical_args = canonicalize_json_for_tool_signature(arguments);
+    let serde_json::Value::Object(mut map) = canonical_args else {
+        return canonical_args;
+    };
+
+    let action = map
+        .get("action")
+        .and_then(serde_json::Value::as_str)
+        .map(normalize_browser_action_for_signature)
+        .or_else(|| {
+            map.get("url")
+                .and_then(serde_json::Value::as_str)
+                .map(|_| "open".to_string())
+        });
+
+    if let Some(action) = action {
+        map.insert(
+            "action".to_string(),
+            serde_json::Value::String(action.clone()),
+        );
+
+        if action == "open" {
+            let mut reduced = serde_json::Map::new();
+            reduced.insert("action".to_string(), serde_json::Value::String(action));
+            if let Some(url) = map
+                .get("url")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|url| !url.is_empty())
+            {
+                reduced.insert(
+                    "url".to_string(),
+                    serde_json::Value::String(url.to_string()),
+                );
+            }
+            return serde_json::Value::Object(reduced);
+        }
+    }
+
+    serde_json::Value::Object(map)
+}
+
+fn canonicalize_browser_open_signature(arguments: &serde_json::Value) -> serde_json::Value {
+    let canonical_args = canonicalize_json_for_tool_signature(arguments);
+    let serde_json::Value::Object(map) = canonical_args else {
+        return canonical_args;
+    };
+
+    let mut reduced = serde_json::Map::new();
+    if let Some(url) = map
+        .get("url")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+    {
+        reduced.insert(
+            "url".to_string(),
+            serde_json::Value::String(url.to_string()),
+        );
+    }
+
+    serde_json::Value::Object(reduced)
+}
+
+pub(super) fn tool_call_signature(name: &str, arguments: &serde_json::Value) -> (String, String) {
+    let normalized_name = name.trim().to_ascii_lowercase();
+    let canonical_args = match normalized_name.as_str() {
+        "browser" => canonicalize_browser_signature(arguments),
+        "browser_open" => canonicalize_browser_open_signature(arguments),
+        _ => canonicalize_json_for_tool_signature(arguments),
+    };
     let args_json = serde_json::to_string(&canonical_args).unwrap_or_else(|_| "{}".to_string());
-    (name.trim().to_ascii_lowercase(), args_json)
+    (normalized_name, args_json)
 }
 
 pub(super) fn parse_tool_call_value(value: &serde_json::Value) -> Option<ParsedToolCall> {

@@ -4,7 +4,7 @@
 //! - Proper HTTP/1.1 parsing and compliance
 //! - Content-Length validation (handled by hyper)
 //! - Request body size limits (64KB max)
-//! - Request timeouts (30s) to prevent slow-loris attacks
+//! - Request timeouts (default 30s, configurable) to prevent slow-loris attacks
 //! - Header sanitization (handled by axum/hyper)
 
 pub mod api;
@@ -48,8 +48,8 @@ use uuid::Uuid;
 
 /// Maximum request body size (64KB) — prevents memory exhaustion
 pub const MAX_BODY_SIZE: usize = 65_536;
-/// Request timeout (30s) — prevents slow-loris attacks
-pub const REQUEST_TIMEOUT_SECS: u64 = 30;
+/// Default request timeout (30s) — prevents slow-loris attacks
+pub const REQUEST_TIMEOUT_SECS_DEFAULT: u64 = 30;
 /// Sliding window used by gateway rate limiting.
 pub const RATE_LIMIT_WINDOW_SECS: u64 = 60;
 /// Fallback max distinct client keys tracked in gateway rate limiter.
@@ -695,6 +695,7 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         cost_tracker,
         event_tx,
     };
+    let request_timeout_secs = config.gateway.request_timeout_secs.max(1);
 
     // Config PUT needs larger body limit (1MB)
     let config_put_router = Router::new()
@@ -770,7 +771,7 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .layer(RequestBodyLimitLayer::new(MAX_BODY_SIZE))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
-            Duration::from_secs(REQUEST_TIMEOUT_SECS),
+            Duration::from_secs(request_timeout_secs),
         ))
         // ── SPA fallback: non-API GET requests serve index.html ──
         .fallback(get(static_files::handle_spa_fallback));
@@ -1928,7 +1929,11 @@ mod tests {
 
     #[test]
     fn security_timeout_is_30_seconds() {
-        assert_eq!(REQUEST_TIMEOUT_SECS, 30);
+        assert_eq!(REQUEST_TIMEOUT_SECS_DEFAULT, 30);
+        assert_eq!(
+            crate::config::GatewayConfig::default().request_timeout_secs,
+            30
+        );
     }
 
     #[test]
