@@ -21,7 +21,7 @@ def main() -> int:
 
     payload = json.loads(Path(args.input_json).read_text(encoding="utf-8"))
     event = {
-        "schema_version": "zeroclaw.audit.v1",
+        "schema_version": "llamafarm.audit.v1",
         "event_type": args.event_type,
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "run_context": {

@@ -1,19 +1,19 @@
-# Προσθήκη Πλακετών και Εργαλείων — Οδηγός Υλικού ZeroClaw
+# Προσθήκη Πλακετών και Εργαλείων — Οδηγός Υλικού LlamaFarm
 
-Αυτός ο οδηγός εξηγεί πώς να προσθέσετε νέες πλακέτες υλικού και προσαρμοσμένα εργαλεία στο ZeroClaw.
+Αυτός ο οδηγός εξηγεί πώς να προσθέσετε νέες πλακέτες υλικού και προσαρμοσμένα εργαλεία στο LlamaFarm.
 
 ## Γρήγορη Εκκίνηση: Προσθήκη Πλακέτας μέσω CLI
 
 ```bash
-# Προσθήκη πλακέτας (ενημερώνει το ~/.zeroclaw/config.toml)
+# Προσθήκη πλακέτας (ενημερώνει το ~/.llamafarm/config.toml)
 
-zeroclaw peripheral add nucleo-f401re /dev/ttyACM0
-zeroclaw peripheral add arduino-uno /dev/cu.usbmodem12345
-zeroclaw peripheral add rpi-gpio native   # για Raspberry Pi GPIO (Linux)
+llamafarm peripheral add nucleo-f401re /dev/ttyACM0
+llamafarm peripheral add arduino-uno /dev/cu.usbmodem12345
+llamafarm peripheral add rpi-gpio native   # για Raspberry Pi GPIO (Linux)
 
 # Επανεκκίνηση του δαίμονα (daemon) για εφαρμογή
 
-zeroclaw daemon --host 127.0.0.1 --port 42617
+llamafarm daemon --host 127.0.0.1 --port 42617
 ```
 
 ## Υποστηριζόμενες Πλακέτες
@@ -28,7 +28,7 @@ zeroclaw daemon --host 127.0.0.1 --port 42617
 
 ## Χειροκίνητη Ρύθμιση (Manual Config)
 
-Επεξεργαστείτε το αρχείο ~/.zeroclaw/config.toml:
+Επεξεργαστείτε το αρχείο ~/.llamafarm/config.toml:
 
 ```toml
 [peripherals]
@@ -79,7 +79,7 @@ builtin_led: 13
 
 ### Φύλλα Δεδομένων PDF
 
-Με τη δυνατότητα rag-pdf, το ZeroClaw μπορεί να ευρετηριάσει αρχεία PDF:
+Με τη δυνατότητα rag-pdf, το LlamaFarm μπορεί να ευρετηριάσει αρχεία PDF:
 
 ```bash
 cargo build --features hardware,rag-pdf
@@ -90,7 +90,7 @@ cargo build --features hardware,rag-pdf
 ## Προσθήκη Νέου Τύπου Πλακέτας
 
 1. Δημιουργήστε ένα φύλλο δεδομένων — docs/datasheets/my-board.md με ψευδώνυμα ακροδεκτών και πληροφορίες GPIO.
-2. Προσθήκη στις ρυθμίσεις — zeroclaw peripheral add my-board /dev/ttyUSB0
+2. Προσθήκη στις ρυθμίσεις — llamafarm peripheral add my-board /dev/ttyUSB0
 3. Υλοποίηση περιφερειακού (προαιρετικό) — Για προσαρμοσμένα πρωτόκολλα, υλοποιήστε το trait Peripheral στο src/peripherals/ και καταχωρίστε το στο create_peripheral_tools.
 
 Δείτε το docs/hardware-peripherals-design.md για τον πλήρη σχεδιασμό.
@@ -105,12 +105,12 @@ cargo build --features hardware,rag-pdf
 
 | Εντολή | Περιγραφή |
 |---------|-------------|
-| zeroclaw peripheral list | Λίστα ρυθμισμένων πλακετών |
-| zeroclaw peripheral add <board> <path> | Προσθήκη πλακέτας (εγγραφή στο config) |
-| zeroclaw peripheral flash | Μεταφόρτωση (flash) υλικολογισμικού Arduino |
-| zeroclaw peripheral flash-nucleo | Μεταφόρτωση (flash) υλικολογισμικού Nucleo |
-| zeroclaw hardware discover | Λίστα συσκευών USB |
-| zeroclaw hardware info | Πληροφορίες chip μέσω probe-rs |
+| llamafarm peripheral list | Λίστα ρυθμισμένων πλακετών |
+| llamafarm peripheral add <board> <path> | Προσθήκη πλακέτας (εγγραφή στο config) |
+| llamafarm peripheral flash | Μεταφόρτωση (flash) υλικολογισμικού Arduino |
+| llamafarm peripheral flash-nucleo | Μεταφόρτωση (flash) υλικολογισμικού Nucleo |
+| llamafarm hardware discover | Λίστα συσκευών USB |
+| llamafarm hardware info | Πληροφορίες chip μέσω probe-rs |
 
 ## Αντιμετώπιση Προβλημάτων
 

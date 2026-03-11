@@ -1,6 +1,6 @@
 # Επιτάχυνση Μεταγλώττισης με το cargo-slicer
 
-Το [cargo-slicer](https://github.com/nickel-org/cargo-slicer) είναι ένα εργαλείο βελτιστοποίησης που μειώνει τους χρόνους κατασκευής (build times) του ZeroClaw. Λειτουργεί αντικαθιστώντας αχρησιμοποίητες συναρτήσεις βιβλιοθηκών με κενές υλοποιήσεις (stubs), μειώνοντας το φόρτο του μεταγλωττιστή.
+Το [cargo-slicer](https://github.com/nickel-org/cargo-slicer) είναι ένα εργαλείο βελτιστοποίησης που μειώνει τους χρόνους κατασκευής (build times) του LlamaFarm. Λειτουργεί αντικαθιστώντας αχρησιμοποίητες συναρτήσεις βιβλιοθηκών με κενές υλοποιήσεις (stubs), μειώνοντας το φόρτο του μεταγλωττιστή.
 
 ## Αποτελέσματα Δοκιμών Απόδοσης
 
@@ -37,7 +37,7 @@ CARGO_SLICER_VIRTUAL=1 CARGO_SLICER_CODEGEN_FILTER=1 \
   cargo +nightly build --release
 
 # Κατασκευή με MIR-precise (Μέγιστη Απόδοση)
-CARGO_SLICER_MIR_PRECISE=1 CARGO_SLICER_WORKSPACE_CRATES=zeroclaw,zeroclaw_robot_kit \
+CARGO_SLICER_MIR_PRECISE=1 CARGO_SLICER_WORKSPACE_CRATES=llamafarm,llamafarm_robot_kit \
   CARGO_SLICER_VIRTUAL=1 CARGO_SLICER_CODEGEN_FILTER=1 \
   RUSTC_WRAPPER=$(which cargo_slicer_dispatch) \
   cargo +nightly build --release

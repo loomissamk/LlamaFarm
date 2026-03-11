@@ -1,4 +1,4 @@
-# ZeroClaw 文档中心（简体中文）
+# LlamaFarm 文档中心（简体中文）
 
 这是中文文档在 `docs/i18n/<locale>/` 结构下的标准入口。
 

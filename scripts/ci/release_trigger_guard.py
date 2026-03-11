@@ -318,7 +318,7 @@ def main() -> int:
     ready_to_publish = publish_release and not violations
 
     report = {
-        "schema_version": "zeroclaw.release-trigger-guard.v1",
+        "schema_version": "llamafarm.release-trigger-guard.v1",
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "event_name": args.event_name,
         "actor": args.actor,

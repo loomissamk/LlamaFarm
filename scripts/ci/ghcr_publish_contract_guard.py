@@ -13,7 +13,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-POLICY_SCHEMA = "zeroclaw.ghcr-tag-policy.v1"
+POLICY_SCHEMA = "llamafarm.ghcr-tag-policy.v1"
 ACCEPT_HEADER = "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json"
 
 
@@ -154,7 +154,7 @@ def fetch_manifest(repository: str, tag: str, token: str) -> dict[str, object]:
         headers={
             "Authorization": f"Bearer {token}",
             "Accept": ACCEPT_HEADER,
-            "User-Agent": "zeroclaw-ghcr-publish-contract-guard/1",
+            "User-Agent": "llamafarm-ghcr-publish-contract-guard/1",
         },
         method="GET",
     )
@@ -268,7 +268,7 @@ def build_markdown(report: dict[str, object]) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate GHCR publish tag contract and rollback mapping.")
-    parser.add_argument("--repository", required=True, help="Repository path for GHCR API, e.g. zeroclaw-labs/zeroclaw")
+    parser.add_argument("--repository", required=True, help="Repository path for GHCR API, e.g. llamafarm-labs/llamafarm")
     parser.add_argument("--release-tag", required=True)
     parser.add_argument("--sha", required=True)
     parser.add_argument("--policy-file", required=True)
@@ -359,7 +359,7 @@ def main() -> int:
             )
 
     report = {
-        "schema_version": "zeroclaw.ghcr-publish-contract.v1",
+        "schema_version": "llamafarm.ghcr-publish-contract.v1",
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "repository": args.repository,
         "release_tag": args.release_tag,

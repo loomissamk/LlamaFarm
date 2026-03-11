@@ -12,16 +12,16 @@ Dành cho cài đặt lần đầu và làm quen nhanh.
 
 | Tình huống | Lệnh |
 |----------|---------|
-| Có API key, muốn cài nhanh nhất | `zeroclaw onboard --api-key sk-... --provider openrouter` |
-| Muốn được hướng dẫn từng bước | `zeroclaw onboard --interactive` |
-| Đã có config, chỉ cần sửa kênh | `zeroclaw onboard --channels-only` |
+| Có API key, muốn cài nhanh nhất | `llamafarm onboard --api-key sk-... --provider openrouter` |
+| Muốn được hướng dẫn từng bước | `llamafarm onboard --interactive` |
+| Đã có config, chỉ cần sửa kênh | `llamafarm onboard --channels-only` |
 | Dùng xác thực subscription | Xem [Subscription Auth](../../../README.md#subscription-auth-openai-codex--claude-code) |
 
 ## Thiết lập và kiểm tra
 
-- Thiết lập nhanh: `zeroclaw onboard --api-key "sk-..." --provider openrouter`
-- Thiết lập tương tác: `zeroclaw onboard --interactive`
-- Kiểm tra môi trường: `zeroclaw status` + `zeroclaw doctor`
+- Thiết lập nhanh: `llamafarm onboard --api-key "sk-..." --provider openrouter`
+- Thiết lập tương tác: `llamafarm onboard --interactive`
+- Kiểm tra môi trường: `llamafarm status` + `llamafarm doctor`
 
 ## Tiếp theo
 

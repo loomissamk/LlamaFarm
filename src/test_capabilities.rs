@@ -30,7 +30,7 @@ pub fn check_writable_dir(path: &Path) -> Result<(), String> {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
-    let probe_name = format!(".zeroclaw-capability-probe-{}-{nanos}", std::process::id());
+    let probe_name = format!(".llamafarm-capability-probe-{}-{nanos}", std::process::id());
     let probe_path = path.join(probe_name);
 
     fs::write(&probe_path, b"probe")

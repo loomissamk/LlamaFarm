@@ -82,12 +82,12 @@ impl SyscallAnomalyDetector {
     /// Build a detector from runtime config.
     pub fn new(
         config: SyscallAnomalyConfig,
-        zeroclaw_dir: impl AsRef<Path>,
+        llamafarm_dir: impl AsRef<Path>,
         audit_config: AuditConfig,
     ) -> Self {
         let baseline = normalize_baseline(&config.baseline_syscalls);
-        let anomaly_log_path = resolve_log_path(zeroclaw_dir.as_ref(), config.log_path.as_str());
-        let audit_logger = AuditLogger::new(audit_config, zeroclaw_dir.as_ref().to_path_buf()).ok();
+        let anomaly_log_path = resolve_log_path(llamafarm_dir.as_ref(), config.log_path.as_str());
+        let audit_logger = AuditLogger::new(audit_config, llamafarm_dir.as_ref().to_path_buf()).ok();
 
         Self {
             config,

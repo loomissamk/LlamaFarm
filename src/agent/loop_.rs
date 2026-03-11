@@ -25,7 +25,7 @@ use uuid::Uuid;
 mod context;
 mod execution;
 mod history;
-mod parsing;
+pub(crate) mod parsing;
 
 use context::{build_context, build_hardware_context};
 use execution::{
@@ -126,7 +126,9 @@ fn inject_prompt_tool_fallback_instructions(
         "\n\n## Compatibility Fallback\n\n\
          Native tool calling failed for this model or provider. \
          For the rest of this turn, emit real <tool_call>...</tool_call> tags instead of \
-         describing commands or returning native function-call payloads.\n",
+         describing commands or returning native function-call payloads. \
+         If the runtime says your last tool format was invalid, immediately retry with another \
+         real <tool_call> call until you receive tool results or a runtime error blocks it.\n",
     );
     system_message
         .content
@@ -181,9 +183,9 @@ const AUTO_CRON_DELIVERY_CHANNELS: &[&str] = &["telegram", "discord", "slack", "
 
 const NON_CLI_APPROVAL_WAIT_TIMEOUT_SECS: u64 = 300;
 const NON_CLI_APPROVAL_POLL_INTERVAL_MS: u64 = 250;
-const MISSING_TOOL_CALL_RETRY_PROMPT: &str = "Internal correction: your last reply implied a follow-up action or claimed action completion, but no valid tool call was emitted. If a tool is needed, emit it now using the required <tool_call>...</tool_call> format. If no tool is needed, provide the complete final answer now and do not defer action.";
+const MISSING_TOOL_CALL_RETRY_PROMPT: &str = "Internal correction: your last reply implied follow-up action, but no valid tool call was emitted. If a tool is required, emit a real tool call now using the runtime's canonical tool syntax. Do not explain the command, do not output example JSON, and do not stop after one failed format attempt. Retry with a valid tool call immediately. If no tool is needed, provide the complete final answer now and do not defer action.";
 const DUPLICATE_TOOL_CALL_RETRY_PROMPT: &str = "Internal correction: the requested tool action was already completed earlier in this turn. Do not repeat the same tool call. Use the existing tool results and provide the final answer now.";
-const TOOL_UNAVAILABLE_RETRY_PROMPT_PREFIX: &str = "Internal correction: your prior reply claimed required tools were unavailable. Use only the runtime-allowed tools listed below. If file changes are requested and `file_write`/`file_edit` are listed, call them directly.";
+const TOOL_UNAVAILABLE_RETRY_PROMPT_PREFIX: &str = "Internal correction: your prior reply claimed required tools were unavailable. Use only the runtime-allowed tools listed below. If tool use is needed, emit the real tool call now instead of refusing, narrating, or giving an example.";
 
 /// Detect completion claims that imply state-changing work already happened
 /// without an accompanying tool call.
@@ -585,6 +587,17 @@ fn looks_like_streamed_tool_payload(window: &str) -> bool {
     lowered.contains("<tool_call")
         || lowered.contains("<toolcall")
         || lowered.contains("\"tool_calls\"")
+        || lowered.contains("\"tool\":")
+        || lowered.contains("json{")
+        || lowered.contains("shell(")
+        || lowered.contains("file_read(")
+        || lowered.contains("file_write(")
+        || lowered.contains("'''bash")
+        || lowered.contains("'''sh")
+        || lowered.contains("'''shell")
+        || lowered.contains("```bash")
+        || lowered.contains("```sh")
+        || lowered.contains("```shell")
 }
 
 async fn call_provider_chat(
@@ -1266,6 +1279,13 @@ pub(crate) async fn run_tool_call_loop(
                 && missing_tool_call_signal;
 
             if missing_tool_call_followthrough {
+                let switched_to_prompt_tool_mode =
+                    use_native_tools && !prompt_tool_fallback_used && !tool_specs.is_empty();
+                if switched_to_prompt_tool_mode {
+                    prompt_tool_fallback_used = true;
+                    use_native_tools = false;
+                    inject_prompt_tool_fallback_instructions(history, tools_registry);
+                }
                 missing_tool_call_retry_used = true;
                 missing_tool_call_retry_prompt = Some(if tool_unavailable_signal {
                     build_tool_unavailable_retry_prompt(&tool_specs)
@@ -1289,6 +1309,7 @@ pub(crate) async fn run_tool_call_loop(
                     Some(retry_reason),
                     serde_json::json!({
                         "iteration": iteration + 1,
+                        "switched_to_prompt_tool_mode": switched_to_prompt_tool_mode,
                         "response_excerpt": truncate_with_ellipsis(
                             &scrub_credentials(&display_text),
                             240
@@ -1828,10 +1849,24 @@ pub(crate) fn build_tool_instructions_from_specs(tool_specs: &[crate::tools::Too
 {\"name\":\"tool_name\",\"arguments\":{}}\n\
 </tool_call>\n\n",
     );
+    instructions.push_str(
+        "If the runtime says your previous tool format was invalid, immediately emit another real <tool_call> in the exact format above. Do not apologize, do not narrate the command, and do not stop at one failed attempt.\n\n",
+    );
+    instructions.push_str("Tool selection guardrails:\n");
+    instructions.push_str(
+        "- Use `shell` for immediate local command execution (for example: lsusb, lsblk, lspci, pwd, git status, rg, cat).\n",
+    );
+    instructions.push_str(
+        "- Use `cron_add` or `schedule` only when the user explicitly wants delayed, scheduled, or recurring execution. Never use them for an immediate one-off command.\n",
+    );
+    instructions.push_str(
+        "- Use `file_read` to inspect files and `file_write`/`file_edit` to change files instead of shelling out when a dedicated file tool exists.\n\n",
+    );
     instructions.push_str("You may use multiple tool calls in a single response. ");
     instructions.push_str("After tool execution, results appear in <tool_result> tags. ");
-    instructions
-        .push_str("Continue reasoning with the results until you can give a final answer.\n\n");
+    instructions.push_str(
+        "Continue using tools with the results until the task is actually complete, then give the final answer.\n\n",
+    );
     instructions.push_str("### Available Tools\n\n");
 
     for tool in tool_specs {
@@ -1932,7 +1967,8 @@ pub(crate) fn build_runtime_tool_availability_notice(tools_registry: &[Box<dyn T
         "\n## Runtime Tool Availability (Authoritative)\n\n\
          Use only these runtime-available tools for this turn.\n\
          Tools: {names}\n\
-         Do not claim tools are unavailable when they are listed here.\n"
+         Do not claim tools are unavailable when they are listed here.\n\
+         If the user asked for an action, keep using these tools until the action is complete or the runtime returns a blocking error.\n"
     )
 }
 
@@ -2025,7 +2061,7 @@ pub async fn run(
     let provider_runtime_options = providers::ProviderRuntimeOptions {
         auth_profile_override: None,
         provider_api_url: config.api_url.clone(),
-        zeroclaw_dir: config.config_path.parent().map(std::path::PathBuf::from),
+        llamafarm_dir: config.config_path.parent().map(std::path::PathBuf::from),
         secrets_encrypt: config.secrets.encrypt,
         reasoning_enabled: config.runtime.reasoning_enabled,
         reasoning_level: config.effective_provider_reasoning_level(),
@@ -2160,7 +2196,7 @@ pub async fn run(
         ));
         tool_descs.push((
             "arduino_upload",
-            "Upload agent-generated Arduino sketch. Use when: user asks for 'make a heart', 'blink pattern', or custom LED behavior on Arduino. You write the full .ino code; ZeroClaw compiles and uploads it. Pin 13 = built-in LED on Uno.",
+            "Upload agent-generated Arduino sketch. Use when: user asks for 'make a heart', 'blink pattern', or custom LED behavior on Arduino. You write the full .ino code; Ollama compiles and uploads it. Pin 13 = built-in LED on Uno.",
         ));
         tool_descs.push((
             "hardware_memory_map",
@@ -2276,7 +2312,7 @@ pub async fn run(
         println!("{response}");
         observer.record_event(&ObserverEvent::TurnComplete);
     } else {
-        println!("🦀 ZeroClaw Interactive Mode");
+        println!("🦀 LlamaFarm Interactive Mode");
         println!("Type /help for commands.\n");
         let cli = crate::channels::CliChannel::new();
 
@@ -2508,7 +2544,7 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
     let provider_runtime_options = providers::ProviderRuntimeOptions {
         auth_profile_override: None,
         provider_api_url: config.api_url.clone(),
-        zeroclaw_dir: config.config_path.parent().map(std::path::PathBuf::from),
+        llamafarm_dir: config.config_path.parent().map(std::path::PathBuf::from),
         secrets_encrypt: config.secrets.encrypt,
         reasoning_enabled: config.runtime.reasoning_enabled,
         reasoning_level: config.effective_provider_reasoning_level(),
@@ -2570,7 +2606,7 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
         ));
         tool_descs.push((
             "arduino_upload",
-            "Upload Arduino sketch. Use for 'make a heart', custom patterns. You write full .ino code; ZeroClaw uploads it.",
+            "Upload Arduino sketch. Use for 'make a heart', custom patterns. You write full .ino code; Ollama uploads it.",
         ));
         tool_descs.push((
             "hardware_memory_map",
@@ -2687,11 +2723,11 @@ mod tests {
     #[test]
     fn inject_prompt_tool_fallback_instructions_appends_tool_protocol_once() {
         let mut history = vec![ChatMessage::system("Base prompt")];
-        let tools_registry = tools::builtin_tools(
-            std::path::Path::new("."),
+        let security = Arc::new(SecurityPolicy::from_config(
             &crate::config::AutonomyConfig::default(),
             std::path::Path::new("."),
-        );
+        ));
+        let tools_registry = tools::default_tools(security);
 
         inject_prompt_tool_fallback_instructions(&mut history, &tools_registry);
         inject_prompt_tool_fallback_instructions(&mut history, &tools_registry);
@@ -2699,7 +2735,10 @@ mod tests {
         let system_prompt = &history[0].content;
         assert!(system_prompt.contains("## Compatibility Fallback"));
         assert!(system_prompt.contains("## Tool Use Protocol"));
-        assert_eq!(system_prompt.matches("## Compatibility Fallback").count(), 1);
+        assert_eq!(
+            system_prompt.matches("## Compatibility Fallback").count(),
+            1
+        );
     }
 
     #[test]
@@ -3017,6 +3056,56 @@ mod tests {
             Ok(crate::tools::ToolResult {
                 success: true,
                 output: format!("counted:{value}"),
+                error: None,
+            })
+        }
+    }
+
+    struct CommandEchoTool {
+        name: String,
+        invocations: Arc<AtomicUsize>,
+    }
+
+    impl CommandEchoTool {
+        fn new(name: &str, invocations: Arc<AtomicUsize>) -> Self {
+            Self {
+                name: name.to_string(),
+                invocations,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Tool for CommandEchoTool {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn description(&self) -> &str {
+            "Echoes shell-style command arguments for parser and retry tests"
+        }
+
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string" }
+                }
+            })
+        }
+
+        async fn execute(
+            &self,
+            args: serde_json::Value,
+        ) -> anyhow::Result<crate::tools::ToolResult> {
+            self.invocations.fetch_add(1, Ordering::SeqCst);
+            let command = args
+                .get("command")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            Ok(crate::tools::ToolResult {
+                success: true,
+                output: format!("ran:{command}"),
                 error: None,
             })
         }
@@ -3737,6 +3826,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_tool_call_loop_switches_native_mode_to_prompt_fallback_after_parse_issue() {
+        let provider = ScriptedProvider::from_text_responses(vec![
+            r#"{"tool":"shell","command":"lsusb""#,
+            r#"<tool_call>
+{"name":"shell","arguments":{"command":"lsusb"}}
+</tool_call>"#,
+            "done after compatibility retry",
+        ])
+        .with_native_tool_support();
+
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(CommandEchoTool::new(
+            "shell",
+            Arc::clone(&invocations),
+        ))];
+
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("run lsusb"),
+        ];
+        let observer = NoopObserver;
+
+        let result = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None,
+            "cli",
+            &crate::config::MultimodalConfig::default(),
+            5,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .await
+        .expect("loop should recover by switching to prompt tool fallback");
+
+        assert_eq!(result, "done after compatibility retry");
+        assert_eq!(invocations.load(Ordering::SeqCst), 1);
+        assert!(
+            history[0].content.contains("## Compatibility Fallback"),
+            "system prompt should switch into prompt tool fallback mode after parse failure"
+        );
+        assert!(
+            history
+                .iter()
+                .any(|msg| msg.role == "user" && msg.content == MISSING_TOOL_CALL_RETRY_PROMPT),
+            "loop should inject corrective retry guidance after malformed tool payloads"
+        );
+    }
+
+    #[tokio::test]
     async fn run_tool_call_loop_shell_strip_policy_handles_repeated_redirect_calls() {
         let provider = ScriptedProvider::from_text_responses(vec![
             r#"<tool_call>
@@ -4278,6 +4425,66 @@ mod tests {
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].name, "file_read");
         assert_eq!(calls[1].name, "file_read");
+    }
+
+    #[test]
+    fn parse_tool_calls_recovers_top_level_pseudo_tool_json() {
+        let response = r#"{"tool":"shell","command":"lsusb"}"#;
+        let (text, calls) = parse_tool_calls(response);
+        assert!(text.is_empty());
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(calls[0].arguments["command"], "lsusb");
+    }
+
+    #[test]
+    fn parse_tool_calls_recovers_function_style_shell_call() {
+        let response = "I'll run it now.\nshell(\"lsusb\")";
+        let (text, calls) = parse_tool_calls(response);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(calls[0].arguments["command"], "lsusb");
+        assert!(text.contains("I'll run it now."));
+    }
+
+    #[test]
+    fn parse_tool_calls_recovers_json_wrapped_function_style_shell_call() {
+        let response = "json{shell(lsusb)}";
+        let (text, calls) = parse_tool_calls(response);
+        assert!(text.is_empty());
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(calls[0].arguments["command"], "lsusb");
+    }
+
+    #[test]
+    fn parse_tool_calls_recovers_shell_block_after_action_cue() {
+        let response = "Running now:\n```bash\nlsusb\n```";
+        let (text, calls) = parse_tool_calls(response);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(calls[0].arguments["command"], "lsusb");
+        assert!(text.contains("Running now:"));
+    }
+
+    #[test]
+    fn parse_tool_calls_recovers_apostrophe_shell_block_after_action_cue() {
+        let response = "Running now:\n'''bash\nlsusb\n'''";
+        let (text, calls) = parse_tool_calls(response);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(calls[0].arguments["command"], "lsusb");
+        assert!(text.contains("Running now:"));
+    }
+
+    #[test]
+    fn parse_tool_calls_recovers_plain_shell_command() {
+        let response = "lsusb";
+        let (text, calls) = parse_tool_calls(response);
+        assert!(text.is_empty());
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(calls[0].arguments["command"], "lsusb");
     }
 
     #[test]

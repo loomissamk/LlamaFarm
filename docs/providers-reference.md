@@ -1,4 +1,4 @@
-# ZeroClaw Providers Reference
+# LlamaFarm Providers Reference
 
 This document maps provider IDs, aliases, and credential environment variables.
 
@@ -7,7 +7,7 @@ Last verified: **February 24, 2026**.
 ## How to List Providers
 
 ```bash
-zeroclaw providers
+llamafarm providers
 ```
 
 ## Credential Resolution Order
@@ -16,7 +16,7 @@ Runtime resolution order is:
 
 1. Explicit credential from config/CLI
 2. Provider-specific env var(s)
-3. Generic fallback env vars: `ZEROCLAW_API_KEY` then `API_KEY`
+3. Generic fallback env vars: `LLAMAFARM_API_KEY` then `API_KEY`
 
 For resilient fallback chains (`reliability.fallback_providers`), each fallback
 provider resolves credentials independently. The primary provider's explicit
@@ -76,8 +76,8 @@ default_model = "qwen2.5-coder:7b"
 ```
 
 - Authentication:
-  - Optional. If your LM Studio server enforces auth, set `api_key` (or `API_KEY`/`ZEROCLAW_API_KEY`).
-  - If no key is set, ZeroClaw uses an internal placeholder token for compatibility with OpenAI-style auth headers.
+  - Optional. If your LM Studio server enforces auth, set `api_key` (or `API_KEY`/`LLAMAFARM_API_KEY`).
+  - If no key is set, LlamaFarm uses an internal placeholder token for compatibility with OpenAI-style auth headers.
 
 ### Vercel AI Gateway Notes
 
@@ -109,7 +109,7 @@ default_model = "qwen2.5-coder:7b"
   - Higher quotas and more models available with paid API key
 - **Authentication**: `QWEN_OAUTH_TOKEN` (for OAuth) or `DASHSCOPE_API_KEY` (for API key)
 - **Recommended Model**: `qwen3-coder-plus` - Optimized for coding tasks
-- **Quota Tracking**: `zeroclaw providers-quota --provider qwen-code` shows static quota info (`?/1000` - unknown remaining, 1000/day total)
+- **Quota Tracking**: `llamafarm providers-quota --provider qwen-code` shows static quota info (`?/1000` - unknown remaining, 1000/day total)
   - Qwen OAuth API does not return rate limit headers
   - Actual request counting requires local counter (not implemented)
   - Rate limit errors are detected and parsed for retry backoff
@@ -121,14 +121,14 @@ default_model = "qwen2.5-coder:7b"
 
 - Provider ID: `ollama`
 - Vision input is supported through user message image markers: ``[IMAGE:<source>]``.
-- After multimodal normalization, ZeroClaw sends image payloads through Ollama's native `messages[].images` field.
-- If a non-vision provider is selected, ZeroClaw returns a structured capability error instead of silently ignoring images.
+- After multimodal normalization, LlamaFarm sends image payloads through Ollama's native `messages[].images` field.
+- If a non-vision provider is selected, LlamaFarm returns a structured capability error instead of silently ignoring images.
 
 ### Ollama Cloud Routing Notes
 
 - Use `:cloud` model suffix only with a remote Ollama endpoint.
 - Remote endpoint should be set in `api_url` (example: `https://ollama.com`).
-- ZeroClaw normalizes a trailing `/api` in `api_url` automatically.
+- LlamaFarm normalizes a trailing `/api` in `api_url` automatically.
 - If `default_model` ends with `:cloud` while `api_url` is local or unset, config validation fails early with an actionable error.
 - Local Ollama model discovery intentionally excludes `:cloud` entries to avoid selecting cloud-only models in local mode.
 
@@ -144,7 +144,7 @@ default_model = "qwen2.5-coder:7b"
 - Provider ID: `llamacpp` (alias: `llama.cpp`)
 - Default endpoint: `http://localhost:8080/v1`
 - API key is optional by default; set `LLAMACPP_API_KEY` only when `llama-server` is started with `--api-key`.
-- Model discovery: `zeroclaw models refresh --provider llamacpp`
+- Model discovery: `llamafarm models refresh --provider llamacpp`
 
 ### SGLang Server Notes
 
@@ -152,21 +152,21 @@ default_model = "qwen2.5-coder:7b"
 - Default endpoint: `http://localhost:30000/v1`
 - API key is optional by default; set `SGLANG_API_KEY` only when the server requires authentication.
 - Tool calling requires launching SGLang with `--tool-call-parser` (e.g. `hermes`, `llama3`, `qwen25`).
-- Model discovery: `zeroclaw models refresh --provider sglang`
+- Model discovery: `llamafarm models refresh --provider sglang`
 
 ### vLLM Server Notes
 
 - Provider ID: `vllm`
 - Default endpoint: `http://localhost:8000/v1`
 - API key is optional by default; set `VLLM_API_KEY` only when the server requires authentication.
-- Model discovery: `zeroclaw models refresh --provider vllm`
+- Model discovery: `llamafarm models refresh --provider vllm`
 
 ### Osaurus Server Notes
 
 - Provider ID: `osaurus`
 - Default endpoint: `http://localhost:1337/v1`
 - API key defaults to `"osaurus"` but is optional; set `OSAURUS_API_KEY` to override or leave unset for keyless access.
-- Model discovery: `zeroclaw models refresh --provider osaurus`
+- Model discovery: `llamafarm models refresh --provider osaurus`
 - [Osaurus](https://github.com/dinoki-ai/osaurus) is a unified AI edge runtime for macOS (Apple Silicon) that combines local MLX inference with cloud provider proxying through a single endpoint.
 - Supports multiple API formats simultaneously: OpenAI-compatible (`/v1/chat/completions`), Anthropic (`/messages`), Ollama (`/chat`), and Open Responses (`/v1/responses`).
 - Built-in MCP (Model Context Protocol) support for tool and context server connectivity.
@@ -201,7 +201,7 @@ Behavior:
 ### Ollama Vision Override
 
 Some Ollama models support vision (e.g. `llava`, `llama3.2-vision`) while others do not.
-Since ZeroClaw cannot auto-detect this, you can override it in `config.toml`:
+Since LlamaFarm cannot auto-detect this, you can override it in `config.toml`:
 
 ```toml
 default_provider = "ollama"
@@ -215,7 +215,7 @@ Behavior:
 - `false`: disables vision even if the provider reports support.
 - Unset: uses the provider's built-in default.
 
-Environment override: `ZEROCLAW_MODEL_SUPPORT_VISION=true`
+Environment override: `LLAMAFARM_MODEL_SUPPORT_VISION=true`
 
 ### OpenAI Codex Reasoning Level
 
@@ -229,8 +229,8 @@ reasoning_level = "high"
 Behavior:
 
 - Supported values: `minimal`, `low`, `medium`, `high`, `xhigh` (case-insensitive).
-- When set, overrides `ZEROCLAW_CODEX_REASONING_EFFORT`.
-- Unset falls back to `ZEROCLAW_CODEX_REASONING_EFFORT` if present, otherwise defaults to `xhigh`.
+- When set, overrides `LLAMAFARM_CODEX_REASONING_EFFORT`.
+- Unset falls back to `LLAMAFARM_CODEX_REASONING_EFFORT` if present, otherwise defaults to `xhigh`.
 - Legacy compatibility: `runtime.reasoning_level` is accepted but deprecated; prefer `provider.reasoning_level`.
 - If both `provider.reasoning_level` and `runtime.reasoning_level` are set, provider-level value wins.
 
@@ -246,7 +246,7 @@ Behavior:
 - Canonical provider ID: `nvidia`
 - Aliases: `nvidia-nim`, `build.nvidia.com`
 - Base API URL: `https://integrate.api.nvidia.com/v1`
-- Model discovery: `zeroclaw models refresh --provider nvidia`
+- Model discovery: `llamafarm models refresh --provider nvidia`
 
 Recommended starter model IDs (verified against NVIDIA API catalog on February 18, 2026):
 
@@ -386,8 +386,8 @@ Recommended workflow:
 1. Keep call sites stable (`hint:reasoning`, `hint:semantic`).
 2. Change only the target model under `[[model_routes]]` or `[[embedding_routes]]`.
 3. Run:
-   - `zeroclaw doctor`
-   - `zeroclaw status`
+   - `llamafarm doctor`
+   - `llamafarm status`
 4. Smoke test one representative flow (chat + memory retrieval) before rollout.
 
 This minimizes breakage because integrations and prompts do not need to change when model IDs are upgraded.

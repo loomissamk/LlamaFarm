@@ -1,3 +1,3 @@
 ### LlamaFarm
 
-Local Ollama agent inspired by zeroclaw
+Local Ollama agent inspired by llamafarm

@@ -1,6 +1,6 @@
 # Preloaded Skills
 
-This directory contains preloaded, transparent skill bundles that ZeroClaw copies into each workspace's `skills/` directory during initialization.
+This directory contains preloaded, transparent skill bundles that LlamaFarm copies into each workspace's `skills/` directory during initialization.
 
 Current preloaded skills:
 

@@ -2143,7 +2143,7 @@ mod tests {
                 },
                 "message": {
                     "message_type": "text",
-                    "content": "{\"text\":\"Hello ZeroClaw!\"}",
+                    "content": "{\"text\":\"Hello LlamaFarm!\"}",
                     "chat_id": "oc_chat123",
                     "create_time": "1699999999000"
                 }
@@ -2152,7 +2152,7 @@ mod tests {
 
         let msgs = ch.parse_event_payload(&payload);
         assert_eq!(msgs.len(), 1);
-        assert_eq!(msgs[0].content, "Hello ZeroClaw!");
+        assert_eq!(msgs[0].content, "Hello LlamaFarm!");
         assert_eq!(msgs[0].sender, "oc_chat123");
         assert_eq!(msgs[0].channel, "lark");
         assert_eq!(msgs[0].timestamp, 1_699_999_999);

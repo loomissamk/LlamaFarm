@@ -17,7 +17,7 @@ Source anglaise:
 - [H2 · Supported Architectures](../../android-setup.md#supported-architectures)
 - [H2 · Installation via Termux](../../android-setup.md#installation-via-termux)
 - [H3 · 1. Install Termux](../../android-setup.md#1-install-termux)
-- [H3 · 2. Download ZeroClaw](../../android-setup.md#2-download-zeroclaw)
+- [H3 · 2. Download LlamaFarm](../../android-setup.md#2-download-llamafarm)
 - [H3 · 3. Install and Run](../../android-setup.md#3-install-and-run)
 - [H2 · Direct Installation via ADB](../../android-setup.md#direct-installation-via-adb)
 - [H2 · Limitations on Android](../../android-setup.md#limitations-on-android)

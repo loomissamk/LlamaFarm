@@ -1,4 +1,4 @@
-# Hub de Documentation ZeroClaw (Français)
+# Hub de Documentation LlamaFarm (Français)
 
 Cette page est le hub français aligné sur la structure canonique `docs/i18n/<locale>/`.
 

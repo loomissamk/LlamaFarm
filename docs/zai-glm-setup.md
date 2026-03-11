@@ -1,11 +1,11 @@
 # Z.AI GLM Setup
 
-ZeroClaw supports Z.AI's GLM models through OpenAI-compatible endpoints.
-This guide covers practical setup options that match current ZeroClaw provider behavior.
+LlamaFarm supports Z.AI's GLM models through OpenAI-compatible endpoints.
+This guide covers practical setup options that match current LlamaFarm provider behavior.
 
 ## Overview
 
-ZeroClaw supports these Z.AI aliases and endpoints out of the box:
+LlamaFarm supports these Z.AI aliases and endpoints out of the box:
 
 | Alias | Endpoint | Notes |
 |-------|----------|-------|
@@ -19,14 +19,14 @@ If you need a custom base URL, see `docs/custom-providers.md`.
 ### Quick Start
 
 ```bash
-zeroclaw onboard \
+llamafarm onboard \
   --provider "zai" \
   --api-key "YOUR_ZAI_API_KEY"
 ```
 
 ### Manual Configuration
 
-Edit `~/.zeroclaw/config.toml`:
+Edit `~/.llamafarm/config.toml`:
 
 ```toml
 api_key = "YOUR_ZAI_API_KEY"
@@ -73,14 +73,14 @@ Expected response:
 }
 ```
 
-### Test with ZeroClaw CLI
+### Test with LlamaFarm CLI
 
 ```bash
 # Test agent directly
-echo "Hello" | zeroclaw agent
+echo "Hello" | llamafarm agent
 
 # Check status
-zeroclaw status
+llamafarm status
 ```
 
 ## Environment Variables
@@ -137,6 +137,6 @@ curl -s "https://api.z.ai/api/coding/paas/v4/models" \
 
 ## Related Documentation
 
-- [ZeroClaw README](../README.md)
+- [LlamaFarm README](../README.md)
 - [Custom Provider Endpoints](./custom-providers.md)
 - [Contributing Guide](../CONTRIBUTING.md)

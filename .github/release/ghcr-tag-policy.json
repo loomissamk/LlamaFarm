@@ -1,5 +1,5 @@
 {
-  "schema_version": "zeroclaw.ghcr-tag-policy.v1",
+  "schema_version": "llamafarm.ghcr-tag-policy.v1",
   "release_tag_regex": "^v[0-9]+\\.[0-9]+\\.[0-9]+$",
   "sha_tag_prefix": "sha-",
   "sha_tag_length": 12,

@@ -2,7 +2,7 @@
   {
     "id": "agents-md",
     "path": "AGENTS.md",
-    "title": "AGENTS.md — ZeroClaw Agent Engineering Protocol",
+    "title": "AGENTS.md — LlamaFarm Agent Engineering Protocol",
     "summary": "This file defines the default working protocol for coding agents in this repository.",
     "section": "root",
     "language": "en",
@@ -17,13 +17,13 @@
     ],
     "readingMinutes": 16,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/AGENTS.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/AGENTS.md"
   },
   {
     "id": "changelog-md",
     "path": "CHANGELOG.md",
     "title": "Changelog",
-    "summary": "All notable changes to ZeroClaw will be documented in this file.",
+    "summary": "All notable changes to LlamaFarm will be documented in this file.",
     "section": "root",
     "language": "en",
     "journey": "start",
@@ -37,12 +37,12 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/CHANGELOG.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/CHANGELOG.md"
   },
   {
     "id": "cla-md",
     "path": "CLA.md",
-    "title": "ZeroClaw Contributor License Agreement (CLA)",
+    "title": "LlamaFarm Contributor License Agreement (CLA)",
     "summary": "This Contributor License Agreement (\"CLA\") clarifies the intellectual",
     "section": "root",
     "language": "en",
@@ -57,12 +57,12 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/CLA.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/CLA.md"
   },
   {
     "id": "claude-md",
     "path": "CLAUDE.md",
-    "title": "CLAUDE.md — ZeroClaw Agent Engineering Protocol",
+    "title": "CLAUDE.md — LlamaFarm Agent Engineering Protocol",
     "summary": "This file defines the default working protocol for Claude agents in this repository.",
     "section": "root",
     "language": "en",
@@ -77,7 +77,7 @@
     ],
     "readingMinutes": 16,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/CLAUDE.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/CLAUDE.md"
   },
   {
     "id": "code-of-conduct-md",
@@ -98,13 +98,13 @@
     ],
     "readingMinutes": 4,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/CODE_OF_CONDUCT.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/CODE_OF_CONDUCT.md"
   },
   {
     "id": "contributing-el-md",
     "path": "CONTRIBUTING.el.md",
-    "title": "Συνεισφορά στο ZeroClaw",
-    "summary": "Σας ευχαριστούμε για το ενδιαφέρον σας να συνεισφέρετε στο ZeroClaw! Αυτός ο οδηγός θα σας βοηθήσει να ξεκινήσετε.",
+    "title": "Συνεισφορά στο LlamaFarm",
+    "summary": "Σας ευχαριστούμε για το ενδιαφέρον σας να συνεισφέρετε στο LlamaFarm! Αυτός ο οδηγός θα σας βοηθήσει να ξεκινήσετε.",
     "section": "root",
     "language": "el",
     "journey": "start",
@@ -119,13 +119,13 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/CONTRIBUTING.el.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/CONTRIBUTING.el.md"
   },
   {
     "id": "contributing-md",
     "path": "CONTRIBUTING.md",
-    "title": "Contributing to ZeroClaw",
-    "summary": "Thanks for your interest in contributing to ZeroClaw! This guide will help you get started.",
+    "title": "Contributing to LlamaFarm",
+    "summary": "Thanks for your interest in contributing to LlamaFarm! This guide will help you get started.",
     "section": "root",
     "language": "en",
     "journey": "start",
@@ -140,7 +140,7 @@
     ],
     "readingMinutes": 11,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/CONTRIBUTING.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/CONTRIBUTING.md"
   },
   {
     "id": "docs-actions-source-policy-md",
@@ -160,13 +160,13 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/actions-source-policy.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/actions-source-policy.md"
   },
   {
     "id": "docs-adding-boards-and-tools-md",
     "path": "docs/adding-boards-and-tools.md",
-    "title": "Adding Boards and Tools — ZeroClaw Hardware Guide",
-    "summary": "This guide explains how to add new hardware boards and custom tools to ZeroClaw.",
+    "title": "Adding Boards and Tools — LlamaFarm Hardware Guide",
+    "summary": "This guide explains how to add new hardware boards and custom tools to LlamaFarm.",
     "section": "adding-boards-and-tools.md",
     "language": "en",
     "journey": "build",
@@ -181,7 +181,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/adding-boards-and-tools.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/adding-boards-and-tools.md"
   },
   {
     "id": "docs-agnostic-security-md",
@@ -201,13 +201,13 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/agnostic-security.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/agnostic-security.md"
   },
   {
     "id": "docs-android-setup-md",
     "path": "docs/android-setup.md",
     "title": "Android Setup",
-    "summary": "ZeroClaw provides prebuilt binaries for Android devices.",
+    "summary": "LlamaFarm provides prebuilt binaries for Android devices.",
     "section": "android-setup.md",
     "language": "en",
     "journey": "build",
@@ -222,13 +222,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/android-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/android-setup.md"
   },
   {
     "id": "docs-arduino-uno-q-setup-md",
     "path": "docs/arduino-uno-q-setup.md",
-    "title": "ZeroClaw on Arduino Uno Q — Step-by-Step Guide",
-    "summary": "Run ZeroClaw on the Arduino Uno Q's Linux side. Telegram works over WiFi; GPIO control uses the Bridge (requires a minimal App Lab app).",
+    "title": "LlamaFarm on Arduino Uno Q — Step-by-Step Guide",
+    "summary": "Run LlamaFarm on the Arduino Uno Q's Linux side. Telegram works over WiFi; GPIO control uses the Bridge (requires a minimal App Lab app).",
     "section": "arduino-uno-q-setup.md",
     "language": "en",
     "journey": "hardware",
@@ -242,7 +242,7 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/arduino-uno-q-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/arduino-uno-q-setup.md"
   },
   {
     "id": "docs-audit-event-schema-md",
@@ -263,13 +263,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/audit-event-schema.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/audit-event-schema.md"
   },
   {
     "id": "docs-audit-logging-md",
     "path": "docs/audit-logging.md",
-    "title": "Audit Logging for ZeroClaw",
-    "summary": "ZeroClaw logs actions but lacks tamper-evident audit trails for:",
+    "title": "Audit Logging for LlamaFarm",
+    "summary": "LlamaFarm logs actions but lacks tamper-evident audit trails for:",
     "section": "audit-logging.md",
     "language": "en",
     "journey": "secure",
@@ -283,7 +283,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/audit-logging.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/audit-logging.md"
   },
   {
     "id": "docs-cargo-slicer-speedup-md",
@@ -303,13 +303,13 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/cargo-slicer-speedup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/cargo-slicer-speedup.md"
   },
   {
     "id": "docs-channels-reference-md",
     "path": "docs/channels-reference.md",
     "title": "Channels Reference",
-    "summary": "This document is the canonical reference for channel configuration in ZeroClaw.",
+    "summary": "This document is the canonical reference for channel configuration in LlamaFarm.",
     "section": "channels-reference.md",
     "language": "en",
     "journey": "reference",
@@ -322,7 +322,7 @@
     ],
     "readingMinutes": 11,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/channels-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/channels-reference.md"
   },
   {
     "id": "docs-ci-map-md",
@@ -343,13 +343,13 @@
     ],
     "readingMinutes": 9,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/ci-map.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/ci-map.md"
   },
   {
     "id": "docs-commands-reference-md",
     "path": "docs/commands-reference.md",
-    "title": "ZeroClaw Commands Reference",
-    "summary": "This reference is derived from the current CLI surface (zeroclaw --help).",
+    "title": "LlamaFarm Commands Reference",
+    "summary": "This reference is derived from the current CLI surface (llamafarm --help).",
     "section": "commands-reference.md",
     "language": "en",
     "journey": "reference",
@@ -362,7 +362,7 @@
     ],
     "readingMinutes": 6,
     "startHere": true,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/commands-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/commands-reference.md"
   },
   {
     "id": "docs-commands-reference-vi-md",
@@ -381,12 +381,12 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/commands-reference.vi.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/commands-reference.vi.md"
   },
   {
     "id": "docs-config-reference-md",
     "path": "docs/config-reference.md",
-    "title": "ZeroClaw Config Reference (Operator-Oriented)",
+    "title": "LlamaFarm Config Reference (Operator-Oriented)",
     "summary": "This is a high-signal reference for common config sections and defaults.",
     "section": "config-reference.md",
     "language": "en",
@@ -400,7 +400,7 @@
     ],
     "readingMinutes": 24,
     "startHere": true,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/config-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/config-reference.md"
   },
   {
     "id": "docs-config-reference-vi-md",
@@ -419,7 +419,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/config-reference.vi.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/config-reference.vi.md"
   },
   {
     "id": "docs-contributing-readme-md",
@@ -441,13 +441,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/contributing/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/contributing/README.md"
   },
   {
     "id": "docs-custom-providers-md",
     "path": "docs/custom-providers.md",
     "title": "Custom Provider Configuration",
-    "summary": "ZeroClaw supports custom API endpoints for both OpenAI-compatible and Anthropic-compatible providers.",
+    "summary": "LlamaFarm supports custom API endpoints for both OpenAI-compatible and Anthropic-compatible providers.",
     "section": "custom-providers.md",
     "language": "en",
     "journey": "integrate",
@@ -463,7 +463,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/custom-providers.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/custom-providers.md"
   },
   {
     "id": "docs-datasheets-arduino-uno-md",
@@ -482,13 +482,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/datasheets/arduino-uno.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/datasheets/arduino-uno.md"
   },
   {
     "id": "docs-datasheets-esp32-md",
     "path": "docs/datasheets/esp32.md",
     "title": "ESP32 GPIO Reference",
-    "summary": "ZeroClaw host sends JSON over serial (115200 baud):",
+    "summary": "LlamaFarm host sends JSON over serial (115200 baud):",
     "section": "datasheets",
     "language": "en",
     "journey": "hardware",
@@ -502,7 +502,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/datasheets/esp32.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/datasheets/esp32.md"
   },
   {
     "id": "docs-datasheets-nucleo-f401re-md",
@@ -522,7 +522,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/datasheets/nucleo-f401re.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/datasheets/nucleo-f401re.md"
   },
   {
     "id": "docs-datasheets-readme-md",
@@ -543,7 +543,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/datasheets/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/datasheets/README.md"
   },
   {
     "id": "docs-doc-template-md",
@@ -563,13 +563,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/doc-template.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/doc-template.md"
   },
   {
     "id": "docs-docker-setup-md",
     "path": "docs/docker-setup.md",
     "title": "Docker Setup Guide",
-    "summary": "This guide explains how to run ZeroClaw in Docker mode, including bootstrap, onboarding, and daily usage.",
+    "summary": "This guide explains how to run LlamaFarm in Docker mode, including bootstrap, onboarding, and daily usage.",
     "section": "docker-setup.md",
     "language": "en",
     "journey": "start",
@@ -585,7 +585,7 @@
     ],
     "readingMinutes": 2,
     "startHere": true,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/docker-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/docker-setup.md"
   },
   {
     "id": "docs-docs-audit-2026-02-24-md",
@@ -607,12 +607,12 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/docs-audit-2026-02-24.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/docs-audit-2026-02-24.md"
   },
   {
     "id": "docs-docs-inventory-md",
     "path": "docs/docs-inventory.md",
-    "title": "ZeroClaw Documentation Inventory",
+    "title": "LlamaFarm Documentation Inventory",
     "summary": "This inventory classifies documentation by intent and canonical location.",
     "section": "docs-inventory.md",
     "language": "en",
@@ -627,7 +627,7 @@
     ],
     "readingMinutes": 4,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/docs-inventory.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/docs-inventory.md"
   },
   {
     "id": "docs-frictionless-security-md",
@@ -648,13 +648,13 @@
     ],
     "readingMinutes": 4,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/frictionless-security.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/frictionless-security.md"
   },
   {
     "id": "docs-getting-started-macos-update-uninstall-md",
     "path": "docs/getting-started/macos-update-uninstall.md",
     "title": "macOS Update and Uninstall Guide",
-    "summary": "This page documents supported update and uninstall procedures for ZeroClaw on macOS (OS X).",
+    "summary": "This page documents supported update and uninstall procedures for LlamaFarm on macOS (OS X).",
     "section": "getting-started",
     "language": "en",
     "journey": "start",
@@ -669,7 +669,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/getting-started/macos-update-uninstall.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/getting-started/macos-update-uninstall.md"
   },
   {
     "id": "docs-getting-started-readme-md",
@@ -690,13 +690,13 @@
     ],
     "readingMinutes": 1,
     "startHere": true,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/getting-started/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/getting-started/README.md"
   },
   {
     "id": "docs-hardware-peripherals-design-md",
     "path": "docs/hardware-peripherals-design.md",
-    "title": "Hardware Peripherals Design — ZeroClaw",
-    "summary": "ZeroClaw enables microcontrollers (MCUs) and Single Board Computers (SBCs) to dynamically interpret natural language commands, generate hardware-specific code, and execute peripheral interactions in real-time.",
+    "title": "Hardware Peripherals Design — LlamaFarm",
+    "summary": "LlamaFarm enables microcontrollers (MCUs) and Single Board Computers (SBCs) to dynamically interpret natural language commands, generate hardware-specific code, and execute peripheral interactions in real-time.",
     "section": "hardware-peripherals-design.md",
     "language": "en",
     "journey": "hardware",
@@ -711,7 +711,7 @@
     ],
     "readingMinutes": 7,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/hardware-peripherals-design.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/hardware-peripherals-design.md"
   },
   {
     "id": "docs-hardware-readme-md",
@@ -730,13 +730,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/hardware/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/hardware/README.md"
   },
   {
     "id": "docs-i18n-coverage-md",
     "path": "docs/i18n-coverage.md",
-    "title": "ZeroClaw i18n Coverage and Structure",
-    "summary": "This document defines the localization structure for ZeroClaw docs and tracks current coverage.",
+    "title": "LlamaFarm i18n Coverage and Structure",
+    "summary": "This document defines the localization structure for LlamaFarm docs and tracks current coverage.",
     "section": "i18n-coverage.md",
     "language": "en",
     "journey": "localize",
@@ -751,7 +751,7 @@
     ],
     "readingMinutes": 4,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n-coverage.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n-coverage.md"
   },
   {
     "id": "docs-i18n-gap-backlog-md",
@@ -772,12 +772,12 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n-gap-backlog.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n-gap-backlog.md"
   },
   {
     "id": "docs-i18n-guide-md",
     "path": "docs/i18n-guide.md",
-    "title": "ZeroClaw i18n Completion Guide",
+    "title": "LlamaFarm i18n Completion Guide",
     "summary": "This guide defines how to keep multilingual documentation complete and consistent when docs change.",
     "section": "i18n-guide.md",
     "language": "en",
@@ -793,7 +793,7 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n-guide.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n-guide.md"
   },
   {
     "id": "docs-i18n-el-actions-source-policy-md",
@@ -814,13 +814,13 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/actions-source-policy.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/actions-source-policy.md"
   },
   {
     "id": "docs-i18n-el-adding-boards-and-tools-md",
     "path": "docs/i18n/el/adding-boards-and-tools.md",
-    "title": "Προσθήκη Πλακετών και Εργαλείων — Οδηγός Υλικού ZeroClaw",
-    "summary": "Αυτός ο οδηγός εξηγεί πώς να προσθέσετε νέες πλακέτες υλικού και προσαρμοσμένα εργαλεία στο ZeroClaw.",
+    "title": "Προσθήκη Πλακετών και Εργαλείων — Οδηγός Υλικού LlamaFarm",
+    "summary": "Αυτός ο οδηγός εξηγεί πώς να προσθέσετε νέες πλακέτες υλικού και προσαρμοσμένα εργαλεία στο LlamaFarm.",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -835,7 +835,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/adding-boards-and-tools.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/adding-boards-and-tools.md"
   },
   {
     "id": "docs-i18n-el-agnostic-security-md",
@@ -857,13 +857,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/agnostic-security.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/agnostic-security.md"
   },
   {
     "id": "docs-i18n-el-android-setup-md",
     "path": "docs/i18n/el/android-setup.md",
     "title": "Εγκατάσταση σε Android",
-    "summary": "Το ZeroClaw παρέχει προκατασκευασμένα εκτελέσιμα αρχεία (binaries) για συσκευές Android.",
+    "summary": "Το LlamaFarm παρέχει προκατασκευασμένα εκτελέσιμα αρχεία (binaries) για συσκευές Android.",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -879,13 +879,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/android-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/android-setup.md"
   },
   {
     "id": "docs-i18n-el-arduino-uno-q-setup-md",
     "path": "docs/i18n/el/arduino-uno-q-setup.md",
-    "title": "Οδηγός Εγκατάστασης ZeroClaw σε Arduino Uno Q",
-    "summary": "Αυτός ο οδηγός περιγράφει τη διαδικασία εγκατάστασης και ρύθμισης του ZeroClaw στην πλευρά Linux του Arduino Uno Q.",
+    "title": "Οδηγός Εγκατάστασης LlamaFarm σε Arduino Uno Q",
+    "summary": "Αυτός ο οδηγός περιγράφει τη διαδικασία εγκατάστασης και ρύθμισης του LlamaFarm στην πλευρά Linux του Arduino Uno Q.",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -902,7 +902,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/arduino-uno-q-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/arduino-uno-q-setup.md"
   },
   {
     "id": "docs-i18n-el-audit-event-schema-md",
@@ -925,13 +925,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/audit-event-schema.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/audit-event-schema.md"
   },
   {
     "id": "docs-i18n-el-audit-logging-md",
     "path": "docs/i18n/el/audit-logging.md",
     "title": "Καταγραφή Ελέγχου (Audit Logging)",
-    "summary": "Το ZeroClaw απαιτεί έναν μηχανισμό καταγραφής ελέγχου (audit trails) με προστασία από παραποίηση, προκειμένου να τεκμηριώνονται:",
+    "summary": "Το LlamaFarm απαιτεί έναν μηχανισμό καταγραφής ελέγχου (audit trails) με προστασία από παραποίηση, προκειμένου να τεκμηριώνονται:",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -947,13 +947,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/audit-logging.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/audit-logging.md"
   },
   {
     "id": "docs-i18n-el-cargo-slicer-speedup-md",
     "path": "docs/i18n/el/cargo-slicer-speedup.md",
     "title": "Επιτάχυνση Μεταγλώττισης με το cargo-slicer",
-    "summary": "Το cargo-slicer είναι ένα εργαλείο βελτιστοποίησης που μειώνει τους χρόνους κατασκευής (build times) του ZeroClaw. Λειτουργεί αντικαθιστώντας αχρησιμοποίητες συναρτήσεις βιβλιοθηκών με κενές υλοποιήσεις (stubs), μειώνοντ",
+    "summary": "Το cargo-slicer είναι ένα εργαλείο βελτιστοποίησης που μειώνει τους χρόνους κατασκευής (build times) του LlamaFarm. Λειτουργεί αντικαθιστώντας αχρησιμοποίητες συναρτήσεις βιβλιοθηκών με κενές υλοποιήσεις (stubs), μειώνοντ",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -968,13 +968,13 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/cargo-slicer-speedup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/cargo-slicer-speedup.md"
   },
   {
     "id": "docs-i18n-el-channels-reference-md",
     "path": "docs/i18n/el/channels-reference.md",
     "title": "Οδηγός Καναλιών Επικοινωνίας (Channels)",
-    "summary": "Αυτός ο οδηγός περιγράφει τη διαδικασία διαμόρφωσης των καναλιών επικοινωνίας (Telegram, Discord, κ.λπ.) στο ZeroClaw.",
+    "summary": "Αυτός ο οδηγός περιγράφει τη διαδικασία διαμόρφωσης των καναλιών επικοινωνίας (Telegram, Discord, κ.λπ.) στο LlamaFarm.",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -989,13 +989,13 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/channels-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/channels-reference.md"
   },
   {
     "id": "docs-i18n-el-ci-map-md",
     "path": "docs/i18n/el/ci-map.md",
     "title": "Οδηγός Αυτόματων Ελέγχων (CI Map)",
-    "summary": "Το παρόν έγγραφο περιγράφει τη δομή και τις λειτουργίες των αυτοματοποιημένων ελέγχων (GitHub Actions) στο ZeroClaw.",
+    "summary": "Το παρόν έγγραφο περιγράφει τη δομή και τις λειτουργίες των αυτοματοποιημένων ελέγχων (GitHub Actions) στο LlamaFarm.",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -1011,13 +1011,13 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/ci-map.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/ci-map.md"
   },
   {
     "id": "docs-i18n-el-commands-reference-md",
     "path": "docs/i18n/el/commands-reference.md",
-    "title": "Αναφορά Εντολών ZeroClaw (CLI Reference)",
-    "summary": "Αυτός ο οδηγός περιλαμβάνει το πλήρες σύνολο των εντολών που είναι διαθέσιμες στη διεπαφή γραμμής εντολών (CLI) του ZeroClaw.",
+    "title": "Αναφορά Εντολών LlamaFarm (CLI Reference)",
+    "summary": "Αυτός ο οδηγός περιλαμβάνει το πλήρες σύνολο των εντολών που είναι διαθέσιμες στη διεπαφή γραμμής εντολών (CLI) του LlamaFarm.",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -1032,12 +1032,12 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/commands-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/commands-reference.md"
   },
   {
     "id": "docs-i18n-el-config-reference-md",
     "path": "docs/i18n/el/config-reference.md",
-    "title": "Οδηγός Ρυθμίσεων ZeroClaw (config.toml)",
+    "title": "Οδηγός Ρυθμίσεων LlamaFarm (config.toml)",
     "summary": "Αυτός ο οδηγός εξηγεί τις πιο σημαντικές ρυθμίσεις που μπορείτε να κάνετε στο αρχείο config.toml.",
     "section": "i18n/el",
     "language": "el",
@@ -1053,13 +1053,13 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/config-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/config-reference.md"
   },
   {
     "id": "docs-i18n-el-contributing-readme-md",
     "path": "docs/i18n/el/contributing/README.md",
     "title": "Οδηγοί Συνεισφοράς και CI (Contributing & CI)",
-    "summary": "Αυτός ο φάκελος περιέχει τεκμηρίωση για τους συνεισφέροντες (contributors), τους αναθεωρητές (reviewers) και τους συντηρητές (maintainers) του ZeroClaw.",
+    "summary": "Αυτός ο φάκελος περιέχει τεκμηρίωση για τους συνεισφέροντες (contributors), τους αναθεωρητές (reviewers) και τους συντηρητές (maintainers) του LlamaFarm.",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -1077,13 +1077,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/contributing/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/contributing/README.md"
   },
   {
     "id": "docs-i18n-el-custom-providers-md",
     "path": "docs/i18n/el/custom-providers.md",
     "title": "Οδηγός Προσαρμοσμένων Παρόχων AI (Custom Providers)",
-    "summary": "Το ZeroClaw σας επιτρέπει να συνδεθείτε με δικές σας υπηρεσίες AI, όπως τοπικούς διακομιστές ή εταιρικά δίκτυα.",
+    "summary": "Το LlamaFarm σας επιτρέπει να συνδεθείτε με δικές σας υπηρεσίες AI, όπως τοπικούς διακομιστές ή εταιρικά δίκτυα.",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -1100,7 +1100,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/custom-providers.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/custom-providers.md"
   },
   {
     "id": "docs-i18n-el-datasheets-arduino-uno-md",
@@ -1122,13 +1122,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/datasheets/arduino-uno.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/datasheets/arduino-uno.md"
   },
   {
     "id": "docs-i18n-el-datasheets-esp32-md",
     "path": "docs/i18n/el/datasheets/esp32.md",
     "title": "Φύλλο Δεδομένων ESP32 GPIO",
-    "summary": "Ο κεντρικός υπολογιστής (Host) του ZeroClaw επικοινωνεί μέσω σειριακής διεπαφής (115200 baud) χρησιμοποιώντας JSON:",
+    "summary": "Ο κεντρικός υπολογιστής (Host) του LlamaFarm επικοινωνεί μέσω σειριακής διεπαφής (115200 baud) χρησιμοποιώντας JSON:",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -1144,7 +1144,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/datasheets/esp32.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/datasheets/esp32.md"
   },
   {
     "id": "docs-i18n-el-datasheets-nucleo-f401re-md",
@@ -1167,7 +1167,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/datasheets/nucleo-f401re.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/datasheets/nucleo-f401re.md"
   },
   {
     "id": "docs-i18n-el-datasheets-readme-md",
@@ -1190,7 +1190,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/datasheets/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/datasheets/README.md"
   },
   {
     "id": "docs-i18n-el-doc-template-md",
@@ -1211,7 +1211,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/doc-template.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/doc-template.md"
   },
   {
     "id": "docs-i18n-el-docs-audit-2026-02-24-md",
@@ -1233,12 +1233,12 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/docs-audit-2026-02-24.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/docs-audit-2026-02-24.md"
   },
   {
     "id": "docs-i18n-el-docs-inventory-md",
     "path": "docs/i18n/el/docs-inventory.md",
-    "title": "Κατάλογος Εγγράφων ZeroClaw",
+    "title": "Κατάλογος Εγγράφων LlamaFarm",
     "summary": "Αυτή η σελίδα σας βοηθάει να βρείτε γρήγορα το έγγραφο που χρειάζεστε, ανάλογα με το τι θέλετε να κάνετε.",
     "section": "i18n/el",
     "language": "el",
@@ -1254,13 +1254,13 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/docs-inventory.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/docs-inventory.md"
   },
   {
     "id": "docs-i18n-el-frictionless-security-md",
     "path": "docs/i18n/el/frictionless-security.md",
     "title": "Απλή και Αθόρυβη Ασφάλεια (Frictionless Security)",
-    "summary": "Αυτό το έγγραφο περιγράφει μια ιδέα για το πώς η ασφάλεια στο ZeroClaw μπορεί να γίνει \"σαν τον αερόσακο\": να είναι πάντα εκεί για να σας προστατεύει, αλλά να μην την βλέπετε μέχρι να χρειαστεί.",
+    "summary": "Αυτό το έγγραφο περιγράφει μια ιδέα για το πώς η ασφάλεια στο LlamaFarm μπορεί να γίνει \"σαν τον αερόσακο\": να είναι πάντα εκεί για να σας προστατεύει, αλλά να μην την βλέπετε μέχρι να χρειαστεί.",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -1276,13 +1276,13 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/frictionless-security.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/frictionless-security.md"
   },
   {
     "id": "docs-i18n-el-getting-started-macos-update-uninstall-md",
     "path": "docs/i18n/el/getting-started/macos-update-uninstall.md",
     "title": "Οδηγός Ενημέρωσης και Απεγκατάστασης στο macOS",
-    "summary": "Αυτή η σελίδα τεκμηριώνει τις υποστηριζόμενες διαδικασίες ενημέρωσης και απεγκατάστασης του ZeroClaw στο macOS (OS X).",
+    "summary": "Αυτή η σελίδα τεκμηριώνει τις υποστηριζόμενες διαδικασίες ενημέρωσης και απεγκατάστασης του LlamaFarm στο macOS (OS X).",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -1298,13 +1298,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/getting-started/macos-update-uninstall.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/getting-started/macos-update-uninstall.md"
   },
   {
     "id": "docs-i18n-el-getting-started-readme-md",
     "path": "docs/i18n/el/getting-started/README.md",
     "title": "Πρώτα Βήματα (Getting Started)",
-    "summary": "Οδηγίες για την αρχική εγκατάσταση και την εξοικείωση με το οικοσύστημα του ZeroClaw.",
+    "summary": "Οδηγίες για την αρχική εγκατάσταση και την εξοικείωση με το οικοσύστημα του LlamaFarm.",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -1320,13 +1320,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/getting-started/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/getting-started/README.md"
   },
   {
     "id": "docs-i18n-el-hardware-peripherals-design-md",
     "path": "docs/i18n/el/hardware-peripherals-design.md",
     "title": "Σχεδιασμός Σύνδεσης με Υλικό (Hardware)",
-    "summary": "Το ZeroClaw μπορεί να ελέγχει ηλεκτρονικές πλακέτες (όπως το Arduino, το ESP32 ή το Raspberry Pi) χρησιμοποιώντας απλά λόγια. Για παράδειγμα, μπορείτε να του πείτε \"Άναψε το λαμπάκι (LED)\" και αυτό θα βρει πώς να το κάνε",
+    "summary": "Το LlamaFarm μπορεί να ελέγχει ηλεκτρονικές πλακέτες (όπως το Arduino, το ESP32 ή το Raspberry Pi) χρησιμοποιώντας απλά λόγια. Για παράδειγμα, μπορείτε να του πείτε \"Άναψε το λαμπάκι (LED)\" και αυτό θα βρει πώς να το κάνε",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -1342,13 +1342,13 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/hardware-peripherals-design.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/hardware-peripherals-design.md"
   },
   {
     "id": "docs-i18n-el-hardware-readme-md",
     "path": "docs/i18n/el/hardware/README.md",
     "title": "Τεκμηρίωση Υλικού και Περιφερειακών (Hardware)",
-    "summary": "Οδηγίες για την ενσωμάτωση πλακετών, τη διαχείριση υλικολογισμικού (firmware) και την αρχιτεκτονική περιφερειακών του ZeroClaw.",
+    "summary": "Οδηγίες για την ενσωμάτωση πλακετών, τη διαχείριση υλικολογισμικού (firmware) και την αρχιτεκτονική περιφερειακών του LlamaFarm.",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -1365,7 +1365,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/hardware/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/hardware/README.md"
   },
   {
     "id": "docs-i18n-el-i18n-coverage-md",
@@ -1386,7 +1386,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/i18n-coverage.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/i18n-coverage.md"
   },
   {
     "id": "docs-i18n-el-i18n-gap-backlog-md",
@@ -1407,7 +1407,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/i18n-gap-backlog.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/i18n-gap-backlog.md"
   },
   {
     "id": "docs-i18n-el-i18n-guide-md",
@@ -1428,13 +1428,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/i18n-guide.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/i18n-guide.md"
   },
   {
     "id": "docs-i18n-el-langgraph-integration-md",
     "path": "docs/i18n/el/langgraph-integration.md",
-    "title": "Χρήση του ZeroClaw με Python (LangGraph)",
-    "summary": "Αυτός ο οδηγός εξηγεί πώς να χρησιμοποιήσετε το πακέτο zeroclaw-tools στην Python για να κάνετε την AI πιο σταθερή όταν χρησιμοποιεί εργαλεία.",
+    "title": "Χρήση του LlamaFarm με Python (LangGraph)",
+    "summary": "Αυτός ο οδηγός εξηγεί πώς να χρησιμοποιήσετε το πακέτο llamafarm-tools στην Python για να κάνετε την AI πιο σταθερή όταν χρησιμοποιεί εργαλεία.",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -1450,13 +1450,13 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/langgraph-integration.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/langgraph-integration.md"
   },
   {
     "id": "docs-i18n-el-matrix-e2ee-guide-md",
     "path": "docs/i18n/el/matrix-e2ee-guide.md",
     "title": "Οδηγός Matrix και Κρυπτογράφησης (E2EE)",
-    "summary": "Αυτός ο οδηγός σας βοηθάει να συνδέσετε το ZeroClaw με το Matrix και να λύσετε προβλήματα, ειδικά σε δωμάτια με κρυπτογράφηση (E2EE).",
+    "summary": "Αυτός ο οδηγός σας βοηθάει να συνδέσετε το LlamaFarm με το Matrix και να λύσετε προβλήματα, ειδικά σε δωμάτια με κρυπτογράφηση (E2EE).",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -1472,13 +1472,13 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/matrix-e2ee-guide.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/matrix-e2ee-guide.md"
   },
   {
     "id": "docs-i18n-el-mattermost-setup-md",
     "path": "docs/i18n/el/mattermost-setup.md",
     "title": "Οδηγός Ενσωμάτωσης Mattermost",
-    "summary": "Το ZeroClaw παρέχει εγγενή υποστήριξη για το Mattermost μέσω του REST API v4. Η ενσωμάτωση αυτή είναι ιδανική για περιβάλλοντα αυτοφιλοξενούμενα (self-hosted), ιδιωτικά ή απομονωμένα (air-gapped), όπου η προστασία των δε",
+    "summary": "Το LlamaFarm παρέχει εγγενή υποστήριξη για το Mattermost μέσω του REST API v4. Η ενσωμάτωση αυτή είναι ιδανική για περιβάλλοντα αυτοφιλοξενούμενα (self-hosted), ιδιωτικά ή απομονωμένα (air-gapped), όπου η προστασία των δε",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -1495,13 +1495,13 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/mattermost-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/mattermost-setup.md"
   },
   {
     "id": "docs-i18n-el-network-deployment-md",
     "path": "docs/i18n/el/network-deployment.md",
-    "title": "Ανάπτυξη Δικτύου — ZeroClaw σε Raspberry Pi και Τοπικό Δίκτυο",
-    "summary": "Αυτό το έγγραφο καλύπτει την ανάπτυξη του ZeroClaw σε ένα Raspberry Pi ή σε άλλον κεντρικό υπολογιστή στο τοπικό σας δίκτυο, με κανάλια Telegram και προαιρετικά κανάλια webhook.",
+    "title": "Ανάπτυξη Δικτύου — LlamaFarm σε Raspberry Pi και Τοπικό Δίκτυο",
+    "summary": "Αυτό το έγγραφο καλύπτει την ανάπτυξη του LlamaFarm σε ένα Raspberry Pi ή σε άλλον κεντρικό υπολογιστή στο τοπικό σας δίκτυο, με κανάλια Telegram και προαιρετικά κανάλια webhook.",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -1517,13 +1517,13 @@
     ],
     "readingMinutes": 4,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/network-deployment.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/network-deployment.md"
   },
   {
     "id": "docs-i18n-el-nextcloud-talk-setup-md",
     "path": "docs/i18n/el/nextcloud-talk-setup.md",
     "title": "Ρύθμιση Nextcloud Talk",
-    "summary": "Αυτός ο οδηγός περιγράφει τη διαδικασία ενσωμάτωσης του Nextcloud Talk με το ZeroClaw.",
+    "summary": "Αυτός ο οδηγός περιγράφει τη διαδικασία ενσωμάτωσης του Nextcloud Talk με το LlamaFarm.",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -1540,13 +1540,13 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/nextcloud-talk-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/nextcloud-talk-setup.md"
   },
   {
     "id": "docs-i18n-el-nucleo-setup-md",
     "path": "docs/i18n/el/nucleo-setup.md",
-    "title": "ZeroClaw σε Nucleo-F401RE — Οδηγός Βήμα προς Βήμα",
-    "summary": "Εκτελέστε το ZeroClaw στον κεντρικό υπολογιστή σας (Mac ή Linux). Συνδέστε ένα Nucleo-F401RE μέσω USB. Ελέγξτε τα GPIO (LED, ακίδες) μέσω Telegram ή CLI.",
+    "title": "LlamaFarm σε Nucleo-F401RE — Οδηγός Βήμα προς Βήμα",
+    "summary": "Εκτελέστε το LlamaFarm στον κεντρικό υπολογιστή σας (Mac ή Linux). Συνδέστε ένα Nucleo-F401RE μέσω USB. Ελέγξτε τα GPIO (LED, ακίδες) μέσω Telegram ή CLI.",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -1563,13 +1563,13 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/nucleo-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/nucleo-setup.md"
   },
   {
     "id": "docs-i18n-el-one-click-bootstrap-md",
     "path": "docs/i18n/el/one-click-bootstrap.md",
     "title": "Προετοιμασία με Ένα Κλικ (One-Click Bootstrap)",
-    "summary": "Αυτός ο οδηγός περιγράφει την ταχύτερη μέθοδο για την εγκατάσταση και την αρχικοποίηση του ZeroClaw.",
+    "summary": "Αυτός ο οδηγός περιγράφει την ταχύτερη μέθοδο για την εγκατάσταση και την αρχικοποίηση του LlamaFarm.",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -1585,12 +1585,12 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/one-click-bootstrap.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/one-click-bootstrap.md"
   },
   {
     "id": "docs-i18n-el-operations-runbook-md",
     "path": "docs/i18n/el/operations-runbook.md",
-    "title": "Εγχειρίδιο Λειτουργιών ZeroClaw (Operations Runbook)",
+    "title": "Εγχειρίδιο Λειτουργιών LlamaFarm (Operations Runbook)",
     "summary": "Αυτό το εγχειρίδιο προορίζεται για τους διαχειριστές του συστήματος που είναι υπεύθυνοι για τη διαθεσιμότητα, την ασφάλεια και την απόκριση σε περιστατικά.",
     "section": "i18n/el",
     "language": "el",
@@ -1607,7 +1607,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/operations-runbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/operations-runbook.md"
   },
   {
     "id": "docs-i18n-el-operations-connectivity-probes-runbook-md",
@@ -1629,13 +1629,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/operations/connectivity-probes-runbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/operations/connectivity-probes-runbook.md"
   },
   {
     "id": "docs-i18n-el-operations-readme-md",
     "path": "docs/i18n/el/operations/README.md",
     "title": "Λειτουργία και Υλοποίηση (Operations & Deployment)",
-    "summary": "Τεχνική τεκμηρίωση για τον χειρισμό, τη συντήρηση και την ανάπτυξη του ZeroClaw σε περιβάλλοντα παραγωγής.",
+    "summary": "Τεχνική τεκμηρίωση για τον χειρισμό, τη συντήρηση και την ανάπτυξη του LlamaFarm σε περιβάλλοντα παραγωγής.",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -1653,13 +1653,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/operations/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/operations/README.md"
   },
   {
     "id": "docs-i18n-el-pr-workflow-md",
     "path": "docs/i18n/el/pr-workflow.md",
     "title": "Ροή Εργασιών Pull Request (PR)",
-    "summary": "Αυτό το έγγραφο περιγράφει τη διαδικασία διαχείρισης των Pull Requests (PR) στο ZeroClaw, με στόχο τη διασφάλιση υψηλής απόδοσης, ασφάλειας και σταθερότητας του κώδικα.",
+    "summary": "Αυτό το έγγραφο περιγράφει τη διαδικασία διαχείρισης των Pull Requests (PR) στο LlamaFarm, με στόχο τη διασφάλιση υψηλής απόδοσης, ασφάλειας και σταθερότητας του κώδικα.",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -1676,12 +1676,12 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/pr-workflow.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/pr-workflow.md"
   },
   {
     "id": "docs-i18n-el-project-triage-snapshot-2026-02-18-md",
     "path": "docs/i18n/el/project-triage-snapshot-2026-02-18.md",
-    "title": "Αναφορά Διαλογής Έργου ZeroClaw (Project Triage Snapshot)",
+    "title": "Αναφορά Διαλογής Έργου LlamaFarm (Project Triage Snapshot)",
     "summary": "Το παρόν έγγραφο αποτελεί μια στατική καταγραφή των ανοιχτών αιτημάτων (PR) και ζητημάτων (Issues) με σκοπό την καθοδήγηση των εργασιών τεκμηρίωσης και της αρχιτεκτονικής πληροφοριών.",
     "section": "i18n/el",
     "language": "el",
@@ -1698,7 +1698,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/project-triage-snapshot-2026-02-18.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/project-triage-snapshot-2026-02-18.md"
   },
   {
     "id": "docs-i18n-el-project-readme-md",
@@ -1721,12 +1721,12 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/project/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/project/README.md"
   },
   {
     "id": "docs-i18n-el-providers-reference-md",
     "path": "docs/i18n/el/providers-reference.md",
-    "title": "Αναφορά Παρόχων ZeroClaw (Providers Reference)",
+    "title": "Αναφορά Παρόχων LlamaFarm (Providers Reference)",
     "summary": "Αυτό το έγγραφο περιγράφει τα ID των παρόχων, τα ψευδώνυμα (aliases) και τις μεταβλητές περιβάλλοντος για τη διαχείριση των διαπιστευτηρίων.",
     "section": "i18n/el",
     "language": "el",
@@ -1742,7 +1742,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/providers-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/providers-reference.md"
   },
   {
     "id": "docs-i18n-el-proxy-agent-playbook-md",
@@ -1764,13 +1764,13 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/proxy-agent-playbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/proxy-agent-playbook.md"
   },
   {
     "id": "docs-i18n-el-readme-md",
     "path": "docs/i18n/el/README.md",
-    "title": "Κέντρο Τεκμηρίωσης ZeroClaw",
-    "summary": "Αυτή η σελίδα αποτελεί το κεντρικό σημείο πρόσβασης για το σύστημα τεκμηρίωσης του ZeroClaw.",
+    "title": "Κέντρο Τεκμηρίωσης LlamaFarm",
+    "summary": "Αυτή η σελίδα αποτελεί το κεντρικό σημείο πρόσβασης για το σύστημα τεκμηρίωσης του LlamaFarm.",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -1786,7 +1786,7 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/README.md"
   },
   {
     "id": "docs-i18n-el-reference-readme-md",
@@ -1808,13 +1808,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/reference/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/reference/README.md"
   },
   {
     "id": "docs-i18n-el-release-process-md",
     "path": "docs/i18n/el/release-process.md",
     "title": "Διαδικασία Έκδοσης (Release Process)",
-    "summary": "Αυτό το εγχειρίδιο περιγράφει την τυπική ροή εργασιών έκδοσης νέων εκδόσεων για τους συντηρητές του ZeroClaw.",
+    "summary": "Αυτό το εγχειρίδιο περιγράφει την τυπική ροή εργασιών έκδοσης νέων εκδόσεων για τους συντηρητές του LlamaFarm.",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -1830,13 +1830,13 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/release-process.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/release-process.md"
   },
   {
     "id": "docs-i18n-el-resource-limits-md",
     "path": "docs/i18n/el/resource-limits.md",
     "title": "Όρια Πόρων (Resource Limits)",
-    "summary": "Το ZeroClaw εφαρμόζει περιορισμό ρυθμού (Rate Limiting - 20 ενέργειες/ώρα), αλλά δεν διαθέτει ανώτατα όρια χρήσης πόρων συστήματος. Χωρίς αυτούς τους περιορισμούς, ένας πράκτορας ενδέχεται να:",
+    "summary": "Το LlamaFarm εφαρμόζει περιορισμό ρυθμού (Rate Limiting - 20 ενέργειες/ώρα), αλλά δεν διαθέτει ανώτατα όρια χρήσης πόρων συστήματος. Χωρίς αυτούς τους περιορισμούς, ένας πράκτορας ενδέχεται να:",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -1851,7 +1851,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/resource-limits.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/resource-limits.md"
   },
   {
     "id": "docs-i18n-el-reviewer-playbook-md",
@@ -1874,13 +1874,13 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/reviewer-playbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/reviewer-playbook.md"
   },
   {
     "id": "docs-i18n-el-sandboxing-md",
     "path": "docs/i18n/el/sandboxing.md",
-    "title": "Στρατηγικές Sandboxing για το ZeroClaw",
-    "summary": "Το ZeroClaw εφαρμόζει ασφάλεια σε επίπεδο εφαρμογής (allowlists, path validation, injection prevention), αλλά δεν διαθέτει απομόνωση σε επίπεδο λειτουργικού συστήματος. Χωρίς sandboxing, ένας εξουσιοδοτημένος χρήστης μπο",
+    "title": "Στρατηγικές Sandboxing για το LlamaFarm",
+    "summary": "Το LlamaFarm εφαρμόζει ασφάλεια σε επίπεδο εφαρμογής (allowlists, path validation, injection prevention), αλλά δεν διαθέτει απομόνωση σε επίπεδο λειτουργικού συστήματος. Χωρίς sandboxing, ένας εξουσιοδοτημένος χρήστης μπο",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -1896,13 +1896,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/sandboxing.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/sandboxing.md"
   },
   {
     "id": "docs-i18n-el-security-roadmap-md",
     "path": "docs/i18n/el/security-roadmap.md",
-    "title": "Οδικός Χάρτης Ασφάλειας ZeroClaw (Security Roadmap)",
-    "summary": "Το ZeroClaw διαθέτει ήδη ισχυρά θεμέλια ασφάλειας στο επίπεδο της εφαρμογής:",
+    "title": "Οδικός Χάρτης Ασφάλειας LlamaFarm (Security Roadmap)",
+    "summary": "Το LlamaFarm διαθέτει ήδη ισχυρά θεμέλια ασφάλειας στο επίπεδο της εφαρμογής:",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -1918,7 +1918,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/security-roadmap.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/security-roadmap.md"
   },
   {
     "id": "docs-i18n-el-security-readme-md",
@@ -1941,7 +1941,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/security/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/security/README.md"
   },
   {
     "id": "docs-i18n-el-sop-connectivity-md",
@@ -1963,7 +1963,7 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/sop/connectivity.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/sop/connectivity.md"
   },
   {
     "id": "docs-i18n-el-sop-cookbook-md",
@@ -1985,7 +1985,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/sop/cookbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/sop/cookbook.md"
   },
   {
     "id": "docs-i18n-el-sop-observability-md",
@@ -2007,7 +2007,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/sop/observability.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/sop/observability.md"
   },
   {
     "id": "docs-i18n-el-sop-readme-md",
@@ -2030,7 +2030,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/sop/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/sop/README.md"
   },
   {
     "id": "docs-i18n-el-sop-syntax-md",
@@ -2052,12 +2052,12 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/sop/syntax.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/sop/syntax.md"
   },
   {
     "id": "docs-i18n-el-structure-readme-md",
     "path": "docs/i18n/el/structure/README.md",
-    "title": "Χάρτης Δομής Τεκμηρίωσης ZeroClaw",
+    "title": "Χάρτης Δομής Τεκμηρίωσης LlamaFarm",
     "summary": "Αυτή η σελίδα ορίζει τη δομή της τεκμηρίωσης κατά τρεις άξονες:",
     "section": "i18n/el",
     "language": "el",
@@ -2074,12 +2074,12 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/structure/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/structure/README.md"
   },
   {
     "id": "docs-i18n-el-summary-md",
     "path": "docs/i18n/el/SUMMARY.md",
-    "title": "Πίνακας Περιεχομένων Τεκμηρίωσης ZeroClaw",
+    "title": "Πίνακας Περιεχομένων Τεκμηρίωσης LlamaFarm",
     "summary": "Αυτό το αρχείο αποτελεί τον κεντρικό οδηγό πλοήγησης για το σύστημα τεκμηρίωσης.",
     "section": "i18n/el",
     "language": "el",
@@ -2095,13 +2095,13 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/SUMMARY.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/SUMMARY.md"
   },
   {
     "id": "docs-i18n-el-troubleshooting-md",
     "path": "docs/i18n/el/troubleshooting.md",
     "title": "Αντιμετώπιση Προβλημάτων (Troubleshooting)",
-    "summary": "Αυτός ο οδηγός περιγράφει λύσεις για κοινά ζητήματα εγκατάστασης και εκτέλεσης του ZeroClaw.",
+    "summary": "Αυτός ο οδηγός περιγράφει λύσεις για κοινά ζητήματα εγκατάστασης και εκτέλεσης του LlamaFarm.",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -2117,13 +2117,13 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/troubleshooting.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/troubleshooting.md"
   },
   {
     "id": "docs-i18n-el-zai-glm-setup-md",
     "path": "docs/i18n/el/zai-glm-setup.md",
     "title": "Διαμόρφωση Z.AI GLM",
-    "summary": "Το ZeroClaw υποστηρίζει τα μοντέλα GLM της Z.AI μέσω διεπαφών συμβατών με το OpenAI API.",
+    "summary": "Το LlamaFarm υποστηρίζει τα μοντέλα GLM της Z.AI μέσω διεπαφών συμβατών με το OpenAI API.",
     "section": "i18n/el",
     "language": "el",
     "journey": "localize",
@@ -2140,7 +2140,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/el/zai-glm-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/el/zai-glm-setup.md"
   },
   {
     "id": "docs-i18n-fr-actions-source-policy-md",
@@ -2161,7 +2161,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/actions-source-policy.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/actions-source-policy.md"
   },
   {
     "id": "docs-i18n-fr-adding-boards-and-tools-md",
@@ -2182,7 +2182,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/adding-boards-and-tools.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/adding-boards-and-tools.md"
   },
   {
     "id": "docs-i18n-fr-agnostic-security-md",
@@ -2204,7 +2204,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/agnostic-security.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/agnostic-security.md"
   },
   {
     "id": "docs-i18n-fr-android-setup-md",
@@ -2226,7 +2226,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/android-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/android-setup.md"
   },
   {
     "id": "docs-i18n-fr-arduino-uno-q-setup-md",
@@ -2249,7 +2249,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/arduino-uno-q-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/arduino-uno-q-setup.md"
   },
   {
     "id": "docs-i18n-fr-audit-event-schema-md",
@@ -2271,7 +2271,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/audit-event-schema.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/audit-event-schema.md"
   },
   {
     "id": "docs-i18n-fr-audit-logging-md",
@@ -2293,7 +2293,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/audit-logging.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/audit-logging.md"
   },
   {
     "id": "docs-i18n-fr-cargo-slicer-speedup-md",
@@ -2314,7 +2314,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/cargo-slicer-speedup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/cargo-slicer-speedup.md"
   },
   {
     "id": "docs-i18n-fr-channels-reference-md",
@@ -2336,7 +2336,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/channels-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/channels-reference.md"
   },
   {
     "id": "docs-i18n-fr-ci-map-md",
@@ -2358,13 +2358,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/ci-map.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/ci-map.md"
   },
   {
     "id": "docs-i18n-fr-commands-reference-md",
     "path": "docs/i18n/fr/commands-reference.md",
     "title": "Référence des commandes (Français)",
-    "summary": "Cette page est une localisation initiale Wave 1 pour retrouver rapidement les commandes CLI ZeroClaw.",
+    "summary": "Cette page est une localisation initiale Wave 1 pour retrouver rapidement les commandes CLI LlamaFarm.",
     "section": "i18n/fr",
     "language": "fr",
     "journey": "localize",
@@ -2379,7 +2379,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/commands-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/commands-reference.md"
   },
   {
     "id": "docs-i18n-fr-config-reference-md",
@@ -2400,7 +2400,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/config-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/config-reference.md"
   },
   {
     "id": "docs-i18n-fr-custom-providers-md",
@@ -2423,7 +2423,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/custom-providers.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/custom-providers.md"
   },
   {
     "id": "docs-i18n-fr-doc-template-md",
@@ -2444,7 +2444,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/doc-template.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/doc-template.md"
   },
   {
     "id": "docs-i18n-fr-docs-audit-2026-02-24-md",
@@ -2466,7 +2466,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/docs-audit-2026-02-24.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/docs-audit-2026-02-24.md"
   },
   {
     "id": "docs-i18n-fr-docs-inventory-md",
@@ -2487,7 +2487,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/docs-inventory.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/docs-inventory.md"
   },
   {
     "id": "docs-i18n-fr-frictionless-security-md",
@@ -2509,7 +2509,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/frictionless-security.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/frictionless-security.md"
   },
   {
     "id": "docs-i18n-fr-hardware-peripherals-design-md",
@@ -2531,7 +2531,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/hardware-peripherals-design.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/hardware-peripherals-design.md"
   },
   {
     "id": "docs-i18n-fr-i18n-coverage-md",
@@ -2552,7 +2552,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/i18n-coverage.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/i18n-coverage.md"
   },
   {
     "id": "docs-i18n-fr-i18n-gap-backlog-md",
@@ -2573,7 +2573,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/i18n-gap-backlog.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/i18n-gap-backlog.md"
   },
   {
     "id": "docs-i18n-fr-i18n-guide-md",
@@ -2594,7 +2594,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/i18n-guide.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/i18n-guide.md"
   },
   {
     "id": "docs-i18n-fr-langgraph-integration-md",
@@ -2616,7 +2616,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/langgraph-integration.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/langgraph-integration.md"
   },
   {
     "id": "docs-i18n-fr-matrix-e2ee-guide-md",
@@ -2638,7 +2638,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/matrix-e2ee-guide.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/matrix-e2ee-guide.md"
   },
   {
     "id": "docs-i18n-fr-mattermost-setup-md",
@@ -2661,7 +2661,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/mattermost-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/mattermost-setup.md"
   },
   {
     "id": "docs-i18n-fr-network-deployment-md",
@@ -2683,7 +2683,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/network-deployment.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/network-deployment.md"
   },
   {
     "id": "docs-i18n-fr-nextcloud-talk-setup-md",
@@ -2706,7 +2706,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/nextcloud-talk-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/nextcloud-talk-setup.md"
   },
   {
     "id": "docs-i18n-fr-nucleo-setup-md",
@@ -2729,7 +2729,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/nucleo-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/nucleo-setup.md"
   },
   {
     "id": "docs-i18n-fr-one-click-bootstrap-md",
@@ -2751,7 +2751,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/one-click-bootstrap.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/one-click-bootstrap.md"
   },
   {
     "id": "docs-i18n-fr-operations-runbook-md",
@@ -2773,7 +2773,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/operations-runbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/operations-runbook.md"
   },
   {
     "id": "docs-i18n-fr-pr-workflow-md",
@@ -2796,7 +2796,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/pr-workflow.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/pr-workflow.md"
   },
   {
     "id": "docs-i18n-fr-project-triage-snapshot-2026-02-18-md",
@@ -2818,7 +2818,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/project-triage-snapshot-2026-02-18.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/project-triage-snapshot-2026-02-18.md"
   },
   {
     "id": "docs-i18n-fr-providers-reference-md",
@@ -2839,7 +2839,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/providers-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/providers-reference.md"
   },
   {
     "id": "docs-i18n-fr-proxy-agent-playbook-md",
@@ -2860,12 +2860,12 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/proxy-agent-playbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/proxy-agent-playbook.md"
   },
   {
     "id": "docs-i18n-fr-readme-md",
     "path": "docs/i18n/fr/README.md",
-    "title": "Hub de Documentation ZeroClaw (Français)",
+    "title": "Hub de Documentation LlamaFarm (Français)",
     "summary": "Cette page est le hub français aligné sur la structure canonique docs/i18n//.",
     "section": "i18n/fr",
     "language": "fr",
@@ -2882,7 +2882,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/README.md"
   },
   {
     "id": "docs-i18n-fr-release-process-md",
@@ -2904,7 +2904,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/release-process.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/release-process.md"
   },
   {
     "id": "docs-i18n-fr-resource-limits-md",
@@ -2925,7 +2925,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/resource-limits.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/resource-limits.md"
   },
   {
     "id": "docs-i18n-fr-reviewer-playbook-md",
@@ -2947,7 +2947,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/reviewer-playbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/reviewer-playbook.md"
   },
   {
     "id": "docs-i18n-fr-sandboxing-md",
@@ -2969,7 +2969,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/sandboxing.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/sandboxing.md"
   },
   {
     "id": "docs-i18n-fr-security-roadmap-md",
@@ -2991,12 +2991,12 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/security-roadmap.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/security-roadmap.md"
   },
   {
     "id": "docs-i18n-fr-summary-md",
     "path": "docs/i18n/fr/SUMMARY.md",
-    "title": "Sommaire de la documentation ZeroClaw (Français, i18n)",
+    "title": "Sommaire de la documentation LlamaFarm (Français, i18n)",
     "summary": "Ce fichier est l'index de navigation pour docs/i18n/fr/.",
     "section": "i18n/fr",
     "language": "fr",
@@ -3012,7 +3012,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/SUMMARY.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/SUMMARY.md"
   },
   {
     "id": "docs-i18n-fr-troubleshooting-md",
@@ -3034,7 +3034,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/troubleshooting.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/troubleshooting.md"
   },
   {
     "id": "docs-i18n-fr-zai-glm-setup-md",
@@ -3057,7 +3057,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/fr/zai-glm-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/fr/zai-glm-setup.md"
   },
   {
     "id": "docs-i18n-ja-actions-source-policy-md",
@@ -3078,7 +3078,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/actions-source-policy.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/actions-source-policy.md"
   },
   {
     "id": "docs-i18n-ja-adding-boards-and-tools-md",
@@ -3099,7 +3099,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/adding-boards-and-tools.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/adding-boards-and-tools.md"
   },
   {
     "id": "docs-i18n-ja-agnostic-security-md",
@@ -3121,7 +3121,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/agnostic-security.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/agnostic-security.md"
   },
   {
     "id": "docs-i18n-ja-android-setup-md",
@@ -3143,7 +3143,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/android-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/android-setup.md"
   },
   {
     "id": "docs-i18n-ja-arduino-uno-q-setup-md",
@@ -3166,7 +3166,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/arduino-uno-q-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/arduino-uno-q-setup.md"
   },
   {
     "id": "docs-i18n-ja-audit-event-schema-md",
@@ -3188,7 +3188,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/audit-event-schema.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/audit-event-schema.md"
   },
   {
     "id": "docs-i18n-ja-audit-logging-md",
@@ -3210,7 +3210,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/audit-logging.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/audit-logging.md"
   },
   {
     "id": "docs-i18n-ja-cargo-slicer-speedup-md",
@@ -3231,7 +3231,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/cargo-slicer-speedup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/cargo-slicer-speedup.md"
   },
   {
     "id": "docs-i18n-ja-channels-reference-md",
@@ -3252,7 +3252,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/channels-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/channels-reference.md"
   },
   {
     "id": "docs-i18n-ja-ci-map-md",
@@ -3274,13 +3274,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/ci-map.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/ci-map.md"
   },
   {
     "id": "docs-i18n-ja-commands-reference-md",
     "path": "docs/i18n/ja/commands-reference.md",
     "title": "コマンドリファレンス（日本語）",
-    "summary": "このページは Wave 1 の初版ローカライズです。ZeroClaw CLI コマンドを素早く参照するための入口です。",
+    "summary": "このページは Wave 1 の初版ローカライズです。LlamaFarm CLI コマンドを素早く参照するための入口です。",
     "section": "i18n/ja",
     "language": "ja",
     "journey": "localize",
@@ -3295,7 +3295,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/commands-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/commands-reference.md"
   },
   {
     "id": "docs-i18n-ja-config-reference-md",
@@ -3316,7 +3316,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/config-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/config-reference.md"
   },
   {
     "id": "docs-i18n-ja-custom-providers-md",
@@ -3339,7 +3339,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/custom-providers.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/custom-providers.md"
   },
   {
     "id": "docs-i18n-ja-doc-template-md",
@@ -3360,7 +3360,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/doc-template.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/doc-template.md"
   },
   {
     "id": "docs-i18n-ja-docs-audit-2026-02-24-md",
@@ -3382,7 +3382,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/docs-audit-2026-02-24.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/docs-audit-2026-02-24.md"
   },
   {
     "id": "docs-i18n-ja-docs-inventory-md",
@@ -3403,7 +3403,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/docs-inventory.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/docs-inventory.md"
   },
   {
     "id": "docs-i18n-ja-frictionless-security-md",
@@ -3425,7 +3425,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/frictionless-security.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/frictionless-security.md"
   },
   {
     "id": "docs-i18n-ja-hardware-peripherals-design-md",
@@ -3447,7 +3447,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/hardware-peripherals-design.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/hardware-peripherals-design.md"
   },
   {
     "id": "docs-i18n-ja-i18n-coverage-md",
@@ -3468,7 +3468,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/i18n-coverage.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/i18n-coverage.md"
   },
   {
     "id": "docs-i18n-ja-i18n-gap-backlog-md",
@@ -3489,7 +3489,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/i18n-gap-backlog.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/i18n-gap-backlog.md"
   },
   {
     "id": "docs-i18n-ja-i18n-guide-md",
@@ -3510,7 +3510,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/i18n-guide.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/i18n-guide.md"
   },
   {
     "id": "docs-i18n-ja-langgraph-integration-md",
@@ -3532,7 +3532,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/langgraph-integration.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/langgraph-integration.md"
   },
   {
     "id": "docs-i18n-ja-matrix-e2ee-guide-md",
@@ -3554,7 +3554,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/matrix-e2ee-guide.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/matrix-e2ee-guide.md"
   },
   {
     "id": "docs-i18n-ja-mattermost-setup-md",
@@ -3577,7 +3577,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/mattermost-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/mattermost-setup.md"
   },
   {
     "id": "docs-i18n-ja-network-deployment-md",
@@ -3599,7 +3599,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/network-deployment.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/network-deployment.md"
   },
   {
     "id": "docs-i18n-ja-nextcloud-talk-setup-md",
@@ -3622,7 +3622,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/nextcloud-talk-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/nextcloud-talk-setup.md"
   },
   {
     "id": "docs-i18n-ja-nucleo-setup-md",
@@ -3645,7 +3645,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/nucleo-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/nucleo-setup.md"
   },
   {
     "id": "docs-i18n-ja-one-click-bootstrap-md",
@@ -3667,7 +3667,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/one-click-bootstrap.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/one-click-bootstrap.md"
   },
   {
     "id": "docs-i18n-ja-operations-runbook-md",
@@ -3689,7 +3689,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/operations-runbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/operations-runbook.md"
   },
   {
     "id": "docs-i18n-ja-pr-workflow-md",
@@ -3712,7 +3712,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/pr-workflow.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/pr-workflow.md"
   },
   {
     "id": "docs-i18n-ja-project-triage-snapshot-2026-02-18-md",
@@ -3734,7 +3734,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/project-triage-snapshot-2026-02-18.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/project-triage-snapshot-2026-02-18.md"
   },
   {
     "id": "docs-i18n-ja-providers-reference-md",
@@ -3755,7 +3755,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/providers-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/providers-reference.md"
   },
   {
     "id": "docs-i18n-ja-proxy-agent-playbook-md",
@@ -3776,12 +3776,12 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/proxy-agent-playbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/proxy-agent-playbook.md"
   },
   {
     "id": "docs-i18n-ja-readme-md",
     "path": "docs/i18n/ja/README.md",
-    "title": "ZeroClaw ドキュメントハブ（日本語）",
+    "title": "LlamaFarm ドキュメントハブ（日本語）",
     "summary": "このファイルは docs/i18n// 構造における日本語ハブです。",
     "section": "i18n/ja",
     "language": "ja",
@@ -3798,7 +3798,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/README.md"
   },
   {
     "id": "docs-i18n-ja-release-process-md",
@@ -3820,7 +3820,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/release-process.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/release-process.md"
   },
   {
     "id": "docs-i18n-ja-resource-limits-md",
@@ -3841,7 +3841,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/resource-limits.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/resource-limits.md"
   },
   {
     "id": "docs-i18n-ja-reviewer-playbook-md",
@@ -3863,7 +3863,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/reviewer-playbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/reviewer-playbook.md"
   },
   {
     "id": "docs-i18n-ja-sandboxing-md",
@@ -3885,7 +3885,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/sandboxing.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/sandboxing.md"
   },
   {
     "id": "docs-i18n-ja-security-roadmap-md",
@@ -3907,12 +3907,12 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/security-roadmap.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/security-roadmap.md"
   },
   {
     "id": "docs-i18n-ja-summary-md",
     "path": "docs/i18n/ja/SUMMARY.md",
-    "title": "ZeroClaw 日本語目次（i18n）",
+    "title": "LlamaFarm 日本語目次（i18n）",
     "summary": "このファイルは docs/i18n/ja/ のナビゲーション目です。",
     "section": "i18n/ja",
     "language": "ja",
@@ -3928,7 +3928,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/SUMMARY.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/SUMMARY.md"
   },
   {
     "id": "docs-i18n-ja-troubleshooting-md",
@@ -3950,7 +3950,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/troubleshooting.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/troubleshooting.md"
   },
   {
     "id": "docs-i18n-ja-zai-glm-setup-md",
@@ -3973,12 +3973,12 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ja/zai-glm-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ja/zai-glm-setup.md"
   },
   {
     "id": "docs-i18n-readme-md",
     "path": "docs/i18n/README.md",
-    "title": "ZeroClaw i18n Docs Index",
+    "title": "LlamaFarm i18n Docs Index",
     "summary": "Canonical localized documentation trees live here.",
     "section": "i18n/README.md",
     "language": "en",
@@ -3995,7 +3995,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/README.md"
   },
   {
     "id": "docs-i18n-ru-actions-source-policy-md",
@@ -4016,7 +4016,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/actions-source-policy.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/actions-source-policy.md"
   },
   {
     "id": "docs-i18n-ru-adding-boards-and-tools-md",
@@ -4037,7 +4037,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/adding-boards-and-tools.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/adding-boards-and-tools.md"
   },
   {
     "id": "docs-i18n-ru-agnostic-security-md",
@@ -4059,7 +4059,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/agnostic-security.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/agnostic-security.md"
   },
   {
     "id": "docs-i18n-ru-android-setup-md",
@@ -4081,7 +4081,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/android-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/android-setup.md"
   },
   {
     "id": "docs-i18n-ru-arduino-uno-q-setup-md",
@@ -4104,7 +4104,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/arduino-uno-q-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/arduino-uno-q-setup.md"
   },
   {
     "id": "docs-i18n-ru-audit-event-schema-md",
@@ -4126,7 +4126,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/audit-event-schema.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/audit-event-schema.md"
   },
   {
     "id": "docs-i18n-ru-audit-logging-md",
@@ -4148,7 +4148,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/audit-logging.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/audit-logging.md"
   },
   {
     "id": "docs-i18n-ru-cargo-slicer-speedup-md",
@@ -4169,7 +4169,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/cargo-slicer-speedup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/cargo-slicer-speedup.md"
   },
   {
     "id": "docs-i18n-ru-channels-reference-md",
@@ -4190,7 +4190,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/channels-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/channels-reference.md"
   },
   {
     "id": "docs-i18n-ru-ci-map-md",
@@ -4212,13 +4212,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/ci-map.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/ci-map.md"
   },
   {
     "id": "docs-i18n-ru-commands-reference-md",
     "path": "docs/i18n/ru/commands-reference.md",
     "title": "Справочник команд (Русский)",
-    "summary": "Это первичная локализация Wave 1 для быстрого поиска CLI-команд ZeroClaw.",
+    "summary": "Это первичная локализация Wave 1 для быстрого поиска CLI-команд LlamaFarm.",
     "section": "i18n/ru",
     "language": "ru",
     "journey": "localize",
@@ -4233,7 +4233,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/commands-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/commands-reference.md"
   },
   {
     "id": "docs-i18n-ru-config-reference-md",
@@ -4254,7 +4254,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/config-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/config-reference.md"
   },
   {
     "id": "docs-i18n-ru-custom-providers-md",
@@ -4277,7 +4277,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/custom-providers.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/custom-providers.md"
   },
   {
     "id": "docs-i18n-ru-doc-template-md",
@@ -4298,7 +4298,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/doc-template.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/doc-template.md"
   },
   {
     "id": "docs-i18n-ru-docs-audit-2026-02-24-md",
@@ -4320,7 +4320,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/docs-audit-2026-02-24.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/docs-audit-2026-02-24.md"
   },
   {
     "id": "docs-i18n-ru-docs-inventory-md",
@@ -4341,7 +4341,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/docs-inventory.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/docs-inventory.md"
   },
   {
     "id": "docs-i18n-ru-frictionless-security-md",
@@ -4363,7 +4363,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/frictionless-security.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/frictionless-security.md"
   },
   {
     "id": "docs-i18n-ru-hardware-peripherals-design-md",
@@ -4385,7 +4385,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/hardware-peripherals-design.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/hardware-peripherals-design.md"
   },
   {
     "id": "docs-i18n-ru-i18n-coverage-md",
@@ -4406,7 +4406,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/i18n-coverage.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/i18n-coverage.md"
   },
   {
     "id": "docs-i18n-ru-i18n-gap-backlog-md",
@@ -4427,7 +4427,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/i18n-gap-backlog.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/i18n-gap-backlog.md"
   },
   {
     "id": "docs-i18n-ru-i18n-guide-md",
@@ -4448,7 +4448,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/i18n-guide.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/i18n-guide.md"
   },
   {
     "id": "docs-i18n-ru-langgraph-integration-md",
@@ -4470,7 +4470,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/langgraph-integration.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/langgraph-integration.md"
   },
   {
     "id": "docs-i18n-ru-matrix-e2ee-guide-md",
@@ -4492,7 +4492,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/matrix-e2ee-guide.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/matrix-e2ee-guide.md"
   },
   {
     "id": "docs-i18n-ru-mattermost-setup-md",
@@ -4515,7 +4515,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/mattermost-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/mattermost-setup.md"
   },
   {
     "id": "docs-i18n-ru-network-deployment-md",
@@ -4537,7 +4537,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/network-deployment.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/network-deployment.md"
   },
   {
     "id": "docs-i18n-ru-nextcloud-talk-setup-md",
@@ -4560,7 +4560,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/nextcloud-talk-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/nextcloud-talk-setup.md"
   },
   {
     "id": "docs-i18n-ru-nucleo-setup-md",
@@ -4583,7 +4583,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/nucleo-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/nucleo-setup.md"
   },
   {
     "id": "docs-i18n-ru-one-click-bootstrap-md",
@@ -4605,7 +4605,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/one-click-bootstrap.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/one-click-bootstrap.md"
   },
   {
     "id": "docs-i18n-ru-operations-runbook-md",
@@ -4627,7 +4627,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/operations-runbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/operations-runbook.md"
   },
   {
     "id": "docs-i18n-ru-pr-workflow-md",
@@ -4650,7 +4650,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/pr-workflow.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/pr-workflow.md"
   },
   {
     "id": "docs-i18n-ru-project-triage-snapshot-2026-02-18-md",
@@ -4672,7 +4672,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/project-triage-snapshot-2026-02-18.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/project-triage-snapshot-2026-02-18.md"
   },
   {
     "id": "docs-i18n-ru-providers-reference-md",
@@ -4693,7 +4693,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/providers-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/providers-reference.md"
   },
   {
     "id": "docs-i18n-ru-proxy-agent-playbook-md",
@@ -4714,12 +4714,12 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/proxy-agent-playbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/proxy-agent-playbook.md"
   },
   {
     "id": "docs-i18n-ru-readme-md",
     "path": "docs/i18n/ru/README.md",
-    "title": "Документация ZeroClaw (Русский)",
+    "title": "Документация LlamaFarm (Русский)",
     "summary": "Этот файл — русскоязычный хаб в канонической структуре docs/i18n//.",
     "section": "i18n/ru",
     "language": "ru",
@@ -4736,7 +4736,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/README.md"
   },
   {
     "id": "docs-i18n-ru-release-process-md",
@@ -4758,7 +4758,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/release-process.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/release-process.md"
   },
   {
     "id": "docs-i18n-ru-resource-limits-md",
@@ -4779,7 +4779,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/resource-limits.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/resource-limits.md"
   },
   {
     "id": "docs-i18n-ru-reviewer-playbook-md",
@@ -4801,7 +4801,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/reviewer-playbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/reviewer-playbook.md"
   },
   {
     "id": "docs-i18n-ru-sandboxing-md",
@@ -4823,7 +4823,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/sandboxing.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/sandboxing.md"
   },
   {
     "id": "docs-i18n-ru-security-roadmap-md",
@@ -4845,12 +4845,12 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/security-roadmap.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/security-roadmap.md"
   },
   {
     "id": "docs-i18n-ru-summary-md",
     "path": "docs/i18n/ru/SUMMARY.md",
-    "title": "Содержание документации ZeroClaw (Русский, i18n)",
+    "title": "Содержание документации LlamaFarm (Русский, i18n)",
     "summary": "Этот файл — навигационный индекс для docs/i18n/ru/.",
     "section": "i18n/ru",
     "language": "ru",
@@ -4866,7 +4866,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/SUMMARY.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/SUMMARY.md"
   },
   {
     "id": "docs-i18n-ru-troubleshooting-md",
@@ -4888,7 +4888,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/troubleshooting.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/troubleshooting.md"
   },
   {
     "id": "docs-i18n-ru-zai-glm-setup-md",
@@ -4911,7 +4911,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/ru/zai-glm-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/ru/zai-glm-setup.md"
   },
   {
     "id": "docs-i18n-vi-actions-source-policy-md",
@@ -4932,13 +4932,13 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/actions-source-policy.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/actions-source-policy.md"
   },
   {
     "id": "docs-i18n-vi-adding-boards-and-tools-md",
     "path": "docs/i18n/vi/adding-boards-and-tools.md",
-    "title": "Thêm Board và Tool — Hướng dẫn phần cứng ZeroClaw",
-    "summary": "Hướng dẫn này giải thích cách thêm board phần cứng mới và tool tùy chỉnh vào ZeroClaw.",
+    "title": "Thêm Board và Tool — Hướng dẫn phần cứng LlamaFarm",
+    "summary": "Hướng dẫn này giải thích cách thêm board phần cứng mới và tool tùy chỉnh vào LlamaFarm.",
     "section": "i18n/vi",
     "language": "vi",
     "journey": "localize",
@@ -4953,7 +4953,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/adding-boards-and-tools.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/adding-boards-and-tools.md"
   },
   {
     "id": "docs-i18n-vi-agnostic-security-md",
@@ -4975,7 +4975,7 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/agnostic-security.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/agnostic-security.md"
   },
   {
     "id": "docs-i18n-vi-android-setup-md",
@@ -4997,13 +4997,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/android-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/android-setup.md"
   },
   {
     "id": "docs-i18n-vi-arduino-uno-q-setup-md",
     "path": "docs/i18n/vi/arduino-uno-q-setup.md",
-    "title": "ZeroClaw trên Arduino Uno Q — Hướng dẫn từng bước",
-    "summary": "Chạy ZeroClaw trên phía Linux của Arduino Uno Q. Telegram hoạt động qua WiFi; điều khiển GPIO dùng Bridge (yêu cầu một ứng dụng App Lab tối giản).",
+    "title": "LlamaFarm trên Arduino Uno Q — Hướng dẫn từng bước",
+    "summary": "Chạy LlamaFarm trên phía Linux của Arduino Uno Q. Telegram hoạt động qua WiFi; điều khiển GPIO dùng Bridge (yêu cầu một ứng dụng App Lab tối giản).",
     "section": "i18n/vi",
     "language": "vi",
     "journey": "localize",
@@ -5020,7 +5020,7 @@
     ],
     "readingMinutes": 4,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/arduino-uno-q-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/arduino-uno-q-setup.md"
   },
   {
     "id": "docs-i18n-vi-audit-event-schema-md",
@@ -5043,13 +5043,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/audit-event-schema.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/audit-event-schema.md"
   },
   {
     "id": "docs-i18n-vi-audit-logging-md",
     "path": "docs/i18n/vi/audit-logging.md",
     "title": "Audit logging",
-    "summary": "ZeroClaw ghi log các hành động nhưng thiếu audit trail chống giả mạo cho:",
+    "summary": "LlamaFarm ghi log các hành động nhưng thiếu audit trail chống giả mạo cho:",
     "section": "i18n/vi",
     "language": "vi",
     "journey": "localize",
@@ -5065,7 +5065,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/audit-logging.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/audit-logging.md"
   },
   {
     "id": "docs-i18n-vi-cargo-slicer-speedup-md",
@@ -5086,13 +5086,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/cargo-slicer-speedup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/cargo-slicer-speedup.md"
   },
   {
     "id": "docs-i18n-vi-channels-reference-md",
     "path": "docs/i18n/vi/channels-reference.md",
     "title": "Tài liệu tham khảo Channels",
-    "summary": "Tài liệu này là nguồn tham khảo chính thức về cấu hình channel trong ZeroClaw.",
+    "summary": "Tài liệu này là nguồn tham khảo chính thức về cấu hình channel trong LlamaFarm.",
     "section": "i18n/vi",
     "language": "vi",
     "journey": "localize",
@@ -5107,7 +5107,7 @@
     ],
     "readingMinutes": 10,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/channels-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/channels-reference.md"
   },
   {
     "id": "docs-i18n-vi-ci-map-md",
@@ -5129,13 +5129,13 @@
     ],
     "readingMinutes": 10,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/ci-map.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/ci-map.md"
   },
   {
     "id": "docs-i18n-vi-commands-reference-md",
     "path": "docs/i18n/vi/commands-reference.md",
-    "title": "Tham khảo lệnh ZeroClaw",
-    "summary": "Dựa trên CLI hiện tại (zeroclaw --help).",
+    "title": "Tham khảo lệnh LlamaFarm",
+    "summary": "Dựa trên CLI hiện tại (llamafarm --help).",
     "section": "i18n/vi",
     "language": "vi",
     "journey": "localize",
@@ -5150,12 +5150,12 @@
     ],
     "readingMinutes": 4,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/commands-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/commands-reference.md"
   },
   {
     "id": "docs-i18n-vi-config-reference-md",
     "path": "docs/i18n/vi/config-reference.md",
-    "title": "Tham khảo cấu hình ZeroClaw",
+    "title": "Tham khảo cấu hình LlamaFarm",
     "summary": "Các mục cấu hình thường dùng và giá trị mặc định.",
     "section": "i18n/vi",
     "language": "vi",
@@ -5171,7 +5171,7 @@
     ],
     "readingMinutes": 17,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/config-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/config-reference.md"
   },
   {
     "id": "docs-i18n-vi-contributing-readme-md",
@@ -5195,13 +5195,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/contributing/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/contributing/README.md"
   },
   {
     "id": "docs-i18n-vi-custom-providers-md",
     "path": "docs/i18n/vi/custom-providers.md",
     "title": "Cấu hình Provider Tùy chỉnh",
-    "summary": "ZeroClaw hỗ trợ endpoint API tùy chỉnh cho cả provider tương thích OpenAI lẫn Anthropic.",
+    "summary": "LlamaFarm hỗ trợ endpoint API tùy chỉnh cho cả provider tương thích OpenAI lẫn Anthropic.",
     "section": "i18n/vi",
     "language": "vi",
     "journey": "localize",
@@ -5218,7 +5218,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/custom-providers.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/custom-providers.md"
   },
   {
     "id": "docs-i18n-vi-datasheets-arduino-uno-md",
@@ -5240,13 +5240,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/datasheets/arduino-uno.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/datasheets/arduino-uno.md"
   },
   {
     "id": "docs-i18n-vi-datasheets-esp32-md",
     "path": "docs/i18n/vi/datasheets/esp32.md",
     "title": "Tham chiếu GPIO ESP32",
-    "summary": "ZeroClaw host gửi JSON qua serial (115200 baud):",
+    "summary": "LlamaFarm host gửi JSON qua serial (115200 baud):",
     "section": "i18n/vi",
     "language": "vi",
     "journey": "localize",
@@ -5262,7 +5262,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/datasheets/esp32.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/datasheets/esp32.md"
   },
   {
     "id": "docs-i18n-vi-datasheets-nucleo-f401re-md",
@@ -5285,7 +5285,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/datasheets/nucleo-f401re.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/datasheets/nucleo-f401re.md"
   },
   {
     "id": "docs-i18n-vi-datasheets-readme-md",
@@ -5308,7 +5308,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/datasheets/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/datasheets/README.md"
   },
   {
     "id": "docs-i18n-vi-doc-template-md",
@@ -5329,7 +5329,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/doc-template.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/doc-template.md"
   },
   {
     "id": "docs-i18n-vi-docs-audit-2026-02-24-md",
@@ -5351,12 +5351,12 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/docs-audit-2026-02-24.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/docs-audit-2026-02-24.md"
   },
   {
     "id": "docs-i18n-vi-docs-inventory-md",
     "path": "docs/i18n/vi/docs-inventory.md",
-    "title": "Danh mục tài liệu ZeroClaw (Tiếng Việt)",
+    "title": "Danh mục tài liệu LlamaFarm (Tiếng Việt)",
     "summary": "Trang này là bản địa hóa tối thiểu cho inventory tài liệu.",
     "section": "i18n/vi",
     "language": "vi",
@@ -5372,7 +5372,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/docs-inventory.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/docs-inventory.md"
   },
   {
     "id": "docs-i18n-vi-frictionless-security-md",
@@ -5394,7 +5394,7 @@
     ],
     "readingMinutes": 4,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/frictionless-security.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/frictionless-security.md"
   },
   {
     "id": "docs-i18n-vi-getting-started-readme-md",
@@ -5416,13 +5416,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/getting-started/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/getting-started/README.md"
   },
   {
     "id": "docs-i18n-vi-hardware-peripherals-design-md",
     "path": "docs/i18n/vi/hardware-peripherals-design.md",
-    "title": "Thiết kế Hardware Peripherals — ZeroClaw",
-    "summary": "ZeroClaw cho phép các vi điều khiển (MCU) và máy tính nhúng (SBC) phân tích lệnh ngôn ngữ tự nhiên theo thời gian thực, tổng hợp code phù hợp với từng phần cứng, và thực thi tương tác với ngoại vi trực tiếp.",
+    "title": "Thiết kế Hardware Peripherals — LlamaFarm",
+    "summary": "LlamaFarm cho phép các vi điều khiển (MCU) và máy tính nhúng (SBC) phân tích lệnh ngôn ngữ tự nhiên theo thời gian thực, tổng hợp code phù hợp với từng phần cứng, và thực thi tương tác với ngoại vi trực tiếp.",
     "section": "i18n/vi",
     "language": "vi",
     "journey": "localize",
@@ -5438,7 +5438,7 @@
     ],
     "readingMinutes": 9,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/hardware-peripherals-design.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/hardware-peripherals-design.md"
   },
   {
     "id": "docs-i18n-vi-hardware-readme-md",
@@ -5461,7 +5461,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/hardware/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/hardware/README.md"
   },
   {
     "id": "docs-i18n-vi-i18n-coverage-md",
@@ -5483,7 +5483,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/i18n-coverage.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/i18n-coverage.md"
   },
   {
     "id": "docs-i18n-vi-i18n-gap-backlog-md",
@@ -5504,7 +5504,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/i18n-gap-backlog.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/i18n-gap-backlog.md"
   },
   {
     "id": "docs-i18n-vi-i18n-guide-md",
@@ -5525,13 +5525,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/i18n-guide.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/i18n-guide.md"
   },
   {
     "id": "docs-i18n-vi-langgraph-integration-md",
     "path": "docs/i18n/vi/langgraph-integration.md",
     "title": "Hướng dẫn Tích hợp LangGraph",
-    "summary": "Hướng dẫn này giải thích cách sử dụng gói Python zeroclaw-tools để gọi tool nhất quán với bất kỳ LLM provider nào tương thích OpenAI.",
+    "summary": "Hướng dẫn này giải thích cách sử dụng gói Python llamafarm-tools để gọi tool nhất quán với bất kỳ LLM provider nào tương thích OpenAI.",
     "section": "i18n/vi",
     "language": "vi",
     "journey": "localize",
@@ -5547,13 +5547,13 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/langgraph-integration.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/langgraph-integration.md"
   },
   {
     "id": "docs-i18n-vi-matrix-e2ee-guide-md",
     "path": "docs/i18n/vi/matrix-e2ee-guide.md",
     "title": "Hướng dẫn Matrix E2EE",
-    "summary": "Hướng dẫn này giải thích cách chạy ZeroClaw ổn định trong các phòng Matrix, bao gồm các phòng mã hóa đầu cuối (E2EE).",
+    "summary": "Hướng dẫn này giải thích cách chạy LlamaFarm ổn định trong các phòng Matrix, bao gồm các phòng mã hóa đầu cuối (E2EE).",
     "section": "i18n/vi",
     "language": "vi",
     "journey": "localize",
@@ -5569,13 +5569,13 @@
     ],
     "readingMinutes": 4,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/matrix-e2ee-guide.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/matrix-e2ee-guide.md"
   },
   {
     "id": "docs-i18n-vi-mattermost-setup-md",
     "path": "docs/i18n/vi/mattermost-setup.md",
     "title": "Hướng dẫn Tích hợp Mattermost",
-    "summary": "ZeroClaw hỗ trợ tích hợp native với Mattermost thông qua REST API v4. Tích hợp này lý tưởng cho các môi trường self-hosted, riêng tư hoặc air-gapped nơi giao tiếp nội bộ là yêu cầu bắt buộc.",
+    "summary": "LlamaFarm hỗ trợ tích hợp native với Mattermost thông qua REST API v4. Tích hợp này lý tưởng cho các môi trường self-hosted, riêng tư hoặc air-gapped nơi giao tiếp nội bộ là yêu cầu bắt buộc.",
     "section": "i18n/vi",
     "language": "vi",
     "journey": "localize",
@@ -5592,13 +5592,13 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/mattermost-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/mattermost-setup.md"
   },
   {
     "id": "docs-i18n-vi-network-deployment-md",
     "path": "docs/i18n/vi/network-deployment.md",
-    "title": "Triển khai mạng — ZeroClaw trên Raspberry Pi và mạng nội bộ",
-    "summary": "Tài liệu này hướng dẫn triển khai ZeroClaw trên Raspberry Pi hoặc host khác trong mạng nội bộ, với các channel Telegram và webhook tùy chọn.",
+    "title": "Triển khai mạng — LlamaFarm trên Raspberry Pi và mạng nội bộ",
+    "summary": "Tài liệu này hướng dẫn triển khai LlamaFarm trên Raspberry Pi hoặc host khác trong mạng nội bộ, với các channel Telegram và webhook tùy chọn.",
     "section": "i18n/vi",
     "language": "vi",
     "journey": "localize",
@@ -5614,7 +5614,7 @@
     ],
     "readingMinutes": 4,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/network-deployment.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/network-deployment.md"
   },
   {
     "id": "docs-i18n-vi-nextcloud-talk-setup-md",
@@ -5637,13 +5637,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/nextcloud-talk-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/nextcloud-talk-setup.md"
   },
   {
     "id": "docs-i18n-vi-nucleo-setup-md",
     "path": "docs/i18n/vi/nucleo-setup.md",
-    "title": "ZeroClaw trên Nucleo-F401RE — Hướng dẫn từng bước",
-    "summary": "Chạy ZeroClaw trên Mac hoặc Linux. Kết nối Nucleo-F401RE qua USB. Điều khiển GPIO (LED, các pin) qua Telegram hoặc CLI.",
+    "title": "LlamaFarm trên Nucleo-F401RE — Hướng dẫn từng bước",
+    "summary": "Chạy LlamaFarm trên Mac hoặc Linux. Kết nối Nucleo-F401RE qua USB. Điều khiển GPIO (LED, các pin) qua Telegram hoặc CLI.",
     "section": "i18n/vi",
     "language": "vi",
     "journey": "localize",
@@ -5660,13 +5660,13 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/nucleo-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/nucleo-setup.md"
   },
   {
     "id": "docs-i18n-vi-one-click-bootstrap-md",
     "path": "docs/i18n/vi/one-click-bootstrap.md",
     "title": "Cài đặt một lệnh",
-    "summary": "Cách cài đặt và khởi tạo ZeroClaw nhanh nhất.",
+    "summary": "Cách cài đặt và khởi tạo LlamaFarm nhanh nhất.",
     "section": "i18n/vi",
     "language": "vi",
     "journey": "localize",
@@ -5682,12 +5682,12 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/one-click-bootstrap.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/one-click-bootstrap.md"
   },
   {
     "id": "docs-i18n-vi-operations-runbook-md",
     "path": "docs/i18n/vi/operations-runbook.md",
-    "title": "Sổ tay Vận hành ZeroClaw",
+    "title": "Sổ tay Vận hành LlamaFarm",
     "summary": "Tài liệu này dành cho các operator chịu trách nhiệm duy trì tính sẵn sàng, tình trạng bảo mật và xử lý sự cố.",
     "section": "i18n/vi",
     "language": "vi",
@@ -5704,7 +5704,7 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/operations-runbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/operations-runbook.md"
   },
   {
     "id": "docs-i18n-vi-operations-connectivity-probes-runbook-md",
@@ -5726,13 +5726,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/operations/connectivity-probes-runbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/operations/connectivity-probes-runbook.md"
   },
   {
     "id": "docs-i18n-vi-operations-readme-md",
     "path": "docs/i18n/vi/operations/README.md",
     "title": "Tài liệu vận hành và triển khai",
-    "summary": "Dành cho operator vận hành ZeroClaw liên tục hoặc trên production.",
+    "summary": "Dành cho operator vận hành LlamaFarm liên tục hoặc trên production.",
     "section": "i18n/vi",
     "language": "vi",
     "journey": "localize",
@@ -5749,13 +5749,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/operations/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/operations/README.md"
   },
   {
     "id": "docs-i18n-vi-pr-workflow-md",
     "path": "docs/i18n/vi/pr-workflow.md",
-    "title": "Quy trình PR ZeroClaw (Cộng tác khối lượng cao)",
-    "summary": "Tài liệu này định nghĩa cách ZeroClaw xử lý khối lượng PR lớn trong khi vẫn duy trì:",
+    "title": "Quy trình PR LlamaFarm (Cộng tác khối lượng cao)",
+    "summary": "Tài liệu này định nghĩa cách LlamaFarm xử lý khối lượng PR lớn trong khi vẫn duy trì:",
     "section": "i18n/vi",
     "language": "vi",
     "journey": "localize",
@@ -5772,7 +5772,7 @@
     ],
     "readingMinutes": 12,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/pr-workflow.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/pr-workflow.md"
   },
   {
     "id": "docs-i18n-vi-project-triage-snapshot-2026-02-18-md",
@@ -5794,7 +5794,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/project-triage-snapshot-2026-02-18.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/project-triage-snapshot-2026-02-18.md"
   },
   {
     "id": "docs-i18n-vi-project-readme-md",
@@ -5817,12 +5817,12 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/project/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/project/README.md"
   },
   {
     "id": "docs-i18n-vi-providers-reference-md",
     "path": "docs/i18n/vi/providers-reference.md",
-    "title": "Tài liệu tham khảo Providers — ZeroClaw",
+    "title": "Tài liệu tham khảo Providers — LlamaFarm",
     "summary": "Tài liệu này liệt kê các provider ID, alias và biến môi trường chứa thông tin xác thực.",
     "section": "i18n/vi",
     "language": "vi",
@@ -5838,7 +5838,7 @@
     ],
     "readingMinutes": 7,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/providers-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/providers-reference.md"
   },
   {
     "id": "docs-i18n-vi-proxy-agent-playbook-md",
@@ -5860,12 +5860,12 @@
     ],
     "readingMinutes": 4,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/proxy-agent-playbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/proxy-agent-playbook.md"
   },
   {
     "id": "docs-i18n-vi-readme-md",
     "path": "docs/i18n/vi/README.md",
-    "title": "Tài liệu ZeroClaw (Tiếng Việt)",
+    "title": "Tài liệu LlamaFarm (Tiếng Việt)",
     "summary": "Đây là trang chủ tiếng Việt của hệ thống tài liệu.",
     "section": "i18n/vi",
     "language": "vi",
@@ -5882,7 +5882,7 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/README.md"
   },
   {
     "id": "docs-i18n-vi-reference-readme-md",
@@ -5904,12 +5904,12 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/reference/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/reference/README.md"
   },
   {
     "id": "docs-i18n-vi-release-process-md",
     "path": "docs/i18n/vi/release-process.md",
-    "title": "Quy trình Release ZeroClaw",
+    "title": "Quy trình Release LlamaFarm",
     "summary": "Runbook này định nghĩa quy trình release tiêu chuẩn của maintainer.",
     "section": "i18n/vi",
     "language": "vi",
@@ -5926,13 +5926,13 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/release-process.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/release-process.md"
   },
   {
     "id": "docs-i18n-vi-resource-limits-md",
     "path": "docs/i18n/vi/resource-limits.md",
     "title": "Giới hạn tài nguyên",
-    "summary": "ZeroClaw có rate limiting (20 actions/hour) nhưng chưa có giới hạn tài nguyên. Một agent bị lỗi lặp vòng có thể:",
+    "summary": "LlamaFarm có rate limiting (20 actions/hour) nhưng chưa có giới hạn tài nguyên. Một agent bị lỗi lặp vòng có thể:",
     "section": "i18n/vi",
     "language": "vi",
     "journey": "localize",
@@ -5947,7 +5947,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/resource-limits.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/resource-limits.md"
   },
   {
     "id": "docs-i18n-vi-reviewer-playbook-md",
@@ -5970,13 +5970,13 @@
     ],
     "readingMinutes": 7,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/reviewer-playbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/reviewer-playbook.md"
   },
   {
     "id": "docs-i18n-vi-sandboxing-md",
     "path": "docs/i18n/vi/sandboxing.md",
     "title": "Chiến lược sandboxing",
-    "summary": "ZeroClaw hiện có application-layer security (allowlists, path blocking, command injection protection) nhưng thiếu cơ chế cách ly cấp hệ điều hành. Nếu kẻ tấn công nằm trong allowlist, họ có thể chạy bất kỳ lệnh nào được ",
+    "summary": "LlamaFarm hiện có application-layer security (allowlists, path blocking, command injection protection) nhưng thiếu cơ chế cách ly cấp hệ điều hành. Nếu kẻ tấn công nằm trong allowlist, họ có thể chạy bất kỳ lệnh nào được ",
     "section": "i18n/vi",
     "language": "vi",
     "journey": "localize",
@@ -5992,13 +5992,13 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/sandboxing.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/sandboxing.md"
   },
   {
     "id": "docs-i18n-vi-security-roadmap-md",
     "path": "docs/i18n/vi/security-roadmap.md",
     "title": "Lộ trình cải tiến bảo mật",
-    "summary": "ZeroClaw đã có application-layer security xuất sắc:",
+    "summary": "LlamaFarm đã có application-layer security xuất sắc:",
     "section": "i18n/vi",
     "language": "vi",
     "journey": "localize",
@@ -6014,7 +6014,7 @@
     ],
     "readingMinutes": 5,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/security-roadmap.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/security-roadmap.md"
   },
   {
     "id": "docs-i18n-vi-security-readme-md",
@@ -6037,12 +6037,12 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/security/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/security/README.md"
   },
   {
     "id": "docs-i18n-vi-summary-md",
     "path": "docs/i18n/vi/SUMMARY.md",
-    "title": "Mục lục tài liệu ZeroClaw (Tiếng Việt)",
+    "title": "Mục lục tài liệu LlamaFarm (Tiếng Việt)",
     "summary": "Đây là mục lục thống nhất cho hệ thống tài liệu tiếng Việt.",
     "section": "i18n/vi",
     "language": "vi",
@@ -6058,12 +6058,12 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/SUMMARY.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/SUMMARY.md"
   },
   {
     "id": "docs-i18n-vi-troubleshooting-md",
     "path": "docs/i18n/vi/troubleshooting.md",
-    "title": "Khắc phục sự cố ZeroClaw",
+    "title": "Khắc phục sự cố LlamaFarm",
     "summary": "Các lỗi thường gặp khi cài đặt và chạy, kèm cách khắc phục.",
     "section": "i18n/vi",
     "language": "vi",
@@ -6080,13 +6080,13 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/troubleshooting.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/troubleshooting.md"
   },
   {
     "id": "docs-i18n-vi-zai-glm-setup-md",
     "path": "docs/i18n/vi/zai-glm-setup.md",
     "title": "Thiết lập Z.AI GLM",
-    "summary": "ZeroClaw hỗ trợ các model GLM của Z.AI thông qua các endpoint tương thích OpenAI.",
+    "summary": "LlamaFarm hỗ trợ các model GLM của Z.AI thông qua các endpoint tương thích OpenAI.",
     "section": "i18n/vi",
     "language": "vi",
     "journey": "localize",
@@ -6103,7 +6103,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/vi/zai-glm-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/zai-glm-setup.md"
   },
   {
     "id": "docs-i18n-zh-cn-actions-source-policy-md",
@@ -6124,7 +6124,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/actions-source-policy.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/actions-source-policy.md"
   },
   {
     "id": "docs-i18n-zh-cn-adding-boards-and-tools-md",
@@ -6145,7 +6145,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/adding-boards-and-tools.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/adding-boards-and-tools.md"
   },
   {
     "id": "docs-i18n-zh-cn-agnostic-security-md",
@@ -6167,7 +6167,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/agnostic-security.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/agnostic-security.md"
   },
   {
     "id": "docs-i18n-zh-cn-android-setup-md",
@@ -6189,7 +6189,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/android-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/android-setup.md"
   },
   {
     "id": "docs-i18n-zh-cn-arduino-uno-q-setup-md",
@@ -6212,7 +6212,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/arduino-uno-q-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/arduino-uno-q-setup.md"
   },
   {
     "id": "docs-i18n-zh-cn-audit-event-schema-md",
@@ -6234,7 +6234,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/audit-event-schema.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/audit-event-schema.md"
   },
   {
     "id": "docs-i18n-zh-cn-audit-logging-md",
@@ -6256,7 +6256,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/audit-logging.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/audit-logging.md"
   },
   {
     "id": "docs-i18n-zh-cn-cargo-slicer-speedup-md",
@@ -6277,7 +6277,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/cargo-slicer-speedup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/cargo-slicer-speedup.md"
   },
   {
     "id": "docs-i18n-zh-cn-channels-reference-md",
@@ -6298,7 +6298,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/channels-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/channels-reference.md"
   },
   {
     "id": "docs-i18n-zh-cn-ci-map-md",
@@ -6320,13 +6320,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/ci-map.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/ci-map.md"
   },
   {
     "id": "docs-i18n-zh-cn-commands-reference-md",
     "path": "docs/i18n/zh-CN/commands-reference.md",
     "title": "命令参考（简体中文）",
-    "summary": "这是 Wave 1 首版本地化页面，用于快速定位 ZeroClaw CLI 命令。",
+    "summary": "这是 Wave 1 首版本地化页面，用于快速定位 LlamaFarm CLI 命令。",
     "section": "i18n/zh-CN",
     "language": "zh-CN",
     "journey": "localize",
@@ -6341,7 +6341,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/commands-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/commands-reference.md"
   },
   {
     "id": "docs-i18n-zh-cn-config-reference-md",
@@ -6362,7 +6362,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/config-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/config-reference.md"
   },
   {
     "id": "docs-i18n-zh-cn-custom-providers-md",
@@ -6385,7 +6385,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/custom-providers.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/custom-providers.md"
   },
   {
     "id": "docs-i18n-zh-cn-doc-template-md",
@@ -6406,7 +6406,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/doc-template.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/doc-template.md"
   },
   {
     "id": "docs-i18n-zh-cn-docs-audit-2026-02-24-md",
@@ -6428,7 +6428,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/docs-audit-2026-02-24.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/docs-audit-2026-02-24.md"
   },
   {
     "id": "docs-i18n-zh-cn-docs-inventory-md",
@@ -6449,7 +6449,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/docs-inventory.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/docs-inventory.md"
   },
   {
     "id": "docs-i18n-zh-cn-frictionless-security-md",
@@ -6471,7 +6471,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/frictionless-security.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/frictionless-security.md"
   },
   {
     "id": "docs-i18n-zh-cn-hardware-peripherals-design-md",
@@ -6493,7 +6493,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/hardware-peripherals-design.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/hardware-peripherals-design.md"
   },
   {
     "id": "docs-i18n-zh-cn-i18n-coverage-md",
@@ -6514,7 +6514,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/i18n-coverage.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/i18n-coverage.md"
   },
   {
     "id": "docs-i18n-zh-cn-i18n-gap-backlog-md",
@@ -6535,7 +6535,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/i18n-gap-backlog.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/i18n-gap-backlog.md"
   },
   {
     "id": "docs-i18n-zh-cn-i18n-guide-md",
@@ -6556,7 +6556,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/i18n-guide.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/i18n-guide.md"
   },
   {
     "id": "docs-i18n-zh-cn-langgraph-integration-md",
@@ -6578,7 +6578,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/langgraph-integration.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/langgraph-integration.md"
   },
   {
     "id": "docs-i18n-zh-cn-matrix-e2ee-guide-md",
@@ -6600,7 +6600,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/matrix-e2ee-guide.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/matrix-e2ee-guide.md"
   },
   {
     "id": "docs-i18n-zh-cn-mattermost-setup-md",
@@ -6623,7 +6623,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/mattermost-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/mattermost-setup.md"
   },
   {
     "id": "docs-i18n-zh-cn-network-deployment-md",
@@ -6645,7 +6645,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/network-deployment.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/network-deployment.md"
   },
   {
     "id": "docs-i18n-zh-cn-nextcloud-talk-setup-md",
@@ -6668,7 +6668,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/nextcloud-talk-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/nextcloud-talk-setup.md"
   },
   {
     "id": "docs-i18n-zh-cn-nucleo-setup-md",
@@ -6691,7 +6691,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/nucleo-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/nucleo-setup.md"
   },
   {
     "id": "docs-i18n-zh-cn-one-click-bootstrap-md",
@@ -6713,7 +6713,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/one-click-bootstrap.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/one-click-bootstrap.md"
   },
   {
     "id": "docs-i18n-zh-cn-operations-runbook-md",
@@ -6735,7 +6735,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/operations-runbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/operations-runbook.md"
   },
   {
     "id": "docs-i18n-zh-cn-pr-workflow-md",
@@ -6758,7 +6758,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/pr-workflow.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/pr-workflow.md"
   },
   {
     "id": "docs-i18n-zh-cn-project-triage-snapshot-2026-02-18-md",
@@ -6780,7 +6780,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/project-triage-snapshot-2026-02-18.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/project-triage-snapshot-2026-02-18.md"
   },
   {
     "id": "docs-i18n-zh-cn-providers-reference-md",
@@ -6801,7 +6801,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/providers-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/providers-reference.md"
   },
   {
     "id": "docs-i18n-zh-cn-proxy-agent-playbook-md",
@@ -6822,12 +6822,12 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/proxy-agent-playbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/proxy-agent-playbook.md"
   },
   {
     "id": "docs-i18n-zh-cn-readme-md",
     "path": "docs/i18n/zh-CN/README.md",
-    "title": "ZeroClaw 文档中心（简体中文）",
+    "title": "LlamaFarm 文档中心（简体中文）",
     "summary": "这是中文文档在 docs/i18n// 结构下的标准入口。",
     "section": "i18n/zh-CN",
     "language": "zh-CN",
@@ -6844,7 +6844,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/README.md"
   },
   {
     "id": "docs-i18n-zh-cn-release-process-md",
@@ -6866,7 +6866,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/release-process.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/release-process.md"
   },
   {
     "id": "docs-i18n-zh-cn-resource-limits-md",
@@ -6887,7 +6887,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/resource-limits.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/resource-limits.md"
   },
   {
     "id": "docs-i18n-zh-cn-reviewer-playbook-md",
@@ -6909,7 +6909,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/reviewer-playbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/reviewer-playbook.md"
   },
   {
     "id": "docs-i18n-zh-cn-sandboxing-md",
@@ -6931,7 +6931,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/sandboxing.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/sandboxing.md"
   },
   {
     "id": "docs-i18n-zh-cn-security-roadmap-md",
@@ -6953,12 +6953,12 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/security-roadmap.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/security-roadmap.md"
   },
   {
     "id": "docs-i18n-zh-cn-summary-md",
     "path": "docs/i18n/zh-CN/SUMMARY.md",
-    "title": "ZeroClaw 中文文档目录（i18n）",
+    "title": "LlamaFarm 中文文档目录（i18n）",
     "summary": "该文件是 docs/i18n/zh-CN/ 的导航目录。",
     "section": "i18n/zh-CN",
     "language": "zh-CN",
@@ -6974,7 +6974,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/SUMMARY.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/SUMMARY.md"
   },
   {
     "id": "docs-i18n-zh-cn-troubleshooting-md",
@@ -6996,7 +6996,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/troubleshooting.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/troubleshooting.md"
   },
   {
     "id": "docs-i18n-zh-cn-zai-glm-setup-md",
@@ -7019,13 +7019,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/i18n/zh-CN/zai-glm-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/zh-CN/zai-glm-setup.md"
   },
   {
     "id": "docs-langgraph-integration-md",
     "path": "docs/langgraph-integration.md",
     "title": "LangGraph Integration Guide",
-    "summary": "This guide explains how to use the zeroclaw-tools Python package for consistent tool calling with any OpenAI-compatible LLM provider.",
+    "summary": "This guide explains how to use the llamafarm-tools Python package for consistent tool calling with any OpenAI-compatible LLM provider.",
     "section": "langgraph-integration.md",
     "language": "en",
     "journey": "integrate",
@@ -7040,13 +7040,13 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/langgraph-integration.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/langgraph-integration.md"
   },
   {
     "id": "docs-matrix-e2ee-guide-md",
     "path": "docs/matrix-e2ee-guide.md",
     "title": "Matrix E2EE Guide",
-    "summary": "This guide explains how to run ZeroClaw reliably in Matrix rooms, including end-to-end encrypted (E2EE) rooms.",
+    "summary": "This guide explains how to run LlamaFarm reliably in Matrix rooms, including end-to-end encrypted (E2EE) rooms.",
     "section": "matrix-e2ee-guide.md",
     "language": "en",
     "journey": "integrate",
@@ -7061,13 +7061,13 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/matrix-e2ee-guide.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/matrix-e2ee-guide.md"
   },
   {
     "id": "docs-mattermost-setup-md",
     "path": "docs/mattermost-setup.md",
     "title": "Mattermost Integration Guide",
-    "summary": "ZeroClaw supports native integration with Mattermost via its REST API v4. This integration is ideal for self-hosted, private, or air-gapped environments where sovereign communication is a requirement.",
+    "summary": "LlamaFarm supports native integration with Mattermost via its REST API v4. This integration is ideal for self-hosted, private, or air-gapped environments where sovereign communication is a requirement.",
     "section": "mattermost-setup.md",
     "language": "en",
     "journey": "integrate",
@@ -7083,13 +7083,13 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/mattermost-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/mattermost-setup.md"
   },
   {
     "id": "docs-network-deployment-md",
     "path": "docs/network-deployment.md",
-    "title": "Network Deployment — ZeroClaw on Raspberry Pi and Local Network",
-    "summary": "This document covers deploying ZeroClaw on a Raspberry Pi or other host on your local network, with Telegram and optional webhook channels.",
+    "title": "Network Deployment — LlamaFarm on Raspberry Pi and Local Network",
+    "summary": "This document covers deploying LlamaFarm on a Raspberry Pi or other host on your local network, with Telegram and optional webhook channels.",
     "section": "network-deployment.md",
     "language": "en",
     "journey": "start",
@@ -7105,13 +7105,13 @@
     ],
     "readingMinutes": 5,
     "startHere": true,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/network-deployment.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/network-deployment.md"
   },
   {
     "id": "docs-nextcloud-talk-setup-md",
     "path": "docs/nextcloud-talk-setup.md",
     "title": "Nextcloud Talk Setup",
-    "summary": "This guide covers native Nextcloud Talk integration for ZeroClaw.",
+    "summary": "This guide covers native Nextcloud Talk integration for LlamaFarm.",
     "section": "nextcloud-talk-setup.md",
     "language": "en",
     "journey": "integrate",
@@ -7127,13 +7127,13 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/nextcloud-talk-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/nextcloud-talk-setup.md"
   },
   {
     "id": "docs-nucleo-setup-md",
     "path": "docs/nucleo-setup.md",
-    "title": "ZeroClaw on Nucleo-F401RE — Step-by-Step Guide",
-    "summary": "Run ZeroClaw on your Mac or Linux host. Connect a Nucleo-F401RE via USB. Control GPIO (LED, pins) via Telegram or CLI.",
+    "title": "LlamaFarm on Nucleo-F401RE — Step-by-Step Guide",
+    "summary": "Run LlamaFarm on your Mac or Linux host. Connect a Nucleo-F401RE via USB. Control GPIO (LED, pins) via Telegram or CLI.",
     "section": "nucleo-setup.md",
     "language": "en",
     "journey": "hardware",
@@ -7147,13 +7147,13 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/nucleo-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/nucleo-setup.md"
   },
   {
     "id": "docs-one-click-bootstrap-md",
     "path": "docs/one-click-bootstrap.md",
     "title": "One-Click Bootstrap",
-    "summary": "This page defines the fastest supported path to install and initialize ZeroClaw.",
+    "summary": "This page defines the fastest supported path to install and initialize LlamaFarm.",
     "section": "one-click-bootstrap.md",
     "language": "en",
     "journey": "start",
@@ -7168,7 +7168,7 @@
     ],
     "readingMinutes": 2,
     "startHere": true,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/one-click-bootstrap.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/one-click-bootstrap.md"
   },
   {
     "id": "docs-one-click-bootstrap-vi-md",
@@ -7189,12 +7189,12 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/one-click-bootstrap.vi.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/one-click-bootstrap.vi.md"
   },
   {
     "id": "docs-operations-runbook-md",
     "path": "docs/operations-runbook.md",
-    "title": "ZeroClaw Operations Runbook",
+    "title": "LlamaFarm Operations Runbook",
     "summary": "This runbook is for operators who maintain availability, security posture, and incident response.",
     "section": "operations-runbook.md",
     "language": "en",
@@ -7211,7 +7211,7 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/operations-runbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/operations-runbook.md"
   },
   {
     "id": "docs-operations-canary-gate-runbook-md",
@@ -7231,7 +7231,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/operations/canary-gate-runbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/operations/canary-gate-runbook.md"
   },
   {
     "id": "docs-operations-connectivity-probes-runbook-md",
@@ -7251,7 +7251,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/operations/connectivity-probes-runbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/operations/connectivity-probes-runbook.md"
   },
   {
     "id": "docs-operations-docs-deploy-policy-md",
@@ -7272,7 +7272,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/operations/docs-deploy-policy.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/operations/docs-deploy-policy.md"
   },
   {
     "id": "docs-operations-docs-deploy-runbook-md",
@@ -7293,7 +7293,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/operations/docs-deploy-runbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/operations/docs-deploy-runbook.md"
   },
   {
     "id": "docs-operations-feature-matrix-runbook-md",
@@ -7314,7 +7314,7 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/operations/feature-matrix-runbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/operations/feature-matrix-runbook.md"
   },
   {
     "id": "docs-operations-ghcr-tag-policy-md",
@@ -7335,7 +7335,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/operations/ghcr-tag-policy.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/operations/ghcr-tag-policy.md"
   },
   {
     "id": "docs-operations-ghcr-vulnerability-policy-md",
@@ -7355,7 +7355,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/operations/ghcr-vulnerability-policy.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/operations/ghcr-vulnerability-policy.md"
   },
   {
     "id": "docs-operations-nightly-all-features-runbook-md",
@@ -7376,7 +7376,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/operations/nightly-all-features-runbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/operations/nightly-all-features-runbook.md"
   },
   {
     "id": "docs-operations-prerelease-stage-gates-md",
@@ -7396,13 +7396,13 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/operations/prerelease-stage-gates.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/operations/prerelease-stage-gates.md"
   },
   {
     "id": "docs-operations-readme-md",
     "path": "docs/operations/README.md",
     "title": "Operations & Deployment Docs",
-    "summary": "For operators running ZeroClaw in persistent or production-like environments.",
+    "summary": "For operators running LlamaFarm in persistent or production-like environments.",
     "section": "operations",
     "language": "en",
     "journey": "operate",
@@ -7418,7 +7418,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/operations/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/operations/README.md"
   },
   {
     "id": "docs-operations-required-check-mapping-md",
@@ -7438,13 +7438,13 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/operations/required-check-mapping.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/operations/required-check-mapping.md"
   },
   {
     "id": "docs-pr-workflow-md",
     "path": "docs/pr-workflow.md",
-    "title": "ZeroClaw PR Workflow (High-Volume Collaboration)",
-    "summary": "This document defines how ZeroClaw handles high PR volume while maintaining:",
+    "title": "LlamaFarm PR Workflow (High-Volume Collaboration)",
+    "summary": "This document defines how LlamaFarm handles high PR volume while maintaining:",
     "section": "pr-workflow.md",
     "language": "en",
     "journey": "contribute",
@@ -7460,12 +7460,12 @@
     ],
     "readingMinutes": 9,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/pr-workflow.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/pr-workflow.md"
   },
   {
     "id": "docs-project-triage-snapshot-2026-02-18-md",
     "path": "docs/project-triage-snapshot-2026-02-18.md",
-    "title": "ZeroClaw Project Triage Snapshot (2026-02-18)",
+    "title": "LlamaFarm Project Triage Snapshot (2026-02-18)",
     "summary": "As-of date: February 18, 2026.",
     "section": "project-triage-snapshot-2026-02-18.md",
     "language": "en",
@@ -7481,7 +7481,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/project-triage-snapshot-2026-02-18.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/project-triage-snapshot-2026-02-18.md"
   },
   {
     "id": "docs-project-readme-md",
@@ -7504,12 +7504,12 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/project/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/project/README.md"
   },
   {
     "id": "docs-providers-reference-md",
     "path": "docs/providers-reference.md",
-    "title": "ZeroClaw Providers Reference",
+    "title": "LlamaFarm Providers Reference",
     "summary": "This document maps provider IDs, aliases, and credential environment variables.",
     "section": "providers-reference.md",
     "language": "en",
@@ -7523,7 +7523,7 @@
     ],
     "readingMinutes": 8,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/providers-reference.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/providers-reference.md"
   },
   {
     "id": "docs-proxy-agent-playbook-md",
@@ -7544,13 +7544,13 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/proxy-agent-playbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/proxy-agent-playbook.md"
   },
   {
     "id": "docs-qwen-provider-test-report-md",
     "path": "docs/qwen-provider-test-report.md",
     "title": "Qwen Provider Integration Test Report",
-    "summary": "Qwen OAuth integration has been successfully validated and configured for ZeroClaw. The provider is ready for production use with the following characteristics:",
+    "summary": "Qwen OAuth integration has been successfully validated and configured for LlamaFarm. The provider is ready for production use with the following characteristics:",
     "section": "qwen-provider-test-report.md",
     "language": "en",
     "journey": "integrate",
@@ -7566,12 +7566,12 @@
     ],
     "readingMinutes": 7,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/qwen-provider-test-report.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/qwen-provider-test-report.md"
   },
   {
     "id": "docs-readme-md",
     "path": "docs/README.md",
-    "title": "ZeroClaw Documentation Hub",
+    "title": "LlamaFarm Documentation Hub",
     "summary": "This page is the primary entry point for the documentation system.",
     "section": "README.md",
     "language": "en",
@@ -7587,7 +7587,7 @@
     ],
     "readingMinutes": 3,
     "startHere": true,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/README.md"
   },
   {
     "id": "docs-reference-readme-md",
@@ -7606,12 +7606,12 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/reference/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/reference/README.md"
   },
   {
     "id": "docs-release-process-md",
     "path": "docs/release-process.md",
-    "title": "ZeroClaw Release Process",
+    "title": "LlamaFarm Release Process",
     "summary": "This runbook defines the maintainers' standard release flow.",
     "section": "release-process.md",
     "language": "en",
@@ -7627,13 +7627,13 @@
     ],
     "readingMinutes": 4,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/release-process.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/release-process.md"
   },
   {
     "id": "docs-resource-limits-md",
     "path": "docs/resource-limits.md",
-    "title": "Resource Limits for ZeroClaw",
-    "summary": "ZeroClaw has rate limiting (20 actions/hour) but no resource caps. A runaway agent could:",
+    "title": "Resource Limits for LlamaFarm",
+    "summary": "LlamaFarm has rate limiting (20 actions/hour) but no resource caps. A runaway agent could:",
     "section": "resource-limits.md",
     "language": "en",
     "journey": "reference",
@@ -7647,7 +7647,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/resource-limits.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/resource-limits.md"
   },
   {
     "id": "docs-reviewer-playbook-md",
@@ -7669,13 +7669,13 @@
     ],
     "readingMinutes": 5,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/reviewer-playbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/reviewer-playbook.md"
   },
   {
     "id": "docs-sandboxing-md",
     "path": "docs/sandboxing.md",
-    "title": "ZeroClaw Sandboxing Strategies",
-    "summary": "ZeroClaw currently has application-layer security (allowlists, path blocking, command injection protection) but lacks OS-level containment. If an attacker is on the allowlist, they can run any allowed command with zerocl",
+    "title": "LlamaFarm Sandboxing Strategies",
+    "summary": "LlamaFarm currently has application-layer security (allowlists, path blocking, command injection protection) but lacks OS-level containment. If an attacker is on the allowlist, they can run any allowed command with zerocl",
     "section": "sandboxing.md",
     "language": "en",
     "journey": "secure",
@@ -7689,13 +7689,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/sandboxing.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/sandboxing.md"
   },
   {
     "id": "docs-security-roadmap-md",
     "path": "docs/security-roadmap.md",
-    "title": "ZeroClaw Security Improvement Roadmap",
-    "summary": "ZeroClaw already has excellent application-layer security:",
+    "title": "LlamaFarm Security Improvement Roadmap",
+    "summary": "LlamaFarm already has excellent application-layer security:",
     "section": "security-roadmap.md",
     "language": "en",
     "journey": "secure",
@@ -7709,7 +7709,7 @@
     ],
     "readingMinutes": 4,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/security-roadmap.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/security-roadmap.md"
   },
   {
     "id": "docs-security-advisory-maintainer-checklist-md",
@@ -7728,7 +7728,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/security/advisory-maintainer-checklist.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/security/advisory-maintainer-checklist.md"
   },
   {
     "id": "docs-security-advisory-maintainer-checklist-zh-cn-md",
@@ -7747,7 +7747,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/security/advisory-maintainer-checklist.zh-CN.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/security/advisory-maintainer-checklist.zh-CN.md"
   },
   {
     "id": "docs-security-advisory-metadata-template-md",
@@ -7766,7 +7766,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/security/advisory-metadata-template.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/security/advisory-metadata-template.md"
   },
   {
     "id": "docs-security-advisory-metadata-template-zh-cn-md",
@@ -7785,7 +7785,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/security/advisory-metadata-template.zh-CN.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/security/advisory-metadata-template.zh-CN.md"
   },
   {
     "id": "docs-security-private-vulnerability-report-template-md",
@@ -7804,7 +7804,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/security/private-vulnerability-report-template.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/security/private-vulnerability-report-template.md"
   },
   {
     "id": "docs-security-private-vulnerability-report-template-zh-cn-md",
@@ -7824,7 +7824,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/security/private-vulnerability-report-template.zh-CN.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/security/private-vulnerability-report-template.zh-CN.md"
   },
   {
     "id": "docs-security-readme-md",
@@ -7844,13 +7844,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/security/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/security/README.md"
   },
   {
     "id": "docs-security-syscall-anomaly-detection-md",
     "path": "docs/security/syscall-anomaly-detection.md",
     "title": "Syscall Anomaly Detection",
-    "summary": "ZeroClaw can monitor syscall-related telemetry emitted by sandboxed command execution",
+    "summary": "LlamaFarm can monitor syscall-related telemetry emitted by sandboxed command execution",
     "section": "security",
     "language": "en",
     "journey": "secure",
@@ -7863,7 +7863,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/security/syscall-anomaly-detection.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/security/syscall-anomaly-detection.md"
   },
   {
     "id": "docs-sop-connectivity-md",
@@ -7884,7 +7884,7 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/sop/connectivity.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/sop/connectivity.md"
   },
   {
     "id": "docs-sop-cookbook-md",
@@ -7905,7 +7905,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/sop/cookbook.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/sop/cookbook.md"
   },
   {
     "id": "docs-sop-observability-md",
@@ -7927,7 +7927,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/sop/observability.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/sop/observability.md"
   },
   {
     "id": "docs-sop-readme-md",
@@ -7950,7 +7950,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/sop/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/sop/README.md"
   },
   {
     "id": "docs-sop-syntax-md",
@@ -7972,12 +7972,12 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/sop/syntax.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/sop/syntax.md"
   },
   {
     "id": "docs-structure-readme-md",
     "path": "docs/structure/README.md",
-    "title": "ZeroClaw Docs Structure Map",
+    "title": "LlamaFarm Docs Structure Map",
     "summary": "This page defines the canonical documentation layout and compatibility layers.",
     "section": "structure",
     "language": "en",
@@ -7993,12 +7993,12 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/structure/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/structure/README.md"
   },
   {
     "id": "docs-summary-el-md",
     "path": "docs/SUMMARY.el.md",
-    "title": "Σύνοψη τεκμηρίωσης ZeroClaw (Ενιαίος πίνακας περιεχομένων)",
+    "title": "Σύνοψη τεκμηρίωσης LlamaFarm (Ενιαίος πίνακας περιεχομένων)",
     "summary": "Αυτό το αρχείο αποτελεί τον κανονικό (canonical) πίνακα περιεχομένων για το σύστημα τεκμηρίωσης.",
     "section": "SUMMARY.el.md",
     "language": "el",
@@ -8013,12 +8013,12 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/SUMMARY.el.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/SUMMARY.el.md"
   },
   {
     "id": "docs-summary-fr-md",
     "path": "docs/SUMMARY.fr.md",
-    "title": "Sommaire de la documentation ZeroClaw (Table des matières unifiée)",
+    "title": "Sommaire de la documentation LlamaFarm (Table des matières unifiée)",
     "summary": "Ce fichier constitue la table des matières canonique du système de documentation.",
     "section": "SUMMARY.fr.md",
     "language": "fr",
@@ -8033,12 +8033,12 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/SUMMARY.fr.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/SUMMARY.fr.md"
   },
   {
     "id": "docs-summary-ja-md",
     "path": "docs/SUMMARY.ja.md",
-    "title": "ZeroClaw ドキュメント目次（統合目次）",
+    "title": "LlamaFarm ドキュメント目次（統合目次）",
     "summary": "このファイルはドキュメントシステムの正規目次です。",
     "section": "SUMMARY.ja.md",
     "language": "ja",
@@ -8053,12 +8053,12 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/SUMMARY.ja.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/SUMMARY.ja.md"
   },
   {
     "id": "docs-summary-md",
     "path": "docs/SUMMARY.md",
-    "title": "ZeroClaw Docs Summary (Unified TOC)",
+    "title": "LlamaFarm Docs Summary (Unified TOC)",
     "summary": "This file is the canonical table of contents for the documentation system.",
     "section": "SUMMARY.md",
     "language": "en",
@@ -8073,12 +8073,12 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/SUMMARY.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/SUMMARY.md"
   },
   {
     "id": "docs-summary-ru-md",
     "path": "docs/SUMMARY.ru.md",
-    "title": "Содержание документации ZeroClaw (Единое оглавление)",
+    "title": "Содержание документации LlamaFarm (Единое оглавление)",
     "summary": "Этот файл является каноническим оглавлением системы документации.",
     "section": "SUMMARY.ru.md",
     "language": "ru",
@@ -8093,12 +8093,12 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/SUMMARY.ru.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/SUMMARY.ru.md"
   },
   {
     "id": "docs-summary-vi-md",
     "path": "docs/SUMMARY.vi.md",
-    "title": "Tóm tắt tài liệu ZeroClaw (Mục lục hợp nhất)",
+    "title": "Tóm tắt tài liệu LlamaFarm (Mục lục hợp nhất)",
     "summary": "Tệp này là mục lục chuẩn của hệ thống tài liệu.",
     "section": "SUMMARY.vi.md",
     "language": "vi",
@@ -8113,12 +8113,12 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/SUMMARY.vi.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/SUMMARY.vi.md"
   },
   {
     "id": "docs-summary-zh-cn-md",
     "path": "docs/SUMMARY.zh-CN.md",
-    "title": "ZeroClaw 文档目录（统一目录）",
+    "title": "LlamaFarm 文档目录（统一目录）",
     "summary": "Project documentation.",
     "section": "SUMMARY.zh-CN.md",
     "language": "zh-CN",
@@ -8134,12 +8134,12 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/SUMMARY.zh-CN.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/SUMMARY.zh-CN.md"
   },
   {
     "id": "docs-troubleshooting-md",
     "path": "docs/troubleshooting.md",
-    "title": "ZeroClaw Troubleshooting",
+    "title": "LlamaFarm Troubleshooting",
     "summary": "This guide focuses on common setup/runtime failures and fast resolution paths.",
     "section": "troubleshooting.md",
     "language": "en",
@@ -8156,7 +8156,7 @@
     ],
     "readingMinutes": 3,
     "startHere": true,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/troubleshooting.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/troubleshooting.md"
   },
   {
     "id": "docs-troubleshooting-vi-md",
@@ -8177,7 +8177,7 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/troubleshooting.vi.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/troubleshooting.vi.md"
   },
   {
     "id": "docs-vi-datasheets-readme-md",
@@ -8197,13 +8197,13 @@
     ],
     "readingMinutes": 1,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/vi/datasheets/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/vi/datasheets/README.md"
   },
   {
     "id": "docs-zai-glm-setup-md",
     "path": "docs/zai-glm-setup.md",
     "title": "Z.AI GLM Setup",
-    "summary": "ZeroClaw supports Z.AI's GLM models through OpenAI-compatible endpoints.",
+    "summary": "LlamaFarm supports Z.AI's GLM models through OpenAI-compatible endpoints.",
     "section": "zai-glm-setup.md",
     "language": "en",
     "journey": "integrate",
@@ -8219,12 +8219,12 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/docs/zai-glm-setup.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/zai-glm-setup.md"
   },
   {
     "id": "readme-md",
     "path": "README.md",
-    "title": "Benchmark Snapshot (ZeroClaw vs OpenClaw, Reproducible)",
+    "title": "Benchmark Snapshot (LlamaFarm vs OpenClaw, Reproducible)",
     "summary": "⚡️ Runs on $10 hardware with",
     "section": "root",
     "language": "en",
@@ -8242,7 +8242,7 @@
     ],
     "readingMinutes": 18,
     "startHere": true,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/README.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/README.md"
   },
   {
     "id": "run-tests-md",
@@ -8262,7 +8262,7 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/RUN_TESTS.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/RUN_TESTS.md"
   },
   {
     "id": "security-md",
@@ -8283,13 +8283,13 @@
     ],
     "readingMinutes": 6,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/SECURITY.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/SECURITY.md"
   },
   {
     "id": "testing-telegram-md",
     "path": "TESTING_TELEGRAM.md",
     "title": "Telegram Integration Testing Guide",
-    "summary": "This guide covers testing the Telegram channel integration for ZeroClaw.",
+    "summary": "This guide covers testing the Telegram channel integration for LlamaFarm.",
     "section": "root",
     "language": "en",
     "journey": "start",
@@ -8303,13 +8303,13 @@
     ],
     "readingMinutes": 2,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/TESTING_TELEGRAM.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/TESTING_TELEGRAM.md"
   },
   {
     "id": "trademark-md",
     "path": "TRADEMARK.md",
-    "title": "ZeroClaw Trademark Policy",
-    "summary": "The following are trademarks of ZeroClaw Labs:",
+    "title": "LlamaFarm Trademark Policy",
+    "summary": "The following are trademarks of LlamaFarm Labs:",
     "section": "root",
     "language": "en",
     "journey": "start",
@@ -8323,6 +8323,6 @@
     ],
     "readingMinutes": 3,
     "startHere": false,
-    "sourceUrl": "https://github.com/zeroclaw-labs/zeroclaw/blob/main/TRADEMARK.md"
+    "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/TRADEMARK.md"
   }
 ]

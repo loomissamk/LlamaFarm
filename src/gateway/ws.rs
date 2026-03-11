@@ -34,7 +34,7 @@ use uuid::Uuid;
 const EMPTY_WS_RESPONSE_FALLBACK: &str =
     "Tool execution completed, but the model returned no final text response. Please ask me to summarize the result.";
 const WS_AUTOSAVE_MIN_MESSAGE_CHARS: usize = 20;
-const WS_CHAT_SUBPROTOCOL: &str = "zeroclaw.v1";
+const WS_CHAT_SUBPROTOCOL: &str = "llamafarm.v1";
 
 #[derive(Debug, Clone, Default)]
 struct WsChatSession {
@@ -609,7 +609,7 @@ pub async fn handle_ws_chat(
         if !state.pairing.is_authenticated(&token) {
             return (
                 axum::http::StatusCode::UNAUTHORIZED,
-                "Unauthorized — provide Authorization: Bearer <token> or Sec-WebSocket-Protocol: zeroclaw.v1, bearer.<token>",
+                "Unauthorized — provide Authorization: Bearer <token> or Sec-WebSocket-Protocol: llamafarm.v1, bearer.<token>",
             )
                 .into_response();
         }
@@ -931,7 +931,7 @@ mod tests {
         );
         headers.insert(
             header::SEC_WEBSOCKET_PROTOCOL,
-            HeaderValue::from_static("zeroclaw.v1, bearer.from-protocol"),
+            HeaderValue::from_static("llamafarm.v1, bearer.from-protocol"),
         );
 
         assert_eq!(
@@ -994,7 +994,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(
             header::SEC_WEBSOCKET_PROTOCOL,
-            HeaderValue::from_static("zeroclaw.v1, bearer.protocol-token"),
+            HeaderValue::from_static("llamafarm.v1, bearer.protocol-token"),
         );
 
         assert_eq!(
@@ -1008,7 +1008,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(
             header::SEC_WEBSOCKET_PROTOCOL,
-            HeaderValue::from_static("zeroclaw.v1"),
+            HeaderValue::from_static("llamafarm.v1"),
         );
 
         assert!(extract_ws_bearer_token(&headers).is_none());
@@ -1023,7 +1023,7 @@ mod tests {
         );
         headers.insert(
             header::SEC_WEBSOCKET_PROTOCOL,
-            HeaderValue::from_static("zeroclaw.v1, bearer."),
+            HeaderValue::from_static("llamafarm.v1, bearer."),
         );
 
         assert!(extract_ws_bearer_token(&headers).is_none());

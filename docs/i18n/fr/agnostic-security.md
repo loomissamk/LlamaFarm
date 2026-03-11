@@ -29,7 +29,7 @@ Source anglaise:
 - [H3 · Binary Size Impact (Estimated)](../../agnostic-security.md#binary-size-impact-estimated)
 - [H3 · $10 Hardware Compatibility](../../agnostic-security.md#10-hardware-compatibility)
 - [H2 · 5. Agnostic Swaps: Everything Remains Pluggable](../../agnostic-security.md#5-agnostic-swaps-everything-remains-pluggable)
-- [H3 · ZeroClaw's Core Promise: Swap Anything](../../agnostic-security.md#zeroclaw-s-core-promise-swap-anything)
+- [H3 · LlamaFarm's Core Promise: Swap Anything](../../agnostic-security.md#llamafarm-s-core-promise-swap-anything)
 - [H3 · Swap Security Backends via Config](../../agnostic-security.md#swap-security-backends-via-config)
 - [H2 · 6. Dependency Impact: Minimal New Deps](../../agnostic-security.md#6-dependency-impact-minimal-new-deps)
 

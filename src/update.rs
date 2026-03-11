@@ -1,4 +1,4 @@
-//! Self-update functionality for ZeroClaw.
+//! Self-update functionality for LlamaFarm.
 //!
 //! Downloads and installs the latest release from GitHub.
 
@@ -9,9 +9,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// GitHub repository for releases
-const GITHUB_REPO: &str = "zeroclaw-labs/zeroclaw";
+const GITHUB_REPO: &str = "llamafarm-labs/llamafarm";
 const GITHUB_API_RELEASES: &str =
-    "https://api.github.com/repos/zeroclaw-labs/zeroclaw/releases/latest";
+    "https://api.github.com/repos/llamafarm-labs/llamafarm/releases/latest";
 
 /// Release information from GitHub API
 #[derive(Debug, serde::Deserialize)]
@@ -52,25 +52,25 @@ fn get_target_triple() -> Result<String> {
 /// Get the binary name for the current platform
 fn get_binary_name() -> String {
     if cfg!(windows) {
-        "zeroclaw.exe".to_string()
+        "llamafarm.exe".to_string()
     } else {
-        "zeroclaw".to_string()
+        "llamafarm".to_string()
     }
 }
 
 /// Get the archive name for a given target
 fn get_archive_name(target: &str) -> String {
     if target.contains("windows") {
-        format!("zeroclaw-{}.zip", target)
+        format!("llamafarm-{}.zip", target)
     } else {
-        format!("zeroclaw-{}.tar.gz", target)
+        format!("llamafarm-{}.tar.gz", target)
     }
 }
 
 /// Fetch the latest release information from GitHub
 async fn fetch_latest_release() -> Result<Release> {
     let client = reqwest::Client::builder()
-        .user_agent(format!("zeroclaw/{}", current_version()))
+        .user_agent(format!("llamafarm/{}", current_version()))
         .build()
         .context("Failed to create HTTP client")?;
 
@@ -112,7 +112,7 @@ fn find_asset_for_platform(release: &Release) -> Result<&Asset> {
 /// Download and extract the binary from the release archive
 async fn download_binary(asset: &Asset, temp_dir: &Path) -> Result<PathBuf> {
     let client = reqwest::Client::builder()
-        .user_agent(format!("zeroclaw/{}", current_version()))
+        .user_agent(format!("llamafarm/{}", current_version()))
         .build()
         .context("Failed to create HTTP client")?;
 
@@ -254,7 +254,7 @@ pub async fn check_for_update() -> Result<Option<String>> {
 
 /// Perform the self-update
 pub async fn self_update(force: bool, check_only: bool) -> Result<()> {
-    println!("🦀 ZeroClaw Self-Update");
+    println!("🦀 LlamaFarm Self-Update");
     println!();
 
     let current_exe = get_current_exe()?;
@@ -282,7 +282,7 @@ pub async fn self_update(force: bool, check_only: bool) -> Result<()> {
             current_version(),
             latest_version
         );
-        println!("Run `zeroclaw update` to install the update.");
+        println!("Run `llamafarm update` to install the update.");
         return Ok(());
     }
 
@@ -311,7 +311,7 @@ pub async fn self_update(force: bool, check_only: bool) -> Result<()> {
     println!();
     println!("✅ Successfully updated to {}!", release.tag_name);
     println!();
-    println!("Restart ZeroClaw to use the new version.");
+    println!("Restart LlamaFarm to use the new version.");
 
     Ok(())
 }

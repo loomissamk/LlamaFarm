@@ -1,6 +1,6 @@
 # Αντιμετώπιση Προβλημάτων (Troubleshooting)
 
-Αυτός ο οδηγός περιγράφει λύσεις για κοινά ζητήματα εγκατάστασης και εκτέλεσης του ZeroClaw.
+Αυτός ο οδηγός περιγράφει λύσεις για κοινά ζητήματα εγκατάστασης και εκτέλεσης του LlamaFarm.
 
 Τελευταία ενημέρωση: 20 Φεβρουαρίου 2026.
 
@@ -60,10 +60,10 @@ CARGO_BUILD_JOBS=1 cargo build --release --locked
 
 Επαληθεύστε την κατάσταση του συστήματος:
 ```bash
-zeroclaw status
-zeroclaw doctor
+llamafarm status
+llamafarm doctor
 ```
-Ελέγξτε τις ρυθμίσεις στο `~/.zeroclaw/config.toml`:
+Ελέγξτε τις ρυθμίσεις στο `~/.llamafarm/config.toml`:
 - `[gateway].host` (Προεπιλογή: `127.0.0.1`)
 - `[gateway].port` (Προεπιλογή: `42617`)
 
@@ -80,7 +80,7 @@ zeroclaw doctor
 
 Εκτελέστε την εντολή:
 ```bash
-zeroclaw channel doctor
+llamafarm channel doctor
 ```
 
 ---
@@ -89,13 +89,13 @@ zeroclaw channel doctor
 
 ### Η υπηρεσία δεν εκκινεί
 
-Ελέγξτε την κατάσταση μέσω του ZeroClaw CLI:
+Ελέγξτε την κατάσταση μέσω του LlamaFarm CLI:
 ```bash
-zeroclaw service status
+llamafarm service status
 ```
 Για προβολή των logs στο Linux:
 ```bash
-journalctl --user -u zeroclaw.service -f
+journalctl --user -u llamafarm.service -f
 ```
 
 ---
@@ -104,10 +104,10 @@ journalctl --user -u zeroclaw.service -f
 
 Εάν το πρόβλημα επιμένει, συμπεριλάβετε τα αποτελέσματα των παρακάτω εντολών στην αναφορά σας:
 ```bash
-zeroclaw --version
-zeroclaw status
-zeroclaw doctor
-zeroclaw channel doctor
+llamafarm --version
+llamafarm status
+llamafarm doctor
+llamafarm channel doctor
 ```
 
 > [!TIP]

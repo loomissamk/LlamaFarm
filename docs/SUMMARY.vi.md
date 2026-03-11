@@ -1,4 +1,4 @@
-# Tóm tắt tài liệu ZeroClaw (Mục lục hợp nhất)
+# Tóm tắt tài liệu LlamaFarm (Mục lục hợp nhất)
 
 Tệp này là mục lục chuẩn của hệ thống tài liệu.
 

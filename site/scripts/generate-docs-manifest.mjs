@@ -472,7 +472,7 @@ async function main() {
       tags: inferTags(relativePath, title, summary, journey, audience, kind, section),
       readingMinutes,
       startHere: isStartHere(relativePath, journey),
-      sourceUrl: `https://github.com/zeroclaw-labs/zeroclaw/blob/main/${relativePath}`,
+      sourceUrl: `https://github.com/llamafarm-labs/llamafarm/blob/main/${relativePath}`,
     });
   }
 

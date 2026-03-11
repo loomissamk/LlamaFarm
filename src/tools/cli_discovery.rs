@@ -376,26 +376,56 @@ fn get_version(name: &str, args: &[&str]) -> Option<String> {
         .output()
         .ok()?;
 
-    if !output.status.success() {
-        return None;
-    }
-
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
+    normalize_version_probe_output(name, output.status.success(), &stdout, &stderr)
+}
 
-    // Some tools print version to stderr (e.g., pip)
+fn normalize_version_probe_output(
+    name: &str,
+    probe_succeeded: bool,
+    stdout: &str,
+    stderr: &str,
+) -> Option<String> {
     let version_text = if stdout.trim().is_empty() {
-        stderr.trim().to_string()
+        stderr.trim()
     } else {
-        stdout.trim().to_string()
+        stdout.trim()
     };
+    let first_line = version_text.lines().next().unwrap_or("").trim();
 
-    // Extract first line only
-    let first_line = version_text.lines().next()?.trim().to_string();
+    if !probe_succeeded || looks_like_failed_version_probe(first_line) {
+        return fallback_version_label(name).map(std::string::ToString::to_string);
+    }
+
     if first_line.is_empty() {
-        None
+        fallback_version_label(name).map(std::string::ToString::to_string)
     } else {
-        Some(first_line)
+        Some(first_line.to_string())
+    }
+}
+
+fn looks_like_failed_version_probe(first_line: &str) -> bool {
+    let lowered = first_line.trim().to_ascii_lowercase();
+    if lowered.is_empty() {
+        return false;
+    }
+
+    [
+        "illegal option",
+        "unknown option",
+        "unrecognized option",
+        "invalid option",
+        "usage:",
+    ]
+    .iter()
+    .any(|marker| lowered.contains(marker))
+}
+
+fn fallback_version_label(name: &str) -> Option<&'static str> {
+    match name {
+        "sh" => Some("POSIX sh"),
+        _ => None,
     }
 }
 
@@ -437,7 +467,7 @@ mod tests {
     #[test]
     fn failed_version_probe_returns_none() {
         let version = get_version("sh", &["-c", "echo nope >&2; exit 2"]);
-        assert!(version.is_none());
+        assert_eq!(version.as_deref(), Some("POSIX sh"));
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -445,5 +475,11 @@ mod tests {
     fn successful_stderr_version_probe_is_preserved() {
         let version = get_version("sh", &["-c", "echo stderr-version >&2"]);
         assert_eq!(version.as_deref(), Some("stderr-version"));
+    }
+
+    #[test]
+    fn normalize_version_probe_output_filters_fake_option_errors() {
+        let version = normalize_version_probe_output("sh", true, "", "Illegal option --");
+        assert_eq!(version.as_deref(), Some("POSIX sh"));
     }
 }

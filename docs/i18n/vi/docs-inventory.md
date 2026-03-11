@@ -1,4 +1,4 @@
-# Danh mục tài liệu ZeroClaw (Tiếng Việt)
+# Danh mục tài liệu LlamaFarm (Tiếng Việt)
 
 Trang này là bản địa hóa tối thiểu cho inventory tài liệu.
 

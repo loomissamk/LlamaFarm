@@ -341,7 +341,7 @@ impl Provider for OpenRouterProvider {
         temperature: f64,
     ) -> anyhow::Result<String> {
         let credential = self.credential.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("OpenRouter API key not set. Run `zeroclaw onboard` or set OPENROUTER_API_KEY env var."))?;
+            .ok_or_else(|| anyhow::anyhow!("OpenRouter API key not set. Run `llamafarm onboard` or set OPENROUTER_API_KEY env var."))?;
 
         let mut messages = Vec::new();
 
@@ -370,9 +370,9 @@ impl Provider for OpenRouterProvider {
             .header("Authorization", format!("Bearer {credential}"))
             .header(
                 "HTTP-Referer",
-                "https://github.com/theonlyhennygod/zeroclaw",
+                "https://github.com/theonlyhennygod/llamafarm",
             )
-            .header("X-Title", "ZeroClaw")
+            .header("X-Title", "LlamaFarm")
             .json(&request)
             .send()
             .await?;
@@ -398,7 +398,7 @@ impl Provider for OpenRouterProvider {
         temperature: f64,
     ) -> anyhow::Result<String> {
         let credential = self.credential.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("OpenRouter API key not set. Run `zeroclaw onboard` or set OPENROUTER_API_KEY env var."))?;
+            .ok_or_else(|| anyhow::anyhow!("OpenRouter API key not set. Run `llamafarm onboard` or set OPENROUTER_API_KEY env var."))?;
 
         let api_messages: Vec<Message> = messages
             .iter()
@@ -421,9 +421,9 @@ impl Provider for OpenRouterProvider {
             .header("Authorization", format!("Bearer {credential}"))
             .header(
                 "HTTP-Referer",
-                "https://github.com/theonlyhennygod/zeroclaw",
+                "https://github.com/theonlyhennygod/llamafarm",
             )
-            .header("X-Title", "ZeroClaw")
+            .header("X-Title", "LlamaFarm")
             .json(&request)
             .send()
             .await?;
@@ -450,7 +450,7 @@ impl Provider for OpenRouterProvider {
     ) -> anyhow::Result<ProviderChatResponse> {
         let credential = self.credential.as_ref().ok_or_else(|| {
             anyhow::anyhow!(
-            "OpenRouter API key not set. Run `zeroclaw onboard` or set OPENROUTER_API_KEY env var."
+            "OpenRouter API key not set. Run `llamafarm onboard` or set OPENROUTER_API_KEY env var."
         )
         })?;
 
@@ -470,9 +470,9 @@ impl Provider for OpenRouterProvider {
             .header("Authorization", format!("Bearer {credential}"))
             .header(
                 "HTTP-Referer",
-                "https://github.com/theonlyhennygod/zeroclaw",
+                "https://github.com/theonlyhennygod/llamafarm",
             )
-            .header("X-Title", "ZeroClaw")
+            .header("X-Title", "LlamaFarm")
             .json(&native_request)
             .send()
             .await?;
@@ -510,7 +510,7 @@ impl Provider for OpenRouterProvider {
     ) -> anyhow::Result<ProviderChatResponse> {
         let credential = self.credential.as_ref().ok_or_else(|| {
             anyhow::anyhow!(
-                "OpenRouter API key not set. Run `zeroclaw onboard` or set OPENROUTER_API_KEY env var."
+                "OpenRouter API key not set. Run `llamafarm onboard` or set OPENROUTER_API_KEY env var."
             )
         })?;
 
@@ -565,9 +565,9 @@ impl Provider for OpenRouterProvider {
             .header("Authorization", format!("Bearer {credential}"))
             .header(
                 "HTTP-Referer",
-                "https://github.com/theonlyhennygod/zeroclaw",
+                "https://github.com/theonlyhennygod/llamafarm",
             )
-            .header("X-Title", "ZeroClaw")
+            .header("X-Title", "LlamaFarm")
             .json(&native_request)
             .send()
             .await?;

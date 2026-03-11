@@ -21,7 +21,7 @@
 - [H2 · Available Models](../../zai-glm-setup.md#available-models)
 - [H2 · Verify Setup](../../zai-glm-setup.md#verify-setup)
 - [H3 · Test with curl](../../zai-glm-setup.md#test-with-curl)
-- [H3 · Test with ZeroClaw CLI](../../zai-glm-setup.md#test-with-zeroclaw-cli)
+- [H3 · Test with LlamaFarm CLI](../../zai-glm-setup.md#test-with-llamafarm-cli)
 - [H2 · Environment Variables](../../zai-glm-setup.md#environment-variables)
 - [H2 · Troubleshooting](../../zai-glm-setup.md#troubleshooting)
 - [H3 · Rate Limiting](../../zai-glm-setup.md#rate-limiting)

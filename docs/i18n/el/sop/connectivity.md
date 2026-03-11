@@ -12,7 +12,7 @@
 
 ## 1. Επισκόπηση
 
-Το ZeroClaw δρομολογεί συμβάντα MQTT/webhook/cron/περιφερειακών μέσω ενός ενοποιημένου SOP dispatcher (`dispatch_sop_event`).
+Το LlamaFarm δρομολογεί συμβάντα MQTT/webhook/cron/περιφερειακών μέσω ενός ενοποιημένου SOP dispatcher (`dispatch_sop_event`).
 
 Βασικές συμπεριφορές:
 
@@ -29,7 +29,7 @@
 ```toml
 [channels_config.mqtt]
 broker_url = "mqtts://broker.example.com:8883"  # χρησιμοποιήστε mqtt:// για plaintext
-client_id = "zeroclaw-agent-1"
+client_id = "llamafarm-agent-1"
 topics = ["sensors/alert", "ops/deploy/#"]
 qos = 1
 username = "mqtt-user"      # προαιρετικό
@@ -140,4 +140,4 @@ expression = "0 0 8 * * *"
 | **Webhook** `401 Unauthorized` | λείπει bearer ή μη έγκυρο secret | επαναφέρετε token (`POST /pair`) και επαληθεύστε `X-Webhook-Secret` αν έχει ρυθμιστεί |
 | **`/sop/*` επιστρέφει 404** | αναντιστοιχία μονοπατιού trigger | βεβαιωθείτε ότι το `SOP.toml` χρησιμοποιεί ακριβές μονοπάτι (π.χ. `/sop/deploy`) |
 | **SOP ξεκίνησε αλλά το βήμα δεν εκτελέστηκε** | headless trigger χωρίς ενεργό agent loop | εκτελέστε agent loop για `ExecuteStep`, ή σχεδιάστε εκτέλεση για παύση σε εγκρίσεις |
-| **Το Cron δεν εκκινεί** | daemon δεν εκτελείται ή μη έγκυρη έκφραση | εκτελέστε `zeroclaw daemon`· ελέγξτε logs για προειδοποιήσεις ανάλυσης cron |
+| **Το Cron δεν εκκινεί** | daemon δεν εκτελείται ή μη έγκυρη έκφραση | εκτελέστε `llamafarm daemon`· ελέγξτε logs για προειδοποιήσεις ανάλυσης cron |

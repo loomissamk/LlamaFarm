@@ -1,4 +1,4 @@
-# ZeroClaw Docs Structure Map
+# LlamaFarm Docs Structure Map
 
 This page defines the canonical documentation layout and compatibility layers.
 

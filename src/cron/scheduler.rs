@@ -780,7 +780,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let config = test_config(&tmp).await;
         let _env = env_lock().await;
-        let _generic = EnvGuard::unset("ZEROCLAW_API_KEY");
+        let _generic = EnvGuard::unset("LLAMAFARM_API_KEY");
         let _fallback = EnvGuard::unset("API_KEY");
         let _openrouter = EnvGuard::unset("OPENROUTER_API_KEY");
         let mut job = test_job("");

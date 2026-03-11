@@ -1,5 +1,5 @@
 {
-  "schema_version": "zeroclaw.docs-deploy-policy.v1",
+  "schema_version": "llamafarm.docs-deploy-policy.v1",
   "production_branch": "main",
   "allow_manual_production_dispatch": true,
   "require_preview_evidence_on_manual_production": true,

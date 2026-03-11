@@ -1,4 +1,4 @@
-# ZeroClaw Config Reference (Operator-Oriented)
+# LlamaFarm Config Reference (Operator-Oriented)
 
 This is a high-signal reference for common config sections and defaults.
 
@@ -6,17 +6,17 @@ Last verified: **February 25, 2026**.
 
 Config path resolution at startup:
 
-1. `ZEROCLAW_WORKSPACE` override (if set)
-2. persisted `~/.zeroclaw/active_workspace.toml` marker (if present)
-3. default `~/.zeroclaw/config.toml`
+1. `LLAMAFARM_WORKSPACE` override (if set)
+2. persisted `~/.llamafarm/active_workspace.toml` marker (if present)
+3. default `~/.llamafarm/config.toml`
 
-ZeroClaw logs the resolved config on startup at `INFO` level:
+LlamaFarm logs the resolved config on startup at `INFO` level:
 
 - `Config loaded` with fields: `path`, `workspace`, `source`, `initialized`
 
 Schema export command:
 
-- `zeroclaw config schema` (prints JSON Schema draft 2020-12 to stdout)
+- `llamafarm config schema` (prints JSON Schema draft 2020-12 to stdout)
 
 ## Core Keys
 
@@ -33,7 +33,7 @@ Notes:
 - `model_support_vision = true` forces vision support on (e.g. Ollama running `llava`).
 - `model_support_vision = false` forces vision support off.
 - Unset keeps the provider's built-in default.
-- Environment override: `ZEROCLAW_MODEL_SUPPORT_VISION` or `MODEL_SUPPORT_VISION` (values: `true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off`).
+- Environment override: `LLAMAFARM_MODEL_SUPPORT_VISION` or `MODEL_SUPPORT_VISION` (values: `true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off`).
 
 ## `[observability]`
 
@@ -41,7 +41,7 @@ Notes:
 |---|---|---|
 | `backend` | `none` | Observability backend: `none`, `noop`, `log`, `prometheus`, `otel`, `opentelemetry`, or `otlp` |
 | `otel_endpoint` | `http://localhost:4318` | OTLP HTTP endpoint used when backend is `otel` |
-| `otel_service_name` | `zeroclaw` | Service name emitted to OTLP collector |
+| `otel_service_name` | `llamafarm` | Service name emitted to OTLP collector |
 | `runtime_trace_mode` | `none` | Runtime trace storage mode: `none`, `rolling`, or `full` |
 | `runtime_trace_path` | `state/runtime-trace.jsonl` | Runtime trace JSONL path (relative to workspace unless absolute) |
 | `runtime_trace_max_entries` | `200` | Maximum retained events when `runtime_trace_mode = "rolling"` |
@@ -52,9 +52,9 @@ Notes:
 - Alias values `opentelemetry` and `otlp` map to the same OTel backend.
 - Runtime traces are intended for debugging tool-call failures and malformed model tool payloads. They can contain model output text, so keep this disabled by default on shared hosts.
 - Query runtime traces with:
-  - `zeroclaw doctor traces --limit 20`
-  - `zeroclaw doctor traces --event tool_call_result --contains \"error\"`
-  - `zeroclaw doctor traces --id <trace-id>`
+  - `llamafarm doctor traces --limit 20`
+  - `llamafarm doctor traces --event tool_call_result --contains \"error\"`
+  - `llamafarm doctor traces --id <trace-id>`
 
 Example:
 
@@ -62,7 +62,7 @@ Example:
 [observability]
 backend = "otel"
 otel_endpoint = "http://localhost:4318"
-otel_service_name = "zeroclaw"
+otel_service_name = "llamafarm"
 runtime_trace_mode = "rolling"
 runtime_trace_path = "state/runtime-trace.jsonl"
 runtime_trace_max_entries = 200
@@ -72,17 +72,17 @@ runtime_trace_max_entries = 200
 
 Provider selection can also be controlled by environment variables. Precedence is:
 
-1. `ZEROCLAW_PROVIDER` (explicit override, always wins when non-empty)
+1. `LLAMAFARM_PROVIDER` (explicit override, always wins when non-empty)
 2. `PROVIDER` (legacy fallback, only applied when config provider is unset or still `openrouter`)
 3. `default_provider` in `config.toml`
 
 Operational note for container users:
 
 - If your `config.toml` sets an explicit custom provider like `custom:https://.../v1`, a default `PROVIDER=openrouter` from Docker/container env will no longer replace it.
-- Use `ZEROCLAW_PROVIDER` when you intentionally want runtime env to override a non-default configured provider.
+- Use `LLAMAFARM_PROVIDER` when you intentionally want runtime env to override a non-default configured provider.
 - For OpenAI-compatible Responses fallback transport:
-  - `ZEROCLAW_RESPONSES_WEBSOCKET=1` forces websocket-first mode (`wss://.../responses`) for compatible providers.
-  - `ZEROCLAW_RESPONSES_WEBSOCKET=0` forces HTTP-only mode.
+  - `LLAMAFARM_RESPONSES_WEBSOCKET=1` forces websocket-first mode (`wss://.../responses`) for compatible providers.
+  - `LLAMAFARM_RESPONSES_WEBSOCKET=0` forces HTTP-only mode.
   - Unset = auto (websocket-first only when endpoint host is `api.openai.com`, then HTTP fallback if websocket fails).
 
 ## `[agent]`
@@ -119,7 +119,7 @@ Notes:
 - Domain patterns support wildcard `*`.
 - Category presets expand to curated domain sets during validation.
 - Invalid domain globs or unknown categories fail fast at startup.
-- When `enabled = true` and no OTP secret exists, ZeroClaw generates one and prints an enrollment URI once.
+- When `enabled = true` and no OTP secret exists, LlamaFarm generates one and prints an enrollment URI once.
 
 Example:
 
@@ -139,14 +139,14 @@ gated_domain_categories = ["banking"]
 | Key | Default | Purpose |
 |---|---|---|
 | `enabled` | `false` | Enable emergency-stop state machine and CLI |
-| `state_file` | `~/.zeroclaw/estop-state.json` | Persistent estop state path |
+| `state_file` | `~/.llamafarm/estop-state.json` | Persistent estop state path |
 | `require_otp_to_resume` | `true` | Require OTP validation before resume operations |
 
 Notes:
 
 - Estop state is persisted atomically and reloaded on startup.
 - Corrupted/unreadable estop state falls back to fail-closed `kill_all`.
-- Use CLI command `zeroclaw estop` to engage and `zeroclaw estop resume` to clear levels.
+- Use CLI command `llamafarm estop` to engage and `llamafarm estop resume` to clear levels.
 
 ## `[security.syscall_anomaly]`
 
@@ -335,8 +335,8 @@ Local host/operator profile template:
 Notes:
 
 - Supported values: `minimal`, `low`, `medium`, `high`, `xhigh` (case-insensitive).
-- When set, overrides `ZEROCLAW_CODEX_REASONING_EFFORT` for OpenAI Codex requests.
-- Unset falls back to `ZEROCLAW_CODEX_REASONING_EFFORT` if present, otherwise defaults to `xhigh`.
+- When set, overrides `LLAMAFARM_CODEX_REASONING_EFFORT` for OpenAI Codex requests.
+- Unset falls back to `LLAMAFARM_CODEX_REASONING_EFFORT` if present, otherwise defaults to `xhigh`.
 - If both `provider.reasoning_level` and deprecated `runtime.reasoning_level` are set, provider-level value wins.
 
 ## `[skills]`
@@ -349,15 +349,15 @@ Notes:
 
 Notes:
 
-- Security-first default: ZeroClaw does **not** clone or sync `open-skills` unless `open_skills_enabled = true`.
+- Security-first default: LlamaFarm does **not** clone or sync `open-skills` unless `open_skills_enabled = true`.
 - Environment overrides:
-  - `ZEROCLAW_OPEN_SKILLS_ENABLED` accepts `1/0`, `true/false`, `yes/no`, `on/off`.
-  - `ZEROCLAW_OPEN_SKILLS_DIR` overrides the repository path when non-empty.
-  - `ZEROCLAW_SKILLS_PROMPT_MODE` accepts `full` or `compact`.
-- Precedence for enable flag: `ZEROCLAW_OPEN_SKILLS_ENABLED` → `skills.open_skills_enabled` in `config.toml` → default `false`.
+  - `LLAMAFARM_OPEN_SKILLS_ENABLED` accepts `1/0`, `true/false`, `yes/no`, `on/off`.
+  - `LLAMAFARM_OPEN_SKILLS_DIR` overrides the repository path when non-empty.
+  - `LLAMAFARM_SKILLS_PROMPT_MODE` accepts `full` or `compact`.
+- Precedence for enable flag: `LLAMAFARM_OPEN_SKILLS_ENABLED` → `skills.open_skills_enabled` in `config.toml` → default `false`.
 - `prompt_injection_mode = "compact"` is recommended on low-context local models to reduce startup prompt size while keeping skill files available on demand.
-- Skill loading and `zeroclaw skills install` both apply a static security audit. Skills that contain symlinks, script-like files, high-risk shell payload snippets, or unsafe markdown link traversal are rejected.
-- URL-based installs enforce first-seen domain trust. On first download from an unseen domain, ZeroClaw prompts for trust and persists the decision.
+- Skill loading and `llamafarm skills install` both apply a static security audit. Skills that contain symlinks, script-like files, high-risk shell payload snippets, or unsafe markdown link traversal are rejected.
+- URL-based installs enforce first-seen domain trust. On first download from an unseen domain, LlamaFarm prompts for trust and persists the decision.
 - Download-source aliases and trust decisions are stored in `<workspace>/skills/.download-policy.toml`:
   - `aliases`: user-editable source shortcuts.
   - `trusted_domains`: domain allowlist for future URL installs.
@@ -379,7 +379,7 @@ Notes:
 
 - Backward compatibility: legacy `enable = true` is accepted as an alias for `enabled = true`.
 - If `enabled = false` or `api_key` is missing, the `composio` tool is not registered.
-- ZeroClaw requests Composio v3 tools with `toolkit_versions=latest` and executes tools with `version="latest"` to avoid stale default tool revisions.
+- LlamaFarm requests Composio v3 tools with `toolkit_versions=latest` and executes tools with `version="latest"` to avoid stale default tool revisions.
 - Typical flow: call `connect`, complete browser OAuth, then run `execute` for the desired tool action.
 - If Composio returns a missing connected-account reference error, call `list_accounts` (optionally with `app`) and pass the returned `connected_account_id` to `execute`.
 
@@ -609,7 +609,7 @@ Upgrade strategy:
 
 1. Keep hints stable (`hint:reasoning`, `hint:semantic`).
 2. Update only `model = "...new-version..."` in the route entries.
-3. Validate with `zeroclaw doctor` before restart/rollout.
+3. Validate with `llamafarm doctor` before restart/rollout.
 
 Natural-language config path:
 
@@ -693,7 +693,7 @@ Notes:
   - `allowed_users` allowlist checks still run first
 - Legacy `mention_only` flags (Telegram/Discord/Mattermost/Lark) remain supported as fallback only.
   If `group_reply.mode` is set, it takes precedence over legacy `mention_only`.
-- While `zeroclaw channel start` is running, updates to `default_provider`, `default_model`, `default_temperature`, `api_key`, `api_url`, and `reliability.*` are hot-applied from `config.toml` on the next inbound message.
+- While `llamafarm channel start` is running, updates to `default_provider`, `default_model`, `default_temperature`, `api_key`, `api_url`, and `reliability.*` are hot-applied from `config.toml` on the next inbound message.
 
 ### `[channels_config.nostr]`
 
@@ -752,7 +752,7 @@ Linq Partner V3 API integration for iMessage, RCS, and SMS.
 Notes:
 
 - Webhook endpoint is `POST /linq`.
-- `ZEROCLAW_LINQ_SIGNING_SECRET` overrides `signing_secret` when set.
+- `LLAMAFARM_LINQ_SIGNING_SECRET` overrides `signing_secret` when set.
 - Signatures use `X-Webhook-Signature` and `X-Webhook-Timestamp` headers; stale timestamps (>300s) are rejected.
 - See [channels-reference.md](channels-reference.md) for full config examples.
 
@@ -770,7 +770,7 @@ Native Nextcloud Talk bot integration (webhook receive + OCS send API).
 Notes:
 
 - Webhook endpoint is `POST /nextcloud-talk`.
-- `ZEROCLAW_NEXTCLOUD_TALK_WEBHOOK_SECRET` overrides `webhook_secret` when set.
+- `LLAMAFARM_NEXTCLOUD_TALK_WEBHOOK_SECRET` overrides `webhook_secret` when set.
 - See [nextcloud-talk-setup.md](nextcloud-talk-setup.md) for setup and troubleshooting.
 
 ## `[hardware]`
@@ -834,12 +834,12 @@ Notes:
 
 ## `[agents_ipc]`
 
-Inter-process communication for independent ZeroClaw agents on the same host.
+Inter-process communication for independent LlamaFarm agents on the same host.
 
 | Key | Default | Purpose |
 |---|---|---|
 | `enabled` | `false` | Enable IPC tools (`agents_list`, `agents_send`, `agents_inbox`, `state_get`, `state_set`) |
-| `db_path` | `~/.zeroclaw/agents.db` | Shared SQLite database path (all agents on this host share one file) |
+| `db_path` | `~/.llamafarm/agents.db` | Shared SQLite database path (all agents on this host share one file) |
 | `staleness_secs` | `300` | Agents not seen within this window are considered offline (seconds) |
 
 Notes:
@@ -853,7 +853,7 @@ Example:
 ```toml
 [agents_ipc]
 enabled = true
-db_path = "~/.zeroclaw/agents.db"
+db_path = "~/.llamafarm/agents.db"
 staleness_secs = 300
 ```
 
@@ -868,10 +868,10 @@ staleness_secs = 300
 After editing config:
 
 ```bash
-zeroclaw status
-zeroclaw doctor
-zeroclaw channel doctor
-zeroclaw service restart
+llamafarm status
+llamafarm doctor
+llamafarm channel doctor
+llamafarm service restart
 ```
 
 ## Related Docs

@@ -163,7 +163,7 @@ def main() -> int:
     history_pass_rate = round(history_passed / history_total, 4) if history_total else 0.0
 
     report = {
-        "schema_version": "zeroclaw.nightly-matrix.v1",
+        "schema_version": "llamafarm.nightly-matrix.v1",
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "input_dir": str(input_dir),
         "total": len(rows),

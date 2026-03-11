@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime};
 mod audit;
 
 const OPEN_SKILLS_REPO_URL: &str = "https://github.com/besoeasy/open-skills";
-const OPEN_SKILLS_SYNC_MARKER: &str = ".zeroclaw-open-skills-sync";
+const OPEN_SKILLS_SYNC_MARKER: &str = ".llamafarm-open-skills-sync";
 const OPEN_SKILLS_SYNC_INTERVAL_SECS: u64 = 60 * 60 * 24 * 7;
 const SKILL_DOWNLOAD_POLICY_FILE: &str = ".download-policy.toml";
 const SKILLS_SH_HOST: &str = "skills.sh";
@@ -99,7 +99,7 @@ impl SkillsShSource {
 }
 
 /// A skill is a user-defined or community-built capability.
-/// Skills live in `~/.zeroclaw/workspace/skills/<name>/SKILL.md`
+/// Skills live in `~/.llamafarm/workspace/skills/<name>/SKILL.md`
 /// and can include tool definitions, prompts, and automation scripts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Skill {
@@ -363,7 +363,7 @@ fn open_skills_enabled_from_sources(
         }
         if !raw.trim().is_empty() {
             tracing::warn!(
-                "Ignoring invalid ZEROCLAW_OPEN_SKILLS_ENABLED (valid: 1|0|true|false|yes|no|on|off)"
+                "Ignoring invalid LLAMAFARM_OPEN_SKILLS_ENABLED (valid: 1|0|true|false|yes|no|on|off)"
             );
         }
     }
@@ -372,7 +372,7 @@ fn open_skills_enabled_from_sources(
 }
 
 fn open_skills_enabled(config_open_skills_enabled: Option<bool>) -> bool {
-    let env_override = std::env::var("ZEROCLAW_OPEN_SKILLS_ENABLED").ok();
+    let env_override = std::env::var("LLAMAFARM_OPEN_SKILLS_ENABLED").ok();
     open_skills_enabled_from_sources(config_open_skills_enabled, env_override.as_deref())
 }
 
@@ -400,7 +400,7 @@ fn resolve_open_skills_dir_from_sources(
 }
 
 fn resolve_open_skills_dir(config_open_skills_dir: Option<&str>) -> Option<PathBuf> {
-    let env_dir = std::env::var("ZEROCLAW_OPEN_SKILLS_DIR").ok();
+    let env_dir = std::env::var("LLAMAFARM_OPEN_SKILLS_DIR").ok();
     let home_dir = UserDirs::new().map(|dirs| dirs.home_dir().to_path_buf());
     resolve_open_skills_dir_from_sources(
         env_dir.as_deref(),
@@ -1011,7 +1011,7 @@ pub fn init_skills_dir(workspace_dir: &Path) -> Result<()> {
     if !readme.exists() {
         std::fs::write(
             &readme,
-            "# ZeroClaw Skills\n\n\
+            "# LlamaFarm Skills\n\n\
              Each subdirectory is a skill. Create a `SKILL.toml` or `SKILL.md` file inside.\n\n\
              ## SKILL.toml format\n\n\
              ```toml\n\
@@ -1032,8 +1032,8 @@ pub fn init_skills_dir(workspace_dir: &Path) -> Result<()> {
              The agent will read it and follow the instructions.\n\n\
              ## Installing community skills\n\n\
              ```bash\n\
-             zeroclaw skills install <source>\n\
-             zeroclaw skills list\n\
+             llamafarm skills install <source>\n\
+             llamafarm skills list\n\
              ```\n",
         )?;
     }
@@ -1368,10 +1368,10 @@ pub fn handle_command(command: crate::SkillCommands, config: &crate::config::Con
             if skills.is_empty() {
                 println!("No skills installed.");
                 println!();
-                println!("  Create one: mkdir -p ~/.zeroclaw/workspace/skills/my-skill");
-                println!("              echo '# My Skill' > ~/.zeroclaw/workspace/skills/my-skill/SKILL.md");
+                println!("  Create one: mkdir -p ~/.llamafarm/workspace/skills/my-skill");
+                println!("              echo '# My Skill' > ~/.llamafarm/workspace/skills/my-skill/SKILL.md");
                 println!();
-                println!("  Or install: zeroclaw skills install <source>");
+                println!("  Or install: llamafarm skills install <source>");
             } else {
                 println!("Installed skills ({}):", skills.len());
                 println!();
@@ -2084,9 +2084,9 @@ description = "Bare minimum"
 
     #[test]
     fn skills_dir_path() {
-        let base = std::path::Path::new("/home/user/.zeroclaw");
+        let base = std::path::Path::new("/home/user/.llamafarm");
         let dir = skills_dir(base);
-        assert_eq!(dir, PathBuf::from("/home/user/.zeroclaw/skills"));
+        assert_eq!(dir, PathBuf::from("/home/user/.llamafarm/skills"));
     }
 
     #[test]
@@ -2154,8 +2154,8 @@ description = "Bare minimum"
     #[test]
     fn load_skills_with_config_reads_open_skills_dir_without_network() {
         let _env_guard = open_skills_env_lock().lock().unwrap();
-        let _enabled_guard = EnvVarGuard::unset("ZEROCLAW_OPEN_SKILLS_ENABLED");
-        let _dir_guard = EnvVarGuard::unset("ZEROCLAW_OPEN_SKILLS_DIR");
+        let _enabled_guard = EnvVarGuard::unset("LLAMAFARM_OPEN_SKILLS_ENABLED");
+        let _dir_guard = EnvVarGuard::unset("LLAMAFARM_OPEN_SKILLS_DIR");
 
         let dir = tempfile::tempdir().unwrap();
         let workspace_dir = dir.path().join("workspace");

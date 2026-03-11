@@ -38,7 +38,7 @@ impl OtelObserver {
         let base_endpoint = endpoint.unwrap_or("http://localhost:4318");
         let traces_endpoint = format!("{}/v1/traces", base_endpoint.trim_end_matches('/'));
         let metrics_endpoint = format!("{}/v1/metrics", base_endpoint.trim_end_matches('/'));
-        let service_name = service_name.unwrap_or("zeroclaw");
+        let service_name = service_name.unwrap_or("llamafarm");
 
         // ── Trace exporter ──────────────────────────────────────
         let span_exporter = opentelemetry_otlp::SpanExporter::builder()
@@ -81,74 +81,74 @@ impl OtelObserver {
         global::set_meter_provider(meter_provider);
 
         // ── Create metric instruments ────────────────────────────
-        let meter = global::meter("zeroclaw");
+        let meter = global::meter("llamafarm");
 
         let agent_starts = meter
-            .u64_counter("zeroclaw.agent.starts")
+            .u64_counter("llamafarm.agent.starts")
             .with_description("Total agent invocations")
             .build();
 
         let agent_duration = meter
-            .f64_histogram("zeroclaw.agent.duration")
+            .f64_histogram("llamafarm.agent.duration")
             .with_description("Agent invocation duration in seconds")
             .with_unit("s")
             .build();
 
         let llm_calls = meter
-            .u64_counter("zeroclaw.llm.calls")
+            .u64_counter("llamafarm.llm.calls")
             .with_description("Total LLM provider calls")
             .build();
 
         let llm_duration = meter
-            .f64_histogram("zeroclaw.llm.duration")
+            .f64_histogram("llamafarm.llm.duration")
             .with_description("LLM provider call duration in seconds")
             .with_unit("s")
             .build();
 
         let tool_calls = meter
-            .u64_counter("zeroclaw.tool.calls")
+            .u64_counter("llamafarm.tool.calls")
             .with_description("Total tool calls")
             .build();
 
         let tool_duration = meter
-            .f64_histogram("zeroclaw.tool.duration")
+            .f64_histogram("llamafarm.tool.duration")
             .with_description("Tool execution duration in seconds")
             .with_unit("s")
             .build();
 
         let channel_messages = meter
-            .u64_counter("zeroclaw.channel.messages")
+            .u64_counter("llamafarm.channel.messages")
             .with_description("Total channel messages")
             .build();
 
         let heartbeat_ticks = meter
-            .u64_counter("zeroclaw.heartbeat.ticks")
+            .u64_counter("llamafarm.heartbeat.ticks")
             .with_description("Total heartbeat ticks")
             .build();
 
         let errors = meter
-            .u64_counter("zeroclaw.errors")
+            .u64_counter("llamafarm.errors")
             .with_description("Total errors by component")
             .build();
 
         let request_latency = meter
-            .f64_histogram("zeroclaw.request.latency")
+            .f64_histogram("llamafarm.request.latency")
             .with_description("Request latency in seconds")
             .with_unit("s")
             .build();
 
         let tokens_used = meter
-            .u64_counter("zeroclaw.tokens.used")
+            .u64_counter("llamafarm.tokens.used")
             .with_description("Total tokens consumed (monotonic)")
             .build();
 
         let active_sessions = meter
-            .u64_gauge("zeroclaw.sessions.active")
+            .u64_gauge("llamafarm.sessions.active")
             .with_description("Current number of active sessions")
             .build();
 
         let queue_depth = meter
-            .u64_gauge("zeroclaw.queue.depth")
+            .u64_gauge("llamafarm.queue.depth")
             .with_description("Current message queue depth")
             .build();
 
@@ -174,7 +174,7 @@ impl OtelObserver {
 
 impl Observer for OtelObserver {
     fn record_event(&self, event: &ObserverEvent) {
-        let tracer = global::tracer("zeroclaw");
+        let tracer = global::tracer("llamafarm");
 
         match event {
             ObserverEvent::AgentStart { provider, model } => {
@@ -387,7 +387,7 @@ mod tests {
     fn test_observer() -> OtelObserver {
         // Create with a dummy endpoint — exports will silently fail
         // but the observer itself works fine for recording
-        OtelObserver::new(Some("http://127.0.0.1:19999"), Some("zeroclaw-test"))
+        OtelObserver::new(Some("http://127.0.0.1:19999"), Some("llamafarm-test"))
             .expect("observer creation should not fail with valid endpoint format")
     }
 
@@ -521,7 +521,7 @@ mod tests {
     #[test]
     fn otel_observer_creation_with_valid_endpoint_succeeds() {
         // Even though endpoint is unreachable, creation should succeed
-        let result = OtelObserver::new(Some("http://127.0.0.1:12345"), Some("zeroclaw-test"));
+        let result = OtelObserver::new(Some("http://127.0.0.1:12345"), Some("llamafarm-test"));
         assert!(
             result.is_ok(),
             "observer creation must succeed even with unreachable endpoint"

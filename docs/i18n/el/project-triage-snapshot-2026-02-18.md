@@ -1,4 +1,4 @@
-# Αναφορά Διαλογής Έργου ZeroClaw (Project Triage Snapshot)
+# Αναφορά Διαλογής Έργου LlamaFarm (Project Triage Snapshot)
 
 **Ημερομηνία Αναφοράς**: 18 Φεβρουαρίου 2026
 
@@ -6,7 +6,7 @@
 
 ## Μεθοδολογία Συλλογής Δεδομένων
 
-Η άντληση των στοιχείων πραγματοποιήθηκε μέσω του GitHub CLI για το αποθετήριο `zeroclaw-labs/zeroclaw`:
+Η άντληση των στοιχείων πραγματοποιήθηκε μέσω του GitHub CLI για το αποθετήριο `llamafarm-labs/llamafarm`:
 
 - `gh repo view`: Γενική εικόνα αποθετηρίου.
 - `gh pr list --state open --limit 500`: Ανάλυση ανοιχτών PR.
@@ -50,11 +50,11 @@
 
 ## PR με Άμεσο Αντίκτυπο στην Τεκμηρίωση
 
-- [#716](https://github.com/zeroclaw-labs/zeroclaw/pull/716): Υποστήριξη OpenRC (διαχείριση υπηρεσιών).
-- [#725](https://github.com/zeroclaw-labs/zeroclaw/pull/725): Shell completion commands (τεκμηρίωση CLI).
-- [#732](https://github.com/zeroclaw-labs/zeroclaw/pull/732): Αναβάθμιση ενεργειών CI (ροές εργασίας συνεισφερόντων).
-- [#759](https://github.com/zeroclaw-labs/zeroclaw/pull/759): Διόρθωση απόκρισης daemon/καναλιού (troubleshooting).
-- [#679](https://github.com/zeroclaw-labs/zeroclaw/pull/679): Αλλαγή στη λογική αποκλεισμού (πολιτική ασφαλείας).
+- [#716](https://github.com/llamafarm-labs/llamafarm/pull/716): Υποστήριξη OpenRC (διαχείριση υπηρεσιών).
+- [#725](https://github.com/llamafarm-labs/llamafarm/pull/725): Shell completion commands (τεκμηρίωση CLI).
+- [#732](https://github.com/llamafarm-labs/llamafarm/pull/732): Αναβάθμιση ενεργειών CI (ροές εργασίας συνεισφερόντων).
+- [#759](https://github.com/llamafarm-labs/llamafarm/pull/759): Διόρθωση απόκρισης daemon/καναλιού (troubleshooting).
+- [#679](https://github.com/llamafarm-labs/llamafarm/pull/679): Αλλαγή στη λογική αποκλεισμού (πολιτική ασφαλείας).
 
 ## Εκκρεμότητες Τεκμηρίωσης (Προτεραιοποίηση)
 

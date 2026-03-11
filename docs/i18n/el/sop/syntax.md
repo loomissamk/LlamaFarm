@@ -64,7 +64,7 @@ condition = "$.env == \"prod\""
 
 | Τύπος | Πεδία | Σημειώσεις |
 |---|---|---|
-| `manual` | κανένα | Ενεργοποιείται από το εργαλείο `sop_execute` (όχι από CLI `zeroclaw sop run`). |
+| `manual` | κανένα | Ενεργοποιείται από το εργαλείο `sop_execute` (όχι από CLI `llamafarm sop run`). |
 | `webhook` | `path` | Ακριβής αντιστοίχιση με μονοπάτι αιτήματος (`/sop/...` ή `/webhook`). |
 | `mqtt` | `topic`, προαιρετικό `condition` | Το MQTT topic υποστηρίζει wildcards `+` και `#`. |
 | `cron` | `expression` | Υποστηρίζει 5, 6 ή 7 πεδία (τα 5-πεδία λαμβάνουν δευτερόλεπτα εσωτερικά). |
@@ -83,8 +83,8 @@ condition = "$.env == \"prod\""
 Χρησιμοποιήστε:
 
 ```bash
-zeroclaw sop validate
-zeroclaw sop validate <name>
+llamafarm sop validate
+llamafarm sop validate <name>
 ```
 
 Η επικύρωση προειδοποιεί για κενά ονόματα/περιγραφές, απόντα triggers, απόντα βήματα και κενά στην αρίθμηση βημάτων.

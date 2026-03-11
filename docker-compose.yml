@@ -17,23 +17,23 @@ services:
     restart: unless-stopped
 
     environment:
-      - ZEROCLAW_ALLOW_PUBLIC_BIND=true
-      - ZEROCLAW_GATEWAY_HOST=0.0.0.0
-      - ZEROCLAW_REQUIRE_PAIRING=false
+      - LLAMAFARM_ALLOW_PUBLIC_BIND=true
+      - LLAMAFARM_GATEWAY_HOST=0.0.0.0
+      - LLAMAFARM_REQUIRE_PAIRING=false
       - SHELL=/bin/bash
       # Default gateway port inside container
-      - ZEROCLAW_GATEWAY_PORT=${ZEROCLAW_GATEWAY_PORT:-42617}
+      - LLAMAFARM_GATEWAY_PORT=${LLAMAFARM_GATEWAY_PORT:-42617}
 
     volumes:
       # Keep the local operator state on a stable volume so redeploys from
       # different worktrees do not silently fork the live data set.
-      - llamafarm-data:/zeroclaw-data
+      - llamafarm-data:/llamafarm-data
 
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
     ports:
-      - "127.0.0.1:${HOST_PORT:-42617}:${ZEROCLAW_GATEWAY_PORT:-42617}"
+      - "127.0.0.1:${HOST_PORT:-42617}:${LLAMAFARM_GATEWAY_PORT:-42617}"
 
     deploy:
       resources:
@@ -45,7 +45,7 @@ services:
           memory: 512M
 
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:${ZEROCLAW_GATEWAY_PORT:-42617}/health"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:${LLAMAFARM_GATEWAY_PORT:-42617}/health"]
       interval: 60s
       timeout: 10s
       retries: 3

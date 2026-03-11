@@ -182,7 +182,7 @@ def main() -> int:
     ready_to_execute = args.mode == "execute" and decision in {"promote", "abort"} and not violations
 
     report = {
-        "schema_version": "zeroclaw.canary-guard.v1",
+        "schema_version": "llamafarm.canary-guard.v1",
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "policy_schema_version": policy.get("schema_version"),
         "candidate_tag": args.candidate_tag,

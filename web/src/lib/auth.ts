@@ -1,4 +1,4 @@
-export const TOKEN_STORAGE_KEY = 'zeroclaw_token';
+export const TOKEN_STORAGE_KEY = 'llamafarm_token';
 let inMemoryToken: string | null = null;
 
 function readStorage(key: string): string | null {
@@ -25,7 +25,7 @@ function removeStorage(key: string): void {
   }
 }
 
-function clearLegacyLocalStorageToken(key: string): void {
+function clearLocalStorageToken(key: string): void {
   try {
     localStorage.removeItem(key);
   } catch {
@@ -69,7 +69,7 @@ export function getToken(): string | null {
 export function setToken(token: string): void {
   inMemoryToken = token;
   writeStorage(TOKEN_STORAGE_KEY, token);
-  clearLegacyLocalStorageToken(TOKEN_STORAGE_KEY);
+  clearLocalStorageToken(TOKEN_STORAGE_KEY);
 }
 
 /**
@@ -78,7 +78,7 @@ export function setToken(token: string): void {
 export function clearToken(): void {
   inMemoryToken = null;
   removeStorage(TOKEN_STORAGE_KEY);
-  clearLegacyLocalStorageToken(TOKEN_STORAGE_KEY);
+  clearLocalStorageToken(TOKEN_STORAGE_KEY);
 }
 
 /**

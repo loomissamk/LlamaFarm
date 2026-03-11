@@ -1,4 +1,4 @@
-# ZeroClaw 中文文档目录（i18n）
+# LlamaFarm 中文文档目录（i18n）
 
 该文件是 `docs/i18n/zh-CN/` 的导航目录。
 

@@ -462,14 +462,14 @@ mod tests {
         assert!(normalize_schema("").is_none());
         assert!(normalize_schema("public").is_none());
         assert!(normalize_schema("PUBLIC").is_none());
-        assert_eq!(normalize_schema("zeroclaw"), Some("zeroclaw".into()));
+        assert_eq!(normalize_schema("llamafarm"), Some("llamafarm".into()));
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn new_does_not_panic_inside_tokio_runtime() {
         let outcome = std::panic::catch_unwind(|| {
             MariadbMemory::new(
-                "mysql://zeroclaw:password@127.0.0.1:1/zeroclaw",
+                "mysql://llamafarm:password@127.0.0.1:1/llamafarm",
                 "public",
                 "memories",
                 Some(1),
@@ -486,15 +486,15 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn integration_roundtrip_when_test_db_is_configured() {
-        let Some(db_url) = std::env::var("ZEROCLAW_TEST_MARIADB_URL")
+        let Some(db_url) = std::env::var("LLAMAFARM_TEST_MARIADB_URL")
             .ok()
             .filter(|value| !value.trim().is_empty())
         else {
-            eprintln!("Skipping MariaDB integration test: set ZEROCLAW_TEST_MARIADB_URL to enable");
+            eprintln!("Skipping MariaDB integration test: set LLAMAFARM_TEST_MARIADB_URL to enable");
             return;
         };
 
-        let schema = format!("zeroclaw_test_{}", Uuid::new_v4().simple());
+        let schema = format!("llamafarm_test_{}", Uuid::new_v4().simple());
         let memory = MariadbMemory::new(&db_url, &schema, "memories", Some(5), false)
             .expect("should initialize MariaDB memory backend");
 

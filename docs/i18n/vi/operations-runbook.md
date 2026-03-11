@@ -1,4 +1,4 @@
-# Sổ tay Vận hành ZeroClaw
+# Sổ tay Vận hành LlamaFarm
 
 Tài liệu này dành cho các operator chịu trách nhiệm duy trì tính sẵn sàng, tình trạng bảo mật và xử lý sự cố.
 
@@ -19,59 +19,59 @@ Nếu đây là lần cài đặt đầu tiên, hãy bắt đầu từ [one-clic
 
 | Chế độ | Lệnh | Khi nào dùng |
 |---|---|---|
-| Foreground runtime | `zeroclaw daemon` | gỡ lỗi cục bộ, phiên ngắn |
-| Foreground gateway only | `zeroclaw gateway` | kiểm thử webhook endpoint |
-| User service | `zeroclaw service install && zeroclaw service start` | runtime được quản lý liên tục bởi operator |
+| Foreground runtime | `llamafarm daemon` | gỡ lỗi cục bộ, phiên ngắn |
+| Foreground gateway only | `llamafarm gateway` | kiểm thử webhook endpoint |
+| User service | `llamafarm service install && llamafarm service start` | runtime được quản lý liên tục bởi operator |
 
 ## Checklist Cơ bản cho Operator
 
 1. Xác thực cấu hình:
 
 ```bash
-zeroclaw status
+llamafarm status
 ```
 
 1. Kiểm tra chẩn đoán:
 
 ```bash
-zeroclaw doctor
-zeroclaw channel doctor
+llamafarm doctor
+llamafarm channel doctor
 ```
 
 1. Khởi động runtime:
 
 ```bash
-zeroclaw daemon
+llamafarm daemon
 ```
 
 1. Để chạy như user session service liên tục:
 
 ```bash
-zeroclaw service install
-zeroclaw service start
-zeroclaw service status
+llamafarm service install
+llamafarm service start
+llamafarm service status
 ```
 
 ## Tín hiệu Sức khoẻ và Trạng thái
 
 | Tín hiệu | Lệnh / File | Kỳ vọng |
 |---|---|---|
-| Tính hợp lệ của config | `zeroclaw doctor` | không có lỗi nghiêm trọng |
-| Kết nối channel | `zeroclaw channel doctor` | các channel đã cấu hình đều khoẻ mạnh |
-| Tóm tắt runtime | `zeroclaw status` | provider/model/channels như mong đợi |
-| Heartbeat/trạng thái daemon | `~/.zeroclaw/daemon_state.json` | file được cập nhật định kỳ |
+| Tính hợp lệ của config | `llamafarm doctor` | không có lỗi nghiêm trọng |
+| Kết nối channel | `llamafarm channel doctor` | các channel đã cấu hình đều khoẻ mạnh |
+| Tóm tắt runtime | `llamafarm status` | provider/model/channels như mong đợi |
+| Heartbeat/trạng thái daemon | `~/.llamafarm/daemon_state.json` | file được cập nhật định kỳ |
 
 ## Log và Chẩn đoán
 
 ### macOS / Windows (log của service wrapper)
 
-- `~/.zeroclaw/logs/daemon.stdout.log`
-- `~/.zeroclaw/logs/daemon.stderr.log`
+- `~/.llamafarm/logs/daemon.stdout.log`
+- `~/.llamafarm/logs/daemon.stderr.log`
 
 ### Linux (systemd user service)
 
 ```bash
-journalctl --user -u zeroclaw.service -f
+journalctl --user -u llamafarm.service -f
 ```
 
 ## Quy trình Phân loại Sự cố (Fast Path)
@@ -79,25 +79,25 @@ journalctl --user -u zeroclaw.service -f
 1. Chụp trạng thái hệ thống:
 
 ```bash
-zeroclaw status
-zeroclaw doctor
-zeroclaw channel doctor
+llamafarm status
+llamafarm doctor
+llamafarm channel doctor
 ```
 
 1. Kiểm tra trạng thái service:
 
 ```bash
-zeroclaw service status
+llamafarm service status
 ```
 
 1. Nếu service không khoẻ, khởi động lại sạch:
 
 ```bash
-zeroclaw service stop
-zeroclaw service start
+llamafarm service stop
+llamafarm service start
 ```
 
-1. Nếu các channel vẫn thất bại, kiểm tra allowlist và thông tin xác thực trong `~/.zeroclaw/config.toml`.
+1. Nếu các channel vẫn thất bại, kiểm tra allowlist và thông tin xác thực trong `~/.llamafarm/config.toml`.
 
 2. Nếu liên quan đến gateway, kiểm tra cài đặt bind/auth (`[gateway]`) và khả năng tiếp cận cục bộ.
 
@@ -105,9 +105,9 @@ zeroclaw service start
 
 Trước khi áp dụng thay đổi cấu hình:
 
-1. sao lưu `~/.zeroclaw/config.toml`
+1. sao lưu `~/.llamafarm/config.toml`
 2. chỉ áp dụng một thay đổi logic tại một thời điểm
-3. chạy `zeroclaw doctor`
+3. chạy `llamafarm doctor`
 4. khởi động lại daemon/service
 5. xác minh bằng `status` + `channel doctor`
 

@@ -1,6 +1,6 @@
-# ZeroClaw Development Environment
+# LlamaFarm Development Environment
 
-A fully containerized development sandbox for ZeroClaw agents. This environment allows you to develop, test, and debug the agent in isolation without modifying your host system.
+A fully containerized development sandbox for the local LlamaFarm stack. This environment allows you to develop, test, and debug the agent in isolation without modifying your host system.
 
 ## Directory Structure
 
@@ -39,15 +39,15 @@ this stack.
 Builds the agent from source and starts the local stack with the power profile by
 default, including the Chromium WebDriver sidecar for the `browser` tool.
 
-### 2. Enter Agent Container (`zeroclaw-dev`)
+### 2. Enter Agent Container (`llamafarm-dev`)
 
 ```bash
 ./dev/cli.sh agent
 ```
 
-Use this to run `zeroclaw` CLI commands manually, debug the binary, or check logs internally.
+Use this to run the local agent CLI manually, debug the binary, or check logs internally.
 
-- **Path**: `/zeroclaw-data`
+- **Path**: `/llamafarm-data`
 - **User**: `nobody` (65534)
 
 ### 3. Enter Sandbox (`sandbox`)
@@ -72,20 +72,20 @@ Use this to act as the "user" or "environment" the agent interacts with.
     ```bash
     ./dev/cli.sh agent
     # inside container:
-    zeroclaw --version
+    llamafarm --version
     ```
 
 ### 5. Persistence & Shared Workspace
 
 The local `playground/` directory (in repo root) is mounted as the shared workspace:
 
-- **Agent**: `/zeroclaw-data/workspace`
+- **Agent**: `/llamafarm-data/workspace`
 - **Sandbox**: `/home/developer/workspace`
 
 Files created by the agent are visible to the sandbox user, and vice versa.
 
-The agent configuration lives in `.dev-state/.zeroclaw` (mounted to
-`/zeroclaw-data/.zeroclaw`), so settings persist across container rebuilds.
+The agent configuration lives in `.dev-state/.llamafarm` (mounted to
+`/llamafarm-data/.llamafarm`), so settings persist across container rebuilds.
 
 ### 6. Cleanup
 
@@ -95,7 +95,7 @@ Stop containers and remove volumes and generated config:
 ./dev/cli.sh clean
 ```
 
-**Note:** This removes `.dev-state/.zeroclaw` (config/DB) but leaves the
+**Note:** This removes `.dev-state/.llamafarm` (config/DB) but leaves the
 `playground/` directory intact. To fully wipe everything, manually delete
 `playground/`.
 
@@ -118,7 +118,7 @@ Recommended path:
 Example apply flow:
 
 ```bash
-cp dev/config.wasm.staging.toml .dev-state/.zeroclaw/config.toml
+cp dev/config.wasm.staging.toml .dev-state/.llamafarm/config.toml
 ```
 
 Example SHA-256 pin generation:
@@ -140,18 +140,19 @@ formatter = "<64-char sha256>"
 Use `dev/config.power.toml` when you want the dev stack to behave like a strong local engineering/operator agent while keeping hard blocks on kernel, firmware, bootloader, raw-disk, and privileged-container actions. The profile now allows broad home-directory access plus the dev data root, but still denies secret subdirectories and anti-brick system paths.
 
 For real host access to `lsblk`, `lsusb`, `nvidia-smi`, the local Docker
-daemon, and your Pop!_OS project directories, launch ZeroClaw directly on the
-host with `dev/config.power.toml` instead of using the containerized dev stack.
+daemon, and your Pop!_OS project directories, launch the Ollama local stack
+directly on the host with `dev/config.power.toml` instead of using the
+containerized dev stack.
 
 Fresh bootstrap:
 
 ```bash
-rm -f .dev-state/.zeroclaw/config.toml
+rm -f .dev-state/.llamafarm/config.toml
 ./dev/cli.sh up
 ```
 
 This now uses the power profile by default. To go back, remove
-`.dev-state/.zeroclaw/config.toml` and start again with
+`.dev-state/.llamafarm/config.toml` and start again with
 `LLAMAFARM_DEV_PROFILE=default ./dev/cli.sh up`.
 
 ## Local CI/CD (Docker-Only)
@@ -225,7 +226,7 @@ Note: local `deny` focuses on license/source policy; advisory scanning is handle
 
 ### Isolation model
 
-- Rust compilation, tests, and audit/deny tools run in `zeroclaw-local-ci` container.
+- Rust compilation, tests, and audit/deny tools run in `ollama-local-ci` container.
 - Your host filesystem is mounted at `/workspace`; no host Rust toolchain is required.
 - Cargo build artifacts are written to container volume `/ci-target` (not your host `target/`).
 - Docker smoke stage uses your Docker daemon to build image layers, but build steps execute in containers.
@@ -233,7 +234,7 @@ Note: local `deny` focuses on license/source policy; advisory scanning is handle
 ### Build cache notes
 
 - Both `Dockerfile` and `dev/ci/Dockerfile` use BuildKit cache mounts for Cargo registry/git data.
-- The root `Dockerfile` also caches Rust `target/` (`id=zeroclaw-target`) to speed repeat local image builds.
+- The root `Dockerfile` also caches Rust `target/` (`id=llamafarm-target`) to speed repeat local image builds.
 - Local CI reuses named Docker volumes for Cargo registry/git and target outputs.
 - `./dev/ci.sh docker-smoke` and `./dev/ci.sh all` now use `docker buildx` local cache at `.cache/buildx-smoke` when available.
 - The CI image keeps Rust toolchain defaults from `rust:1.92-slim` and installs pinned toolchain `1.92.0` (no custom `CARGO_HOME`/`RUSTUP_HOME` overrides), preventing repeated toolchain bootstrapping on each run.

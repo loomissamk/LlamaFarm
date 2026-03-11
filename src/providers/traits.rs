@@ -470,10 +470,24 @@ pub fn build_tool_instructions_text(tools: &[ToolSpec]) -> String {
     instructions.push_str("<tool_call>\n");
     instructions.push_str(r#"{"name": "tool_name", "arguments": {"param": "value"}}"#);
     instructions.push_str("\n</tool_call>\n\n");
+    instructions.push_str(
+        "Emit real tool calls, not prose, examples, or pseudo-code. If the runtime says your last tool format was invalid, immediately emit another real <tool_call> in the exact format above.\n\n",
+    );
+    instructions.push_str("Tool selection guardrails:\n");
+    instructions.push_str(
+        "- Use `shell` for immediate local command execution (for example: lsusb, lsblk, lspci, pwd, git status, rg, cat).\n",
+    );
+    instructions.push_str(
+        "- Use `cron_add` or `schedule` only when the user explicitly wants delayed, scheduled, or recurring execution. Never use them for an immediate one-off command.\n",
+    );
+    instructions.push_str(
+        "- Use `file_read` to inspect files and `file_write`/`file_edit` to change files instead of shelling out when a dedicated file tool exists.\n\n",
+    );
     instructions.push_str("You may use multiple tool calls in a single response. ");
     instructions.push_str("After tool execution, results appear in <tool_result> tags. ");
-    instructions
-        .push_str("Continue reasoning with the results until you can give a final answer.\n\n");
+    instructions.push_str(
+        "Continue using tools with the results until the task is actually complete, then give the final answer.\n\n",
+    );
     instructions.push_str("### Available Tools\n\n");
 
     for tool in tools {

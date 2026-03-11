@@ -1,7 +1,7 @@
-//! Inter-process communication tools for independent ZeroClaw agents.
+//! Inter-process communication tools for independent LlamaFarm agents.
 //!
 //! Provides 5 LLM-callable tools backed by a shared SQLite database, allowing
-//! independent ZeroClaw processes on the same host to discover each other and
+//! independent LlamaFarm processes on the same host to discover each other and
 //! exchange messages. See Issue #1518 for design rationale.
 
 use super::traits::{Tool, ToolResult};
@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS shared_state (
     updated_at INTEGER NOT NULL
 );";
 
-/// Shared SQLite handle for IPC tools. Each ZeroClaw process holds one instance.
+/// Shared SQLite handle for IPC tools. Each LlamaFarm process holds one instance.
 pub(crate) struct IpcDb {
     conn: Arc<Mutex<Connection>>,
     agent_id: String,
@@ -577,7 +577,7 @@ mod tests {
     #[test]
     fn schema_creates_three_tables() {
         let dir = TempDir::new().unwrap();
-        let db = test_db(&dir, "zeroclaw_agent_a");
+        let db = test_db(&dir, "llamafarm_agent_a");
         let conn = db.conn.lock().unwrap();
 
         let tables: Vec<String> = conn
@@ -596,12 +596,12 @@ mod tests {
     #[test]
     fn agent_registers_on_open() {
         let dir = TempDir::new().unwrap();
-        let db = test_db(&dir, "zeroclaw_agent_a");
+        let db = test_db(&dir, "llamafarm_agent_a");
         let conn = db.conn.lock().unwrap();
 
         let count: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM agents WHERE agent_id = 'zeroclaw_agent_a'",
+                "SELECT COUNT(*) FROM agents WHERE agent_id = 'llamafarm_agent_a'",
                 [],
                 |row| row.get(0),
             )
@@ -612,12 +612,12 @@ mod tests {
     #[test]
     fn heartbeat_updates_last_seen() {
         let dir = TempDir::new().unwrap();
-        let db = test_db(&dir, "zeroclaw_agent_a");
+        let db = test_db(&dir, "llamafarm_agent_a");
 
         let before: i64 = {
             let conn = db.conn.lock().unwrap();
             conn.query_row(
-                "SELECT last_seen FROM agents WHERE agent_id = 'zeroclaw_agent_a'",
+                "SELECT last_seen FROM agents WHERE agent_id = 'llamafarm_agent_a'",
                 [],
                 |row| row.get(0),
             )
@@ -631,7 +631,7 @@ mod tests {
         let after: i64 = {
             let conn = db.conn.lock().unwrap();
             conn.query_row(
-                "SELECT last_seen FROM agents WHERE agent_id = 'zeroclaw_agent_a'",
+                "SELECT last_seen FROM agents WHERE agent_id = 'llamafarm_agent_a'",
                 [],
                 |row| row.get(0),
             )
@@ -646,13 +646,13 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let db_path = dir.path().join("agents.db").to_str().unwrap().to_string();
 
-        let db_a = Arc::new(IpcDb::open_with_id(&db_path, "zeroclaw_agent_a", 300).unwrap());
-        let db_b = Arc::new(IpcDb::open_with_id(&db_path, "zeroclaw_agent_b", 300).unwrap());
+        let db_a = Arc::new(IpcDb::open_with_id(&db_path, "llamafarm_agent_a", 300).unwrap());
+        let db_b = Arc::new(IpcDb::open_with_id(&db_path, "llamafarm_agent_b", 300).unwrap());
 
         // Agent A sends to Agent B
         let send_tool = AgentsSendTool::new(db_a.clone(), Arc::new(SecurityPolicy::default()));
         send_tool
-            .execute(json!({"to_agent": "zeroclaw_agent_b", "payload": "hello b"}))
+            .execute(json!({"to_agent": "llamafarm_agent_b", "payload": "hello b"}))
             .await
             .unwrap();
 
@@ -675,8 +675,8 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let db_path = dir.path().join("agents.db").to_str().unwrap().to_string();
 
-        let db_a = Arc::new(IpcDb::open_with_id(&db_path, "zeroclaw_agent_a", 300).unwrap());
-        let db_b = Arc::new(IpcDb::open_with_id(&db_path, "zeroclaw_agent_b", 300).unwrap());
+        let db_a = Arc::new(IpcDb::open_with_id(&db_path, "llamafarm_agent_a", 300).unwrap());
+        let db_b = Arc::new(IpcDb::open_with_id(&db_path, "llamafarm_agent_b", 300).unwrap());
 
         // Agent A broadcasts
         let send_tool = AgentsSendTool::new(db_a.clone(), Arc::new(SecurityPolicy::default()));
@@ -703,14 +703,14 @@ mod tests {
         let db_path = dir.path().join("agents.db").to_str().unwrap().to_string();
 
         // Agent A with short staleness window
-        let db_a = Arc::new(IpcDb::open_with_id(&db_path, "zeroclaw_agent_a", 5).unwrap());
+        let db_a = Arc::new(IpcDb::open_with_id(&db_path, "llamafarm_agent_a", 5).unwrap());
 
         // Manually backdate agent B's last_seen
         {
             let conn = db_a.conn.lock().unwrap();
             let old_time = now_epoch() - 100;
             conn.execute(
-                "INSERT OR REPLACE INTO agents (agent_id, status, last_seen) VALUES ('zeroclaw_agent_b', 'online', ?1)",
+                "INSERT OR REPLACE INTO agents (agent_id, status, last_seen) VALUES ('llamafarm_agent_b', 'online', ?1)",
                 rusqlite::params![old_time],
             )
             .unwrap();
@@ -722,19 +722,19 @@ mod tests {
 
         // Only agent A should be listed (agent B is stale)
         assert_eq!(agents.len(), 1);
-        assert_eq!(agents[0]["agent_id"], "zeroclaw_agent_a");
+        assert_eq!(agents[0]["agent_id"], "llamafarm_agent_a");
     }
 
     #[tokio::test]
     async fn identity_code_enforced() {
         let dir = TempDir::new().unwrap();
         let db_path = dir.path().join("agents.db").to_str().unwrap().to_string();
-        let db = Arc::new(IpcDb::open_with_id(&db_path, "zeroclaw_agent_a", 300).unwrap());
+        let db = Arc::new(IpcDb::open_with_id(&db_path, "llamafarm_agent_a", 300).unwrap());
 
         // Send a message — from_agent must be agent_a regardless of input
         let send_tool = AgentsSendTool::new(db.clone(), Arc::new(SecurityPolicy::default()));
         send_tool
-            .execute(json!({"to_agent": "zeroclaw_agent_b", "payload": "test"}))
+            .execute(json!({"to_agent": "llamafarm_agent_b", "payload": "test"}))
             .await
             .unwrap();
 
@@ -744,13 +744,13 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(from, "zeroclaw_agent_a");
+        assert_eq!(from, "llamafarm_agent_a");
     }
 
     #[tokio::test]
     async fn state_upsert_creates_and_updates() {
         let dir = TempDir::new().unwrap();
-        let db = Arc::new(test_db(&dir, "zeroclaw_agent_a"));
+        let db = Arc::new(test_db(&dir, "llamafarm_agent_a"));
 
         let set_tool = StateSetTool::new(db.clone(), Arc::new(SecurityPolicy::default()));
         let get_tool = StateGetTool::new(db.clone());
@@ -779,7 +779,7 @@ mod tests {
     #[tokio::test]
     async fn state_records_owner() {
         let dir = TempDir::new().unwrap();
-        let db = Arc::new(test_db(&dir, "zeroclaw_agent_a"));
+        let db = Arc::new(test_db(&dir, "llamafarm_agent_a"));
 
         let set_tool = StateSetTool::new(db.clone(), Arc::new(SecurityPolicy::default()));
         set_tool
@@ -790,13 +790,13 @@ mod tests {
         let get_tool = StateGetTool::new(db);
         let result = get_tool.execute(json!({"key": "task"})).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result.output).unwrap();
-        assert_eq!(parsed["owner"], "zeroclaw_agent_a");
+        assert_eq!(parsed["owner"], "llamafarm_agent_a");
     }
 
     #[tokio::test]
     async fn empty_inbox_returns_success() {
         let dir = TempDir::new().unwrap();
-        let db = Arc::new(test_db(&dir, "zeroclaw_agent_a"));
+        let db = Arc::new(test_db(&dir, "llamafarm_agent_a"));
 
         let inbox_tool = AgentsInboxTool::new(db);
         let result = inbox_tool.execute(json!({})).await.unwrap();
@@ -809,7 +809,7 @@ mod tests {
     #[tokio::test]
     async fn security_blocks_act_in_readonly() {
         let dir = TempDir::new().unwrap();
-        let db = Arc::new(test_db(&dir, "zeroclaw_agent_a"));
+        let db = Arc::new(test_db(&dir, "llamafarm_agent_a"));
         let readonly = Arc::new(SecurityPolicy {
             autonomy: AutonomyLevel::ReadOnly,
             ..SecurityPolicy::default()
@@ -818,7 +818,7 @@ mod tests {
         // agents_send should be blocked
         let send_tool = AgentsSendTool::new(db.clone(), readonly.clone());
         let result = send_tool
-            .execute(json!({"to_agent": "zeroclaw_agent_b", "payload": "test"}))
+            .execute(json!({"to_agent": "llamafarm_agent_b", "payload": "test"}))
             .await
             .unwrap();
         assert!(!result.success);
@@ -878,7 +878,7 @@ mod tests {
 
         // Open a connection that outlives the IpcDb to verify cleanup
         {
-            let _db = IpcDb::open_with_id(&db_path_str, "zeroclaw_agent_a", 300).unwrap();
+            let _db = IpcDb::open_with_id(&db_path_str, "llamafarm_agent_a", 300).unwrap();
             // _db is alive here — agent should be in table
         }
         // _db dropped — agent should be removed
@@ -886,7 +886,7 @@ mod tests {
         let conn = Connection::open(&db_path_str).unwrap();
         let count: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM agents WHERE agent_id = 'zeroclaw_agent_a'",
+                "SELECT COUNT(*) FROM agents WHERE agent_id = 'llamafarm_agent_a'",
                 [],
                 |row| row.get(0),
             )
@@ -899,13 +899,13 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let db_path = dir.path().join("agents.db").to_str().unwrap().to_string();
 
-        let db_a = Arc::new(IpcDb::open_with_id(&db_path, "zeroclaw_agent_a", 300).unwrap());
-        let db_b = Arc::new(IpcDb::open_with_id(&db_path, "zeroclaw_agent_b", 300).unwrap());
+        let db_a = Arc::new(IpcDb::open_with_id(&db_path, "llamafarm_agent_a", 300).unwrap());
+        let db_b = Arc::new(IpcDb::open_with_id(&db_path, "llamafarm_agent_b", 300).unwrap());
 
         // Agent A sends to Agent B
         let send_tool = AgentsSendTool::new(db_a, Arc::new(SecurityPolicy::default()));
         send_tool
-            .execute(json!({"to_agent": "zeroclaw_agent_b", "payload": "once"}))
+            .execute(json!({"to_agent": "llamafarm_agent_b", "payload": "once"}))
             .await
             .unwrap();
 
@@ -925,7 +925,7 @@ mod tests {
     #[tokio::test]
     async fn state_get_missing_key_returns_not_found() {
         let dir = TempDir::new().unwrap();
-        let db = Arc::new(test_db(&dir, "zeroclaw_agent_a"));
+        let db = Arc::new(test_db(&dir, "llamafarm_agent_a"));
 
         let get_tool = StateGetTool::new(db);
         let result = get_tool
@@ -940,12 +940,12 @@ mod tests {
     #[tokio::test]
     async fn send_missing_params_returns_error() {
         let dir = TempDir::new().unwrap();
-        let db = Arc::new(test_db(&dir, "zeroclaw_agent_a"));
+        let db = Arc::new(test_db(&dir, "llamafarm_agent_a"));
         let send_tool = AgentsSendTool::new(db, Arc::new(SecurityPolicy::default()));
 
         // Missing payload
         let result = send_tool
-            .execute(json!({"to_agent": "zeroclaw_agent_b"}))
+            .execute(json!({"to_agent": "llamafarm_agent_b"}))
             .await
             .unwrap();
         assert!(!result.success);
@@ -965,8 +965,8 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let db_path = dir.path().join("agents.db").to_str().unwrap().to_string();
 
-        let db_a = Arc::new(IpcDb::open_with_id(&db_path, "zeroclaw_agent_a", 300).unwrap());
-        let db_b = Arc::new(IpcDb::open_with_id(&db_path, "zeroclaw_agent_b", 300).unwrap());
+        let db_a = Arc::new(IpcDb::open_with_id(&db_path, "llamafarm_agent_a", 300).unwrap());
+        let db_b = Arc::new(IpcDb::open_with_id(&db_path, "llamafarm_agent_b", 300).unwrap());
         let security = Arc::new(SecurityPolicy::default());
 
         // Both agents visible in list
@@ -978,7 +978,7 @@ mod tests {
         // Agent A sends to Agent B
         let send_a = AgentsSendTool::new(db_a.clone(), security.clone());
         let r = send_a
-            .execute(json!({"to_agent": "zeroclaw_agent_b", "payload": "task: summarize"}))
+            .execute(json!({"to_agent": "llamafarm_agent_b", "payload": "task: summarize"}))
             .await
             .unwrap();
         assert!(r.success);
@@ -989,12 +989,12 @@ mod tests {
         let msgs: Vec<serde_json::Value> = serde_json::from_str(&r.output).unwrap();
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0]["payload"], "task: summarize");
-        assert_eq!(msgs[0]["from_agent"], "zeroclaw_agent_a");
+        assert_eq!(msgs[0]["from_agent"], "llamafarm_agent_a");
 
         // Agent B replies to Agent A
         let send_b = AgentsSendTool::new(db_b.clone(), security.clone());
         send_b
-            .execute(json!({"to_agent": "zeroclaw_agent_a", "payload": "done: summary attached"}))
+            .execute(json!({"to_agent": "llamafarm_agent_a", "payload": "done: summary attached"}))
             .await
             .unwrap();
 
@@ -1004,7 +1004,7 @@ mod tests {
         let msgs: Vec<serde_json::Value> = serde_json::from_str(&r.output).unwrap();
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0]["payload"], "done: summary attached");
-        assert_eq!(msgs[0]["from_agent"], "zeroclaw_agent_b");
+        assert_eq!(msgs[0]["from_agent"], "llamafarm_agent_b");
 
         // Agent A sets shared state
         let set_tool = StateSetTool::new(db_a, security);
@@ -1018,6 +1018,6 @@ mod tests {
         let r = get_tool.execute(json!({"key": "status"})).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&r.output).unwrap();
         assert_eq!(parsed["value"], "complete");
-        assert_eq!(parsed["owner"], "zeroclaw_agent_a");
+        assert_eq!(parsed["owner"], "llamafarm_agent_a");
     }
 }

@@ -1,12 +1,12 @@
 # Διαμόρφωση Z.AI GLM
 
-Το ZeroClaw υποστηρίζει τα μοντέλα GLM της Z.AI μέσω διεπαφών συμβατών με το OpenAI API.
+Το LlamaFarm υποστηρίζει τα μοντέλα GLM της Z.AI μέσω διεπαφών συμβατών με το OpenAI API.
 
 ---
 
 ## 1. Τελικά Σημεία και Ψευδώνυμα (Endpoints & Aliases)
 
-Το ZeroClaw υποστηρίζει τα εξής προκαθορισμένα ψευδώνυμα για την Z.AI:
+Το LlamaFarm υποστηρίζει τα εξής προκαθορισμένα ψευδώνυμα για την Z.AI:
 
 | Ψευδώνυμο | URL Τελικού Σημείου | Περιγραφή |
 |:---|:---|:---|
@@ -24,14 +24,14 @@
 
 Χρησιμοποιήστε το CLI για αυτόματη ρύθμιση:
 ```bash
-zeroclaw onboard \
+llamafarm onboard \
   --provider "zai" \
   --api-key "YOUR_ZAI_API_KEY"
 ```
 
 ### Χειροκίνητη Διαμόρφωση
 
-Επεξεργαστείτε το αρχείο `~/.zeroclaw/config.toml`:
+Επεξεργαστείτε το αρχείο `~/.llamafarm/config.toml`:
 ```toml
 api_key = "YOUR_ZAI_API_KEY"
 default_provider = "zai"

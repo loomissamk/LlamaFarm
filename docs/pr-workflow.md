@@ -1,6 +1,6 @@
-# ZeroClaw PR Workflow (High-Volume Collaboration)
+# LlamaFarm PR Workflow (High-Volume Collaboration)
 
-This document defines how ZeroClaw handles high PR volume while maintaining:
+This document defines how LlamaFarm handles high PR volume while maintaining:
 
 - High performance
 - High efficiency
@@ -159,7 +159,7 @@ Maintain these branch protection rules on `dev` and `main`:
 - Validation evidence attached (not just "CI will check").
 - Security and rollback fields completed for risky paths.
 - Privacy/data-hygiene checks are completed and test language is neutral/project-scoped.
-- If identity-like wording appears in tests/examples, it is normalized to ZeroClaw/project-native labels.
+- If identity-like wording appears in tests/examples, it is normalized to LlamaFarm/project-native labels.
 
 ### 5.2 Definition of Done (DoD) merge-ready
 
@@ -315,7 +315,7 @@ To keep review quality stable under high PR volume, use a two-lane review model.
 - Confirm risk class via labels and touched paths.
 - Confirm rollback statement exists.
 - Confirm privacy/data-hygiene section and neutral wording requirements are satisfied.
-- Confirm any required identity-like wording uses ZeroClaw/project-native terminology.
+- Confirm any required identity-like wording uses LlamaFarm/project-native terminology.
 
 ### 12.2 Lane B: deep review (risk-based)
 

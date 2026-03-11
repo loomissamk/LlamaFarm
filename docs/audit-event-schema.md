@@ -8,7 +8,7 @@ All audit events emitted by `scripts/ci/emit_audit_event.py` follow this top-lev
 
 ```json
 {
-  "schema_version": "zeroclaw.audit.v1",
+  "schema_version": "llamafarm.audit.v1",
   "event_type": "string",
   "generated_at": "RFC3339 timestamp",
   "run_context": {

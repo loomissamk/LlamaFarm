@@ -1,4 +1,4 @@
-# Development Environment for ZeroClaw Agentic Testing
+# Development Environment for LlamaFarm Agentic Testing
 #
 # Use this for:
 # - Running the agent in a sandboxed environment
@@ -8,38 +8,38 @@
 # Usage:
 #   cd dev && ./cli.sh up
 #   or from root: ./dev/cli.sh up
-name: zeroclaw-dev
+name: llamafarm-dev
 services:
   # ── The Agent (Development Image) ──
   # Builds from source using the 'dev' stage of the root Dockerfile
-  zeroclaw-dev:
+  llamafarm-dev:
     build:
       context: ..
       dockerfile: Dockerfile
       target: dev
       args:
-        ZEROCLAW_CARGO_FEATURES: browser-native
-    container_name: zeroclaw-dev
+        LLAMAFARM_CARGO_FEATURES: browser-native
+    container_name: llamafarm-dev
     restart: unless-stopped
     user: "${LLAMAFARM_UID:-1000}:${LLAMAFARM_GID:-1000}"
     depends_on:
       - chromium
       - sandbox
     environment:
-      - ZEROCLAW_GATEWAY_PORT=42617
-      - ZEROCLAW_GATEWAY_HOST=0.0.0.0
-      - ZEROCLAW_REQUIRE_PAIRING=false
-      - ZEROCLAW_ALLOW_PUBLIC_BIND=true
-      - SANDBOX_HOST=zeroclaw-sandbox
+      - LLAMAFARM_GATEWAY_PORT=42617
+      - LLAMAFARM_GATEWAY_HOST=0.0.0.0
+      - LLAMAFARM_REQUIRE_PAIRING=false
+      - LLAMAFARM_ALLOW_PUBLIC_BIND=true
+      - SANDBOX_HOST=sandbox
     entrypoint: ["/bin/bash", "-lc"]
     command:
       - |
-        exec zeroclaw gateway
+        exec llamafarm gateway
     volumes:
       # Mount the full local state directory so pairing, IPC, and memory files persist.
-      - ../.dev-state/.zeroclaw:/zeroclaw-data/.zeroclaw
+      - ../.dev-state/.llamafarm:/llamafarm-data/.llamafarm
       # Mount shared workspace
-      - ../playground:/zeroclaw-data/workspace
+      - ../playground:/llamafarm-data/workspace
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -63,7 +63,7 @@ services:
     build:
       context: sandbox # Context relative to dev/
       dockerfile: Dockerfile
-    container_name: zeroclaw-sandbox
+    container_name: llamafarm-sandbox
     hostname: dev-box
     command: ["tail", "-f", "/dev/null"]
     working_dir: /home/developer/workspace

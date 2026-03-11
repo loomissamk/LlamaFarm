@@ -1,4 +1,4 @@
-# ZeroClaw Troubleshooting
+# LlamaFarm Troubleshooting
 
 This guide focuses on common setup/runtime failures and fast resolution paths.
 
@@ -78,10 +78,10 @@ cargo build --release --locked --features hardware
 
 Symptoms:
 
-- `cargo check` / `cargo build` appears stuck at `Checking zeroclaw` for a long time
+- `cargo check` / `cargo build` appears stuck at `Checking llamafarm` for a long time
 - repeated `Blocking waiting for file lock on package cache` or `build directory`
 
-Why this happens in ZeroClaw:
+Why this happens in LlamaFarm:
 
 - Matrix E2EE stack (`matrix-sdk`, `ruma`, `vodozemac`) is large and expensive to type-check.
 - TLS + crypto native build scripts (`aws-lc-sys`, `ring`) add noticeable compile time.
@@ -125,17 +125,17 @@ pgrep -af "cargo (check|build|test)|cargo check|cargo build|cargo test"
 
 Stop unrelated cargo jobs before running your own build.
 
-### `zeroclaw` command not found after install
+### `llamafarm` command not found after install
 
 Symptom:
 
-- install succeeds but shell cannot find `zeroclaw`
+- install succeeds but shell cannot find `llamafarm`
 
 Fix:
 
 ```bash
 export PATH="$HOME/.cargo/bin:$PATH"
-which zeroclaw
+which llamafarm
 ```
 
 Persist in your shell profile if needed.
@@ -147,11 +147,11 @@ Persist in your shell profile if needed.
 Checks:
 
 ```bash
-zeroclaw status
-zeroclaw doctor
+llamafarm status
+llamafarm doctor
 ```
 
-Verify `~/.zeroclaw/config.toml`:
+Verify `~/.llamafarm/config.toml`:
 
 - `[gateway].host` (default `127.0.0.1`)
 - `[gateway].port` (default `42617`)
@@ -166,7 +166,7 @@ Checks:
 3. Re-run diagnostics:
 
 ```bash
-zeroclaw doctor
+llamafarm doctor
 ```
 
 ## Channel Issues
@@ -180,14 +180,14 @@ Cause:
 Fix:
 
 - keep only one active runtime for that token
-- stop extra `zeroclaw daemon` / `zeroclaw channel start` processes
+- stop extra `llamafarm daemon` / `llamafarm channel start` processes
 
 ### Channel unhealthy in `channel doctor`
 
 Checks:
 
 ```bash
-zeroclaw channel doctor
+llamafarm channel doctor
 ```
 
 Then verify channel-specific credentials + allowlist fields in config.
@@ -199,20 +199,20 @@ Then verify channel-specific credentials + allowlist fields in config.
 Checks:
 
 ```bash
-zeroclaw service status
+llamafarm service status
 ```
 
 Recovery:
 
 ```bash
-zeroclaw service stop
-zeroclaw service start
+llamafarm service stop
+llamafarm service start
 ```
 
 Linux logs:
 
 ```bash
-journalctl --user -u zeroclaw.service -f
+journalctl --user -u llamafarm.service -f
 ```
 
 ## Legacy Installer Compatibility
@@ -220,8 +220,8 @@ journalctl --user -u zeroclaw.service -f
 Both still work:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw/main/scripts/bootstrap.sh | bash
-curl -fsSL https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/llamafarm-labs/llamafarm/main/scripts/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/llamafarm-labs/llamafarm/main/scripts/install.sh | bash
 ```
 
 `install.sh` is a compatibility entry and forwards/falls back to bootstrap behavior.
@@ -231,10 +231,10 @@ curl -fsSL https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw/main/scripts
 Collect and include these outputs when filing an issue:
 
 ```bash
-zeroclaw --version
-zeroclaw status
-zeroclaw doctor
-zeroclaw channel doctor
+llamafarm --version
+llamafarm status
+llamafarm doctor
+llamafarm channel doctor
 ```
 
 Also include OS, install method, and sanitized config snippets (no secrets).

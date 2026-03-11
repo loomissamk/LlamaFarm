@@ -1,6 +1,6 @@
 # Ρύθμιση Nextcloud Talk
 
-Αυτός ο οδηγός περιγράφει τη διαδικασία ενσωμάτωσης του Nextcloud Talk με το ZeroClaw.
+Αυτός ο οδηγός περιγράφει τη διαδικασία ενσωμάτωσης του Nextcloud Talk με το LlamaFarm.
 
 ## 1. Λειτουργία Ενσωμάτωσης
 
@@ -10,7 +10,7 @@
 
 ## 2. Ρύθμιση
 
-Στο αρχείο `~/.zeroclaw/config.toml`, προσθέστε την ενότητα `[channels_config.nextcloud_talk]`:
+Στο αρχείο `~/.llamafarm/config.toml`, προσθέστε την ενότητα `[channels_config.nextcloud_talk]`:
 
 ```toml
 [channels_config.nextcloud_talk]
@@ -27,14 +27,14 @@ allowed_users = ["*"]
 - `webhook_secret`: Το κοινό μυστικό για την επαλήθευση της κεφαλίδας `X-Nextcloud-Talk-Signature`.
 - `allowed_users`: Λίστα με επιτρεπόμενα ID χρηστών (actors). Χρησιμοποιήστε `["*"]` για καθολική πρόσβαση.
 
-> **Συμβουλή**: Μπορείτε να χρησιμοποιήσετε τη μεταβλητή περιβάλλοντος `ZEROCLAW_NEXTCLOUD_TALK_WEBHOOK_SECRET` για να παρακάμψετε τη ρύθμιση του αρχείου.
+> **Συμβουλή**: Μπορείτε να χρησιμοποιήσετε τη μεταβλητή περιβάλλοντος `LLAMAFARM_NEXTCLOUD_TALK_WEBHOOK_SECRET` για να παρακάμψετε τη ρύθμιση του αρχείου.
 
 ## 3. Ρύθμιση Τελικού Σημείου (Endpoint)
 
-Ξεκινήστε τον daemon του ZeroClaw για να εκθέσετε το webhook:
+Ξεκινήστε τον daemon του LlamaFarm για να εκθέσετε το webhook:
 
 ```bash
-zeroclaw daemon
+llamafarm daemon
 ```
 
 Στο Nextcloud Talk, ορίστε το URL του webhook για το bot σας ως:
@@ -42,7 +42,7 @@ zeroclaw daemon
 
 ## 4. Επαλήθευση Υπογραφής
 
-Εάν έχει οριστεί `webhook_secret`, το ZeroClaw επαληθεύει τις κεφαλίδες:
+Εάν έχει οριστεί `webhook_secret`, το LlamaFarm επαληθεύει τις κεφαλίδες:
 - `X-Nextcloud-Talk-Random`
 - `X-Nextcloud-Talk-Signature`
 
@@ -50,7 +50,7 @@ zeroclaw daemon
 
 ## 5. Φιλτράρισμα και Δρομολόγηση
 
-- Το ZeroClaw αγνοεί συμβάντα που προέρχονται από άλλα bots (`actorType = bots`).
+- Το LlamaFarm αγνοεί συμβάντα που προέρχονται από άλλα bots (`actorType = bots`).
 - Αγνοούνται συμβάντα συστήματος ή συμβάντα που δεν περιέχουν μηνύματα.
 - Οι απαντήσεις δρομολογούνται αυτόματα στο σωστό δωμάτιο χρησιμοποιώντας το token δωματίου από το payload του webhook.
 
@@ -58,7 +58,7 @@ zeroclaw daemon
 
 1. Ορίστε προσωρινά `allowed_users = ["*"]`.
 2. Στείλτε ένα δοκιμαστικό μήνυμα στο δωμάτιο του Talk.
-3. Επιβεβαιώστε τη λήψη και την απάντηση από το ZeroClaw.
+3. Επιβεβαιώστε τη λήψη και την απάντηση από το LlamaFarm.
 4. Περιορίστε την πρόσβαση ορίζοντας συγκεκριμένα ID χρηστών στο `allowed_users`.
 
 ## 7. Αντιμετώπιση Προβλημάτων

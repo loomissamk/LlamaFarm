@@ -1,4 +1,4 @@
-# ZeroClaw 日本語目次（i18n）
+# LlamaFarm 日本語目次（i18n）
 
 このファイルは `docs/i18n/ja/` のナビゲーション目です。
 

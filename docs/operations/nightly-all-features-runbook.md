@@ -59,13 +59,13 @@ SLA targets:
 
 Use:
 
-- `gh run list --repo zeroclaw-labs/zeroclaw --workflow feature-matrix.yml --limit 10`
-- `gh run view <run_id> --repo zeroclaw-labs/zeroclaw --json jobs,headSha,event,createdAt,url`
+- `gh run list --repo llamafarm-labs/llamafarm --workflow feature-matrix.yml --limit 10`
+- `gh run view <run_id> --repo llamafarm-labs/llamafarm --json jobs,headSha,event,createdAt,url`
 - inspect `nightly-history.json` in `nightly-all-features-summary` artifact
 
 Manual trigger (nightly profile):
 
-- `gh workflow run feature-matrix.yml --repo zeroclaw-labs/zeroclaw --ref dev -f profile=nightly -f fail_on_failure=true`
+- `gh workflow run feature-matrix.yml --repo llamafarm-labs/llamafarm --ref dev -f profile=nightly -f fail_on_failure=true`
 
 Project update expectation:
 

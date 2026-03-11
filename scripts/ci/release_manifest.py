@@ -99,7 +99,7 @@ def main() -> int:
         )
 
     report = {
-        "schema_version": "zeroclaw.release-manifest.v1",
+        "schema_version": "llamafarm.release-manifest.v1",
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "artifacts_dir": str(artifacts_dir),
         "release_tag": args.release_tag or None,
