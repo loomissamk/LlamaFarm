@@ -5,8 +5,11 @@
 #   2. Run: docker compose up -d --build
 #   3. Open http://127.0.0.1:42617
 
+name: llamafarm-local
+
 services:
   llamafarm:
+    image: llamafarm-local:dev
     build:
       context: .
       target: dev
@@ -17,10 +20,13 @@ services:
       - ZEROCLAW_ALLOW_PUBLIC_BIND=true
       - ZEROCLAW_GATEWAY_HOST=0.0.0.0
       - ZEROCLAW_REQUIRE_PAIRING=false
+      - SHELL=/bin/bash
       # Default gateway port inside container
       - ZEROCLAW_GATEWAY_PORT=${ZEROCLAW_GATEWAY_PORT:-42617}
 
     volumes:
+      # Keep the local operator state on a stable volume so redeploys from
+      # different worktrees do not silently fork the live data set.
       - llamafarm-data:/zeroclaw-data
 
     extra_hosts:
@@ -39,7 +45,7 @@ services:
           memory: 512M
 
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:42617/health"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:${ZEROCLAW_GATEWAY_PORT:-42617}/health"]
       interval: 60s
       timeout: 10s
       retries: 3
@@ -47,3 +53,4 @@ services:
 
 volumes:
   llamafarm-data:
+    name: llamafarm-data

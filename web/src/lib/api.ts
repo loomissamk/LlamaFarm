@@ -9,6 +9,7 @@ import type {
   CostSummary,
   CliTool,
   HealthSnapshot,
+  WorkspaceFileResponse,
 } from '../types/api';
 import { clearToken, getToken, setToken } from './auth';
 
@@ -144,6 +145,23 @@ export function putConfig(toml: string): Promise<void> {
     headers: { 'Content-Type': 'application/toml' },
     body: toml,
   });
+}
+
+export function getWorkspaceFile(name: string): Promise<WorkspaceFileResponse> {
+  return apiFetch<WorkspaceFileResponse>(`/api/workspace-files/${encodeURIComponent(name)}`);
+}
+
+export function putWorkspaceFile(
+  name: string,
+  content: string,
+): Promise<WorkspaceFileResponse> {
+  return apiFetch<WorkspaceFileResponse>(
+    `/api/workspace-files/${encodeURIComponent(name)}`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ content }),
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------

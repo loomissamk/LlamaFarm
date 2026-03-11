@@ -103,6 +103,16 @@ const KNOWN_CLIS: &[KnownCli] = &[
         category: CliCategory::Container,
     },
     KnownCli {
+        name: "docker-compose",
+        version_args: &["--version"],
+        category: CliCategory::Container,
+    },
+    KnownCli {
+        name: "podman",
+        version_args: &["--version"],
+        category: CliCategory::Container,
+    },
+    KnownCli {
         name: "cargo",
         version_args: &["--version"],
         category: CliCategory::Build,
@@ -123,8 +133,68 @@ const KNOWN_CLIS: &[KnownCli] = &[
         category: CliCategory::Utility,
     },
     KnownCli {
+        name: "grep",
+        version_args: &["--version"],
+        category: CliCategory::Utility,
+    },
+    KnownCli {
+        name: "sed",
+        version_args: &["--version"],
+        category: CliCategory::Utility,
+    },
+    KnownCli {
+        name: "find",
+        version_args: &["--version"],
+        category: CliCategory::Utility,
+    },
+    KnownCli {
+        name: "awk",
+        version_args: &["--version"],
+        category: CliCategory::Utility,
+    },
+    KnownCli {
+        name: "tar",
+        version_args: &["--version"],
+        category: CliCategory::Utility,
+    },
+    KnownCli {
+        name: "zip",
+        version_args: &["--version"],
+        category: CliCategory::Utility,
+    },
+    KnownCli {
+        name: "unzip",
+        version_args: &["--version"],
+        category: CliCategory::Utility,
+    },
+    KnownCli {
+        name: "lsusb",
+        version_args: &["--version"],
+        category: CliCategory::Utility,
+    },
+    KnownCli {
+        name: "lsblk",
+        version_args: &["--version"],
+        category: CliCategory::Utility,
+    },
+    KnownCli {
+        name: "lspci",
+        version_args: &["--version"],
+        category: CliCategory::Utility,
+    },
+    KnownCli {
         name: "sqlite3",
         version_args: &["--version"],
+        category: CliCategory::Utility,
+    },
+    KnownCli {
+        name: "pdftotext",
+        version_args: &["-v"],
+        category: CliCategory::Utility,
+    },
+    KnownCli {
+        name: "ffmpeg",
+        version_args: &["-version"],
         category: CliCategory::Utility,
     },
     KnownCli {
@@ -156,6 +226,51 @@ const KNOWN_CLIS: &[KnownCli] = &[
         name: "make",
         version_args: &["--version"],
         category: CliCategory::Build,
+    },
+    KnownCli {
+        name: "go",
+        version_args: &["version"],
+        category: CliCategory::Language,
+    },
+    KnownCli {
+        name: "java",
+        version_args: &["-version"],
+        category: CliCategory::Language,
+    },
+    KnownCli {
+        name: "javac",
+        version_args: &["-version"],
+        category: CliCategory::Language,
+    },
+    KnownCli {
+        name: "ruby",
+        version_args: &["--version"],
+        category: CliCategory::Language,
+    },
+    KnownCli {
+        name: "perl",
+        version_args: &["--version"],
+        category: CliCategory::Language,
+    },
+    KnownCli {
+        name: "php",
+        version_args: &["--version"],
+        category: CliCategory::Language,
+    },
+    KnownCli {
+        name: "pnpm",
+        version_args: &["--version"],
+        category: CliCategory::PackageManager,
+    },
+    KnownCli {
+        name: "yarn",
+        version_args: &["--version"],
+        category: CliCategory::PackageManager,
+    },
+    KnownCli {
+        name: "bun",
+        version_args: &["--version"],
+        category: CliCategory::PackageManager,
     },
     KnownCli {
         name: "kubectl",
@@ -198,6 +313,16 @@ pub fn discover_cli_tools(additional: &[String], excluded: &[String]) -> Vec<Dis
     }
 
     results
+}
+
+/// Probe a command by name using the known-command table first, then a generic
+/// fallback. This is used by the gateway to validate runtime shell detection.
+pub fn probe_cli_command(name: &str) -> Option<DiscoveredCli> {
+    let known = KNOWN_CLIS.iter().find(|known| known.name == name);
+    match known {
+        Some(known) => probe_cli(known.name, known.version_args, known.category.clone()),
+        None => probe_cli(name, &["--version"], CliCategory::Utility),
+    }
 }
 
 /// Probe a single CLI tool: check if it exists and get its version.

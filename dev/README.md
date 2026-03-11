@@ -19,6 +19,17 @@ A fully containerized development sandbox for ZeroClaw agents. This environment 
 
 Run all commands from the repository root using the helper script:
 
+## Current Local Ollama Coverage
+
+The root `docker-compose.yml` LlamaFarm deployment has only been smoke-tested so
+far with these Ollama models:
+
+- `qwen3.5:9b`
+- `devstral-small-2:latest`
+
+Treat other local Ollama models as unvalidated until they have been tested in
+this stack.
+
 ### 1. Start Environment
 
 ```bash

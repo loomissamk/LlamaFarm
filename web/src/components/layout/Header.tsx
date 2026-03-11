@@ -8,6 +8,7 @@ const routeTitles: Record<string, string> = {
   '/cron': 'nav.cron',
   '/integrations': 'nav.integrations',
   '/memory': 'nav.memory',
+  '/workspace': 'nav.workspace',
   '/config': 'nav.config',
   '/models': 'nav.cost',
   '/logs': 'nav.logs',

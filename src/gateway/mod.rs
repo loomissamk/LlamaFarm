@@ -799,6 +799,10 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .route("/api/status", get(api::handle_api_status))
         .route("/api/config", get(api::handle_api_config_get))
         .route("/api/tools", get(api::handle_api_tools))
+        .route(
+            "/api/workspace-files/{name}",
+            get(api::handle_api_workspace_file_get).put(api::handle_api_workspace_file_put),
+        )
         .route("/api/cron", get(api::handle_api_cron_list))
         .route("/api/cron", post(api::handle_api_cron_add))
         .route("/api/cron/{id}", put(api::handle_api_cron_update))

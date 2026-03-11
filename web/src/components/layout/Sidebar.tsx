@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import {
+  BookText,
   LayoutDashboard,
   MessageSquare,
   Wrench,
@@ -20,6 +21,7 @@ const navItems = [
   { to: '/cron', icon: Clock, labelKey: 'nav.cron' },
   { to: '/integrations', icon: Puzzle, labelKey: 'nav.integrations' },
   { to: '/memory', icon: Brain, labelKey: 'nav.memory' },
+  { to: '/workspace', icon: BookText, labelKey: 'nav.workspace' },
   { to: '/config', icon: Settings, labelKey: 'nav.config' },
   { to: '/models', icon: DollarSign, labelKey: 'nav.cost' },
   { to: '/logs', icon: Activity, labelKey: 'nav.logs' },

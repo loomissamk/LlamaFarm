@@ -1,14 +1,185 @@
-# For the high-power local engineering/operator profile, copy `dev/config.power.toml`
-# or start the dev stack with `ZEROCLAW_DEV_PROFILE=power ./dev/cli.sh up`.
-# Ollama base URL
+# Default local operator profile for the root Docker deployment.
+# This intentionally favors the older "show the real tool call and real stdout"
+# local workflow instead of the stricter minimal template.
 api_url = "http://host.docker.internal:11434"
 default_provider = "ollama"
-default_model = "devstral-small-2:latest"
-default_temperature = 0.7
+default_model = "qwen3.5:9b"
+default_temperature = 0.1
+model_support_vision = true
 
 [gateway]
 port = 42617
 host = "0.0.0.0"
 require_pairing = false
 allow_public_bind = true
-request_timeout_secs = 30
+request_timeout_secs = 300
+
+[agent]
+compact_context = false
+max_tool_iterations = 40
+max_history_messages = 80
+parallel_tools = false
+tool_dispatcher = "auto"
+
+[observability]
+backend = "log"
+runtime_trace_mode = "rolling"
+runtime_trace_path = "state/runtime-trace.jsonl"
+runtime_trace_max_entries = 2000
+
+[autonomy]
+level = "supervised"
+workspace_only = false
+allowed_commands = [
+  "apt",
+  "apt-get",
+  "awk",
+  "bash",
+  "basename",
+  "cargo",
+  "cat",
+  "chmod",
+  "chown",
+  "cp",
+  "curl",
+  "cut",
+  "date",
+  "df",
+  "diff",
+  "dirname",
+  "docker",
+  "docker-compose",
+  "du",
+  "echo",
+  "env",
+  "file",
+  "find",
+  "free",
+  "git",
+  "grep",
+  "head",
+  "ip",
+  "jq",
+  "ln",
+  "ls",
+  "lsblk",
+  "lspci",
+  "lsusb",
+  "mkdir",
+  "mv",
+  "netstat",
+  "node",
+  "npm",
+  "patch",
+  "ping",
+  "ps",
+  "pwd",
+  "python",
+  "python3",
+  "readlink",
+  "realpath",
+  "rg",
+  "rm",
+  "sed",
+  "sh",
+  "sqlite3",
+  "ss",
+  "stat",
+  "tail",
+  "tee",
+  "timeout",
+  "touch",
+  "uname",
+  "wc",
+  "wget",
+  "whoami",
+  "xargs",
+]
+forbidden_paths = [
+  "/boot",
+  "/dev",
+  "/efi",
+  "/lib",
+  "/lib64",
+  "/lib/modules",
+  "/media",
+  "/mnt",
+  "/proc",
+  "/root",
+  "/run",
+  "/sbin",
+  "/snap",
+  "/srv",
+  "/sys",
+  "/usr/lib/firmware",
+  "/usr/lib/modules",
+]
+max_actions_per_hour = 1000
+max_cost_per_day_cents = 10000
+require_approval_for_medium_risk = false
+block_high_risk_commands = true
+shell_redirect_policy = "strip"
+shell_env_passthrough = [
+  "CUDA_VISIBLE_DEVICES",
+  "DOCKER_HOST",
+  "NVIDIA_VISIBLE_DEVICES",
+  "OLLAMA_HOST",
+]
+auto_approve = [
+  "agents_inbox",
+  "agents_list",
+  "agents_send",
+  "apply_patch",
+  "browser",
+  "browser_open",
+  "content_search",
+  "cron_add",
+  "cron_list",
+  "cron_remove",
+  "cron_run",
+  "cron_runs",
+  "cron_update",
+  "delegate",
+  "delegate_coordination_status",
+  "file_edit",
+  "file_read",
+  "file_write",
+  "git_operations",
+  "glob_search",
+  "http_request",
+  "memory_forget",
+  "memory_recall",
+  "memory_store",
+  "model_routing_config",
+  "pdf_read",
+  "process",
+  "schedule",
+  "shell",
+  "task_plan",
+  "web_fetch",
+  "web_search_tool",
+]
+always_ask = []
+allowed_roots = [
+  "~",
+  "/zeroclaw-data",
+]
+non_cli_excluded_tools = []
+non_cli_approval_approvers = []
+non_cli_natural_language_approval_mode = "direct"
+
+[autonomy.non_cli_natural_language_approval_mode_by_channel]
+
+[http_request]
+enabled = true
+allowed_domains = ["*"]
+max_response_size = 5000000
+timeout_secs = 60
+
+[web_fetch]
+enabled = true
+provider = "fast_html2md"
+allowed_domains = ["*"]
+blocked_domains = []
+max_response_size = 1000000
+timeout_secs = 60

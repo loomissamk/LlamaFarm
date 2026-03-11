@@ -4,10 +4,20 @@
 
 Finish turning this repo into a local-first, Ollama-only `LlamaFarm` deployment.
 
-## Current State (2026-03-10)
+## Current State (2026-03-11)
 
 - Local Docker deployment is up as container `LlamaFarm`.
+- The live stack now runs from the current repo compose file with stable local names:
+  `llamafarm-local` project, `llamafarm-local:dev` image, and `llamafarm-data`
+  persistent volume.
+- The old `LlamaFarm` container from the legacy `llamafarm-local-todo` worktree
+  was removed after cutover. The old `llamafarm-local-todo_data` volume is still
+  present as rollback data.
 - Local web UI is reachable on `http://127.0.0.1:42617`.
+- Smoke checks passed for `/health`, `/api/status`, `/api/tools`,
+  `/api/cli-tools`, `/api/doctor`, and the root HTML shell title.
+- Current locally smoke-tested Ollama models: `devstral-small-2:latest` and
+  `qwen3.5:9b`.
 - Visible app branding is now `LlamaFarm`.
 - The current pause point is tool/runtime debugging in the live local app.
 
@@ -18,6 +28,11 @@ Finish turning this repo into a local-first, Ollama-only `LlamaFarm` deployment.
 - Updated the local Docker/dev config for a local Ollama-first setup.
 - Set the compose container name to `LlamaFarm`.
 - Rebuilt and redeployed the local container successfully.
+- Switched the local compose deployment to stable project/image/volume naming and
+  migrated the live workspace into `llamafarm-data`.
+- Fixed the containerized config bootstrap so
+  `/zeroclaw-data/.zeroclaw/config.toml` is created with mode `600`.
+- Documented the currently smoke-tested Ollama models in `dev/README.md`.
 - Shifted the dashboard/models experience toward local Ollama runtime status.
 - Removed the visible language selector and pairing-focused shell UI from the current web app.
 
@@ -52,6 +67,10 @@ Finish turning this repo into a local-first, Ollama-only `LlamaFarm` deployment.
   - Load and save the workspace copies live from the UI. These need to work instantly on save
   - Keep the scope limited to those two files. Unless more make sense
 
+- [ ] Add basic chat/session management in the web UI.
+  - Show prior conversations or saved sessions instead of a single transient chat thread.
+  - Add explicit new chat / clear chat controls.
+  - Keep tool-call and tool-result messages visible and readable in the transcript.
 
 - [ ] Decide and implement Ollama model unload behavior on model switch.
   - Verify the actual Ollama unload/stop path first. Literally tell ollamas to stop old model if able...

@@ -65,6 +65,7 @@ RUN --mount=type=cache,id=zeroclaw-cargo-registry,target=/usr/local/cargo/regist
 # Prepare runtime directory structure and default config inline (no extra stage)
 RUN mkdir -p /zeroclaw-data/.zeroclaw /zeroclaw-data/workspace && \
     cat > /zeroclaw-data/.zeroclaw/config.toml <<EOF && \
+    chmod 600 /zeroclaw-data/.zeroclaw/config.toml && \
     chown -R 65534:65534 /zeroclaw-data
 workspace_dir = "/zeroclaw-data/workspace"
 config_path = "/zeroclaw-data/.zeroclaw/config.toml"
@@ -106,7 +107,7 @@ COPY --from=builder /app/zeroclaw /usr/local/bin/zeroclaw
 
 # Overwrite minimal config with DEV template (Ollama defaults)
 COPY dev/config.template.toml /zeroclaw-data/.zeroclaw/config.toml
-RUN chown 65534:65534 /zeroclaw-data/.zeroclaw/config.toml
+RUN chown 65534:65534 /zeroclaw-data/.zeroclaw/config.toml && chmod 600 /zeroclaw-data/.zeroclaw/config.toml
 
 # Environment setup
 # Use consistent workspace path

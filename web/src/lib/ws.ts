@@ -17,6 +17,18 @@ export interface WebSocketClientOptions {
   autoReconnect?: boolean;
 }
 
+export interface SeedChatMessage {
+  role: 'user' | 'assistant' | 'agent';
+  content: string;
+}
+
+export interface SendChatMessageOptions {
+  content: string;
+  sessionId?: string;
+  temporary?: boolean;
+  historySeed?: SeedChatMessage[];
+}
+
 const DEFAULT_RECONNECT_DELAY = 1000;
 const MAX_RECONNECT_DELAY = 30000;
 
@@ -85,11 +97,33 @@ export class WebSocketClient {
   }
 
   /** Send a chat message to the agent. */
-  sendMessage(content: string): void {
+  sendMessage(options: SendChatMessageOptions): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error('WebSocket is not connected');
     }
-    this.ws.send(JSON.stringify({ type: 'message', content }));
+    this.ws.send(
+      JSON.stringify({
+        type: 'message',
+        content: options.content,
+        session_id: options.sessionId,
+        temporary: options.temporary,
+        history_seed: options.historySeed,
+      }),
+    );
+  }
+
+  /** Delete an existing chat session from the backend session store. */
+  deleteSession(sessionId: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    this.ws.send(
+      JSON.stringify({
+        type: 'session_delete',
+        session_id: sessionId,
+      }),
+    );
   }
 
   /** Close the connection without auto-reconnecting. */

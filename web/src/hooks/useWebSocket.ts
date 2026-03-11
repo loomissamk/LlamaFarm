@@ -93,7 +93,7 @@ export function useWebSocket(
   const sendMessage = useCallback(
     (content: string) => {
       const client = getClient();
-      client.sendMessage(content);
+      client.sendMessage({ content });
       // Optimistically add the user message to the local list
       setMessages((prev) => [
         ...prev,

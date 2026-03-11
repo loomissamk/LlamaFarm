@@ -10,6 +10,7 @@ import Config from './pages/Config';
 import Models from './pages/Cost';
 import Logs from './pages/Logs';
 import Doctor from './pages/Doctor';
+import WorkspaceFiles from './pages/WorkspaceFiles';
 
 export default function App() {
   return (
@@ -21,6 +22,7 @@ export default function App() {
         <Route path="/cron" element={<Cron />} />
         <Route path="/integrations" element={<Integrations />} />
         <Route path="/memory" element={<Memory />} />
+        <Route path="/workspace" element={<WorkspaceFiles />} />
         <Route path="/config" element={<Config />} />
         <Route path="/models" element={<Models />} />
         <Route path="/cost" element={<Navigate to="/models" replace />} />

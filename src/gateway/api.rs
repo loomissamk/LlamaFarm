@@ -11,9 +11,10 @@ use axum::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, path::Path as FsPath};
 
 const MASKED_SECRET: &str = "***MASKED***";
+const WORKSPACE_EDITOR_FILES: &[&str] = &["AGENTS.md", "SOUL.md"];
 
 // ── Bearer token auth extractor ─────────────────────────────────
 
@@ -220,6 +221,25 @@ struct OllamaModelListEntry {
     name: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct WorkspaceFileUpdateBody {
+    pub content: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkspaceFilePayload {
+    name: String,
+    content: String,
+    exists: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RuntimeShellInfo {
+    path: String,
+    name: String,
+    available: bool,
+}
+
 fn has_non_empty(value: Option<&str>) -> bool {
     value.is_some_and(|candidate| !candidate.trim().is_empty())
 }
@@ -239,6 +259,48 @@ fn normalize_ollama_base_url(config: &crate::config::Config) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+fn build_runtime_shell_info() -> RuntimeShellInfo {
+    let path = std::env::var("SHELL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .unwrap_or_default();
+    let name = FsPath::new(&path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(path.as_str())
+        .to_string();
+    let available = if path.is_empty() {
+        false
+    } else if FsPath::new(&path).is_absolute() {
+        FsPath::new(&path).is_file()
+    } else {
+        crate::tools::cli_discovery::probe_cli_command(&name).is_some()
+    };
+
+    RuntimeShellInfo {
+        path,
+        name,
+        available,
+    }
+}
+
+fn normalize_workspace_editor_name(name: &str) -> Option<&'static str> {
+    match name.trim() {
+        "AGENTS.md" => Some("AGENTS.md"),
+        "SOUL.md" => Some("SOUL.md"),
+        _ => None,
+    }
+}
+
+fn workspace_editor_path(
+    config: &crate::config::Config,
+    name: &str,
+) -> Result<std::path::PathBuf, String> {
+    let normalized = normalize_workspace_editor_name(name)
+        .ok_or_else(|| format!("Unsupported workspace file: {name}"))?;
+    Ok(config.workspace_dir.join(normalized))
 }
 
 async fn fetch_ollama_dashboard_info(
@@ -352,6 +414,16 @@ fn build_integration_settings_payload(
             masked_value: None,
         },
         IntegrationCredentialsField {
+            key: "default_temperature".to_string(),
+            label: "Temperature".to_string(),
+            required: false,
+            has_value: true,
+            input_type: "text",
+            options: Vec::new(),
+            current_value: Some(config.default_temperature.to_string()),
+            masked_value: None,
+        },
+        IntegrationCredentialsField {
             key: "api_url".to_string(),
             label: "Ollama Endpoint".to_string(),
             required: false,
@@ -432,6 +504,15 @@ fn apply_integration_credentials_update(
                     Some(trimmed.to_string())
                 };
             }
+            "default_temperature" => {
+                updated.default_temperature = if trimmed.is_empty() {
+                    crate::config::Config::default().default_temperature
+                } else {
+                    trimmed.parse::<f64>().map_err(|_| {
+                        "Invalid integration config update: default_temperature must be a number between 0.0 and 2.0".to_string()
+                    })?
+                };
+            }
             "api_url" => {
                 updated.api_url = if trimmed.is_empty() {
                     None
@@ -473,6 +554,7 @@ pub async fn handle_api_status(
     let config = state.config.lock().clone();
     let health = crate::health::snapshot();
     let ollama = fetch_ollama_dashboard_info(&config).await;
+    let shell = build_runtime_shell_info();
 
     let mut channels = serde_json::Map::new();
 
@@ -488,6 +570,7 @@ pub async fn handle_api_status(
         "gateway_port": config.gateway.port,
         "locale": "en",
         "memory_backend": runtime.mem.name(),
+        "shell": shell,
         "channels": channels,
         "health": health,
         "ollama": {
@@ -529,6 +612,107 @@ pub async fn handle_api_config_get(
     Json(serde_json::json!({
         "format": "toml",
         "content": toml_str,
+    }))
+    .into_response()
+}
+
+/// GET /api/workspace-files/:name — load AGENTS.md or SOUL.md from the live workspace
+pub async fn handle_api_workspace_file_get(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let config = state.config.lock().clone();
+    let file_path = match workspace_editor_path(&config, &name) {
+        Ok(path) => path,
+        Err(error) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": error, "allowed_files": WORKSPACE_EDITOR_FILES })),
+            )
+                .into_response();
+        }
+    };
+    let normalized = normalize_workspace_editor_name(&name).unwrap_or(name.as_str());
+
+    match tokio::fs::read_to_string(&file_path).await {
+        Ok(content) => Json(WorkspaceFilePayload {
+            name: normalized.to_string(),
+            content,
+            exists: true,
+        })
+        .into_response(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Json(WorkspaceFilePayload {
+            name: normalized.to_string(),
+            content: String::new(),
+            exists: false,
+        })
+        .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Failed to read workspace file: {error}")
+            })),
+        )
+            .into_response(),
+    }
+}
+
+/// PUT /api/workspace-files/:name — save AGENTS.md or SOUL.md into the live workspace
+pub async fn handle_api_workspace_file_put(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+    Json(body): Json<WorkspaceFileUpdateBody>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let config = state.config.lock().clone();
+    let file_path = match workspace_editor_path(&config, &name) {
+        Ok(path) => path,
+        Err(error) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": error, "allowed_files": WORKSPACE_EDITOR_FILES })),
+            )
+                .into_response();
+        }
+    };
+    let normalized = normalize_workspace_editor_name(&name).unwrap_or(name.as_str());
+
+    if let Err(error) = tokio::fs::create_dir_all(&config.workspace_dir).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Failed to prepare workspace directory: {error}")
+            })),
+        )
+            .into_response();
+    }
+
+    if let Err(error) = tokio::fs::write(&file_path, &body.content).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Failed to save workspace file: {error}")
+            })),
+        )
+            .into_response();
+    }
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "file": WorkspaceFilePayload {
+            name: normalized.to_string(),
+            content: body.content,
+            exists: true,
+        }
     }))
     .into_response()
 }
@@ -1864,9 +2048,9 @@ mod tests {
     }
 
     #[test]
-    fn integration_settings_payload_includes_openrouter_and_revision() {
+    fn integration_settings_payload_includes_ollama_fields_and_revision() {
         let config = crate::config::Config::default();
-        let payload = build_integration_settings_payload(&config);
+        let payload = build_integration_settings_payload(&config, &OllamaDashboardInfo::default());
 
         assert!(
             !payload.revision.is_empty(),
@@ -1876,8 +2060,20 @@ mod tests {
             payload
                 .integrations
                 .iter()
-                .any(|entry| entry.id == "openrouter" && entry.name == "OpenRouter"),
-            "dashboard settings payload should expose OpenRouter editor metadata"
+                .any(|entry| entry.id == "ollama" && entry.name == "Ollama"),
+            "dashboard settings payload should expose Ollama editor metadata"
+        );
+        let ollama = payload
+            .integrations
+            .iter()
+            .find(|entry| entry.id == "ollama")
+            .expect("ollama settings entry should exist");
+        assert!(
+            ollama
+                .fields
+                .iter()
+                .any(|field| field.key == "default_temperature"),
+            "ollama settings payload should expose default_temperature"
         );
     }
 
@@ -1905,9 +2101,32 @@ mod tests {
         let mut fields = BTreeMap::new();
         fields.insert("unknown".to_string(), "value".to_string());
 
-        let err = apply_integration_credentials_update(&config, "openrouter", &fields)
+        let err = apply_integration_credentials_update(&config, "ollama", &fields)
             .expect_err("unknown fields should fail validation");
         assert!(err.contains("Unsupported field 'unknown'"));
+    }
+
+    #[test]
+    fn apply_integration_credentials_update_accepts_temperature() {
+        let config = crate::config::Config::default();
+        let mut fields = BTreeMap::new();
+        fields.insert("default_temperature".to_string(), "0.25".to_string());
+
+        let updated = apply_integration_credentials_update(&config, "ollama", &fields)
+            .expect("temperature update should succeed");
+
+        assert!((updated.default_temperature - 0.25).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn apply_integration_credentials_update_rejects_invalid_temperature() {
+        let config = crate::config::Config::default();
+        let mut fields = BTreeMap::new();
+        fields.insert("default_temperature".to_string(), "hot".to_string());
+
+        let err = apply_integration_credentials_update(&config, "ollama", &fields)
+            .expect_err("invalid temperature should fail validation");
+        assert!(err.contains("default_temperature must be a number"));
     }
 
     #[test]

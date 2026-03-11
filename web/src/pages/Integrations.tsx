@@ -19,6 +19,20 @@ function fieldFor(entry: IntegrationSettingsEntry | null, key: string) {
   return entry?.fields.find((field) => field.key === key) ?? null;
 }
 
+function normalizeTemperatureInput(raw: string): { value: string | null; error: string | null } {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { value: null, error: 'Temperature is required.' };
+  }
+
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 2) {
+    return { value: null, error: 'Temperature must be between 0.0 and 2.0.' };
+  }
+
+  return { value: parsed.toString(), error: null };
+}
+
 export default function Integrations() {
   const [integration, setIntegration] = useState<IntegrationSettingsEntry | null>(null);
   const [revision, setRevision] = useState('');
@@ -27,9 +41,11 @@ export default function Integrations() {
   const [error, setError] = useState<string | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [quickModel, setQuickModel] = useState('');
+  const [quickTemperature, setQuickTemperature] = useState('');
   const [quickSaveBusy, setQuickSaveBusy] = useState(false);
   const [formModelChoice, setFormModelChoice] = useState('');
   const [formCustomModel, setFormCustomModel] = useState('');
+  const [formTemperature, setFormTemperature] = useState('');
   const [formEndpoint, setFormEndpoint] = useState('');
   const [formApiKey, setFormApiKey] = useState('');
   const [saveBusy, setSaveBusy] = useState(false);
@@ -54,6 +70,7 @@ export default function Integrations() {
         const modelOptions = fieldFor(ollamaEntry, 'default_model')?.options ?? [];
         const activeModel = runtimeStatus.model.trim();
         setQuickModel(activeModel || modelOptions[0] || '');
+        setQuickTemperature(runtimeStatus.temperature.toString());
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to load Ollama settings');
@@ -75,14 +92,25 @@ export default function Integrations() {
   }, [saveSuccess]);
 
   const modelField = fieldFor(integration, 'default_model');
+  const temperatureField = fieldFor(integration, 'default_temperature');
   const endpointField = fieldFor(integration, 'api_url');
   const apiKeyField = fieldFor(integration, 'api_key');
   const modelOptions = modelField?.options ?? [];
   const currentModel = status?.model?.trim() || modelField?.current_value?.trim() || '';
+  const currentTemperatureText =
+    normalizeTemperatureInput(
+      typeof status?.temperature === 'number'
+        ? status.temperature.toString()
+        : temperatureField?.current_value ?? '0.1',
+    ).value ?? '0.1';
   const currentEndpoint =
     status?.ollama.endpoint || endpointField?.current_value || 'http://localhost:11434';
   const currentLoadedModels = status?.ollama.loaded_models ?? [];
   const installedModels = status?.ollama.installed_models ?? modelOptions;
+  const quickTemperatureState = normalizeTemperatureInput(quickTemperature);
+  const quickSettingsChanged =
+    quickModel.trim() !== currentModel ||
+    quickTemperatureState.value !== null && quickTemperatureState.value !== currentTemperatureText;
 
   const openEditor = () => {
     const selectedModel = currentModel && modelOptions.includes(currentModel)
@@ -94,6 +122,7 @@ export default function Integrations() {
     setFormCustomModel(
       currentModel && !modelOptions.includes(currentModel) ? currentModel : '',
     );
+    setFormTemperature(currentTemperatureText);
     setFormEndpoint(endpointField?.current_value ?? currentEndpoint);
     setFormApiKey('');
     setSaveError(null);
@@ -106,9 +135,25 @@ export default function Integrations() {
     setSaveError(null);
   };
 
-  const saveQuickModel = async () => {
+  const saveQuickRuntime = async () => {
     const targetModel = quickModel.trim();
-    if (!integration || !targetModel || targetModel === currentModel) {
+    const normalizedTemperature = normalizeTemperatureInput(quickTemperature);
+    if (!integration || !targetModel) {
+      return;
+    }
+    if (normalizedTemperature.error) {
+      setSaveError(normalizedTemperature.error);
+      return;
+    }
+
+    const payload: Record<string, string> = {};
+    if (targetModel !== currentModel) {
+      payload.default_model = targetModel;
+    }
+    if (normalizedTemperature.value !== currentTemperatureText) {
+      payload.default_temperature = normalizedTemperature.value!;
+    }
+    if (Object.keys(payload).length === 0) {
       return;
     }
 
@@ -117,12 +162,12 @@ export default function Integrations() {
     try {
       await putIntegrationCredentials(integration.id, {
         revision,
-        fields: { default_model: targetModel },
+        fields: payload,
       });
       await loadData(false);
-      setSaveSuccess(`Live model switched to ${targetModel}.`);
+      setSaveSuccess('Live model and temperature updated.');
     } catch (err: unknown) {
-      setSaveError(err instanceof Error ? err.message : 'Failed to switch Ollama model');
+      setSaveError(err instanceof Error ? err.message : 'Failed to update live Ollama settings');
     } finally {
       setQuickSaveBusy(false);
     }
@@ -137,10 +182,18 @@ export default function Integrations() {
       setSaveError('Choose an installed model or enter a custom Ollama model ID.');
       return;
     }
+    const normalizedTemperature = normalizeTemperatureInput(formTemperature);
+    if (normalizedTemperature.error) {
+      setSaveError(normalizedTemperature.error);
+      return;
+    }
 
     const payload: Record<string, string> = {};
     if (resolvedModel !== (modelField?.current_value?.trim() || currentModel)) {
       payload.default_model = resolvedModel;
+    }
+    if (normalizedTemperature.value !== currentTemperatureText) {
+      payload.default_temperature = normalizedTemperature.value!;
     }
 
     const trimmedEndpoint = formEndpoint.trim();
@@ -244,7 +297,7 @@ export default function Integrations() {
             </span>
           </div>
 
-          <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-3">
+          <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
             <div className="rounded-lg border border-gray-800 bg-gray-950/50 p-4">
               <span className="text-xs uppercase tracking-[0.2em] text-gray-500">Current model</span>
               <p className="mt-2 break-all text-sm font-semibold text-white">{currentModel}</p>
@@ -257,6 +310,12 @@ export default function Integrations() {
               <span className="text-xs uppercase tracking-[0.2em] text-gray-500">Endpoint</span>
               <p className="mt-2 break-all text-sm font-semibold text-white">{currentEndpoint}</p>
               <p className="mt-2 text-xs text-gray-500">{installedModels.length} installed models</p>
+            </div>
+
+            <div className="rounded-lg border border-gray-800 bg-gray-950/50 p-4">
+              <span className="text-xs uppercase tracking-[0.2em] text-gray-500">Temperature</span>
+              <p className="mt-2 text-sm font-semibold text-white">{currentTemperatureText}</p>
+              <p className="mt-2 text-xs text-gray-500">Live runtime sampling setting</p>
             </div>
 
             <div className="rounded-lg border border-gray-800 bg-gray-950/50 p-4">
@@ -282,12 +341,27 @@ export default function Integrations() {
                 </option>
               ))}
             </select>
+            <input
+              type="number"
+              min="0"
+              max="2"
+              step="0.1"
+              value={quickTemperature}
+              onChange={(event) => setQuickTemperature(event.target.value)}
+              disabled={quickSaveBusy}
+              className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 lg:w-32"
+            />
             <button
-              onClick={() => void saveQuickModel()}
-              disabled={quickSaveBusy || !quickModel || quickModel === currentModel}
+              onClick={() => void saveQuickRuntime()}
+              disabled={
+                quickSaveBusy ||
+                !quickModel ||
+                quickTemperatureState.error !== null ||
+                !quickSettingsChanged
+              }
               className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
             >
-              {quickSaveBusy ? 'Applying...' : 'Apply Live Model'}
+              {quickSaveBusy ? 'Applying...' : 'Apply Live Settings'}
             </button>
             <button
               onClick={openEditor}
@@ -306,8 +380,8 @@ export default function Integrations() {
           </div>
           <ul className="mt-4 space-y-3 text-sm text-gray-400">
             <li>Installed model choices come from the configured Ollama endpoint.</li>
-            <li>Quick Apply writes `default_model` and refreshes the live runtime snapshot.</li>
-            <li>Use Edit Connection to change endpoint or set an Ollama API key for a remote host.</li>
+            <li>Quick Apply writes `default_model` and `default_temperature` into the live runtime snapshot.</li>
+            <li>Use Edit Connection to change endpoint, temperature, or set an Ollama API key for a remote host.</li>
           </ul>
         </div>
       </div>
@@ -426,6 +500,21 @@ export default function Integrations() {
                   value={formEndpoint}
                   onChange={(event) => setFormEndpoint(event.target.value)}
                   placeholder="http://localhost:11434"
+                  className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-gray-300">
+                  Temperature
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  max="2"
+                  step="0.1"
+                  value={formTemperature}
+                  onChange={(event) => setFormTemperature(event.target.value)}
                   className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>

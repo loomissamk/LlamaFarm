@@ -6,9 +6,16 @@ export interface StatusResponse {
   gateway_port: number;
   locale: string;
   memory_backend: string;
+  shell: RuntimeShell;
   channels: Record<string, boolean>;
   health: HealthSnapshot;
   ollama: OllamaStatus;
+}
+
+export interface RuntimeShell {
+  path: string;
+  name: string;
+  available: boolean;
 }
 
 export interface OllamaStatus {
@@ -132,6 +139,18 @@ export interface CliTool {
   category: string;
 }
 
+export interface CliToolProbeResponse {
+  found: boolean;
+  name: string;
+  tool: CliTool | null;
+}
+
+export interface WorkspaceFileResponse {
+  name: string;
+  content: string;
+  exists: boolean;
+}
+
 export interface SSEEvent {
   type: string;
   timestamp?: string;
@@ -140,10 +159,13 @@ export interface SSEEvent {
 
 export interface WsMessage {
   type: 'message' | 'chunk' | 'tool_call' | 'tool_result' | 'done' | 'error';
+  session_id?: string;
   content?: string;
   full_response?: string;
   name?: string;
   args?: any;
+  success?: boolean;
+  duration_secs?: number;
   output?: string;
   message?: string;
 }

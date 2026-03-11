@@ -110,6 +110,29 @@ pub(crate) fn configured_native_tools_enabled(
     !tool_dispatcher.trim().eq_ignore_ascii_case("xml") && provider_supports_native_tools
 }
 
+fn inject_prompt_tool_fallback_instructions(
+    history: &mut [ChatMessage],
+    tools_registry: &[Box<dyn Tool>],
+) {
+    let Some(system_message) = history.iter_mut().find(|msg| msg.role == "system") else {
+        return;
+    };
+
+    if system_message.content.contains("## Tool Use Protocol") {
+        return;
+    }
+
+    system_message.content.push_str(
+        "\n\n## Compatibility Fallback\n\n\
+         Native tool calling failed for this model or provider. \
+         For the rest of this turn, emit real <tool_call>...</tool_call> tags instead of \
+         describing commands or returning native function-call payloads.\n",
+    );
+    system_message
+        .content
+        .push_str(&build_tool_instructions(tools_registry));
+}
+
 pub(crate) async fn with_tool_loop_settings<F>(
     parallel_tools: bool,
     native_tools: bool,
@@ -870,7 +893,7 @@ pub(crate) async fn run_tool_call_loop(
         .filter(|tool| !excluded_tools.iter().any(|ex| ex == tool.name()))
         .map(|tool| tool.spec())
         .collect();
-    let use_native_tools = TOOL_LOOP_NATIVE_TOOLS_ENABLED
+    let mut use_native_tools = TOOL_LOOP_NATIVE_TOOLS_ENABLED
         .try_with(|enabled| *enabled)
         .ok()
         .flatten()
@@ -882,6 +905,7 @@ pub(crate) async fn run_tool_call_loop(
     let mut duplicate_tool_call_retry_used = false;
     let mut missing_tool_call_retry_prompt: Option<String> = None;
     let mut successful_tool_execution_seen = false;
+    let mut prompt_tool_fallback_used = false;
     let bypass_non_cli_approval_for_turn =
         approval.is_some_and(|mgr| channel_name != "cli" && mgr.consume_non_cli_allow_all_once());
     if bypass_non_cli_approval_for_turn {
@@ -1175,6 +1199,37 @@ pub(crate) async fn run_tool_call_loop(
                         "duration_ms": llm_started_at.elapsed().as_millis(),
                     }),
                 );
+
+                let should_retry_with_prompt_tools = use_native_tools
+                    && !prompt_tool_fallback_used
+                    && !tool_specs.is_empty()
+                    && !successful_tool_execution_seen;
+                if should_retry_with_prompt_tools {
+                    prompt_tool_fallback_used = true;
+                    use_native_tools = false;
+                    inject_prompt_tool_fallback_instructions(history, tools_registry);
+                    runtime_trace::record_event(
+                        "llm_native_tool_fallback",
+                        Some(channel_name),
+                        Some(provider_name),
+                        Some(model),
+                        Some(&turn_id),
+                        Some(false),
+                        Some("native tool path failed; retrying with prompt tool mode"),
+                        serde_json::json!({
+                            "iteration": iteration + 1,
+                            "error": safe_error,
+                        }),
+                    );
+                    if let Some(ref tx) = on_delta {
+                        let _ = tx
+                            .send(format!(
+                                "{DRAFT_PROGRESS_SENTINEL}\u{21bb} Retrying with compatibility tool mode after native tool-call failure\n"
+                            ))
+                            .await;
+                    }
+                    continue;
+                }
                 return Err(e);
             }
         };
@@ -1643,13 +1698,17 @@ pub(crate) async fn run_tool_call_loop(
                 } else {
                     "\u{274c}"
                 };
+                let output = truncate_with_ellipsis(&scrub_credentials(&outcome.output), 12_000);
+                let progress = if output.trim().is_empty() {
+                    format!("{DRAFT_PROGRESS_SENTINEL}{icon} {} ({secs}s)\n", call.name)
+                } else {
+                    format!(
+                        "{DRAFT_PROGRESS_SENTINEL}{icon} {} ({secs}s)\n{}\n",
+                        call.name, output
+                    )
+                };
                 tracing::debug!(tool = %call.name, secs, "Sending progress complete to draft");
-                let _ = tx
-                    .send(format!(
-                        "{DRAFT_PROGRESS_SENTINEL}{icon} {} ({secs}s)\n",
-                        call.name
-                    ))
-                    .await;
+                let _ = tx.send(progress).await;
             }
 
             ordered_results[*idx] = Some((call.name.clone(), call.tool_call_id.clone(), outcome));
@@ -2623,6 +2682,24 @@ mod tests {
     fn configured_native_tools_enabled_uses_provider_capability_outside_xml_mode() {
         assert!(configured_native_tools_enabled("auto", true));
         assert!(!configured_native_tools_enabled("native", false));
+    }
+
+    #[test]
+    fn inject_prompt_tool_fallback_instructions_appends_tool_protocol_once() {
+        let mut history = vec![ChatMessage::system("Base prompt")];
+        let tools_registry = tools::builtin_tools(
+            std::path::Path::new("."),
+            &crate::config::AutonomyConfig::default(),
+            std::path::Path::new("."),
+        );
+
+        inject_prompt_tool_fallback_instructions(&mut history, &tools_registry);
+        inject_prompt_tool_fallback_instructions(&mut history, &tools_registry);
+
+        let system_prompt = &history[0].content;
+        assert!(system_prompt.contains("## Compatibility Fallback"));
+        assert!(system_prompt.contains("## Tool Use Protocol"));
+        assert_eq!(system_prompt.matches("## Compatibility Fallback").count(), 1);
     }
 
     #[test]
