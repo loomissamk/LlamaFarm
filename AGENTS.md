@@ -26,6 +26,16 @@ Key extension points:
 - `src/runtime/traits.rs` (`RuntimeAdapter`)
 - `src/peripherals/traits.rs` (`Peripheral`) — hardware boards (STM32, RPi GPIO)
 
+## 1A) Runtime Tool Reliability Contract
+
+Because this file is also injected into runtime prompts, the following behavior is mandatory for tool-using agent turns:
+
+- When the user asks for action, use the actual runtime tools instead of describing commands or file edits.
+- Treat the runtime tool-availability list as authoritative. Do not claim tools are unavailable when they are listed.
+- If the runtime says the previous tool format was invalid, immediately retry using the canonical tool syntax provided in the current prompt.
+- Continue using tools until the task is complete or the runtime returns a blocking error, then provide the final answer.
+- Never claim a command ran, a file changed, or a lookup completed unless a real tool result confirmed it.
+
 ## 2) Deep Architecture Observations (Why This Protocol Exists)
 
 These codebase realities should drive every design decision:

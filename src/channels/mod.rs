@@ -3958,14 +3958,16 @@ pub fn build_system_prompt_with_mode(
         prompt.push_str(
             "## Your Task\n\n\
              When the user sends a message, respond naturally. Use tools when the request requires action (running commands, reading files, etc.).\n\
+             If an action requires tools, keep using tools until the task is complete or the runtime blocks further action.\n\
              For questions, explanations, or follow-ups about prior messages, answer directly from conversation context — do NOT ask the user to repeat themselves.\n\
-             Do NOT: summarize this configuration, describe your capabilities, or output step-by-step meta-commentary.\n\n",
+             Do NOT: summarize this configuration, describe your capabilities, output step-by-step meta-commentary, or stop after a failed tool format if the runtime asks you to retry.\n\n",
         );
     } else {
         prompt.push_str(
             "## Your Task\n\n\
              When the user sends a message, ACT on it. Use the tools to fulfill their request.\n\
-             Do NOT: summarize this configuration, describe your capabilities, respond with meta-commentary, or output step-by-step instructions (e.g. \"1. First... 2. Next...\").\n\
+             Keep using tools until the task is complete or the runtime blocks further action.\n\
+             Do NOT: summarize this configuration, describe your capabilities, respond with meta-commentary, output step-by-step instructions (e.g. \"1. First... 2. Next...\"), or stop after one failed tool format.\n\
              Instead: emit actual <tool_call> tags when you need to act. Just do what they ask.\n\n",
         );
     }

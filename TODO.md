@@ -35,6 +35,11 @@ Finish turning this repo into a local-first, Ollama-only `LlamaFarm` deployment.
 - Documented the currently smoke-tested Ollama models in `dev/README.md`.
 - Shifted the dashboard/models experience toward local Ollama runtime status.
 - Removed the visible language selector and pairing-focused shell UI from the current web app.
+- Hardened Ollama/Qwen tool-call recovery for malformed local-tool outputs:
+  raw JSON tool objects, `shell("...")`, bare commands like `lsusb`,
+  narrative shell fences, `json{shell(...)}`, and `'''bash` shell fences.
+- Rebuilt and redeployed the local `LlamaFarm` container with the widened tool parser.
+- Confirmed the ugly `lsusb` prompt now reaches real `shell` execution in the live local app instead of stopping at fake JSON/plain-text tool output.
 
 ## Resume Later
 - [ ] Rename all zeroclaw to llamafarm
@@ -52,7 +57,7 @@ Finish turning this repo into a local-first, Ollama-only `LlamaFarm` deployment.
   - Decide whether `sqlite3` and browser binaries should be installed or shown as optional.
 
 - [ ] Fix web agent tool execution.
-  - The live agent should execute shell/tool calls instead of only describing JSON calls.
+  - Finish the final-answer follow-through after successful live tool execution, especially on the web/WebSocket chat path.
   - Revisit the local autonomy/tool allowlist defaults. Allow everything!!! or just most linux, mac, windows 
   - Retest `lsusb`, shell, scheduler, and file tools end-to-end in the live app. ensure real outputs
 

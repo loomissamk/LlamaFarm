@@ -1,3 +1,4 @@
+use crate::providers::traits::build_tool_instructions_text;
 use crate::providers::{ChatMessage, ChatResponse, ConversationMessage, ToolResultMessage};
 use crate::tools::{Tool, ToolSpec};
 use serde_json::Value;
@@ -28,70 +29,7 @@ pub trait ToolDispatcher: Send + Sync {
 
 #[derive(Default)]
 pub struct XmlToolDispatcher;
-
 impl XmlToolDispatcher {
-    fn parse_xml_tool_calls(response: &str) -> (String, Vec<ParsedToolCall>) {
-        let mut text_parts = Vec::new();
-        let mut calls = Vec::new();
-        // Normalize tag variants produced by some models/channels so the parser is consistent.
-        // The dispatcher expects <tool_call>...</tool_call>, but other parts of the system accept
-        // <toolcall>, <tool-call>, and <invoke>. Normalize them here.
-        let normalized = response
-            .replace("<toolcall>", "<tool_call>")
-            .replace("</toolcall>", "</tool_call>")
-            .replace("<tool-call>", "<tool_call>")
-            .replace("</tool-call>", "</tool_call>")
-            .replace("<invoke>", "<tool_call>")
-            .replace("</invoke>", "</tool_call>");
-
-        let mut remaining = normalized.as_str();
-
-        while let Some(start) = remaining.find("<tool_call>") {
-            let before = &remaining[..start];
-            if !before.trim().is_empty() {
-                text_parts.push(before.trim().to_string());
-            }
-
-            if let Some(end) = remaining[start..].find("</tool_call>") {
-                let inner = &remaining[start + 11..start + end];
-                match serde_json::from_str::<Value>(inner.trim()) {
-                    Ok(parsed) => {
-                        let name = parsed
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .to_string();
-                        if name.is_empty() {
-                            remaining = &remaining[start + end + 12..];
-                            continue;
-                        }
-                        let arguments = parsed
-                            .get("arguments")
-                            .cloned()
-                            .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
-                        calls.push(ParsedToolCall {
-                            name,
-                            arguments,
-                            tool_call_id: None,
-                        });
-                    }
-                    Err(e) => {
-                        tracing::warn!("Malformed <tool_call> JSON: {e}");
-                    }
-                }
-                remaining = &remaining[start + end + 12..];
-            } else {
-                break;
-            }
-        }
-
-        if !remaining.trim().is_empty() {
-            text_parts.push(remaining.trim().to_string());
-        }
-
-        (text_parts.join("\n"), calls)
-    }
-
     pub fn tool_specs(tools: &[Box<dyn Tool>]) -> Vec<ToolSpec> {
         tools.iter().map(|tool| tool.spec()).collect()
     }
@@ -100,7 +38,16 @@ impl XmlToolDispatcher {
 impl ToolDispatcher for XmlToolDispatcher {
     fn parse_response(&self, response: &ChatResponse) -> (String, Vec<ParsedToolCall>) {
         let text = response.text_or_empty();
-        Self::parse_xml_tool_calls(text)
+        let (parsed_text, parsed_calls) = crate::agent::loop_::parsing::parse_tool_calls(text);
+        let calls = parsed_calls
+            .into_iter()
+            .map(|call| ParsedToolCall {
+                name: call.name,
+                arguments: call.arguments,
+                tool_call_id: call.tool_call_id,
+            })
+            .collect();
+        (parsed_text, calls)
     }
 
     fn format_results(&self, results: &[ToolExecutionResult]) -> ConversationMessage {
@@ -117,26 +64,7 @@ impl ToolDispatcher for XmlToolDispatcher {
     }
 
     fn prompt_instructions(&self, tools: &[Box<dyn Tool>]) -> String {
-        let mut instructions = String::new();
-        instructions.push_str("## Tool Use Protocol\n\n");
-        instructions
-            .push_str("To use a tool, wrap a JSON object in <tool_call></tool_call> tags:\n\n");
-        instructions.push_str(
-            "```\n<tool_call>\n{\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}\n</tool_call>\n```\n\n",
-        );
-        instructions.push_str("### Available Tools\n\n");
-
-        for tool in tools {
-            let _ = writeln!(
-                instructions,
-                "- **{}**: {}\n  Parameters: `{}`",
-                tool.name(),
-                tool.description(),
-                tool.parameters_schema()
-            );
-        }
-
-        instructions
+        build_tool_instructions_text(&Self::tool_specs(tools))
     }
 
     fn to_provider_messages(&self, history: &[ConversationMessage]) -> Vec<ChatMessage> {
@@ -268,6 +196,22 @@ mod tests {
         let (_, calls) = dispatcher.parse_response(&response);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "shell");
+    }
+
+    #[test]
+    fn xml_dispatcher_recovers_function_style_tool_calls() {
+        let response = ChatResponse {
+            text: Some("I'll run it.\nshell(\"lsusb\")".into()),
+            tool_calls: vec![],
+            usage: None,
+            reasoning_content: None,
+        };
+        let dispatcher = XmlToolDispatcher;
+        let (text, calls) = dispatcher.parse_response(&response);
+        assert!(text.contains("I'll run it."));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(calls[0].arguments["command"], "lsusb");
     }
 
     #[test]
