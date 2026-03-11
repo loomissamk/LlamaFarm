@@ -16,7 +16,7 @@ Bản gốc tiếng Anh:
 
 1. Xác định đúng kiến trúc thiết bị (`uname -m`).
 2. Tải đúng binary theo kiến trúc.
-3. Kiểm tra quyền thực thi (`chmod +x zeroclaw`).
-4. Chạy `zeroclaw --version` và `zeroclaw onboard` để xác minh.
+3. Kiểm tra quyền thực thi (`chmod +x llamafarm`).
+4. Chạy `llamafarm --version` và `llamafarm onboard` để xác minh.
 
 Nếu cần lệnh chi tiết đầy đủ, dùng bản gốc tiếng Anh ở liên kết trên.

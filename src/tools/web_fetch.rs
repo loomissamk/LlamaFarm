@@ -514,7 +514,7 @@ mod tests {
             blocked_domains.into_iter().map(String::from).collect(),
             500_000,
             30,
-            "ZeroClaw/1.0".to_string(),
+            "LlamaFarm/1.0".to_string(),
         )
     }
 

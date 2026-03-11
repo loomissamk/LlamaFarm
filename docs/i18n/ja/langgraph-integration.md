@@ -30,7 +30,7 @@
 - [H3 · Ollama (Local)](../../langgraph-integration.md#ollama-local)
 - [H2 · Discord Bot Integration](../../langgraph-integration.md#discord-bot-integration)
 - [H2 · CLI Usage](../../langgraph-integration.md#cli-usage)
-- [H2 · Comparison with Rust ZeroClaw](../../langgraph-integration.md#comparison-with-rust-zeroclaw)
+- [H2 · Comparison with Rust LlamaFarm](../../langgraph-integration.md#comparison-with-rust-llamafarm)
 - [H2 · Troubleshooting](../../langgraph-integration.md#troubleshooting)
 
 ## 実行ヒント

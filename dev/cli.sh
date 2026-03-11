@@ -36,8 +36,8 @@ function load_env {
 }
 
 function ensure_config {
-    PROFILE="${LLAMAFARM_DEV_PROFILE:-${ZEROCLAW_DEV_PROFILE:-power}}"
-    CONFIG_DIR="$HOST_TARGET_DIR/.zeroclaw"
+    PROFILE="${LLAMAFARM_DEV_PROFILE:-${LLAMAFARM_DEV_PROFILE:-power}}"
+    CONFIG_DIR="$HOST_TARGET_DIR/.llamafarm"
     CONFIG_FILE="$CONFIG_DIR/config.toml"
     WORKSPACE_DIR="$CONFIG_DIR/workspace"
     TEMPLATE_FILE="$BASE_DIR/config.template.toml"
@@ -47,7 +47,7 @@ function ensure_config {
     fi
 
     if [ ! -f "$CONFIG_FILE" ]; then
-        echo -e "${YELLOW}⚙️  Config file missing in .dev-state/.zeroclaw. Creating '${PROFILE}' dev config from template...${NC}"
+        echo -e "${YELLOW}⚙️  Config file missing in .dev-state/.llamafarm. Creating '${PROFILE}' dev config from template...${NC}"
         mkdir -p "$WORKSPACE_DIR"
 
         # Copy template
@@ -57,14 +57,14 @@ function ensure_config {
 }
 
 function print_help {
-    echo -e "${YELLOW}ZeroClaw Development Environment Manager${NC}"
+    echo -e "${YELLOW}LlamaFarm Development Environment Manager${NC}"
     echo "Usage: ./dev/cli.sh [command]"
     echo ""
     echo "Commands:"
     echo -e "  ${GREEN}up${NC}      Start dev environment (Agent + Sandbox)"
     echo -e "  ${GREEN}down${NC}    Stop containers"
     echo -e "  ${GREEN}shell${NC}   Enter Sandbox (Ubuntu)"
-    echo -e "  ${GREEN}agent${NC}   Enter Agent (ZeroClaw CLI)"
+    echo -e "  ${GREEN}agent${NC}   Enter Agent (LlamaFarm CLI)"
     echo -e "  ${GREEN}logs${NC}    View logs"
     echo -e "  ${GREEN}build${NC}   Rebuild images"
     echo -e "  ${GREEN}ci${NC}      Run local CI checks in Docker (see ./dev/ci.sh)"
@@ -94,7 +94,7 @@ case "$1" in
         echo -e "   - Agent: http://127.0.0.1:42617"
         echo -e "   - Chromium WebDriver: http://127.0.0.1:4444"
         echo -e "   - Sandbox: running (background)"
-        echo -e "   - Config: .dev-state/.zeroclaw/config.toml (Edit locally to apply changes)"
+        echo -e "   - Config: .dev-state/.llamafarm/config.toml (Edit locally to apply changes)"
         ;;
 
     down)
@@ -105,12 +105,12 @@ case "$1" in
 
     shell)
         echo -e "${GREEN}💻 Entering Sandbox (Ubuntu)... (Type 'exit' to leave)${NC}"
-        docker exec -it zeroclaw-sandbox /bin/bash
+        docker exec -it llamafarm-sandbox /bin/bash
         ;;
 
     agent)
-        echo -e "${GREEN}🤖 Entering Agent Container (ZeroClaw)... (Type 'exit' to leave)${NC}"
-        docker exec -it zeroclaw-dev /bin/bash
+        echo -e "${GREEN}🤖 Entering Agent Container (LlamaFarm)... (Type 'exit' to leave)${NC}"
+        docker exec -it llamafarm-dev /bin/bash
         ;;
 
     logs)
@@ -135,12 +135,12 @@ case "$1" in
         ;;
 
     clean)
-        echo -e "${RED}⚠️  WARNING: This will delete '.dev-state/.zeroclaw' data and Docker volumes.${NC}"
+        echo -e "${RED}⚠️  WARNING: This will delete '.dev-state/.llamafarm' data and Docker volumes.${NC}"
         read -p "Are you sure? (y/N) " -n 1 -r
         echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
             docker compose -f "$COMPOSE_FILE" down -v
-            rm -rf "$HOST_TARGET_DIR/.zeroclaw"
+            rm -rf "$HOST_TARGET_DIR/.llamafarm"
             echo -e "${GREEN}🧹 Cleaned up (playground/ remains intact).${NC}"
         else
             echo "Cancelled."

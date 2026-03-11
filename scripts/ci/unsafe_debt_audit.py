@@ -480,7 +480,7 @@ def main() -> int:
     by_severity = Counter(str(item["severity"]) for item in findings)
 
     report = {
-        "schema_version": "zeroclaw.audit.v1",
+        "schema_version": "llamafarm.audit.v1",
         "event_type": "unsafe_debt_audit",
         "script_version": "3",
         "source": {

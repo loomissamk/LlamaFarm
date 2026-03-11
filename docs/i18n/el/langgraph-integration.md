@@ -1,6 +1,6 @@
-# Χρήση του ZeroClaw με Python (LangGraph)
+# Χρήση του LlamaFarm με Python (LangGraph)
 
-Αυτός ο οδηγός εξηγεί πώς να χρησιμοποιήσετε το πακέτο `zeroclaw-tools` στην Python για να κάνετε την AI πιο σταθερή όταν χρησιμοποιεί εργαλεία.
+Αυτός ο οδηγός εξηγεί πώς να χρησιμοποιήσετε το πακέτο `llamafarm-tools` στην Python για να κάνετε την AI πιο σταθερή όταν χρησιμοποιεί εργαλεία.
 
 ## Γιατί να το χρησιμοποιήσετε
 
@@ -13,7 +13,7 @@
 ### 1. Εγκατάσταση
 
 Γράψτε στο τερματικό σας:
-`pip install zeroclaw-tools`
+`pip install llamafarm-tools`
 
 ### 2. Παράδειγμα Κώδικα
 
@@ -21,7 +21,7 @@
 
 ```python
 import asyncio
-from zeroclaw_tools import create_agent, shell, file_read
+from llamafarm_tools import create_agent, shell, file_read
 
 async def main():
     # Δημιουργία του βοηθού (agent)
@@ -62,4 +62,4 @@ asyncio.run(main())
 
 ---
 
-**Σύνοψη**: Το `zeroclaw-tools` στην Python είναι ο εύκολος τρόπος να δώσετε "χέρια" στην AI σας, ειδικά αν χρησιμοποιείτε μοντέλα που χρειάζονται λίγη παραπάνω βοήθεια για να λειτουργήσουν σωστά.
+**Σύνοψη**: Το `llamafarm-tools` στην Python είναι ο εύκολος τρόπος να δώσετε "χέρια" στην AI σας, ειδικά αν χρησιμοποιείτε μοντέλα που χρειάζονται λίγη παραπάνω βοήθεια για να λειτουργήσουν σωστά.

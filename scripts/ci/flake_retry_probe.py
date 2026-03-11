@@ -71,7 +71,7 @@ def main() -> int:
             classification = "persistent_failure"
 
     report = {
-        "schema_version": "zeroclaw.audit.v1",
+        "schema_version": "llamafarm.audit.v1",
         "event_type": "test_flake_retry_probe",
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "initial_test_result": initial,

@@ -1,11 +1,11 @@
 # Power local engineering/operator profile.
 #
 # Intended use:
-# - supervised autonomy with broad userland + Docker authority
-# - hard blocks for kernel/driver/firmware/bootloader/disk-destructive actions
+# - full Ollama-first autonomy with broad userland + Docker authority
+# - large action/tool budgets for long local runs
 # - audit logging and emergency stop preserved
 #
-# If you run ZeroClaw directly on the host instead of the dev container,
+# If you run Ollama directly on the host instead of the dev container,
 # change the Ollama URL below to `http://127.0.0.1:11434`.
 api_url = "http://host.docker.internal:11434"
 default_provider = "ollama"
@@ -22,7 +22,7 @@ request_timeout_secs = 300
 
 [agent]
 compact_context = false
-max_tool_iterations = 40
+max_tool_iterations = 120
 max_history_messages = 80
 parallel_tools = false
 # Devstral via Ollama is more reliable with the XML dispatcher than native
@@ -30,7 +30,7 @@ parallel_tools = false
 tool_dispatcher = "xml"
 
 [autonomy]
-level = "supervised"
+level = "full"
 workspace_only = false
 allowed_commands = [
   "apt",
@@ -149,10 +149,10 @@ forbidden_paths = [
   "~/.gnupg",
   "~/.ssh",
 ]
-max_actions_per_hour = 500
-max_cost_per_day_cents = 5000
+max_actions_per_hour = 10000
+max_cost_per_day_cents = 100000
 require_approval_for_medium_risk = false
-block_high_risk_commands = true
+block_high_risk_commands = false
 shell_redirect_policy = "strip"
 shell_env_passthrough = [
   "CUDA_VISIBLE_DEVICES",
@@ -197,7 +197,7 @@ auto_approve = [
 always_ask = []
 allowed_roots = [
   "~",
-  "/zeroclaw-data",
+  "/llamafarm-data",
 ]
 non_cli_excluded_tools = [
   "composio",
@@ -253,7 +253,7 @@ root = "workspaces"
 
 [agents_ipc]
 enabled = true
-db_path = "~/.zeroclaw/agents.db"
+db_path = "~/.llamafarm/agents.db"
 staleness_secs = 600
 
 [security.resources]

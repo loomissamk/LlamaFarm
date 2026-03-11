@@ -23,7 +23,7 @@ export default function Header() {
     <header className="h-14 bg-gray-800 border-b border-gray-700 flex items-center justify-between px-6">
       <h1 className="text-lg font-semibold text-white">{t(titleKey)}</h1>
       <span className="text-xs font-medium uppercase tracking-[0.24em] text-gray-500">
-        local ollama runtime
+        local llamafarm runtime
       </span>
     </header>
   );

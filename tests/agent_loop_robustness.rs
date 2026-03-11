@@ -11,14 +11,14 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
-use zeroclaw::agent::agent::Agent;
-use zeroclaw::agent::dispatcher::NativeToolDispatcher;
-use zeroclaw::config::MemoryConfig;
-use zeroclaw::memory;
-use zeroclaw::memory::Memory;
-use zeroclaw::observability::{NoopObserver, Observer};
-use zeroclaw::providers::{ChatRequest, ChatResponse, Provider, ToolCall};
-use zeroclaw::tools::{Tool, ToolResult};
+use llamafarm::agent::agent::Agent;
+use llamafarm::agent::dispatcher::NativeToolDispatcher;
+use llamafarm::config::MemoryConfig;
+use llamafarm::memory;
+use llamafarm::memory::Memory;
+use llamafarm::observability::{NoopObserver, Observer};
+use llamafarm::providers::{ChatRequest, ChatResponse, Provider, ToolCall};
+use llamafarm::tools::{Tool, ToolResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Mock infrastructure

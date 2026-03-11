@@ -23,7 +23,7 @@ def dns_check(hostname: str, port: int) -> tuple[bool, str]:
 
 
 def http_probe(url: str, method: str, timeout_s: int) -> tuple[bool, int | None, str, int]:
-    req = urllib.request.Request(url=url, method=method, headers={"User-Agent": "zeroclaw-ci-probe/1.0"})
+    req = urllib.request.Request(url=url, method=method, headers={"User-Agent": "llamafarm-ci-probe/1.0"})
     start = time.perf_counter()
     try:
         with urllib.request.urlopen(req, timeout=timeout_s) as resp:

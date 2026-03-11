@@ -164,8 +164,8 @@ pub struct CommandExecutionLog<'a> {
 
 impl AuditLogger {
     /// Create a new audit logger
-    pub fn new(config: AuditConfig, zeroclaw_dir: PathBuf) -> Result<Self> {
-        let log_path = zeroclaw_dir.join(&config.log_path);
+    pub fn new(config: AuditConfig, llamafarm_dir: PathBuf) -> Result<Self> {
+        let log_path = llamafarm_dir.join(&config.log_path);
         if config.enabled {
             initialize_audit_log_file(&log_path)?;
         }

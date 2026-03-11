@@ -115,7 +115,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         event = json.loads(output_path.read_text(encoding="utf-8"))
-        self.assertEqual(event["schema_version"], "zeroclaw.audit.v1")
+        self.assertEqual(event["schema_version"], "llamafarm.audit.v1")
         self.assertEqual(event["event_type"], "unit_test_event")
         self.assertIn("run_context", event)
         self.assertEqual(event["payload"]["status"], "ok")
@@ -223,7 +223,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         governance_path.write_text(
             json.dumps(
                 {
-                    "schema_version": "zeroclaw.deny-governance.v1",
+                    "schema_version": "llamafarm.deny-governance.v1",
                     "advisories": [
                         {
                             "id": "RUSTSEC-2025-0001",
@@ -288,7 +288,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         governance_path.write_text(
             json.dumps(
                 {
-                    "schema_version": "zeroclaw.deny-governance.v1",
+                    "schema_version": "llamafarm.deny-governance.v1",
                     "advisories": [
                         {
                             "id": "RUSTSEC-2025-1111",
@@ -346,7 +346,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         governance_path.write_text(
             json.dumps(
                 {
-                    "schema_version": "zeroclaw.secrets-governance.v1",
+                    "schema_version": "llamafarm.secrets-governance.v1",
                     "paths": [
                         {
                             "pattern": r"src/security/leak_detector\.rs",
@@ -410,7 +410,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         governance_path.write_text(
             json.dumps(
                 {
-                    "schema_version": "zeroclaw.secrets-governance.v1",
+                    "schema_version": "llamafarm.secrets-governance.v1",
                     "paths": [
                         {
                             "pattern": r"src/security/leak_detector\.rs",
@@ -515,7 +515,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
 
     def test_generate_provenance_contains_subject_digest(self) -> None:
         artifact = self.tmp / "artifact.bin"
-        artifact.write_bytes(b"zeroclaw-provenance-test")
+        artifact.write_bytes(b"llamafarm-provenance-test")
         out = self.tmp / "provenance.json"
         proc = run_cmd(
             [
@@ -1614,7 +1614,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         governance_path.write_text(
             json.dumps(
                 {
-                    "schema_version": "zeroclaw.unsafe-audit-governance.v1",
+                    "schema_version": "llamafarm.unsafe-audit-governance.v1",
                     "ignore_paths": [
                         {
                             "path": "legacy/vendor",
@@ -1680,7 +1680,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         governance_path.write_text(
             json.dumps(
                 {
-                    "schema_version": "zeroclaw.unsafe-audit-governance.v1",
+                    "schema_version": "llamafarm.unsafe-audit-governance.v1",
                     "ignore_paths": [
                         {
                             "path": "legacy/vendor",
@@ -1733,8 +1733,8 @@ class CiScriptsBehaviorTest(unittest.TestCase):
     def test_release_manifest_generates_checksums_and_report(self) -> None:
         artifacts = self.tmp / "artifacts"
         artifacts.mkdir(parents=True, exist_ok=True)
-        (artifacts / "zeroclaw-x86_64-unknown-linux-gnu.tar.gz").write_bytes(b"release-asset")
-        (artifacts / "zeroclaw.cdx.json").write_text('{"sbom":"ok"}\n', encoding="utf-8")
+        (artifacts / "llamafarm-x86_64-unknown-linux-gnu.tar.gz").write_bytes(b"release-asset")
+        (artifacts / "llamafarm.cdx.json").write_text('{"sbom":"ok"}\n', encoding="utf-8")
         (artifacts / "LICENSE-APACHE").write_text("license\n", encoding="utf-8")
 
         out_json = self.tmp / "release-manifest.json"
@@ -1761,7 +1761,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         report = json.loads(out_json.read_text(encoding="utf-8"))
         self.assertEqual(report["release_tag"], "v0.2.0-rc.1")
         self.assertGreaterEqual(len(report["files"]), 3)
-        self.assertIn("zeroclaw-x86_64-unknown-linux-gnu.tar.gz", checksums.read_text(encoding="utf-8"))
+        self.assertIn("llamafarm-x86_64-unknown-linux-gnu.tar.gz", checksums.read_text(encoding="utf-8"))
 
     def test_release_notes_supply_chain_refs_generates_release_preface(self) -> None:
         artifacts = self.tmp / "artifacts"
@@ -1769,16 +1769,16 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         (artifacts / "release-manifest.json").write_text('{"ok":true}\n', encoding="utf-8")
         (artifacts / "release-manifest.md").write_text("# manifest\n", encoding="utf-8")
         (artifacts / "SHA256SUMS").write_text("abc  file\n", encoding="utf-8")
-        (artifacts / "zeroclaw.cdx.json").write_text('{"sbom":"cdx"}\n', encoding="utf-8")
-        (artifacts / "zeroclaw.spdx.json").write_text('{"sbom":"spdx"}\n', encoding="utf-8")
-        (artifacts / "zeroclaw.sha256sums.intoto.json").write_text('{"_type":"statement"}\n', encoding="utf-8")
+        (artifacts / "llamafarm.cdx.json").write_text('{"sbom":"cdx"}\n', encoding="utf-8")
+        (artifacts / "llamafarm.spdx.json").write_text('{"sbom":"spdx"}\n', encoding="utf-8")
+        (artifacts / "llamafarm.sha256sums.intoto.json").write_text('{"_type":"statement"}\n', encoding="utf-8")
         (artifacts / "audit-event-release-sha256sums-provenance.json").write_text(
-            '{"schema_version":"zeroclaw.audit.v1"}\n',
+            '{"schema_version":"llamafarm.audit.v1"}\n',
             encoding="utf-8",
         )
         (artifacts / "release-artifact-guard.publish.json").write_text('{"ready":true}\n', encoding="utf-8")
         (artifacts / "audit-event-release-artifact-guard-publish.json").write_text(
-            '{"schema_version":"zeroclaw.audit.v1"}\n',
+            '{"schema_version":"llamafarm.audit.v1"}\n',
             encoding="utf-8",
         )
         (artifacts / "SHA256SUMS.sig").write_text("sig\n", encoding="utf-8")
@@ -1788,7 +1788,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         trigger_dir.mkdir(parents=True, exist_ok=True)
         (trigger_dir / "release-trigger-guard.json").write_text('{"ready":true}\n', encoding="utf-8")
         (trigger_dir / "audit-event-release-trigger-guard.json").write_text(
-            '{"schema_version":"zeroclaw.audit.v1"}\n',
+            '{"schema_version":"llamafarm.audit.v1"}\n',
             encoding="utf-8",
         )
 
@@ -1801,7 +1801,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
                 "--artifacts-dir",
                 str(artifacts),
                 "--repository",
-                "zeroclaw-labs/zeroclaw",
+                "llamafarm-labs/llamafarm",
                 "--release-tag",
                 "v1.2.3",
                 "--output-json",
@@ -1816,7 +1816,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         self.assertTrue(report["ready"])
         self.assertEqual(report["violations"], [])
         sbom_url = report["references"]["sbom_cyclonedx"]["url"]
-        self.assertIn("/releases/download/v1.2.3/zeroclaw.cdx.json", sbom_url)
+        self.assertIn("/releases/download/v1.2.3/llamafarm.cdx.json", sbom_url)
         body = out_md.read_text(encoding="utf-8")
         self.assertIn("Supply-Chain Evidence", body)
         self.assertIn("Automated Commit Notes", body)
@@ -1827,17 +1827,17 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         (artifacts / "release-manifest.json").write_text('{"ok":true}\n', encoding="utf-8")
         (artifacts / "release-manifest.md").write_text("# manifest\n", encoding="utf-8")
         (artifacts / "SHA256SUMS").write_text("abc  file\n", encoding="utf-8")
-        (artifacts / "zeroclaw.cdx.json").write_text('{"sbom":"cdx"}\n', encoding="utf-8")
-        (artifacts / "zeroclaw.spdx.json").write_text('{"sbom":"spdx"}\n', encoding="utf-8")
-        (artifacts / "zeroclaw.sha256sums.intoto.json").write_text('{"_type":"statement"}\n', encoding="utf-8")
+        (artifacts / "llamafarm.cdx.json").write_text('{"sbom":"cdx"}\n', encoding="utf-8")
+        (artifacts / "llamafarm.spdx.json").write_text('{"sbom":"spdx"}\n', encoding="utf-8")
+        (artifacts / "llamafarm.sha256sums.intoto.json").write_text('{"_type":"statement"}\n', encoding="utf-8")
         (artifacts / "release-trigger-guard.json").write_text('{"ready":true}\n', encoding="utf-8")
         (artifacts / "audit-event-release-trigger-guard.json").write_text(
-            '{"schema_version":"zeroclaw.audit.v1"}\n',
+            '{"schema_version":"llamafarm.audit.v1"}\n',
             encoding="utf-8",
         )
         (artifacts / "release-artifact-guard.publish.json").write_text('{"ready":true}\n', encoding="utf-8")
         (artifacts / "audit-event-release-artifact-guard-publish.json").write_text(
-            '{"schema_version":"zeroclaw.audit.v1"}\n',
+            '{"schema_version":"llamafarm.audit.v1"}\n',
             encoding="utf-8",
         )
 
@@ -1850,7 +1850,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
                 "--artifacts-dir",
                 str(artifacts),
                 "--repository",
-                "zeroclaw-labs/zeroclaw",
+                "llamafarm-labs/llamafarm",
                 "--release-tag",
                 "v1.2.3",
                 "--output-json",
@@ -1873,7 +1873,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         policy.write_text(
             json.dumps(
                 {
-                    "schema_version": "zeroclaw.ghcr-tag-policy.v1",
+                    "schema_version": "llamafarm.ghcr-tag-policy.v1",
                     "release_tag_regex": "^v[0-9]+\\.[0-9]+\\.[0-9]+$",
                     "sha_tag_prefix": "sha-",
                     "sha_tag_length": 12,
@@ -1913,7 +1913,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
                 "python3",
                 self._script("ghcr_publish_contract_guard.py"),
                 "--repository",
-                "zeroclaw-labs/zeroclaw",
+                "llamafarm-labs/llamafarm",
                 "--release-tag",
                 "v1.2.3",
                 "--sha",
@@ -1940,7 +1940,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         policy.write_text(
             json.dumps(
                 {
-                    "schema_version": "zeroclaw.ghcr-tag-policy.v1",
+                    "schema_version": "llamafarm.ghcr-tag-policy.v1",
                     "release_tag_regex": "^v[0-9]+\\.[0-9]+\\.[0-9]+$",
                     "sha_tag_prefix": "sha-",
                     "sha_tag_length": 12,
@@ -1980,7 +1980,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
                 "python3",
                 self._script("ghcr_publish_contract_guard.py"),
                 "--repository",
-                "zeroclaw-labs/zeroclaw",
+                "llamafarm-labs/llamafarm",
                 "--release-tag",
                 "v1.2.3",
                 "--sha",
@@ -2008,7 +2008,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         policy.write_text(
             json.dumps(
                 {
-                    "schema_version": "zeroclaw.ghcr-vulnerability-policy.v1",
+                    "schema_version": "llamafarm.ghcr-vulnerability-policy.v1",
                     "required_tag_classes": ["release", "sha", "latest"],
                     "blocking_severities": ["HIGH", "CRITICAL"],
                     "max_blocking_findings_per_tag": 0,
@@ -2085,7 +2085,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         policy.write_text(
             json.dumps(
                 {
-                    "schema_version": "zeroclaw.ghcr-vulnerability-policy.v1",
+                    "schema_version": "llamafarm.ghcr-vulnerability-policy.v1",
                     "required_tag_classes": ["release", "sha", "latest"],
                     "blocking_severities": ["HIGH", "CRITICAL"],
                     "max_blocking_findings_per_tag": 0,
@@ -2205,7 +2205,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         policy.write_text(
             json.dumps(
                 {
-                    "schema_version": "zeroclaw.docs-deploy-policy.v1",
+                    "schema_version": "llamafarm.docs-deploy-policy.v1",
                     "production_branch": "main",
                     "allow_manual_production_dispatch": True,
                     "require_preview_evidence_on_manual_production": True,
@@ -2237,7 +2237,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
                 "--input-deploy-target",
                 "production",
                 "--input-preview-evidence-run-url",
-                "https://github.com/zeroclaw-labs/zeroclaw/actions/runs/123",
+                "https://github.com/llamafarm-labs/llamafarm/actions/runs/123",
                 "--input-rollback-ref",
                 rollback_sha,
                 "--policy-file",
@@ -2276,7 +2276,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         policy.write_text(
             json.dumps(
                 {
-                    "schema_version": "zeroclaw.docs-deploy-policy.v1",
+                    "schema_version": "llamafarm.docs-deploy-policy.v1",
                     "production_branch": "main",
                     "allow_manual_production_dispatch": True,
                     "require_preview_evidence_on_manual_production": True,
@@ -2350,7 +2350,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         policy.write_text(
             json.dumps(
                 {
-                    "schema_version": "zeroclaw.docs-deploy-policy.v1",
+                    "schema_version": "llamafarm.docs-deploy-policy.v1",
                     "production_branch": "main",
                     "allow_manual_production_dispatch": True,
                     "require_preview_evidence_on_manual_production": True,
@@ -2382,7 +2382,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
                 "--input-deploy-target",
                 "production",
                 "--input-preview-evidence-run-url",
-                "https://github.com/zeroclaw-labs/zeroclaw/actions/runs/123",
+                "https://github.com/llamafarm-labs/llamafarm/actions/runs/123",
                 "--input-rollback-ref",
                 side_sha,
                 "--policy-file",
@@ -2403,23 +2403,23 @@ class CiScriptsBehaviorTest(unittest.TestCase):
     def test_release_artifact_guard_detects_missing_archives_in_verify_stage(self) -> None:
         artifacts = self.tmp / "artifacts"
         artifacts.mkdir(parents=True, exist_ok=True)
-        (artifacts / "zeroclaw-x86_64-unknown-linux-gnu.tar.gz").write_bytes(b"linux-gnu")
+        (artifacts / "llamafarm-x86_64-unknown-linux-gnu.tar.gz").write_bytes(b"linux-gnu")
 
         contract = self.tmp / "artifact-contract.json"
         contract.write_text(
             json.dumps(
                 {
-                    "schema_version": "zeroclaw.release-artifact-contract.v1",
+                    "schema_version": "llamafarm.release-artifact-contract.v1",
                     "release_archive_patterns": [
-                        "zeroclaw-x86_64-unknown-linux-gnu.tar.gz",
-                        "zeroclaw-x86_64-unknown-linux-musl.tar.gz",
+                        "llamafarm-x86_64-unknown-linux-gnu.tar.gz",
+                        "llamafarm-x86_64-unknown-linux-musl.tar.gz",
                     ],
                     "required_manifest_files": [
                         "release-manifest.json",
                         "release-manifest.md",
                         "SHA256SUMS",
                     ],
-                    "required_sbom_files": ["zeroclaw.cdx.json", "zeroclaw.spdx.json"],
+                    "required_sbom_files": ["llamafarm.cdx.json", "llamafarm.spdx.json"],
                     "required_notice_files": ["LICENSE-APACHE", "LICENSE-MIT", "NOTICE"],
                 },
                 indent=2,
@@ -2460,33 +2460,33 @@ class CiScriptsBehaviorTest(unittest.TestCase):
     def test_release_artifact_guard_passes_for_full_publish_contract(self) -> None:
         artifacts = self.tmp / "artifacts"
         artifacts.mkdir(parents=True, exist_ok=True)
-        (artifacts / "zeroclaw-x86_64-unknown-linux-gnu.tar.gz").write_bytes(b"linux-gnu")
-        (artifacts / "zeroclaw-x86_64-unknown-linux-musl.tar.gz").write_bytes(b"linux-musl")
+        (artifacts / "llamafarm-x86_64-unknown-linux-gnu.tar.gz").write_bytes(b"linux-gnu")
+        (artifacts / "llamafarm-x86_64-unknown-linux-musl.tar.gz").write_bytes(b"linux-musl")
         (artifacts / "release-manifest.json").write_text('{"ok":true}\n', encoding="utf-8")
         (artifacts / "release-manifest.md").write_text("# ok\n", encoding="utf-8")
         (artifacts / "SHA256SUMS").write_text("abc  file\n", encoding="utf-8")
-        (artifacts / "zeroclaw.cdx.json").write_text('{"sbom":"cdx"}\n', encoding="utf-8")
-        (artifacts / "zeroclaw.spdx.json").write_text('{"sbom":"spdx"}\n', encoding="utf-8")
+        (artifacts / "llamafarm.cdx.json").write_text('{"sbom":"cdx"}\n', encoding="utf-8")
+        (artifacts / "llamafarm.spdx.json").write_text('{"sbom":"spdx"}\n', encoding="utf-8")
         (artifacts / "LICENSE-APACHE").write_text("license\n", encoding="utf-8")
         (artifacts / "LICENSE-MIT").write_text("license\n", encoding="utf-8")
         (artifacts / "NOTICE").write_text("notice\n", encoding="utf-8")
-        (artifacts / "zeroclaw-x86_64-unknown-linux-gnu.tar.gz.sig").write_text("sig\n", encoding="utf-8")
+        (artifacts / "llamafarm-x86_64-unknown-linux-gnu.tar.gz.sig").write_text("sig\n", encoding="utf-8")
 
         contract = self.tmp / "artifact-contract.json"
         contract.write_text(
             json.dumps(
                 {
-                    "schema_version": "zeroclaw.release-artifact-contract.v1",
+                    "schema_version": "llamafarm.release-artifact-contract.v1",
                     "release_archive_patterns": [
-                        "zeroclaw-x86_64-unknown-linux-gnu.tar.gz",
-                        "zeroclaw-x86_64-unknown-linux-musl.tar.gz",
+                        "llamafarm-x86_64-unknown-linux-gnu.tar.gz",
+                        "llamafarm-x86_64-unknown-linux-musl.tar.gz",
                     ],
                     "required_manifest_files": [
                         "release-manifest.json",
                         "release-manifest.md",
                         "SHA256SUMS",
                     ],
-                    "required_sbom_files": ["zeroclaw.cdx.json", "zeroclaw.spdx.json"],
+                    "required_sbom_files": ["llamafarm.cdx.json", "llamafarm.spdx.json"],
                     "required_notice_files": ["LICENSE-APACHE", "LICENSE-MIT", "NOTICE"],
                 },
                 indent=2,
@@ -2524,16 +2524,16 @@ class CiScriptsBehaviorTest(unittest.TestCase):
     def test_release_artifact_guard_rejects_invalid_contract_schema(self) -> None:
         artifacts = self.tmp / "artifacts"
         artifacts.mkdir(parents=True, exist_ok=True)
-        (artifacts / "zeroclaw-x86_64-unknown-linux-gnu.tar.gz").write_bytes(b"linux-gnu")
+        (artifacts / "llamafarm-x86_64-unknown-linux-gnu.tar.gz").write_bytes(b"linux-gnu")
 
         contract = self.tmp / "artifact-contract.json"
         contract.write_text(
             json.dumps(
                 {
-                    "schema_version": "zeroclaw.release-artifact-contract.v0",
-                    "release_archive_patterns": ["zeroclaw-x86_64-unknown-linux-gnu.tar.gz"],
+                    "schema_version": "llamafarm.release-artifact-contract.v0",
+                    "release_archive_patterns": ["llamafarm-x86_64-unknown-linux-gnu.tar.gz"],
                     "required_manifest_files": ["release-manifest.json"],
-                    "required_sbom_files": ["zeroclaw.cdx.json"],
+                    "required_sbom_files": ["llamafarm.cdx.json"],
                     "required_notice_files": ["NOTICE"],
                 },
                 indent=2,
@@ -2602,7 +2602,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
                 "--repo-root",
                 str(repo),
                 "--repository",
-                "zeroclaw-labs/zeroclaw",
+                "llamafarm-labs/llamafarm",
                 "--origin-url",
                 str(repo),
                 "--event-name",
@@ -2670,7 +2670,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
                 "--repo-root",
                 str(repo),
                 "--repository",
-                "zeroclaw-labs/zeroclaw",
+                "llamafarm-labs/llamafarm",
                 "--origin-url",
                 str(repo),
                 "--event-name",
@@ -2739,7 +2739,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
                 "--repo-root",
                 str(repo),
                 "--repository",
-                "zeroclaw-labs/zeroclaw",
+                "llamafarm-labs/llamafarm",
                 "--origin-url",
                 str(repo),
                 "--event-name",
@@ -2800,7 +2800,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         owners.write_text(
             json.dumps(
                 {
-                    "schema_version": "zeroclaw.nightly-owner-routing.v1",
+                    "schema_version": "llamafarm.nightly-owner-routing.v1",
                     "owners": {
                         "default": "@ops",
                         "nightly-all-features": "@release",
@@ -2855,7 +2855,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         owners.write_text(
             json.dumps(
                 {
-                    "schema_version": "zeroclaw.nightly-owner-routing.v1",
+                    "schema_version": "llamafarm.nightly-owner-routing.v1",
                     "owners": {"default": "@ops"},
                 },
                 indent=2,
@@ -2934,7 +2934,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         policy.write_text(
             json.dumps(
                 {
-                    "schema_version": "zeroclaw.canary-policy.v1",
+                    "schema_version": "llamafarm.canary-policy.v1",
                     "minimum_sample_size": 300,
                     "observation_window_minutes": 60,
                     "cohorts": [
@@ -3027,7 +3027,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         stage_cfg.write_text(
             json.dumps(
                 {
-                    "schema_version": "zeroclaw.prerelease-stage-gates.v1",
+                    "schema_version": "llamafarm.prerelease-stage-gates.v1",
                     "required_previous_stage": {
                         "beta": "alpha",
                         "rc": "beta",
@@ -3102,7 +3102,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         stage_cfg.write_text(
             json.dumps(
                 {
-                    "schema_version": "zeroclaw.prerelease-stage-gates.v1",
+                    "schema_version": "llamafarm.prerelease-stage-gates.v1",
                     "stage_order": ["alpha", "beta", "rc", "stable"],
                     "required_previous_stage": {
                         "beta": "alpha",
@@ -3157,7 +3157,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         report = json.loads(out_json.read_text(encoding="utf-8"))
-        self.assertEqual(report["schema_version"], "zeroclaw.prerelease-guard.v2")
+        self.assertEqual(report["schema_version"], "llamafarm.prerelease-guard.v2")
         self.assertEqual(report["transition"]["type"], "promotion")
         self.assertEqual(report["transition"]["outcome"], "promotion")
         self.assertEqual(report["transition"]["required_previous_tag"], "v0.2.0-alpha.1")
@@ -3199,7 +3199,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         stage_cfg.write_text(
             json.dumps(
                 {
-                    "schema_version": "zeroclaw.prerelease-stage-gates.v1",
+                    "schema_version": "llamafarm.prerelease-stage-gates.v1",
                     "stage_order": ["alpha", "beta", "rc", "stable"],
                     "required_previous_stage": {
                         "beta": "alpha",
@@ -3293,7 +3293,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         stage_cfg.write_text(
             json.dumps(
                 {
-                    "schema_version": "zeroclaw.prerelease-stage-gates.v1",
+                    "schema_version": "llamafarm.prerelease-stage-gates.v1",
                     "stage_order": ["alpha", "beta", "rc", "stable"],
                     "required_previous_stage": {
                         "beta": "alpha",
@@ -3382,7 +3382,7 @@ class CiScriptsBehaviorTest(unittest.TestCase):
         stage_cfg.write_text(
             json.dumps(
                 {
-                    "schema_version": "zeroclaw.prerelease-stage-gates.v1",
+                    "schema_version": "llamafarm.prerelease-stage-gates.v1",
                     "stage_order": ["alpha", "beta", "stable"],
                     "required_previous_stage": {
                         "beta": "alpha",

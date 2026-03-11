@@ -240,6 +240,17 @@ struct RuntimeShellInfo {
     available: bool,
 }
 
+#[derive(Debug, Default, Clone, Serialize)]
+struct OllamaUnloadReport {
+    endpoint: String,
+    reachable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    keep_model: Option<String>,
+    attempted: Vec<String>,
+    unloaded: Vec<String>,
+    failed: Vec<String>,
+}
+
 fn has_non_empty(value: Option<&str>) -> bool {
     value.is_some_and(|candidate| !candidate.trim().is_empty())
 }
@@ -261,16 +272,62 @@ fn normalize_ollama_base_url(config: &crate::config::Config) -> String {
     }
 }
 
+fn ollama_auth_token(config: &crate::config::Config) -> Option<String> {
+    config
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn default_runtime_shell() -> Option<(String, String)> {
+    #[cfg(target_os = "windows")]
+    let absolute_candidates = ["C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"];
+    #[cfg(not(target_os = "windows"))]
+    let absolute_candidates = ["/bin/bash", "/usr/bin/bash", "/bin/sh", "/usr/bin/sh"];
+
+    for candidate in absolute_candidates {
+        let path = FsPath::new(candidate);
+        if path.is_file() {
+            let name = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or(candidate)
+                .to_string();
+            return Some((candidate.to_string(), name));
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    let cli_candidates = ["pwsh", "powershell", "cmd"];
+    #[cfg(not(target_os = "windows"))]
+    let cli_candidates = ["bash", "sh"];
+
+    for candidate in cli_candidates {
+        if let Some(cli) = crate::tools::cli_discovery::probe_cli_command(candidate) {
+            return Some((cli.path.to_string_lossy().into_owned(), cli.name));
+        }
+    }
+
+    None
+}
+
 fn build_runtime_shell_info() -> RuntimeShellInfo {
-    let path = std::env::var("SHELL")
+    let env_shell = std::env::var("SHELL")
         .ok()
         .map(|value| value.trim().to_string())
         .unwrap_or_default();
-    let name = FsPath::new(&path)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or(path.as_str())
-        .to_string();
+    let (path, name) = if env_shell.is_empty() {
+        default_runtime_shell().unwrap_or_default()
+    } else {
+        let name = FsPath::new(&env_shell)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or(env_shell.as_str())
+            .to_string();
+        (env_shell, name)
+    };
     let available = if path.is_empty() {
         false
     } else if FsPath::new(&path).is_absolute() {
@@ -303,55 +360,165 @@ fn workspace_editor_path(
     Ok(config.workspace_dir.join(normalized))
 }
 
-async fn fetch_ollama_dashboard_info(
-    config: &crate::config::Config,
-) -> OllamaDashboardInfo {
-    let endpoint = normalize_ollama_base_url(config);
-    let client = crate::config::build_runtime_proxy_client_with_timeouts("provider.ollama", 30, 5);
-    let auth_token = config
-        .api_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string);
-
-    async fn fetch_model_names(
-        client: &reqwest::Client,
-        endpoint: &str,
-        auth_token: Option<&str>,
-        suffix: &str,
-    ) -> Option<Vec<String>> {
-        let url = format!("{endpoint}{suffix}");
-        let mut request = client.get(url);
-        if let Some(token) = auth_token {
-            request = request.bearer_auth(token);
-        }
-
-        let Ok(response) = request.send().await else {
-            return None;
-        };
-        if !response.status().is_success() {
-            return None;
-        }
-        let Ok(payload) = response.json::<OllamaModelListResponse>().await else {
-            return None;
-        };
-
-        let mut names: Vec<String> = payload
-            .models
-            .into_iter()
-            .map(|model| model.name.trim().to_string())
-            .filter(|name| !name.is_empty())
-            .collect();
-        names.sort();
-        names.dedup();
-        Some(names)
+async fn fetch_ollama_model_names(
+    client: &reqwest::Client,
+    endpoint: &str,
+    auth_token: Option<&str>,
+    suffix: &str,
+) -> Option<Vec<String>> {
+    let url = format!("{endpoint}{suffix}");
+    let mut request = client.get(url);
+    if let Some(token) = auth_token {
+        request = request.bearer_auth(token);
     }
 
+    let Ok(response) = request.send().await else {
+        return None;
+    };
+    if !response.status().is_success() {
+        return None;
+    }
+    let Ok(payload) = response.json::<OllamaModelListResponse>().await else {
+        return None;
+    };
+
+    let mut names: Vec<String> = payload
+        .models
+        .into_iter()
+        .map(|model| model.name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .collect();
+    names.sort();
+    names.dedup();
+    Some(names)
+}
+
+async fn unload_ollama_model(
+    client: &reqwest::Client,
+    endpoint: &str,
+    auth_token: Option<&str>,
+    model: &str,
+) -> Result<(), String> {
+    let url = format!("{endpoint}/api/generate");
+    let mut request = client.post(url).json(&serde_json::json!({
+        "model": model,
+        "prompt": "",
+        "stream": false,
+        "keep_alive": 0,
+    }));
+    if let Some(token) = auth_token {
+        request = request.bearer_auth(token);
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|error| format!("request failed: {error}"))?;
+    if response.status().is_success() {
+        return Ok(());
+    }
+
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    let body = body.trim();
+    if body.is_empty() {
+        Err(format!("HTTP {status}"))
+    } else {
+        Err(format!("HTTP {status}: {body}"))
+    }
+}
+
+async fn unload_ollama_models_except(
+    config: &crate::config::Config,
+    keep_model: Option<&str>,
+) -> OllamaUnloadReport {
+    let endpoint = normalize_ollama_base_url(config);
+    let client = crate::config::build_runtime_proxy_client_with_timeouts("provider.ollama", 30, 5);
+    let auth_token = ollama_auth_token(config);
+    let keep_model = keep_model
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(std::string::ToString::to_string);
+    let mut report = OllamaUnloadReport {
+        endpoint: endpoint.clone(),
+        keep_model: keep_model.clone(),
+        ..OllamaUnloadReport::default()
+    };
+
+    let Some(loaded_models) =
+        fetch_ollama_model_names(&client, &endpoint, auth_token.as_deref(), "/api/ps").await
+    else {
+        return report;
+    };
+
+    report.reachable = true;
+    for model in loaded_models {
+        if keep_model.as_deref().is_some_and(|keep| keep == model) {
+            continue;
+        }
+
+        report.attempted.push(model.clone());
+        match unload_ollama_model(&client, &endpoint, auth_token.as_deref(), &model).await {
+            Ok(()) => report.unloaded.push(model),
+            Err(error) => report.failed.push(format!("{model}: {error}")),
+        }
+    }
+
+    report
+}
+
+fn should_rebalance_ollama_models(
+    previous: &crate::config::Config,
+    updated: &crate::config::Config,
+) -> bool {
+    normalize_ollama_base_url(previous) != normalize_ollama_base_url(updated)
+        || previous
+            .default_model
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            != updated
+                .default_model
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or_default()
+}
+
+async fn rebalance_ollama_models_for_live_switch(
+    previous: &crate::config::Config,
+    updated: &crate::config::Config,
+) -> Vec<OllamaUnloadReport> {
+    if !should_rebalance_ollama_models(previous, updated) {
+        return Vec::new();
+    }
+
+    let previous_endpoint = normalize_ollama_base_url(previous);
+    let updated_endpoint = normalize_ollama_base_url(updated);
+    let mut reports = Vec::new();
+
+    if previous_endpoint != updated_endpoint {
+        let report = unload_ollama_models_except(previous, None).await;
+        if report.reachable || !report.attempted.is_empty() || !report.failed.is_empty() {
+            reports.push(report);
+        }
+    }
+
+    let report = unload_ollama_models_except(updated, updated.default_model.as_deref()).await;
+    if report.reachable || !report.attempted.is_empty() || !report.failed.is_empty() {
+        reports.push(report);
+    }
+
+    reports
+}
+
+async fn fetch_ollama_dashboard_info(config: &crate::config::Config) -> OllamaDashboardInfo {
+    let endpoint = normalize_ollama_base_url(config);
+    let client = crate::config::build_runtime_proxy_client_with_timeouts("provider.ollama", 30, 5);
+    let auth_token = ollama_auth_token(config);
     let installed_models =
-        fetch_model_names(&client, &endpoint, auth_token.as_deref(), "/api/tags").await;
+        fetch_ollama_model_names(&client, &endpoint, auth_token.as_deref(), "/api/tags").await;
     let loaded_models =
-        fetch_model_names(&client, &endpoint, auth_token.as_deref(), "/api/ps").await;
+        fetch_ollama_model_names(&client, &endpoint, auth_token.as_deref(), "/api/ps").await;
     let reachable = installed_models.is_some() || loaded_models.is_some();
     let installed_models = installed_models.unwrap_or_default();
     let loaded_models = loaded_models.unwrap_or_default();
@@ -1169,6 +1336,8 @@ pub async fn handle_api_integration_credentials_put(
         }
     };
 
+    let unload_requested = should_rebalance_ollama_models(&current, &updated);
+
     if let Err(error) = updated.save().await {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1177,11 +1346,16 @@ pub async fn handle_api_integration_credentials_put(
             .into_response();
     }
 
+    let unload_reports = rebalance_ollama_models_for_live_switch(&current, &updated).await;
     *state.config.lock() = updated;
     state.replace_runtime_snapshot(runtime_snapshot);
     Json(serde_json::json!({
         "status": "ok",
         "revision": updated_revision,
+        "ollama_unload": {
+            "requested": unload_requested,
+            "reports": unload_reports,
+        }
     }))
     .into_response()
 }
@@ -1874,7 +2048,7 @@ mod tests {
         });
         cfg.tunnel.ngrok = Some(NgrokTunnelConfig {
             auth_token: "ngrok-real-token".to_string(),
-            domain: Some("zeroclaw.ngrok.app".to_string()),
+            domain: Some("ollama.ngrok.app".to_string()),
         });
         cfg.channels_config.wati = Some(WatiConfig {
             api_token: "wati-real-token".to_string(),
@@ -1959,7 +2133,7 @@ mod tests {
         });
         current.tunnel.ngrok = Some(NgrokTunnelConfig {
             auth_token: "ngrok-real-token".to_string(),
-            domain: Some("zeroclaw.ngrok.app".to_string()),
+            domain: Some("ollama.ngrok.app".to_string()),
         });
         current.channels_config.wati = Some(WatiConfig {
             api_token: "wati-real-token".to_string(),
@@ -2127,6 +2301,41 @@ mod tests {
         let err = apply_integration_credentials_update(&config, "ollama", &fields)
             .expect_err("invalid temperature should fail validation");
         assert!(err.contains("default_temperature must be a number"));
+    }
+
+    #[test]
+    fn normalize_ollama_base_url_strips_api_suffix() {
+        let config = crate::config::Config {
+            api_url: Some("http://localhost:11434/api/".to_string()),
+            ..crate::config::Config::default()
+        };
+
+        assert_eq!(normalize_ollama_base_url(&config), "http://localhost:11434");
+    }
+
+    #[test]
+    fn should_rebalance_ollama_models_detects_model_change() {
+        let previous = crate::config::Config {
+            default_model: Some("qwen3.5:9b".to_string()),
+            ..crate::config::Config::default()
+        };
+        let updated = crate::config::Config {
+            default_model: Some("devstral-small-2:latest".to_string()),
+            ..previous.clone()
+        };
+
+        assert!(should_rebalance_ollama_models(&previous, &updated));
+    }
+
+    #[test]
+    fn should_rebalance_ollama_models_ignores_unchanged_selection() {
+        let config = crate::config::Config {
+            default_model: Some("qwen3.5:9b".to_string()),
+            api_url: Some("http://localhost:11434".to_string()),
+            ..crate::config::Config::default()
+        };
+
+        assert!(!should_rebalance_ollama_models(&config, &config));
     }
 
     #[test]

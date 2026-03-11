@@ -1,6 +1,6 @@
 # Εγκατάσταση σε Android
 
-Το ZeroClaw παρέχει προκατασκευασμένα εκτελέσιμα αρχεία (binaries) για συσκευές Android.
+Το LlamaFarm παρέχει προκατασκευασμένα εκτελέσιμα αρχεία (binaries) για συσκευές Android.
 
 ## Υποστηριζόμενες Αρχιτεκτονικές
 
@@ -11,7 +11,7 @@
 
 ## Εγκατάσταση μέσω Termux
 
-Ο ευκολότερος τρόπος εκτέλεσης του ZeroClaw σε Android είναι μέσω [Termux](https://termux.dev/).
+Ο ευκολότερος τρόπος εκτέλεσης του LlamaFarm σε Android είναι μέσω [Termux](https://termux.dev/).
 
 ### 1. Εγκατάσταση Termux
 
@@ -19,7 +19,7 @@
 
 > ⚠️ **Σημείωση:** Η έκδοση του Play Store είναι παρωχημένη και δεν υποστηρίζεται.
 
-### 2. Λήψη ZeroClaw
+### 2. Λήψη LlamaFarm
 
 ```bash
 # Έλεγχος αρχιτεκτονικής
@@ -28,36 +28,36 @@ uname -m
 
 # Λήψη του κατάλληλου binary
 # Για 64-bit (aarch64):
-curl -LO https://github.com/zeroclaw-labs/zeroclaw/releases/latest/download/zeroclaw-aarch64-linux-android.tar.gz
-tar xzf zeroclaw-aarch64-linux-android.tar.gz
+curl -LO https://github.com/llamafarm-labs/llamafarm/releases/latest/download/llamafarm-aarch64-linux-android.tar.gz
+tar xzf llamafarm-aarch64-linux-android.tar.gz
 
 # Για 32-bit (armv7):
-curl -LO https://github.com/zeroclaw-labs/zeroclaw/releases/latest/download/zeroclaw-armv7-linux-androideabi.tar.gz
-tar xzf zeroclaw-armv7-linux-androideabi.tar.gz
+curl -LO https://github.com/llamafarm-labs/llamafarm/releases/latest/download/llamafarm-armv7-linux-androideabi.tar.gz
+tar xzf llamafarm-armv7-linux-androideabi.tar.gz
 ```
 
 ### 3. Εγκατάσταση και Εκτέλεση
 
 ```bash
-chmod +x zeroclaw
-mv zeroclaw $PREFIX/bin/
+chmod +x llamafarm
+mv llamafarm $PREFIX/bin/
 
 # Επαλήθευση εγκατάστασης
-zeroclaw --version
+llamafarm --version
 
 # Εκτέλεση ρύθμισης
-zeroclaw onboard
+llamafarm onboard
 ```
 
 ## Άμεση Εγκατάσταση μέσω ADB
 
-Για προχωρημένους χρήστες που θέλουν να εκτελέσουν το ZeroClaw εκτός Termux:
+Για προχωρημένους χρήστες που θέλουν να εκτελέσουν το LlamaFarm εκτός Termux:
 
 ```bash
 # Από τον υπολογιστή σας με ADB
-adb push zeroclaw /data/local/tmp/
-adb shell chmod +x /data/local/tmp/zeroclaw
-adb shell /data/local/tmp/zeroclaw --version
+adb push llamafarm /data/local/tmp/
+adb shell chmod +x /data/local/tmp/llamafarm
+adb shell /data/local/tmp/llamafarm --version
 ```
 
 > ⚠️ Η εκτέλεση εκτός Termux απαιτεί συσκευή με root ή συγκεκριμένα δικαιώματα για πλήρη λειτουργικότητα.
@@ -91,7 +91,7 @@ cargo build --release --target aarch64-linux-android
 ### "Permission denied"
 
 ```bash
-chmod +x zeroclaw
+chmod +x llamafarm
 ```
 
 ### "not found" ή σφάλματα linker

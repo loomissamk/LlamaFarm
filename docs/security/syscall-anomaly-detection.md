@@ -1,6 +1,6 @@
 # Syscall Anomaly Detection
 
-ZeroClaw can monitor syscall-related telemetry emitted by sandboxed command execution
+LlamaFarm can monitor syscall-related telemetry emitted by sandboxed command execution
 and flag anomalies before they become silent failures.
 
 This feature is designed for daemon runtime paths where `shell` and `process` tools

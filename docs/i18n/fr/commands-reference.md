@@ -1,6 +1,6 @@
 # Référence des commandes (Français)
 
-Cette page est une localisation initiale Wave 1 pour retrouver rapidement les commandes CLI ZeroClaw.
+Cette page est une localisation initiale Wave 1 pour retrouver rapidement les commandes CLI LlamaFarm.
 
 Source anglaise:
 
@@ -19,4 +19,4 @@ Source anglaise:
 
 ## Mise à jour récente
 
-- `zeroclaw gateway` prend en charge `--new-pairing` pour effacer les tokens appairés et générer un nouveau code d'appairage.
+- `llamafarm gateway` prend en charge `--new-pairing` pour effacer les tokens appairés et générer un nouveau code d'appairage.

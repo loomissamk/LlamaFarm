@@ -1,4 +1,4 @@
-# ZeroClaw Release Process
+# LlamaFarm Release Process
 
 This runbook defines the maintainers' standard release flow.
 
@@ -100,7 +100,7 @@ Expected publish outputs:
 - GitHub Release notes + assets
 - `release-artifact-guard.publish.json` + `release-artifact-guard.publish.md`
 - `audit-event-release-artifact-guard-publish.json` proving publish-stage artifact contract completeness
-- `zeroclaw.sha256sums.intoto.json` + `audit-event-release-sha256sums-provenance.json` for checksum provenance linkage
+- `llamafarm.sha256sums.intoto.json` + `audit-event-release-sha256sums-provenance.json` for checksum provenance linkage
 - `release-notes-supply-chain.md` / `release-notes-supply-chain.json` with release-asset references (manifest, SBOM, provenance, guard audit artifacts)
 - Docker publish evidence from `Pub Docker Img`: `ghcr-publish-contract.json` + `audit-event-ghcr-publish-contract.json` + `ghcr-vulnerability-gate.json` + `audit-event-ghcr-vulnerability-gate.json` + Trivy reports
 

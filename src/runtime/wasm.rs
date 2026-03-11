@@ -9,7 +9,7 @@
 //!
 //! # Feature gate
 //! This module is only compiled when `--features runtime-wasm` is enabled.
-//! The default ZeroClaw binary excludes it to maintain the 4.6 MB size target.
+//! The default LlamaFarm binary excludes it to maintain the 4.6 MB size target.
 
 use super::traits::RuntimeAdapter;
 use crate::config::{WasmCapabilityEscalationMode, WasmModuleHashPolicy, WasmRuntimeConfig};
@@ -697,7 +697,7 @@ impl RuntimeAdapter for WasmRuntime {
     fn storage_path(&self) -> PathBuf {
         self.workspace_dir
             .as_ref()
-            .map_or_else(|| PathBuf::from(".zeroclaw"), |w| w.join(".zeroclaw"))
+            .map_or_else(|| PathBuf::from(".llamafarm"), |w| w.join(".llamafarm"))
     }
 
     fn supports_long_running(&self) -> bool {
@@ -793,7 +793,7 @@ mod tests {
     #[test]
     fn wasm_storage_path_default() {
         let rt = WasmRuntime::new(default_config());
-        assert!(rt.storage_path().to_string_lossy().contains("zeroclaw"));
+        assert!(rt.storage_path().to_string_lossy().contains("llamafarm"));
     }
 
     #[test]
@@ -801,7 +801,7 @@ mod tests {
         let rt = WasmRuntime::with_workspace(default_config(), PathBuf::from("/home/user/project"));
         assert_eq!(
             rt.storage_path(),
-            PathBuf::from("/home/user/project/.zeroclaw")
+            PathBuf::from("/home/user/project/.llamafarm")
         );
     }
 

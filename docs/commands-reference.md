@@ -1,6 +1,6 @@
-# ZeroClaw Commands Reference
+# LlamaFarm Commands Reference
 
-This reference is derived from the current CLI surface (`zeroclaw --help`).
+This reference is derived from the current CLI surface (`llamafarm --help`).
 
 Last verified: **February 25, 2026**.
 
@@ -32,13 +32,13 @@ Last verified: **February 25, 2026**.
 
 ### `onboard`
 
-- `zeroclaw onboard`
-- `zeroclaw onboard --interactive`
-- `zeroclaw onboard --channels-only`
-- `zeroclaw onboard --force`
-- `zeroclaw onboard --api-key <KEY> --provider <ID> --memory <sqlite|lucid|markdown|none>`
-- `zeroclaw onboard --api-key <KEY> --provider <ID> --model <MODEL_ID> --memory <sqlite|lucid|markdown|none>`
-- `zeroclaw onboard --api-key <KEY> --provider <ID> --model <MODEL_ID> --memory <sqlite|lucid|markdown|none> --force`
+- `llamafarm onboard`
+- `llamafarm onboard --interactive`
+- `llamafarm onboard --channels-only`
+- `llamafarm onboard --force`
+- `llamafarm onboard --api-key <KEY> --provider <ID> --memory <sqlite|lucid|markdown|none>`
+- `llamafarm onboard --api-key <KEY> --provider <ID> --model <MODEL_ID> --memory <sqlite|lucid|markdown|none>`
+- `llamafarm onboard --api-key <KEY> --provider <ID> --model <MODEL_ID> --memory <sqlite|lucid|markdown|none> --force`
 
 `onboard` safety behavior:
 
@@ -46,14 +46,14 @@ Last verified: **February 25, 2026**.
   - Full onboarding (overwrite `config.toml`)
   - Provider-only update (update provider/model/API key while preserving existing channels, tunnel, memory, hooks, and other settings)
 - In non-interactive environments, existing `config.toml` causes a safe refusal unless `--force` is passed.
-- Use `zeroclaw onboard --channels-only` when you only need to rotate channel tokens/allowlists.
+- Use `llamafarm onboard --channels-only` when you only need to rotate channel tokens/allowlists.
 
 ### `agent`
 
-- `zeroclaw agent`
-- `zeroclaw agent -m "Hello"`
-- `zeroclaw agent --provider <ID> --model <MODEL> --temperature <0.0-2.0>`
-- `zeroclaw agent --peripheral <board:path>`
+- `llamafarm agent`
+- `llamafarm agent -m "Hello"`
+- `llamafarm agent --provider <ID> --model <MODEL> --temperature <0.0-2.0>`
+- `llamafarm agent --peripheral <board:path>`
 
 Tip:
 
@@ -61,23 +61,23 @@ Tip:
 
 ### `gateway` / `daemon`
 
-- `zeroclaw gateway [--host <HOST>] [--port <PORT>] [--new-pairing]`
-- `zeroclaw daemon [--host <HOST>] [--port <PORT>]`
+- `llamafarm gateway [--host <HOST>] [--port <PORT>] [--new-pairing]`
+- `llamafarm daemon [--host <HOST>] [--port <PORT>]`
 
 `--new-pairing` clears all stored paired tokens and forces generation of a fresh pairing code on gateway startup.
 
 ### `estop`
 
-- `zeroclaw estop` (engage `kill-all`)
-- `zeroclaw estop --level network-kill`
-- `zeroclaw estop --level domain-block --domain "*.chase.com" [--domain "*.paypal.com"]`
-- `zeroclaw estop --level tool-freeze --tool shell [--tool browser]`
-- `zeroclaw estop status`
-- `zeroclaw estop resume`
-- `zeroclaw estop resume --network`
-- `zeroclaw estop resume --domain "*.chase.com"`
-- `zeroclaw estop resume --tool shell`
-- `zeroclaw estop resume --otp <123456>`
+- `llamafarm estop` (engage `kill-all`)
+- `llamafarm estop --level network-kill`
+- `llamafarm estop --level domain-block --domain "*.chase.com" [--domain "*.paypal.com"]`
+- `llamafarm estop --level tool-freeze --tool shell [--tool browser]`
+- `llamafarm estop status`
+- `llamafarm estop resume`
+- `llamafarm estop resume --network`
+- `llamafarm estop resume --domain "*.chase.com"`
+- `llamafarm estop resume --tool shell`
+- `llamafarm estop resume --otp <123456>`
 
 Notes:
 
@@ -87,23 +87,23 @@ Notes:
 
 ### `service`
 
-- `zeroclaw service install`
-- `zeroclaw service start`
-- `zeroclaw service stop`
-- `zeroclaw service restart`
-- `zeroclaw service status`
-- `zeroclaw service uninstall`
+- `llamafarm service install`
+- `llamafarm service start`
+- `llamafarm service stop`
+- `llamafarm service restart`
+- `llamafarm service status`
+- `llamafarm service uninstall`
 
 ### `cron`
 
-- `zeroclaw cron list`
-- `zeroclaw cron add <expr> [--tz <IANA_TZ>] <command>`
-- `zeroclaw cron add-at <rfc3339_timestamp> <command>`
-- `zeroclaw cron add-every <every_ms> <command>`
-- `zeroclaw cron once <delay> <command>`
-- `zeroclaw cron remove <id>`
-- `zeroclaw cron pause <id>`
-- `zeroclaw cron resume <id>`
+- `llamafarm cron list`
+- `llamafarm cron add <expr> [--tz <IANA_TZ>] <command>`
+- `llamafarm cron add-at <rfc3339_timestamp> <command>`
+- `llamafarm cron add-every <every_ms> <command>`
+- `llamafarm cron once <delay> <command>`
+- `llamafarm cron remove <id>`
+- `llamafarm cron pause <id>`
+- `llamafarm cron resume <id>`
 
 Notes:
 
@@ -112,33 +112,33 @@ Notes:
 
 ### `models`
 
-- `zeroclaw models refresh`
-- `zeroclaw models refresh --provider <ID>`
-- `zeroclaw models refresh --force`
+- `llamafarm models refresh`
+- `llamafarm models refresh --provider <ID>`
+- `llamafarm models refresh --force`
 
 `models refresh` currently supports live catalog refresh for provider IDs: `openrouter`, `openai`, `anthropic`, `groq`, `mistral`, `deepseek`, `xai`, `together-ai`, `gemini`, `ollama`, `llamacpp`, `sglang`, `vllm`, `astrai`, `venice`, `fireworks`, `cohere`, `moonshot`, `glm`, `zai`, `qwen`, and `nvidia`.
 
 ### `doctor`
 
-- `zeroclaw doctor`
-- `zeroclaw doctor models [--provider <ID>] [--use-cache]`
-- `zeroclaw doctor traces [--limit <N>] [--event <TYPE>] [--contains <TEXT>]`
-- `zeroclaw doctor traces --id <TRACE_ID>`
+- `llamafarm doctor`
+- `llamafarm doctor models [--provider <ID>] [--use-cache]`
+- `llamafarm doctor traces [--limit <N>] [--event <TYPE>] [--contains <TEXT>]`
+- `llamafarm doctor traces --id <TRACE_ID>`
 
 Provider connectivity matrix CI/local helper:
 
-- `python3 scripts/ci/provider_connectivity_matrix.py --binary target/release-fast/zeroclaw --contract .github/connectivity/probe-contract.json`
+- `python3 scripts/ci/provider_connectivity_matrix.py --binary target/release-fast/llamafarm --contract .github/connectivity/probe-contract.json`
 
 `doctor traces` reads runtime tool/model diagnostics from `observability.runtime_trace_path`.
 
 ### `channel`
 
-- `zeroclaw channel list`
-- `zeroclaw channel start`
-- `zeroclaw channel doctor`
-- `zeroclaw channel bind-telegram <IDENTITY>`
-- `zeroclaw channel add <type> <json>`
-- `zeroclaw channel remove <name>`
+- `llamafarm channel list`
+- `llamafarm channel start`
+- `llamafarm channel doctor`
+- `llamafarm channel bind-telegram <IDENTITY>`
+- `llamafarm channel add <type> <json>`
+- `llamafarm channel remove <name>`
 
 Runtime in-chat commands while channel server is running:
 
@@ -170,7 +170,7 @@ Approval safety behavior:
 - Optional policy gate: `[autonomy].non_cli_approval_approvers` can restrict who may execute approval-management commands.
 
 Startup behavior for multiple channels:
-- `zeroclaw channel start` starts all configured channels in one process.
+- `llamafarm channel start` starts all configured channels in one process.
 - If one channel fails initialization, other channels continue to start.
 - If all configured channels fail initialization, startup exits with an error.
 
@@ -185,14 +185,14 @@ Channel runtime also watches `config.toml` and hot-applies updates to:
 
 ### `integrations`
 
-- `zeroclaw integrations info <name>`
+- `llamafarm integrations info <name>`
 
 ### `skills`
 
-- `zeroclaw skills list`
-- `zeroclaw skills audit <source_or_name>`
-- `zeroclaw skills install <source>`
-- `zeroclaw skills remove <name>`
+- `llamafarm skills list`
+- `llamafarm skills audit <source_or_name>`
+- `llamafarm skills install <source>`
+- `llamafarm skills remove <name>`
 
 `<source>` accepts:
 
@@ -204,7 +204,7 @@ Channel runtime also watches `config.toml` and hot-applies updates to:
 | **Local filesystem paths** | `./my-skill` or `/abs/path/skill` | Directory copied and audited |
 
 **Domain trust gate (URL installs):**
-- First time a URL-based install hits an unseen domain, ZeroClaw asks whether you trust that domain.
+- First time a URL-based install hits an unseen domain, LlamaFarm asks whether you trust that domain.
 - Trust decisions are persisted in `<workspace>/skills/.download-policy.toml`.
 - Trusted domains allow future downloads on the same domain/subdomains; blocked domains are denied automatically.
 - Built-in defaults are transparent: preloaded bundles ship in repository `/skills/` and are copied to `<workspace>/skills/` on initialization.
@@ -228,43 +228,43 @@ Skill manifests (`SKILL.toml`) support `prompts` and `[[tools]]`; both are injec
 
 ### `migrate`
 
-- `zeroclaw migrate openclaw [--source <path>] [--dry-run]`
+- `llamafarm migrate openclaw [--source <path>] [--dry-run]`
 
 ### `config`
 
-- `zeroclaw config schema`
+- `llamafarm config schema`
 
 `config schema` prints a JSON Schema (draft 2020-12) for the full `config.toml` contract to stdout.
 
 ### `completions`
 
-- `zeroclaw completions bash`
-- `zeroclaw completions fish`
-- `zeroclaw completions zsh`
-- `zeroclaw completions powershell`
-- `zeroclaw completions elvish`
+- `llamafarm completions bash`
+- `llamafarm completions fish`
+- `llamafarm completions zsh`
+- `llamafarm completions powershell`
+- `llamafarm completions elvish`
 
 `completions` is stdout-only by design so scripts can be sourced directly without log/warning contamination.
 
 ### `hardware`
 
-- `zeroclaw hardware discover`
-- `zeroclaw hardware introspect <path>`
-- `zeroclaw hardware info [--chip <chip_name>]`
+- `llamafarm hardware discover`
+- `llamafarm hardware introspect <path>`
+- `llamafarm hardware info [--chip <chip_name>]`
 
 ### `peripheral`
 
-- `zeroclaw peripheral list`
-- `zeroclaw peripheral add <board> <path>`
-- `zeroclaw peripheral flash [--port <serial_port>]`
-- `zeroclaw peripheral setup-uno-q [--host <ip_or_host>]`
-- `zeroclaw peripheral flash-nucleo`
+- `llamafarm peripheral list`
+- `llamafarm peripheral add <board> <path>`
+- `llamafarm peripheral flash [--port <serial_port>]`
+- `llamafarm peripheral setup-uno-q [--host <ip_or_host>]`
+- `llamafarm peripheral flash-nucleo`
 
 ## Validation Tip
 
 To verify docs against your current binary quickly:
 
 ```bash
-zeroclaw --help
-zeroclaw <command> --help
+llamafarm --help
+llamafarm <command> --help
 ```

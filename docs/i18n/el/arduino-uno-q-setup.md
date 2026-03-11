@@ -1,16 +1,16 @@
-# Οδηγός Εγκατάστασης ZeroClaw σε Arduino Uno Q
+# Οδηγός Εγκατάστασης LlamaFarm σε Arduino Uno Q
 
-Αυτός ο οδηγός περιγράφει τη διαδικασία εγκατάστασης και ρύθμισης του ZeroClaw στην πλευρά Linux του Arduino Uno Q.
+Αυτός ο οδηγός περιγράφει τη διαδικασία εγκατάστασης και ρύθμισης του LlamaFarm στην πλευρά Linux του Arduino Uno Q.
 
 ## Επισκόπηση
 
-Το ZeroClaw παρέχει πλήρη υποστήριξη για το Arduino Uno Q χωρίς να απαιτούνται αλλαγές στον κώδικα.
+Το LlamaFarm παρέχει πλήρη υποστήριξη για το Arduino Uno Q χωρίς να απαιτούνται αλλαγές στον κώδικα.
 
 | Στοιχείο | Τοποθεσία | Περιγραφή |
 |:---|:---|:---|
-| Εφαρμογή Bridge | `firmware/zeroclaw-uno-q-bridge/` | MCU sketch και Python socket server για τη διαχείριση των GPIO. |
+| Εφαρμογή Bridge | `firmware/llamafarm-uno-q-bridge/` | MCU sketch και Python socket server για τη διαχείριση των GPIO. |
 | Εργαλεία Bridge | `src/peripherals/uno_q_bridge.rs` | Εργαλεία `gpio_read` / `gpio_write` για επικοινωνία μέσω TCP. |
-| Εντολή Setup | `src/peripherals/uno_q_setup.rs` | Η εντολή `zeroclaw peripheral setup-uno-q` για την ανάπτυξη του Bridge. |
+| Εντολή Setup | `src/peripherals/uno_q_setup.rs` | Η εντολή `llamafarm peripheral setup-uno-q` για την ανάπτυξη του Bridge. |
 
 > **Σημείωση**: Απαιτείται μεταγλώττιση (build) με το feature `hardware` για την υποστήριξη του Uno Q.
 
@@ -43,7 +43,7 @@ ssh arduino@<UNO_Q_IP>
 
 ---
 
-## Βήμα 2: Εγκατάσταση του ZeroClaw
+## Βήμα 2: Εγκατάσταση του LlamaFarm
 
 ### Μεταγλώττιση στη Συσκευή (Προτεινόμενο)
 
@@ -66,37 +66,37 @@ ssh arduino@<UNO_Q_IP>
 
 4. **Λήψη και Μεταγλώττιση**:
    ```bash
-   git clone https://github.com/theonlyhennygod/zeroclaw.git
-   cd zeroclaw
+   git clone https://github.com/theonlyhennygod/llamafarm.git
+   cd llamafarm
    cargo build --release --features hardware
    ```
 
 5. **Εγκατάσταση Εκτελέσιμου**:
    ```bash
-   sudo cp target/release/zeroclaw /usr/local/bin/
+   sudo cp target/release/llamafarm /usr/local/bin/
    ```
 
 ---
 
-## Βήμα 3: Ρύθμιση του ZeroClaw
+## Βήμα 3: Ρύθμιση του LlamaFarm
 
 ### 3.1 Αυτόματη Προετοιμασία (Onboarding)
 
 ```bash
-zeroclaw onboard --api-key <YOUR_API_KEY> --provider <provider_name>
+llamafarm onboard --api-key <YOUR_API_KEY> --provider <provider_name>
 ```
 
 ### 3.2 Αρχείο Ρυθμίσεων (config.toml)
 
-Βεβαιωθείτε ότι το αρχείο `~/.zeroclaw/config.toml` περιλαμβάνει τις απαραίτητες ρυθμίσεις για το Telegram και τον πράκτορα.
+Βεβαιωθείτε ότι το αρχείο `~/.llamafarm/config.toml` περιλαμβάνει τις απαραίτητες ρυθμίσεις για το Telegram και τον πράκτορα.
 
 ---
 
-## Βήμα 4: Εκτέλεση του ZeroClaw Daemon
+## Βήμα 4: Εκτέλεση του LlamaFarm Daemon
 
-Ξεκινήστε την υπηρεσία ZeroClaw:
+Ξεκινήστε την υπηρεσία LlamaFarm:
 ```bash
-zeroclaw daemon --host 127.0.0.1 --port 42617
+llamafarm daemon --host 127.0.0.1 --port 42617
 ```
 Σε αυτό το στάδιο, η επικοινωνία μέσω Telegram είναι ενεργή, αλλά χωρίς έλεγχο των GPIO.
 
@@ -108,7 +108,7 @@ zeroclaw daemon --host 127.0.0.1 --port 42617
 
 Από τον υπολογιστή σας ή απευθείας από το Uno Q, εκτελέστε:
 ```bash
-zeroclaw peripheral setup-uno-q --host <UNO_Q_IP>
+llamafarm peripheral setup-uno-q --host <UNO_Q_IP>
 ```
 
 ### 5.2 Ενημέρωση Ρυθμίσεων
@@ -128,7 +128,7 @@ transport = "bridge"
 
 Επανεκκινήστε τον daemon:
 ```bash
-zeroclaw daemon --host 127.0.0.1 --port 42617
+llamafarm daemon --host 127.0.0.1 --port 42617
 ```
 
 ---

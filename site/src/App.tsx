@@ -79,8 +79,8 @@ type PaletteEntry = {
   run: () => void;
 };
 
-const repoBase = "https://github.com/zeroclaw-labs/zeroclaw/blob/main";
-const rawBase = "https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw/main";
+const repoBase = "https://github.com/llamafarm-labs/llamafarm/blob/main";
+const rawBase = "https://raw.githubusercontent.com/llamafarm-labs/llamafarm/main";
 
 const languageNames: Record<string, Localized> = {
   en: { en: "English", zh: "英文" },
@@ -162,7 +162,7 @@ const readingPaths: Array<{
 }> = [
   {
     id: "newcomer",
-    label: { en: "New to ZeroClaw", zh: "初次了解 ZeroClaw" },
+    label: { en: "New to LlamaFarm", zh: "初次了解 LlamaFarm" },
     detail: {
       en: "Onboarding and first successful run in the shortest path.",
       zh: "最短路径完成安装、配置和首个可运行实例。",
@@ -200,8 +200,8 @@ const readingPaths: Array<{
     id: "integrate",
     label: { en: "Integrations", zh: "外部集成" },
     detail: {
-      en: "Connect ZeroClaw with chat platforms and external providers.",
-      zh: "将 ZeroClaw 接入聊天平台与外部模型能力。",
+      en: "Connect LlamaFarm with chat platforms and external providers.",
+      zh: "将 LlamaFarm 接入聊天平台与外部模型能力。",
     },
     filters: { journey: "integrate", audience: "integrator" },
   },
@@ -263,14 +263,14 @@ const copy = {
   en: {
     navDocs: "Docs",
     navGitHub: "GitHub",
-    navWebsite: "zeroclawlabs.ai",
+    navWebsite: "llamafarmlabs.ai",
     badge: "PRIVATE AGENT INTELLIGENCE.",
     title: "Zero overhead. Zero compromise. 100% Rust. 100% Agnostic.",
     summary:
       "Fast, small, and fully autonomous AI assistant infrastructure.",
     summary2: "Deploy anywhere. Swap anything.",
     notice:
-      "Official source channels: use this repository as the source of truth and zeroclawlabs.ai as the official website.",
+      "Official source channels: use this repository as the source of truth and llamafarmlabs.ai as the official website.",
     ctaDocs: "Read docs now",
     ctaBootstrap: "One-click bootstrap",
     commandLaneTitle: "Runtime command lane",
@@ -345,13 +345,13 @@ const copy = {
   zh: {
     navDocs: "文档",
     navGitHub: "GitHub",
-    navWebsite: "zeroclawlabs.ai",
+    navWebsite: "llamafarmlabs.ai",
     badge: "PRIVATE AGENT INTELLIGENCE.",
     title: "Zero overhead. Zero compromise. 100% Rust. 100% Agnostic.",
     summary: "Fast, small, and fully autonomous AI assistant infrastructure.",
     summary2: "Deploy anywhere. Swap anything.",
     notice:
-      "官方信息渠道：请以本仓库为事实来源，以 zeroclawlabs.ai 为官方网站。",
+      "官方信息渠道：请以本仓库为事实来源，以 llamafarmlabs.ai 为官方网站。",
     ctaDocs: "立即阅读文档",
     ctaBootstrap: "一键安装",
     commandLaneTitle: "运行命令通道",
@@ -366,7 +366,7 @@ const copy = {
     readingPathsTitle: "阅读路径",
     readingPathsLead: "先按任务路径进入，再用分类筛选做深入浏览。",
     startHereTitle: "新手起步",
-    startHereLead: "面向首次接触 ZeroClaw 的核心文档，快速完成有效上手。",
+    startHereLead: "面向首次接触 LlamaFarm 的核心文档，快速完成有效上手。",
     noStartHere: "当前语言/筛选条件下暂无起步文档。",
     startBadge: "起步",
     sectionFilter: "分组",
@@ -424,19 +424,19 @@ const copy = {
 
 const commandLane: Array<{ command: string; hint: Localized }> = [
   {
-    command: "zeroclaw onboard --interactive",
+    command: "llamafarm onboard --interactive",
     hint: { en: "Generate config and credentials", zh: "生成配置与凭据" },
   },
   {
-    command: "zeroclaw agent",
+    command: "llamafarm agent",
     hint: { en: "Run interactive agent mode", zh: "运行交互式 Agent 模式" },
   },
   {
-    command: "zeroclaw gateway && zeroclaw daemon",
+    command: "llamafarm gateway && llamafarm daemon",
     hint: { en: "Start runtime services", zh: "启动运行时服务" },
   },
   {
-    command: "zeroclaw doctor",
+    command: "llamafarm doctor",
     hint: {
       en: "Validate environment and runtime health",
       zh: "校验环境与运行时健康状态",
@@ -1265,15 +1265,15 @@ export default function App(): JSX.Element {
       <header className="topbar">
         <div className="topbar-inner">
           <a className="brand" href="#top">
-            ZeroClaw
+            LlamaFarm
           </a>
 
           <nav className="top-nav" aria-label="Primary">
             <a href="#docs-workspace">{text.navDocs}</a>
-            <a href="https://github.com/zeroclaw-labs/zeroclaw" target="_blank" rel="noreferrer">
+            <a href="https://github.com/llamafarm-labs/llamafarm" target="_blank" rel="noreferrer">
               {text.navGitHub}
             </a>
-            <a href="https://zeroclawlabs.ai" target="_blank" rel="noreferrer">
+            <a href="https://llamafarmlabs.ai" target="_blank" rel="noreferrer">
               {text.navWebsite}
             </a>
           </nav>
@@ -1914,7 +1914,7 @@ export default function App(): JSX.Element {
 
       <footer className="footer">
         <p>
-          ZeroClaw · Trait-driven architecture · secure-by-default runtime ·
+          LlamaFarm · Trait-driven architecture · secure-by-default runtime ·
           pluggable everything
         </p>
       </footer>

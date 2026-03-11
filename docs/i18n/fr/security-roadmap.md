@@ -16,7 +16,7 @@ Source anglaise:
 
 - [H2 · Current State: Strong Foundation](../../security-roadmap.md#current-state-strong-foundation)
 - [H2 · What's Missing: OS-Level Containment](../../security-roadmap.md#what-s-missing-os-level-containment)
-- [H2 · Comparison: ZeroClaw vs PicoClaw vs Production Grade](../../security-roadmap.md#comparison-zeroclaw-vs-picoclaw-vs-production-grade)
+- [H2 · Comparison: LlamaFarm vs PicoClaw vs Production Grade](../../security-roadmap.md#comparison-llamafarm-vs-picoclaw-vs-production-grade)
 - [H2 · Implementation Roadmap](../../security-roadmap.md#implementation-roadmap)
 - [H3 · Phase 1: Quick Wins (1-2 weeks)](../../security-roadmap.md#phase-1-quick-wins-1-2-weeks)
 - [H3 · Phase 2: Platform Integration (2-3 weeks)](../../security-roadmap.md#phase-2-platform-integration-2-3-weeks)

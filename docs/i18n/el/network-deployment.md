@@ -1,6 +1,6 @@
-# Ανάπτυξη Δικτύου — ZeroClaw σε Raspberry Pi και Τοπικό Δίκτυο
+# Ανάπτυξη Δικτύου — LlamaFarm σε Raspberry Pi και Τοπικό Δίκτυο
 
-Αυτό το έγγραφο καλύπτει την ανάπτυξη του ZeroClaw σε ένα Raspberry Pi ή σε άλλον κεντρικό υπολογιστή στο τοπικό σας δίκτυο, με κανάλια Telegram και προαιρετικά κανάλια webhook.
+Αυτό το έγγραφο καλύπτει την ανάπτυξη του LlamaFarm σε ένα Raspberry Pi ή σε άλλον κεντρικό υπολογιστή στο τοπικό σας δίκτυο, με κανάλια Telegram και προαιρετικά κανάλια webhook.
 
 ---
 
@@ -8,19 +8,19 @@
 
 | Λειτουργία | Απαιτείται εισερχόμενη θύρα; | Περίπτωση χρήσης |
 |------|----------------------|----------|
-| **Telegram polling** | Όχι | Το ZeroClaw αντλεί δεδομένα από το API του Telegram. Λειτουργεί από παντού. |
-| **Matrix sync (συμπ. E2EE)** | Όχι | Το ZeroClaw συγχρονίζεται μέσω του API του Matrix. Δεν απαιτείται εισερχόμενο webhook. |
+| **Telegram polling** | Όχι | Το LlamaFarm αντλεί δεδομένα από το API του Telegram. Λειτουργεί από παντού. |
+| **Matrix sync (συμπ. E2EE)** | Όχι | Το LlamaFarm συγχρονίζεται μέσω του API του Matrix. Δεν απαιτείται εισερχόμενο webhook. |
 | **Discord/Slack** | Όχι | Το ίδιο — μόνο εξερχόμενες συνδέσεις. |
 | **Nostr** | Όχι | Συνδέεται με relays μέσω WebSocket. Μόνο εξερχόμενες συνδέσεις. |
 | **Gateway webhook** | Ναι | Τα POST /webhook, /whatsapp, /linq, /nextcloud-talk απαιτούν δημόσιο URL. |
 | **Gateway pairing** | Ναι | Εάν αντιστοιχίζετε πελάτες μέσω της πύλης (gateway). |
 | **Υπηρεσία Alpine/OpenRC** | Όχι | Υπηρεσία παρασκηνίου σε όλο το σύστημα στο Alpine Linux. |
 
-**Σημείωση:** Τα Telegram, Discord, Slack και Nostr χρησιμοποιούν **εξερχόμενες συνδέσεις** — το ZeroClaw συνδέεται σε εξωτερικούς διακομιστές. Δεν απαιτείται προώθηση θυρών (port forwarding) ή δημόσια IP.
+**Σημείωση:** Τα Telegram, Discord, Slack και Nostr χρησιμοποιούν **εξερχόμενες συνδέσεις** — το LlamaFarm συνδέεται σε εξωτερικούς διακομιστές. Δεν απαιτείται προώθηση θυρών (port forwarding) ή δημόσια IP.
 
 ---
 
-## 2. ZeroClaw σε Raspberry Pi
+## 2. LlamaFarm σε Raspberry Pi
 
 ### 2.1 Προαπαιτούμενα
 
@@ -39,7 +39,7 @@ cargo build --release --features hardware
 
 ### 2.3 Ρύθμιση
 
-Επεξεργαστείτε το αρχείο `~/.zeroclaw/config.toml`:
+Επεξεργαστείτε το αρχείο `~/.llamafarm/config.toml`:
 
 ```toml
 [peripherals]
@@ -69,11 +69,11 @@ allow_public_bind = false
 ### 2.4 Εκτέλεση Δαίμονα (Μόνο τοπικά)
 
 ```bash
-zeroclaw daemon --host 127.0.0.1 --port 42617
+llamafarm daemon --host 127.0.0.1 --port 42617
 ```
 
 - Η πύλη (gateway) συνδέεται στο `127.0.0.1` — δεν είναι προσβάσιμη από άλλα μηχανήματα.
-- Το κανάλι Telegram λειτουργεί: το ZeroClaw αντλεί δεδομένα από το API του Telegram (εξερχόμενη σύνδεση).
+- Το κανάλι Telegram λειτουργεί: το LlamaFarm αντλεί δεδομένα από το API του Telegram (εξερχόμενη σύνδεση).
 - Δεν απαιτείται τείχος προστασίας (firewall) ή προώθηση θυρών.
 
 ---
@@ -92,7 +92,7 @@ allow_public_bind = true
 ```
 
 ```bash
-zeroclaw daemon --host 0.0.0.0 --port 42617
+llamafarm daemon --host 0.0.0.0 --port 42617
 ```
 
 **Ασφάλεια:** Η ρύθμιση `allow_public_bind = true` εκθέτει την πύλη στο τοπικό σας δίκτυο. Χρησιμοποιήστε την μόνο σε έμπιστα δίκτυα LAN.
@@ -103,7 +103,7 @@ zeroclaw daemon --host 0.0.0.0 --port 42617
 
 1. Εκτελέστε την πύλη στο localhost:
    ```bash
-   zeroclaw daemon --host 127.0.0.1 --port 42617
+   llamafarm daemon --host 127.0.0.1 --port 42617
    ```
 
 2. Ξεκινήστε μια σήραγγα (tunnel):
@@ -111,9 +111,9 @@ zeroclaw daemon --host 0.0.0.0 --port 42617
    [tunnel]
    provider = "tailscale"   # ή "ngrok", "cloudflare"
    ```
-   Ή χρησιμοποιήστε την εντολή `zeroclaw tunnel`.
+   Ή χρησιμοποιήστε την εντολή `llamafarm tunnel`.
 
-3. Το ZeroClaw θα απορρίψει το `0.0.0.0` εκτός εάν η επιλογή `allow_public_bind = true` ή μια σήραγγα είναι ενεργή.
+3. Το LlamaFarm θα απορρίψει το `0.0.0.0` εκτός εάν η επιλογή `allow_public_bind = true` ή μια σήραγγα είναι ενεργή.
 
 ---
 
@@ -121,7 +121,7 @@ zeroclaw daemon --host 0.0.0.0 --port 42617
 
 Το Telegram χρησιμοποιεί **long-polling** από προεπιλογή:
 
-- Το ZeroClaw καλεί το `https://api.telegram.org/bot{token}/getUpdates`.
+- Το LlamaFarm καλεί το `https://api.telegram.org/bot{token}/getUpdates`.
 - Δεν απαιτείται εισερχόμενη θύρα ή δημόσια IP.
 - Λειτουργεί πίσω από NAT, σε RPi, ή σε οικιακό lab.
 
@@ -133,12 +133,12 @@ bot_token = "ΤΟ_TOKEN_ΤΟΥ_BOT_ΣΑΣ"
 allowed_users = []            # Άρνηση από προεπιλογή, αντιστοιχίστε τις ταυτότητες ρητά
 ```
 
-Εκτελέστε το `zeroclaw daemon` — το κανάλι Telegram ξεκινά αυτόματα.
+Εκτελέστε το `llamafarm daemon` — το κανάλι Telegram ξεκινά αυτόματα.
 
 Για την έγκριση ενός λογαριασμού Telegram κατά την εκτέλεση:
 
 ```bash
-zeroclaw channel bind-telegram <ΤΑΥΤΟΤΗΤΑ>
+llamafarm channel bind-telegram <ΤΑΥΤΟΤΗΤΑ>
 ```
 
 Η `<ΤΑΥΤΟΤΗΤΑ>` μπορεί να είναι ένα αριθμητικό ID χρήστη Telegram ή ένα όνομα χρήστη (χωρίς το `@`).
@@ -147,7 +147,7 @@ zeroclaw channel bind-telegram <ΤΑΥΤΟΤΗΤΑ>
 
 Το API των Bot του Telegram υποστηρίζει μόνο έναν ενεργό poller ανά token.
 
-- Διατηρήστε μόνο μία ενεργή εκτέλεση για το ίδιο token (συνιστάται: η υπηρεσία `zeroclaw daemon`).
+- Διατηρήστε μόνο μία ενεργή εκτέλεση για το ίδιο token (συνιστάται: η υπηρεσία `llamafarm daemon`).
 - Μην εκτελείτε ταυτόχρονα το `cargo run -- channel start` ή άλλη διαδικασία bot.
 
 Εάν δείτε το σφάλμα:
@@ -188,7 +188,7 @@ ngrok http 42617
 
 - [ ] Μεταγλώττιση με `--features hardware` (και `peripheral-rpi` για εγγενές GPIO).
 - [ ] Ρύθμιση των ενοτήτων `[peripherals]` και `[channels_config.telegram]`.
-- [ ] Εκτέλεση `zeroclaw daemon --host 127.0.0.1 --port 42617`.
+- [ ] Εκτέλεση `llamafarm daemon --host 127.0.0.1 --port 42617`.
 - [ ] Για πρόσβαση σε LAN: `--host 0.0.0.0` + `allow_public_bind = true`.
 - [ ] Για webhooks: χρήση Tailscale, ngrok ή Cloudflare tunnel.
 
@@ -196,51 +196,51 @@ ngrok http 42617
 
 ## 7. OpenRC (Υπηρεσία Alpine Linux)
 
-Το ZeroClaw υποστηρίζει το OpenRC για το Alpine Linux και άλλες διανομές που χρησιμοποιούν το σύστημα αρχικοποίησης OpenRC. Οι υπηρεσίες OpenRC εκτελούνται **σε όλο το σύστημα** και απαιτούν δικαιώματα root/sudo.
+Το LlamaFarm υποστηρίζει το OpenRC για το Alpine Linux και άλλες διανομές που χρησιμοποιούν το σύστημα αρχικοποίησης OpenRC. Οι υπηρεσίες OpenRC εκτελούνται **σε όλο το σύστημα** και απαιτούν δικαιώματα root/sudo.
 
 ### 7.1 Προαπαιτούμενα
 
 - Alpine Linux (ή άλλη διανομή βασισμένη στο OpenRC).
 - Πρόσβαση Root ή sudo.
-- Ένας αποκλειστικός χρήστης συστήματος `zeroclaw` (δημιουργείται κατά την εγκατάσταση).
+- Ένας αποκλειστικός χρήστης συστήματος `llamafarm` (δημιουργείται κατά την εγκατάσταση).
 
 ### 7.2 Εγκατάσταση Υπηρεσίας
 
 ```bash
 # Εγκατάσταση υπηρεσίας (το OpenRC εντοπίζεται αυτόματα στο Alpine)
-sudo zeroclaw service install
+sudo llamafarm service install
 ```
 
 Αυτό δημιουργεί:
-- Σενάριο αρχικοποίησης (Init script): `/etc/init.d/zeroclaw`
-- Κατάλογο ρυθμίσεων: `/etc/zeroclaw/`
-- Κατάλογο καταγραφών (Logs): `/var/log/zeroclaw/`
+- Σενάριο αρχικοποίησης (Init script): `/etc/init.d/llamafarm`
+- Κατάλογο ρυθμίσεων: `/etc/llamafarm/`
+- Κατάλογο καταγραφών (Logs): `/var/log/llamafarm/`
 
 ### 7.3 Ρύθμιση
 
-Συνήθως δεν απαιτείται χειροκίνητη αντιγραφή των ρυθμίσεων. Η εντολή `sudo zeroclaw service install` προετοιμάζει αυτόματα το `/etc/zeroclaw`, μεταφέρει την υπάρχουσα κατάσταση από τις ρυθμίσεις του χρήστη σας και ορίζει τις σωστές άδειες για τον χρήστη της υπηρεσίας `zeroclaw`.
+Συνήθως δεν απαιτείται χειροκίνητη αντιγραφή των ρυθμίσεων. Η εντολή `sudo llamafarm service install` προετοιμάζει αυτόματα το `/etc/llamafarm`, μεταφέρει την υπάρχουσα κατάσταση από τις ρυθμίσεις του χρήστη σας και ορίζει τις σωστές άδειες για τον χρήστη της υπηρεσίας `llamafarm`.
 
 ### 7.4 Ενεργοποίηση και Έναρξη
 
 ```bash
 # Προσθήκη στο προεπιλεγμένο επίπεδο εκτέλεσης (runlevel)
-sudo rc-update add zeroclaw default
+sudo rc-update add llamafarm default
 
 # Έναρξη της υπηρεσίας
-sudo rc-service zeroclaw start
+sudo rc-service llamafarm start
 
 # Έλεγχος κατάστασης
-sudo rc-service zeroclaw status
+sudo rc-service llamafarm status
 ```
 
 ### 7.5 Διαχείριση Υπηρεσίας
 
 | Εντολή | Περιγραφή |
 |---------|-------------|
-| `sudo rc-service zeroclaw start` | Έναρξη του δαίμονα |
-| `sudo rc-service zeroclaw stop` | Διακοπή του δαίμονα |
-| `sudo rc-service zeroclaw status` | Έλεγχος κατάστασης υπηρεσίας |
-| `sudo rc-service zeroclaw restart` | Επανεκκίνηση του δαίμονα |
+| `sudo rc-service llamafarm start` | Έναρξη του δαίμονα |
+| `sudo rc-service llamafarm stop` | Διακοπή του δαίμονα |
+| `sudo rc-service llamafarm status` | Έλεγχος κατάστασης υπηρεσίας |
+| `sudo rc-service llamafarm restart` | Επανεκκίνηση του δαίμονα |
 
 ### 7.6 Καταγραφές (Logs)
 
@@ -248,13 +248,13 @@ sudo rc-service zeroclaw status
 
 | Καταγραφή | Διαδρομή |
 |-----|------|
-| Πρόσβαση/stdout | `/var/log/zeroclaw/access.log` |
-| Σφάλματα/stderr | `/var/log/zeroclaw/error.log` |
+| Πρόσβαση/stdout | `/var/log/llamafarm/access.log` |
+| Σφάλματα/stderr | `/var/log/llamafarm/error.log` |
 
 Προβολή καταγραφών:
 
 ```bash
-sudo tail -f /var/log/zeroclaw/error.log
+sudo tail -f /var/log/llamafarm/error.log
 ```
 
 ---

@@ -1,4 +1,4 @@
-# Sommaire de la documentation ZeroClaw (Français, i18n)
+# Sommaire de la documentation LlamaFarm (Français, i18n)
 
 Ce fichier est l'index de navigation pour `docs/i18n/fr/`.
 

@@ -1,4 +1,4 @@
-# ZeroClaw Documentation Inventory
+# LlamaFarm Documentation Inventory
 
 This inventory classifies documentation by intent and canonical location.
 

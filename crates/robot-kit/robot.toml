@@ -1,5 +1,5 @@
-# ZeroClaw Robot Kit Configuration
-# Copy to ~/.zeroclaw/robot.toml
+# LlamaFarm Robot Kit Configuration
+# Copy to ~/.llamafarm/robot.toml
 
 # =============================================================================
 # DRIVE SYSTEM

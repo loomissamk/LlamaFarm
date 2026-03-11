@@ -10,7 +10,7 @@ import json
 import sys
 from pathlib import Path
 
-CONTRACT_SCHEMA = "zeroclaw.release-artifact-contract.v1"
+CONTRACT_SCHEMA = "llamafarm.release-artifact-contract.v1"
 
 
 def load_contract(path: Path) -> tuple[dict, list[str]]:
@@ -265,7 +265,7 @@ def main() -> int:
         )
 
     report = {
-        "schema_version": "zeroclaw.release-artifact-guard.v1",
+        "schema_version": "llamafarm.release-artifact-guard.v1",
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "artifacts_dir": str(artifacts_dir),
         "contract_file": str(contract_file),

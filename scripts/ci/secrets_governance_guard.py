@@ -208,7 +208,7 @@ def main() -> int:
         )
 
     report = {
-        "schema_version": "zeroclaw.audit.v1",
+        "schema_version": "llamafarm.audit.v1",
         "event_type": "secrets_governance_guard",
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "gitleaks_file": str(gitleaks_path),

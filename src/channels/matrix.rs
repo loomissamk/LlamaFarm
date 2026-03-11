@@ -34,7 +34,7 @@ pub struct MatrixChannel {
     mention_only: bool,
     session_owner_hint: Option<String>,
     session_device_id_hint: Option<String>,
-    zeroclaw_dir: Option<PathBuf>,
+    llamafarm_dir: Option<PathBuf>,
     resolved_room_id_cache: Arc<RwLock<Option<String>>>,
     sdk_client: Arc<OnceCell<MatrixSdkClient>>,
     otk_conflict_detected: Arc<AtomicBool>,
@@ -157,8 +157,8 @@ impl MatrixChannel {
     fn otk_conflict_recovery_message(&self) -> String {
         let mut message = String::from(
             "Matrix E2EE one-time key upload conflict detected (`one time key ... already exists`). \
-ZeroClaw paused Matrix sync to avoid an infinite retry loop. \
-Resolve by deregistering the stale Matrix device for this bot account, resetting the local Matrix crypto store, then restarting ZeroClaw.",
+LlamaFarm paused Matrix sync to avoid an infinite retry loop. \
+Resolve by deregistering the stale Matrix device for this bot account, resetting the local Matrix crypto store, then restarting LlamaFarm.",
         );
         if let Some(store_dir) = self.matrix_store_dir() {
             message.push_str(&format!(" Local crypto store: {}", store_dir.display()));
@@ -189,7 +189,7 @@ Resolve by deregistering the stale Matrix device for this bot account, resetting
         owner_hint: Option<String>,
         device_id_hint: Option<String>,
     ) -> Self {
-        Self::new_with_session_hint_and_zeroclaw_dir(
+        Self::new_with_session_hint_and_llamafarm_dir(
             homeserver,
             access_token,
             room_id,
@@ -200,14 +200,14 @@ Resolve by deregistering the stale Matrix device for this bot account, resetting
         )
     }
 
-    pub fn new_with_session_hint_and_zeroclaw_dir(
+    pub fn new_with_session_hint_and_llamafarm_dir(
         homeserver: String,
         access_token: String,
         room_id: String,
         allowed_users: Vec<String>,
         owner_hint: Option<String>,
         device_id_hint: Option<String>,
-        zeroclaw_dir: Option<PathBuf>,
+        llamafarm_dir: Option<PathBuf>,
     ) -> Self {
         let homeserver = homeserver.trim_end_matches('/').to_string();
         let access_token = access_token.trim().to_string();
@@ -226,7 +226,7 @@ Resolve by deregistering the stale Matrix device for this bot account, resetting
             mention_only: false,
             session_owner_hint: Self::normalize_optional_field(owner_hint),
             session_device_id_hint: Self::normalize_optional_field(device_id_hint),
-            zeroclaw_dir,
+            llamafarm_dir,
             resolved_room_id_cache: Arc::new(RwLock::new(None)),
             sdk_client: Arc::new(OnceCell::new()),
             otk_conflict_detected: Arc::new(AtomicBool::new(false)),
@@ -274,7 +274,7 @@ Resolve by deregistering the stale Matrix device for this bot account, resetting
     }
 
     fn matrix_store_dir(&self) -> Option<PathBuf> {
-        self.zeroclaw_dir
+        self.llamafarm_dir
             .as_ref()
             .map(|dir| dir.join("state").join("matrix"))
     }
@@ -1144,25 +1144,25 @@ mod tests {
     }
 
     #[test]
-    fn matrix_store_dir_is_derived_from_zeroclaw_dir() {
-        let ch = MatrixChannel::new_with_session_hint_and_zeroclaw_dir(
+    fn matrix_store_dir_is_derived_from_llamafarm_dir() {
+        let ch = MatrixChannel::new_with_session_hint_and_llamafarm_dir(
             "https://matrix.org".to_string(),
             "tok".to_string(),
             "!r:m".to_string(),
             vec![],
             None,
             None,
-            Some(PathBuf::from("/tmp/zeroclaw")),
+            Some(PathBuf::from("/tmp/llamafarm")),
         );
 
         assert_eq!(
             ch.matrix_store_dir(),
-            Some(PathBuf::from("/tmp/zeroclaw/state/matrix"))
+            Some(PathBuf::from("/tmp/llamafarm/state/matrix"))
         );
     }
 
     #[test]
-    fn matrix_store_dir_absent_without_zeroclaw_dir() {
+    fn matrix_store_dir_absent_without_llamafarm_dir() {
         let ch = MatrixChannel::new_with_session_hint(
             "https://matrix.org".to_string(),
             "tok".to_string(),
@@ -1195,19 +1195,19 @@ mod tests {
 
     #[test]
     fn otk_conflict_recovery_message_includes_store_path_when_available() {
-        let ch = MatrixChannel::new_with_session_hint_and_zeroclaw_dir(
+        let ch = MatrixChannel::new_with_session_hint_and_llamafarm_dir(
             "https://matrix.org".to_string(),
             "tok".to_string(),
             "!r:m".to_string(),
             vec![],
             None,
             None,
-            Some(PathBuf::from("/tmp/zeroclaw")),
+            Some(PathBuf::from("/tmp/llamafarm")),
         );
 
         let message = ch.otk_conflict_recovery_message();
         assert!(message.contains("one-time key upload conflict"));
-        assert!(message.contains("/tmp/zeroclaw/state/matrix"));
+        assert!(message.contains("/tmp/llamafarm/state/matrix"));
     }
 
     #[test]

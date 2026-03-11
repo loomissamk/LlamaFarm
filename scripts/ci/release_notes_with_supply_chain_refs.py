@@ -14,9 +14,9 @@ REQUIRED_REFERENCES = {
     "release_manifest_json": "release-manifest.json",
     "release_manifest_markdown": "release-manifest.md",
     "checksums": "SHA256SUMS",
-    "sbom_cyclonedx": "zeroclaw.cdx.json",
-    "sbom_spdx": "zeroclaw.spdx.json",
-    "checksums_provenance": "zeroclaw.sha256sums.intoto.json",
+    "sbom_cyclonedx": "llamafarm.cdx.json",
+    "sbom_spdx": "llamafarm.spdx.json",
+    "checksums_provenance": "llamafarm.sha256sums.intoto.json",
     "checksums_provenance_audit_event": "audit-event-release-sha256sums-provenance.json",
     "release_trigger_guard": "release-trigger-guard.json",
     "release_trigger_guard_audit_event": "audit-event-release-trigger-guard.json",
@@ -213,7 +213,7 @@ def main() -> int:
         violations.extend(ref_violations)
 
     report: dict[str, object] = {
-        "schema_version": "zeroclaw.release-notes-supply-chain.v1",
+        "schema_version": "llamafarm.release-notes-supply-chain.v1",
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "artifacts_dir": str(artifacts_dir),
         "repository": args.repository,

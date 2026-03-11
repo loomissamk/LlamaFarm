@@ -428,7 +428,7 @@ def main() -> int:
     ready_to_publish = args.mode == "publish" and not violations
 
     report = {
-        "schema_version": "zeroclaw.prerelease-guard.v2",
+        "schema_version": "llamafarm.prerelease-guard.v2",
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "policy_schema_version": policy.get("schema_version"),
         "stage_order": stage_order,

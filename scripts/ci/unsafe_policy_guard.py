@@ -255,7 +255,7 @@ def main() -> int:
         )
 
     report = {
-        "schema_version": "zeroclaw.audit.v1",
+        "schema_version": "llamafarm.audit.v1",
         "event_type": "unsafe_policy_guard",
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "policy_file": str(policy_path),

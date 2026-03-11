@@ -1,6 +1,6 @@
 # 命令参考（简体中文）
 
-这是 Wave 1 首版本地化页面，用于快速定位 ZeroClaw CLI 命令。
+这是 Wave 1 首版本地化页面，用于快速定位 LlamaFarm CLI 命令。
 
 英文原文：
 
@@ -19,4 +19,4 @@
 
 ## 最近更新
 
-- `zeroclaw gateway` 新增 `--new-pairing` 参数，可清空已配对 token 并在网关启动时生成新的配对码。
+- `llamafarm gateway` 新增 `--new-pairing` 参数，可清空已配对 token 并在网关启动时生成新的配对码。

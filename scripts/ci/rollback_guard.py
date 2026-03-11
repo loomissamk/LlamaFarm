@@ -174,7 +174,7 @@ def main() -> int:
     ready_to_execute = args.mode == "execute" and not violations
 
     report = {
-        "schema_version": "zeroclaw.audit.v1",
+        "schema_version": "llamafarm.audit.v1",
         "event_type": "rollback_guard",
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "repo_root": str(repo_root),

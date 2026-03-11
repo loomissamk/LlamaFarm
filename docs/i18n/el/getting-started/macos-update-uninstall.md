@@ -1,20 +1,20 @@
 # Οδηγός Ενημέρωσης και Απεγκατάστασης στο macOS
 
-Αυτή η σελίδα τεκμηριώνει τις υποστηριζόμενες διαδικασίες ενημέρωσης και απεγκατάστασης του ZeroClaw στο macOS (OS X).
+Αυτή η σελίδα τεκμηριώνει τις υποστηριζόμενες διαδικασίες ενημέρωσης και απεγκατάστασης του LlamaFarm στο macOS (OS X).
 
 Τελευταία επαλήθευση: **22 Φεβρουαρίου 2026**.
 
 ## 1) Έλεγχος τρέχουσας μεθόδου εγκατάστασης
 
 ```bash
-which zeroclaw
-zeroclaw --version
+which llamafarm
+llamafarm --version
 ```
 
 Τυπικές τοποθεσίες:
 
-- Homebrew: `/opt/homebrew/bin/zeroclaw` (Apple Silicon) ή `/usr/local/bin/zeroclaw` (Intel)
-- Cargo/bootstrap/χειροκίνητη: `~/.cargo/bin/zeroclaw`
+- Homebrew: `/opt/homebrew/bin/llamafarm` (Apple Silicon) ή `/usr/local/bin/llamafarm` (Intel)
+- Cargo/bootstrap/χειροκίνητη: `~/.cargo/bin/llamafarm`
 
 Αν υπάρχουν και οι δύο, η σειρά `PATH` του shell σας καθορίζει ποια εκτελείται.
 
@@ -24,8 +24,8 @@ zeroclaw --version
 
 ```bash
 brew update
-brew upgrade zeroclaw
-zeroclaw --version
+brew upgrade llamafarm
+llamafarm --version
 ```
 
 ### Β) Εγκατάσταση μέσω Clone + bootstrap
@@ -35,7 +35,7 @@ zeroclaw --version
 ```bash
 git pull --ff-only
 ./bootstrap.sh --prefer-prebuilt
-zeroclaw --version
+llamafarm --version
 ```
 
 Αν θέλετε ενημέρωση μόνο από πηγαίο κώδικα:
@@ -43,7 +43,7 @@ zeroclaw --version
 ```bash
 git pull --ff-only
 cargo install --path . --force --locked
-zeroclaw --version
+llamafarm --version
 ```
 
 ### Γ) Χειροκίνητη εγκατάσταση προκατασκευασμένου binary
@@ -51,7 +51,7 @@ zeroclaw --version
 Επαναλάβετε τη ροή λήψης/εγκατάστασης με το πιο πρόσφατο αρχείο έκδοσης και επαληθεύστε:
 
 ```bash
-zeroclaw --version
+llamafarm --version
 ```
 
 ## 3) Απεγκατάσταση στο macOS
@@ -61,27 +61,27 @@ zeroclaw --version
 Αυτό αποτρέπει τη συνέχεια εκτέλεσης του daemon μετά την αφαίρεση του binary.
 
 ```bash
-zeroclaw service stop || true
-zeroclaw service uninstall || true
+llamafarm service stop || true
+llamafarm service uninstall || true
 ```
 
 Αντικείμενα υπηρεσίας που αφαιρούνται από την `service uninstall`:
 
-- `~/Library/LaunchAgents/com.zeroclaw.daemon.plist`
+- `~/Library/LaunchAgents/com.llamafarm.daemon.plist`
 
 ### Β) Αφαίρεση binary ανά μέθοδο εγκατάστασης
 
 Homebrew:
 
 ```bash
-brew uninstall zeroclaw
+brew uninstall llamafarm
 ```
 
-Cargo/bootstrap/χειροκίνητη (`~/.cargo/bin/zeroclaw`):
+Cargo/bootstrap/χειροκίνητη (`~/.cargo/bin/llamafarm`):
 
 ```bash
-cargo uninstall zeroclaw || true
-rm -f ~/.cargo/bin/zeroclaw
+cargo uninstall llamafarm || true
+rm -f ~/.cargo/bin/llamafarm
 ```
 
 ### Γ) Προαιρετικά: αφαίρεση τοπικών δεδομένων εκτέλεσης
@@ -89,20 +89,20 @@ rm -f ~/.cargo/bin/zeroclaw
 Εκτελέστε αυτό μόνο αν θέλετε πλήρη εκκαθάριση ρυθμίσεων, προφίλ auth, logs και κατάστασης workspace.
 
 ```bash
-rm -rf ~/.zeroclaw
+rm -rf ~/.llamafarm
 ```
 
 ## 4) Επαλήθευση ολοκλήρωσης απεγκατάστασης
 
 ```bash
-command -v zeroclaw || echo "zeroclaw binary not found"
-pgrep -fl zeroclaw || echo "No running zeroclaw process"
+command -v llamafarm || echo "llamafarm binary not found"
+pgrep -fl llamafarm || echo "No running llamafarm process"
 ```
 
 Αν το `pgrep` εξακολουθεί να βρίσκει διεργασία, σταματήστε την χειροκίνητα και ελέγξτε ξανά:
 
 ```bash
-pkill -f zeroclaw
+pkill -f llamafarm
 ```
 
 ## Σχετικά Έγγραφα

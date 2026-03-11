@@ -1,4 +1,4 @@
-title = "ZeroClaw gitleaks configuration"
+title = "LlamaFarm gitleaks configuration"
 
 [allowlist]
 description = "Known false positives in detector fixtures and documentation examples"

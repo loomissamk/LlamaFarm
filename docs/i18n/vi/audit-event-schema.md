@@ -8,7 +8,7 @@ Bản gốc tiếng Anh:
 
 ## Nội dung chính
 
-- Chuẩn envelope sự kiện: `zeroclaw.audit.v1`.
+- Chuẩn envelope sự kiện: `llamafarm.audit.v1`.
 - Các trường chính: `event_type`, `generated_at`, `run_context`, `artifact`, `payload`.
 - Danh sách loại sự kiện hiện tại và chính sách retention artifact theo workflow.
 

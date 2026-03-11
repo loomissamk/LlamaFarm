@@ -8611,7 +8611,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "zeroclaw"
+name = "llamafarm"
 version = "0.1.8"
 dependencies = [
  "anyhow",
@@ -8704,7 +8704,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "zeroclaw-robot-kit"
+name = "llamafarm-robot-kit"
 version = "0.1.0"
 dependencies = [
  "anyhow",

@@ -1,6 +1,6 @@
-# Tham khảo lệnh ZeroClaw
+# Tham khảo lệnh LlamaFarm
 
-Dựa trên CLI hiện tại (`zeroclaw --help`).
+Dựa trên CLI hiện tại (`llamafarm --help`).
 
 Xác minh lần cuối: **2026-02-20**.
 
@@ -31,62 +31,62 @@ Xác minh lần cuối: **2026-02-20**.
 
 ### `onboard`
 
-- `zeroclaw onboard`
-- `zeroclaw onboard --interactive`
-- `zeroclaw onboard --channels-only`
-- `zeroclaw onboard --api-key <KEY> --provider <ID> --memory <sqlite|lucid|markdown|none>`
-- `zeroclaw onboard --api-key <KEY> --provider <ID> --model <MODEL_ID> --memory <sqlite|lucid|markdown|none>`
+- `llamafarm onboard`
+- `llamafarm onboard --interactive`
+- `llamafarm onboard --channels-only`
+- `llamafarm onboard --api-key <KEY> --provider <ID> --memory <sqlite|lucid|markdown|none>`
+- `llamafarm onboard --api-key <KEY> --provider <ID> --model <MODEL_ID> --memory <sqlite|lucid|markdown|none>`
 
 ### `agent`
 
-- `zeroclaw agent`
-- `zeroclaw agent -m "Hello"`
-- `zeroclaw agent --provider <ID> --model <MODEL> --temperature <0.0-2.0>`
-- `zeroclaw agent --peripheral <board:path>`
+- `llamafarm agent`
+- `llamafarm agent -m "Hello"`
+- `llamafarm agent --provider <ID> --model <MODEL> --temperature <0.0-2.0>`
+- `llamafarm agent --peripheral <board:path>`
 
 ### `gateway` / `daemon`
 
-- `zeroclaw gateway [--host <HOST>] [--port <PORT>] [--new-pairing]`
-- `zeroclaw daemon [--host <HOST>] [--port <PORT>]`
+- `llamafarm gateway [--host <HOST>] [--port <PORT>] [--new-pairing]`
+- `llamafarm daemon [--host <HOST>] [--port <PORT>]`
 
 `--new-pairing` sẽ xóa toàn bộ token đã ghép đôi và tạo mã ghép đôi mới khi gateway khởi động.
 
 ### `service`
 
-- `zeroclaw service install`
-- `zeroclaw service start`
-- `zeroclaw service stop`
-- `zeroclaw service restart`
-- `zeroclaw service status`
-- `zeroclaw service uninstall`
+- `llamafarm service install`
+- `llamafarm service start`
+- `llamafarm service stop`
+- `llamafarm service restart`
+- `llamafarm service status`
+- `llamafarm service uninstall`
 
 ### `cron`
 
-- `zeroclaw cron list`
-- `zeroclaw cron add <expr> [--tz <IANA_TZ>] <command>`
-- `zeroclaw cron add-at <rfc3339_timestamp> <command>`
-- `zeroclaw cron add-every <every_ms> <command>`
-- `zeroclaw cron once <delay> <command>`
-- `zeroclaw cron remove <id>`
-- `zeroclaw cron pause <id>`
-- `zeroclaw cron resume <id>`
+- `llamafarm cron list`
+- `llamafarm cron add <expr> [--tz <IANA_TZ>] <command>`
+- `llamafarm cron add-at <rfc3339_timestamp> <command>`
+- `llamafarm cron add-every <every_ms> <command>`
+- `llamafarm cron once <delay> <command>`
+- `llamafarm cron remove <id>`
+- `llamafarm cron pause <id>`
+- `llamafarm cron resume <id>`
 
 ### `models`
 
-- `zeroclaw models refresh`
-- `zeroclaw models refresh --provider <ID>`
-- `zeroclaw models refresh --force`
+- `llamafarm models refresh`
+- `llamafarm models refresh --provider <ID>`
+- `llamafarm models refresh --force`
 
 `models refresh` hiện hỗ trợ làm mới danh mục trực tiếp cho các provider: `openrouter`, `openai`, `anthropic`, `groq`, `mistral`, `deepseek`, `xai`, `together-ai`, `gemini`, `ollama`, `astrai`, `venice`, `fireworks`, `cohere`, `moonshot`, `glm`, `zai`, `qwen` và `nvidia`.
 
 ### `channel`
 
-- `zeroclaw channel list`
-- `zeroclaw channel start`
-- `zeroclaw channel doctor`
-- `zeroclaw channel bind-telegram <IDENTITY>`
-- `zeroclaw channel add <type> <json>`
-- `zeroclaw channel remove <name>`
+- `llamafarm channel list`
+- `llamafarm channel start`
+- `llamafarm channel doctor`
+- `llamafarm channel bind-telegram <IDENTITY>`
+- `llamafarm channel add <type> <json>`
+- `llamafarm channel remove <name>`
 
 Lệnh trong chat khi runtime đang chạy (Telegram/Discord):
 
@@ -106,13 +106,13 @@ Channel runtime cũng theo dõi `config.toml` và tự động áp dụng thay �
 
 ### `integrations`
 
-- `zeroclaw integrations info <name>`
+- `llamafarm integrations info <name>`
 
 ### `skills`
 
-- `zeroclaw skills list`
-- `zeroclaw skills install <source>`
-- `zeroclaw skills remove <name>`
+- `llamafarm skills list`
+- `llamafarm skills install <source>`
+- `llamafarm skills remove <name>`
 
 `<source>` chấp nhận git remote (`https://...`, `http://...`, `ssh://...` và `git@host:owner/repo.git`) hoặc đường dẫn cục bộ.
 
@@ -120,43 +120,43 @@ Skill manifest (`SKILL.toml`) hỗ trợ `prompts` và `[[tools]]`; cả hai đ�
 
 ### `migrate`
 
-- `zeroclaw migrate openclaw [--source <path>] [--dry-run]`
+- `llamafarm migrate openclaw [--source <path>] [--dry-run]`
 
 ### `config`
 
-- `zeroclaw config schema`
+- `llamafarm config schema`
 
 `config schema` xuất JSON Schema (draft 2020-12) cho toàn bộ hợp đồng `config.toml` ra stdout.
 
 ### `completions`
 
-- `zeroclaw completions bash`
-- `zeroclaw completions fish`
-- `zeroclaw completions zsh`
-- `zeroclaw completions powershell`
-- `zeroclaw completions elvish`
+- `llamafarm completions bash`
+- `llamafarm completions fish`
+- `llamafarm completions zsh`
+- `llamafarm completions powershell`
+- `llamafarm completions elvish`
 
 `completions` chỉ xuất ra stdout để script có thể được source trực tiếp mà không bị lẫn log/cảnh báo.
 
 ### `hardware`
 
-- `zeroclaw hardware discover`
-- `zeroclaw hardware introspect <path>`
-- `zeroclaw hardware info [--chip <chip_name>]`
+- `llamafarm hardware discover`
+- `llamafarm hardware introspect <path>`
+- `llamafarm hardware info [--chip <chip_name>]`
 
 ### `peripheral`
 
-- `zeroclaw peripheral list`
-- `zeroclaw peripheral add <board> <path>`
-- `zeroclaw peripheral flash [--port <serial_port>]`
-- `zeroclaw peripheral setup-uno-q [--host <ip_or_host>]`
-- `zeroclaw peripheral flash-nucleo`
+- `llamafarm peripheral list`
+- `llamafarm peripheral add <board> <path>`
+- `llamafarm peripheral flash [--port <serial_port>]`
+- `llamafarm peripheral setup-uno-q [--host <ip_or_host>]`
+- `llamafarm peripheral flash-nucleo`
 
 ## Kiểm tra nhanh
 
 Để xác minh nhanh tài liệu với binary hiện tại:
 
 ```bash
-zeroclaw --help
-zeroclaw <command> --help
+llamafarm --help
+llamafarm <command> --help
 ```

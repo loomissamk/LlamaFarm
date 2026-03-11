@@ -38,16 +38,16 @@ Export live policy snapshots whenever branch protection changes:
 
 ```bash
 mkdir -p docs/operations/branch-protection
-gh api repos/zeroclaw-labs/zeroclaw/branches/dev/protection \
+gh api repos/llamafarm-labs/llamafarm/branches/dev/protection \
   > docs/operations/branch-protection/dev-protection.json
-gh api repos/zeroclaw-labs/zeroclaw/branches/main/protection \
+gh api repos/llamafarm-labs/llamafarm/branches/main/protection \
   > docs/operations/branch-protection/main-protection.json
 ```
 
 If your org uses repository rulesets, also export:
 
 ```bash
-gh api repos/zeroclaw-labs/zeroclaw/rulesets \
+gh api repos/llamafarm-labs/llamafarm/rulesets \
   > docs/operations/branch-protection/rulesets.json
 ```
 

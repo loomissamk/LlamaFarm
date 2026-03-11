@@ -1,5 +1,5 @@
 {
-  "schema_version": "zeroclaw.canary-policy.v1",
+  "schema_version": "llamafarm.canary-policy.v1",
   "release_channel": "stable",
   "observation_window_minutes": 60,
   "minimum_sample_size": 500,

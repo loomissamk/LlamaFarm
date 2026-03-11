@@ -51,7 +51,7 @@ base_build_status="success"
 if ! (
   cd "$worktree_dir"
   export CARGO_TARGET_DIR="$BASE_TARGET_DIR"
-  cargo build --profile release-fast --locked --bin zeroclaw
+  cargo build --profile release-fast --locked --bin llamafarm
 ); then
   base_build_status="failure"
 fi
@@ -69,7 +69,7 @@ if [ "$base_build_status" != "success" ]; then
   exit 0
 fi
 
-BASE_BIN="${BASE_TARGET_DIR}/release-fast/zeroclaw"
+BASE_BIN="${BASE_TARGET_DIR}/release-fast/llamafarm"
 if [ ! -f "$BASE_BIN" ]; then
   echo "::warning::Base binary missing (${BASE_BIN}); skipping binary-size regression gate."
   exit 0

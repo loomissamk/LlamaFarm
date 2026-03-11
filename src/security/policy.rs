@@ -3108,7 +3108,7 @@ Inst fwupd [1.9.0] (1.9.1 Ubuntu:24.04/noble [amd64])\n";
 
     #[test]
     fn absolute_path_under_allowed_root_passes_even_when_parent_is_forbidden() {
-        let allowed_root = std::env::temp_dir().join("zeroclaw_allowed_root");
+        let allowed_root = std::env::temp_dir().join("llamafarm_allowed_root");
         let policy = SecurityPolicy {
             workspace_only: false,
             forbidden_paths: vec![
@@ -3136,8 +3136,8 @@ Inst fwupd [1.9.0] (1.9.1 Ubuntu:24.04/noble [amd64])\n";
 
     #[test]
     fn forbidden_subpath_beats_broad_allowed_root() {
-        let root = std::env::temp_dir().join("zeroclaw_prefix_allowlist");
-        let allowed_root = root.join("home").join("zeroclaw_user");
+        let root = std::env::temp_dir().join("llamafarm_prefix_allowlist");
+        let allowed_root = root.join("home").join("llamafarm_user");
         let secret_root = allowed_root.join(".ssh");
         let policy = SecurityPolicy {
             workspace_only: false,
@@ -3155,7 +3155,7 @@ Inst fwupd [1.9.0] (1.9.1 Ubuntu:24.04/noble [amd64])\n";
 
     #[test]
     fn workspace_only_false_allows_resolved_outside_workspace() {
-        let workspace = std::env::temp_dir().join("zeroclaw_test_ws_only_false");
+        let workspace = std::env::temp_dir().join("llamafarm_test_ws_only_false");
         let _ = std::fs::create_dir_all(&workspace);
         let canonical_workspace = workspace
             .canonicalize()
@@ -3172,7 +3172,7 @@ Inst fwupd [1.9.0] (1.9.1 Ubuntu:24.04/noble [amd64])\n";
         let outside = std::env::var_os("HOME")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/home"))
-            .join("zeroclaw_outside_ws");
+            .join("llamafarm_outside_ws");
         assert!(
             p.is_resolved_path_allowed(&outside),
             "workspace_only=false must allow resolved paths outside workspace"
@@ -3193,7 +3193,7 @@ Inst fwupd [1.9.0] (1.9.1 Ubuntu:24.04/noble [amd64])\n";
 
     #[test]
     fn workspace_only_true_blocks_resolved_outside_workspace() {
-        let workspace = std::env::temp_dir().join("zeroclaw_test_ws_only_true");
+        let workspace = std::env::temp_dir().join("llamafarm_test_ws_only_true");
         let _ = std::fs::create_dir_all(&workspace);
         let canonical_workspace = workspace
             .canonicalize()
@@ -3216,7 +3216,7 @@ Inst fwupd [1.9.0] (1.9.1 Ubuntu:24.04/noble [amd64])\n";
         let outside = std::env::temp_dir()
             .canonicalize()
             .unwrap_or_else(|_| std::env::temp_dir())
-            .join("zeroclaw_outside_ws_true");
+            .join("llamafarm_outside_ws_true");
         assert!(
             !p.is_resolved_path_allowed(&outside),
             "workspace_only=true must block resolved paths outside workspace"
@@ -3227,7 +3227,7 @@ Inst fwupd [1.9.0] (1.9.1 Ubuntu:24.04/noble [amd64])\n";
 
     #[test]
     fn resolved_forbidden_subpath_beats_workspace_root() {
-        let root = std::env::temp_dir().join("zeroclaw_resolved_prefix_precedence");
+        let root = std::env::temp_dir().join("llamafarm_resolved_prefix_precedence");
         let workspace = root.join("workspace");
         let secret_dir = workspace.join(".ssh");
         let allowed_path = workspace.join("src").join("main.rs");
@@ -3390,7 +3390,7 @@ Inst fwupd [1.9.0] (1.9.1 Ubuntu:24.04/noble [amd64])\n";
 
     #[test]
     fn resolved_path_blocks_outside_workspace() {
-        let workspace = std::env::temp_dir().join("zeroclaw_test_resolved_path");
+        let workspace = std::env::temp_dir().join("llamafarm_test_resolved_path");
         let _ = std::fs::create_dir_all(&workspace);
 
         // Use the canonicalized workspace so starts_with checks match
@@ -3414,7 +3414,7 @@ Inst fwupd [1.9.0] (1.9.1 Ubuntu:24.04/noble [amd64])\n";
         let canonical_temp = std::env::temp_dir()
             .canonicalize()
             .unwrap_or_else(|_| std::env::temp_dir());
-        let outside = canonical_temp.join("outside_workspace_zeroclaw");
+        let outside = canonical_temp.join("outside_workspace_llamafarm");
         assert!(
             !policy.is_resolved_path_allowed(&outside),
             "path outside workspace must be blocked"
@@ -3426,7 +3426,7 @@ Inst fwupd [1.9.0] (1.9.1 Ubuntu:24.04/noble [amd64])\n";
     #[test]
     fn resolved_path_blocks_root_escape() {
         let policy = SecurityPolicy {
-            workspace_dir: PathBuf::from("/home/zeroclaw_user/project"),
+            workspace_dir: PathBuf::from("/home/llamafarm_user/project"),
             ..SecurityPolicy::default()
         };
 
@@ -3445,7 +3445,7 @@ Inst fwupd [1.9.0] (1.9.1 Ubuntu:24.04/noble [amd64])\n";
     fn resolved_path_blocks_symlink_escape() {
         use std::os::unix::fs::symlink;
 
-        let root = std::env::temp_dir().join("zeroclaw_test_symlink_escape");
+        let root = std::env::temp_dir().join("llamafarm_test_symlink_escape");
         let workspace = root.join("workspace");
         let outside = root.join("outside_target");
 
@@ -3477,7 +3477,7 @@ Inst fwupd [1.9.0] (1.9.1 Ubuntu:24.04/noble [amd64])\n";
     fn allowed_roots_permits_paths_outside_workspace() {
         use std::os::unix::fs::symlink;
 
-        let root = std::env::temp_dir().join("zeroclaw_test_allowed_roots");
+        let root = std::env::temp_dir().join("llamafarm_test_allowed_roots");
         let workspace = root.join("workspace");
         let extra = root.join("extra_root");
         let extra_file = extra.join("data.txt");

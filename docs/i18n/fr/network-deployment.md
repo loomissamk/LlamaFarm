@@ -15,7 +15,7 @@ Source anglaise:
 ## Plan des sections source
 
 - [H2 · 1. Overview](../../network-deployment.md#1-overview)
-- [H2 · 2. ZeroClaw on Raspberry Pi](../../network-deployment.md#2-zeroclaw-on-raspberry-pi)
+- [H2 · 2. LlamaFarm on Raspberry Pi](../../network-deployment.md#2-llamafarm-on-raspberry-pi)
 - [H3 · 2.1 Prerequisites](../../network-deployment.md#2-1-prerequisites)
 - [H3 · 2.2 Install](../../network-deployment.md#2-2-install)
 - [H3 · 2.3 Config](../../network-deployment.md#2-3-config)

@@ -22,7 +22,7 @@ def sha256_file(path: Path) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate provenance statement for artifact.")
     parser.add_argument("--artifact", required=True)
-    parser.add_argument("--subject-name", default="zeroclaw")
+    parser.add_argument("--subject-name", default="llamafarm")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
@@ -36,7 +36,7 @@ def main() -> int:
         "predicateType": "https://slsa.dev/provenance/v1",
         "predicate": {
             "buildDefinition": {
-                "buildType": "https://zeroclaw.dev/ci/release-fast",
+                "buildType": "https://llamafarm.dev/ci/release-fast",
                 "externalParameters": {
                     "repository": os.getenv("GITHUB_REPOSITORY", ""),
                     "ref": os.getenv("GITHUB_REF", ""),

@@ -647,8 +647,8 @@ impl Channel for QQChannel {
                 "intents": intents,
                 "properties": {
                     "os": "linux",
-                    "browser": "zeroclaw",
-                    "device": "zeroclaw",
+                    "browser": "llamafarm",
+                    "device": "llamafarm",
                 }
             }
         });

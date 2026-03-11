@@ -15,14 +15,14 @@ error() {
 
 usage() {
   cat <<'USAGE'
-ZeroClaw installer bootstrap engine
+LlamaFarm installer bootstrap engine
 
 Usage:
-  ./zeroclaw_install.sh [options]
+  ./llamafarm_install.sh [options]
   ./bootstrap.sh [options]         # compatibility entrypoint
 
 Modes:
-  Default mode installs/builds ZeroClaw only (requires existing Rust toolchain).
+  Default mode installs/builds LlamaFarm only (requires existing Rust toolchain).
   Guided mode asks setup questions and configures options interactively.
   Optional bootstrap mode can also install system dependencies and Rust.
 
@@ -30,7 +30,7 @@ Options:
   --guided                   Run interactive guided installer
   --no-guided                Disable guided installer
   --docker                   Run bootstrap in Docker-compatible mode and launch onboarding inside the container
-  --docker-reset             Reset existing ZeroClaw Docker containers/networks/volumes and data dir before --docker bootstrap
+  --docker-reset             Reset existing LlamaFarm Docker containers/networks/volumes and data dir before --docker bootstrap
   --docker-config <path>     Seed Docker config.toml from host path (skips default onboarding unless explicitly requested)
   --docker-secret-key <path> Seed Docker .secret_key from host path (used with --docker-config encrypted secrets)
   --docker-daemon            Start persistent Docker daemon container directly (requires --docker)
@@ -51,50 +51,50 @@ Options:
   -h, --help                 Show help
 
 Examples:
-  ./zeroclaw_install.sh
-  ./zeroclaw_install.sh --guided
-  ./zeroclaw_install.sh --install-system-deps --install-rust
-  ./zeroclaw_install.sh --prefer-prebuilt
-  ./zeroclaw_install.sh --prebuilt-only
-  ./zeroclaw_install.sh --onboard --api-key "sk-..." --provider openrouter [--model "openrouter/auto"]
-  ./zeroclaw_install.sh --interactive-onboard
-  ./zeroclaw_install.sh --docker --docker-config ./config.toml --docker-daemon
+  ./llamafarm_install.sh
+  ./llamafarm_install.sh --guided
+  ./llamafarm_install.sh --install-system-deps --install-rust
+  ./llamafarm_install.sh --prefer-prebuilt
+  ./llamafarm_install.sh --prebuilt-only
+  ./llamafarm_install.sh --onboard --api-key "sk-..." --provider openrouter [--model "openrouter/auto"]
+  ./llamafarm_install.sh --interactive-onboard
+  ./llamafarm_install.sh --docker --docker-config ./config.toml --docker-daemon
 
   # Compatibility entrypoint:
   ./bootstrap.sh --docker
 
   # Remote one-liner
-  curl -fsSL https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw/main/scripts/bootstrap.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/llamafarm-labs/llamafarm/main/scripts/bootstrap.sh | bash
 
 Environment:
-  ZEROCLAW_CONTAINER_CLI     Container CLI command (default: docker; auto-fallback: podman)
-  ZEROCLAW_DOCKER_DATA_DIR   Host path for Docker config/workspace persistence
-  ZEROCLAW_DOCKER_IMAGE      Docker image tag to build/run (default: zeroclaw-bootstrap:local)
-  ZEROCLAW_DOCKER_BROWSER_RUNTIME
+  LLAMAFARM_CONTAINER_CLI     Container CLI command (default: docker; auto-fallback: podman)
+  LLAMAFARM_DOCKER_DATA_DIR   Host path for Docker config/workspace persistence
+  LLAMAFARM_DOCKER_IMAGE      Docker image tag to build/run (default: llamafarm-bootstrap:local)
+  LLAMAFARM_DOCKER_BROWSER_RUNTIME
                             Browser runtime provisioning mode for --docker: "auto" (prompt), "on", or "off"
-  ZEROCLAW_DOCKER_BROWSER_SIDECAR_IMAGE
+  LLAMAFARM_DOCKER_BROWSER_SIDECAR_IMAGE
                             Browser WebDriver sidecar image (default: selenium/standalone-chromium:latest)
-  ZEROCLAW_DOCKER_BROWSER_SIDECAR_NAME
-                            Browser WebDriver sidecar container name (default: zeroclaw-browser-webdriver)
-  ZEROCLAW_DOCKER_NETWORK    Docker network for ZeroClaw + sidecars (default: zeroclaw-bootstrap-net)
-  ZEROCLAW_DOCKER_CARGO_FEATURES
+  LLAMAFARM_DOCKER_BROWSER_SIDECAR_NAME
+                            Browser WebDriver sidecar container name (default: llamafarm-browser-webdriver)
+  LLAMAFARM_DOCKER_NETWORK    Docker network for LlamaFarm + sidecars (default: llamafarm-bootstrap-net)
+  LLAMAFARM_DOCKER_CARGO_FEATURES
                             Extra Cargo features for Docker builds (comma-separated)
-  ZEROCLAW_CARGO_FEATURES    Extra Cargo features for local source builds (comma-separated)
-  ZEROCLAW_CONFIG_PATH       Config path used for channel feature auto-detection (default: ~/.zeroclaw/config.toml)
-  ZEROCLAW_DOCKER_DAEMON_NAME
-                            Daemon container name for --docker-daemon (default: zeroclaw-daemon)
-  ZEROCLAW_DOCKER_DAEMON_BIND_HOST
+  LLAMAFARM_CARGO_FEATURES    Extra Cargo features for local source builds (comma-separated)
+  LLAMAFARM_CONFIG_PATH       Config path used for channel feature auto-detection (default: ~/.llamafarm/config.toml)
+  LLAMAFARM_DOCKER_DAEMON_NAME
+                            Daemon container name for --docker-daemon (default: llamafarm-daemon)
+  LLAMAFARM_DOCKER_DAEMON_BIND_HOST
                             Host bind address for daemon port publish (default: 127.0.0.1)
-  ZEROCLAW_DOCKER_DAEMON_HOST_PORT
+  LLAMAFARM_DOCKER_DAEMON_HOST_PORT
                             Host port to publish daemon gateway (default: same as gateway.port)
-  ZEROCLAW_DOCKER_SECRET_KEY_FILE
+  LLAMAFARM_DOCKER_SECRET_KEY_FILE
                             Host path to .secret_key used when seeding encrypted config.toml
-  ZEROCLAW_API_KEY           Used when --api-key is not provided
-  ZEROCLAW_PROVIDER          Used when --provider is not provided (default: openrouter)
-  ZEROCLAW_MODEL             Used when --model is not provided
-  ZEROCLAW_BOOTSTRAP_MIN_RAM_MB   Minimum RAM threshold for source build preflight (default: 2048)
-  ZEROCLAW_BOOTSTRAP_MIN_DISK_MB  Minimum free disk threshold for source build preflight (default: 6144)
-  ZEROCLAW_DISABLE_ALPINE_AUTO_DEPS
+  LLAMAFARM_API_KEY           Used when --api-key is not provided
+  LLAMAFARM_PROVIDER          Used when --provider is not provided (default: openrouter)
+  LLAMAFARM_MODEL             Used when --model is not provided
+  LLAMAFARM_BOOTSTRAP_MIN_RAM_MB   Minimum RAM threshold for source build preflight (default: 2048)
+  LLAMAFARM_BOOTSTRAP_MIN_DISK_MB  Minimum free disk threshold for source build preflight (default: 6144)
+  LLAMAFARM_DISABLE_ALPINE_AUTO_DEPS
                             Set to 1 to disable Alpine auto-install of missing prerequisites
 USAGE
 }
@@ -165,8 +165,8 @@ should_attempt_prebuilt_for_resources() {
   local workspace="${1:-.}"
   local min_ram_mb min_disk_mb total_ram_mb free_disk_mb low_resource
 
-  min_ram_mb="${ZEROCLAW_BOOTSTRAP_MIN_RAM_MB:-2048}"
-  min_disk_mb="${ZEROCLAW_BOOTSTRAP_MIN_DISK_MB:-6144}"
+  min_ram_mb="${LLAMAFARM_BOOTSTRAP_MIN_RAM_MB:-2048}"
+  min_disk_mb="${LLAMAFARM_BOOTSTRAP_MIN_DISK_MB:-6144}"
   total_ram_mb="$(get_total_memory_mb || true)"
   free_disk_mb="$(get_available_disk_mb "$workspace" || true)"
   low_resource=false
@@ -279,9 +279,9 @@ install_prebuilt_binary() {
     return 1
   fi
 
-  archive_url="https://github.com/zeroclaw-labs/zeroclaw/releases/latest/download/zeroclaw-${target}.tar.gz"
-  temp_dir="$(mktemp -d -t zeroclaw-prebuilt-XXXXXX)"
-  archive_path="$temp_dir/zeroclaw-${target}.tar.gz"
+  archive_url="https://github.com/llamafarm-labs/llamafarm/releases/latest/download/llamafarm-${target}.tar.gz"
+  temp_dir="$(mktemp -d -t llamafarm-prebuilt-XXXXXX)"
+  archive_path="$temp_dir/llamafarm-${target}.tar.gz"
 
   info "Attempting pre-built binary install for target: $target"
   if ! curl -fsSL "$archive_url" -o "$archive_path"; then
@@ -296,22 +296,22 @@ install_prebuilt_binary() {
     return 1
   fi
 
-  extracted_bin="$temp_dir/zeroclaw"
+  extracted_bin="$temp_dir/llamafarm"
   if [[ ! -x "$extracted_bin" ]]; then
-    extracted_bin="$(find "$temp_dir" -maxdepth 2 -type f -name zeroclaw -perm -u+x | head -n 1 || true)"
+    extracted_bin="$(find "$temp_dir" -maxdepth 2 -type f -name llamafarm -perm -u+x | head -n 1 || true)"
   fi
   if [[ -z "$extracted_bin" || ! -x "$extracted_bin" ]]; then
-    warn "Archive did not contain an executable zeroclaw binary."
+    warn "Archive did not contain an executable llamafarm binary."
     rm -rf "$temp_dir"
     return 1
   fi
 
   install_dir="$HOME/.cargo/bin"
   mkdir -p "$install_dir"
-  install -m 0755 "$extracted_bin" "$install_dir/zeroclaw"
+  install -m 0755 "$extracted_bin" "$install_dir/llamafarm"
   rm -rf "$temp_dir"
 
-  info "Installed pre-built binary to $install_dir/zeroclaw"
+  info "Installed pre-built binary to $install_dir/llamafarm"
   if [[ ":$PATH:" != *":$install_dir:"* ]]; then
     warn "$install_dir is not in PATH for this shell."
     warn "Run: export PATH=\"$install_dir:\$PATH\""
@@ -356,7 +356,7 @@ run_pacman() {
 
   local pacman_cfg_tmp=""
   local pacman_rc=0
-  pacman_cfg_tmp="$(mktemp /tmp/zeroclaw-pacman.XXXXXX.conf)"
+  pacman_cfg_tmp="$(mktemp /tmp/llamafarm-pacman.XXXXXX.conf)"
   cp /etc/pacman.conf "$pacman_cfg_tmp"
   if ! grep -Eq '^[[:space:]]*DisableSandboxSyscalls([[:space:]]|$)' "$pacman_cfg_tmp"; then
     printf '\nDisableSandboxSyscalls\n' >> "$pacman_cfg_tmp"
@@ -593,7 +593,7 @@ run_guided_installer() {
   fi
 
   echo
-  echo "ZeroClaw guided installer"
+  echo "LlamaFarm guided installer"
   echo "Answer a few questions, then the installer will run automatically."
   echo
 
@@ -621,7 +621,7 @@ run_guided_installer() {
     SKIP_BUILD=true
   fi
 
-  if prompt_yes_no "Install zeroclaw into cargo bin now?" "yes"; then
+  if prompt_yes_no "Install llamafarm into cargo bin now?" "yes"; then
     SKIP_INSTALL=false
   else
     SKIP_INSTALL=true
@@ -701,7 +701,7 @@ run_guided_installer() {
 
 resolve_container_cli() {
   local requested_cli
-  requested_cli="${ZEROCLAW_CONTAINER_CLI:-docker}"
+  requested_cli="${LLAMAFARM_CONTAINER_CLI:-docker}"
 
   if have_cmd "$requested_cli"; then
     CONTAINER_CLI="$requested_cli"
@@ -716,9 +716,9 @@ resolve_container_cli() {
 
   error "Container CLI '$requested_cli' is not installed."
   if [[ "$requested_cli" != "docker" ]]; then
-    error "Set ZEROCLAW_CONTAINER_CLI to an installed Docker-compatible CLI (e.g., docker or podman)."
+    error "Set LLAMAFARM_CONTAINER_CLI to an installed Docker-compatible CLI (e.g., docker or podman)."
   else
-    error "Install Docker, install podman, or set ZEROCLAW_CONTAINER_CLI to an available Docker-compatible CLI."
+    error "Install Docker, install podman, or set LLAMAFARM_CONTAINER_CLI to an available Docker-compatible CLI."
   fi
   exit 1
 }
@@ -733,7 +733,7 @@ ensure_docker_ready() {
   fi
 }
 
-is_zeroclaw_container() {
+is_llamafarm_container() {
   local name="$1"
   local image="$2"
   local command="$3"
@@ -743,17 +743,17 @@ is_zeroclaw_container() {
   image_lc="$(printf '%s' "$image" | tr '[:upper:]' '[:lower:]')"
   command_lc="$(printf '%s' "$command" | tr '[:upper:]' '[:lower:]')"
 
-  [[ "$name_lc" == *"zeroclaw"* || "$image_lc" == *"zeroclaw"* || "$command_lc" == *"zeroclaw"* ]]
+  [[ "$name_lc" == *"llamafarm"* || "$image_lc" == *"llamafarm"* || "$command_lc" == *"llamafarm"* ]]
 }
 
-is_zeroclaw_resource_name() {
+is_llamafarm_resource_name() {
   local name="$1"
   local name_lc
   name_lc="$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')"
-  [[ "$name_lc" == *"zeroclaw"* ]]
+  [[ "$name_lc" == *"llamafarm"* ]]
 }
 
-maybe_stop_running_zeroclaw_containers() {
+maybe_stop_running_llamafarm_containers() {
   local -a running_ids=() running_rows=()
   local id name image command row
 
@@ -761,7 +761,7 @@ maybe_stop_running_zeroclaw_containers() {
     if [[ -z "$id" ]]; then
       continue
     fi
-    if is_zeroclaw_container "$name" "$image" "$command"; then
+    if is_llamafarm_container "$name" "$image" "$command"; then
       running_ids+=("$id")
       running_rows+=("$id"$'\t'"$name"$'\t'"$image"$'\t'"$command")
     fi
@@ -771,26 +771,26 @@ maybe_stop_running_zeroclaw_containers() {
     return 0
   fi
 
-  warn "Detected running ZeroClaw container(s):"
+  warn "Detected running LlamaFarm container(s):"
   for row in "${running_rows[@]}"; do
     IFS=$'\t' read -r id name image command <<<"$row"
     echo "  - $name ($id) image=$image cmd=$command"
   done
 
   if ! guided_input_stream >/dev/null 2>&1; then
-    warn "Non-interactive mode detected; leaving existing ZeroClaw containers running."
+    warn "Non-interactive mode detected; leaving existing LlamaFarm containers running."
     return 0
   fi
 
-  if prompt_yes_no "Stop these running ZeroClaw containers before continuing?" "yes"; then
-    info "Stopping ${#running_ids[@]} ZeroClaw container(s)"
+  if prompt_yes_no "Stop these running LlamaFarm containers before continuing?" "yes"; then
+    info "Stopping ${#running_ids[@]} LlamaFarm container(s)"
     "$CONTAINER_CLI" stop "${running_ids[@]}" >/dev/null
   else
-    warn "Continuing with existing ZeroClaw containers still running."
+    warn "Continuing with existing LlamaFarm containers still running."
   fi
 }
 
-reset_docker_zeroclaw_resources() {
+reset_docker_llamafarm_resources() {
   local docker_data_dir="$1"
   local -a container_ids container_rows network_names volume_names
   local id name image command row resource_name
@@ -800,40 +800,40 @@ reset_docker_zeroclaw_resources() {
   network_names=()
   volume_names=()
 
-  info "Resetting ZeroClaw Docker resources"
+  info "Resetting LlamaFarm Docker resources"
 
   while IFS=$'\t' read -r id name image command; do
     if [[ -z "$id" ]]; then
       continue
     fi
-    if is_zeroclaw_container "$name" "$image" "$command"; then
+    if is_llamafarm_container "$name" "$image" "$command"; then
       container_ids+=("$id")
       container_rows+=("$id"$'\t'"$name"$'\t'"$image"$'\t'"$command")
     fi
   done < <("$CONTAINER_CLI" ps -a --format '{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Command}}')
 
   if [[ ${#container_ids[@]} -gt 0 ]]; then
-    info "Removing ${#container_ids[@]} ZeroClaw container(s)"
+    info "Removing ${#container_ids[@]} LlamaFarm container(s)"
     for row in "${container_rows[@]}"; do
       IFS=$'\t' read -r id name image command <<<"$row"
       echo "  - $name ($id) image=$image cmd=$command"
     done
     "$CONTAINER_CLI" rm -f "${container_ids[@]}" >/dev/null
   else
-    info "No existing ZeroClaw containers found"
+    info "No existing LlamaFarm containers found"
   fi
 
   while IFS= read -r resource_name; do
     if [[ -z "$resource_name" ]]; then
       continue
     fi
-    if is_zeroclaw_resource_name "$resource_name"; then
+    if is_llamafarm_resource_name "$resource_name"; then
       network_names+=("$resource_name")
     fi
   done < <("$CONTAINER_CLI" network ls --format '{{.Name}}')
 
   if [[ ${#network_names[@]} -gt 0 ]]; then
-    info "Removing ${#network_names[@]} ZeroClaw network(s)"
+    info "Removing ${#network_names[@]} LlamaFarm network(s)"
     for resource_name in "${network_names[@]}"; do
       echo "  - $resource_name"
       if ! "$CONTAINER_CLI" network rm "$resource_name" >/dev/null 2>&1; then
@@ -841,20 +841,20 @@ reset_docker_zeroclaw_resources() {
       fi
     done
   else
-    info "No existing ZeroClaw networks found"
+    info "No existing LlamaFarm networks found"
   fi
 
   while IFS= read -r resource_name; do
     if [[ -z "$resource_name" ]]; then
       continue
     fi
-    if is_zeroclaw_resource_name "$resource_name"; then
+    if is_llamafarm_resource_name "$resource_name"; then
       volume_names+=("$resource_name")
     fi
   done < <("$CONTAINER_CLI" volume ls --format '{{.Name}}')
 
   if [[ ${#volume_names[@]} -gt 0 ]]; then
-    info "Removing ${#volume_names[@]} ZeroClaw volume(s)"
+    info "Removing ${#volume_names[@]} LlamaFarm volume(s)"
     for resource_name in "${volume_names[@]}"; do
       echo "  - $resource_name"
       if ! "$CONTAINER_CLI" volume rm "$resource_name" >/dev/null 2>&1; then
@@ -862,7 +862,7 @@ reset_docker_zeroclaw_resources() {
       fi
     done
   else
-    info "No existing ZeroClaw volumes found"
+    info "No existing LlamaFarm volumes found"
   fi
 
   if [[ -d "$docker_data_dir" ]]; then
@@ -1036,33 +1036,33 @@ run_docker_bootstrap() {
   local config_gateway_port_value
   local -a container_run_user_args container_run_namespace_args
   local -a container_extra_run_args container_extra_env_args docker_build_args daemon_cmd
-  docker_image="${ZEROCLAW_DOCKER_IMAGE:-zeroclaw-bootstrap:local}"
-  fallback_image="ghcr.io/zeroclaw-labs/zeroclaw:latest"
-  docker_build_features="${ZEROCLAW_DOCKER_CARGO_FEATURES:-}"
-  docker_browser_runtime_mode="${ZEROCLAW_DOCKER_BROWSER_RUNTIME:-auto}"
-  docker_browser_sidecar_name="${ZEROCLAW_DOCKER_BROWSER_SIDECAR_NAME:-zeroclaw-browser-webdriver}"
-  docker_browser_sidecar_image="${ZEROCLAW_DOCKER_BROWSER_SIDECAR_IMAGE:-selenium/standalone-chromium:latest}"
-  docker_network="${ZEROCLAW_DOCKER_NETWORK:-zeroclaw-bootstrap-net}"
-  docker_daemon_name="${ZEROCLAW_DOCKER_DAEMON_NAME:-zeroclaw-daemon}"
-  docker_daemon_bind_host="${ZEROCLAW_DOCKER_DAEMON_BIND_HOST:-127.0.0.1}"
-  docker_daemon_host_port="${ZEROCLAW_DOCKER_DAEMON_HOST_PORT:-}"
+  docker_image="${LLAMAFARM_DOCKER_IMAGE:-llamafarm-bootstrap:local}"
+  fallback_image="ghcr.io/llamafarm-labs/llamafarm:latest"
+  docker_build_features="${LLAMAFARM_DOCKER_CARGO_FEATURES:-}"
+  docker_browser_runtime_mode="${LLAMAFARM_DOCKER_BROWSER_RUNTIME:-auto}"
+  docker_browser_sidecar_name="${LLAMAFARM_DOCKER_BROWSER_SIDECAR_NAME:-llamafarm-browser-webdriver}"
+  docker_browser_sidecar_image="${LLAMAFARM_DOCKER_BROWSER_SIDECAR_IMAGE:-selenium/standalone-chromium:latest}"
+  docker_network="${LLAMAFARM_DOCKER_NETWORK:-llamafarm-bootstrap-net}"
+  docker_daemon_name="${LLAMAFARM_DOCKER_DAEMON_NAME:-llamafarm-daemon}"
+  docker_daemon_bind_host="${LLAMAFARM_DOCKER_DAEMON_BIND_HOST:-127.0.0.1}"
+  docker_daemon_host_port="${LLAMAFARM_DOCKER_DAEMON_HOST_PORT:-}"
   seed_config_path="${DOCKER_CONFIG_FILE:-}"
-  seed_secret_key_path="${DOCKER_SECRET_KEY_FILE:-${ZEROCLAW_DOCKER_SECRET_KEY_FILE:-}}"
+  seed_secret_key_path="${DOCKER_SECRET_KEY_FILE:-${LLAMAFARM_DOCKER_SECRET_KEY_FILE:-}}"
   container_network_name=""
   docker_browser_webdriver_url=""
   if [[ "$TEMP_CLONE" == true ]]; then
-    default_data_dir="$HOME/.zeroclaw-docker"
+    default_data_dir="$HOME/.llamafarm-docker"
   else
-    default_data_dir="$WORK_DIR/.zeroclaw-docker"
+    default_data_dir="$WORK_DIR/.llamafarm-docker"
   fi
-  docker_data_dir="${ZEROCLAW_DOCKER_DATA_DIR:-$default_data_dir}"
+  docker_data_dir="${LLAMAFARM_DOCKER_DATA_DIR:-$default_data_dir}"
   DOCKER_DATA_DIR="$docker_data_dir"
 
   if [[ "$DOCKER_RESET" == true ]]; then
-    reset_docker_zeroclaw_resources "$docker_data_dir"
+    reset_docker_llamafarm_resources "$docker_data_dir"
   fi
 
-  mkdir -p "$docker_data_dir/.zeroclaw" "$docker_data_dir/workspace"
+  mkdir -p "$docker_data_dir/.llamafarm" "$docker_data_dir/workspace"
 
   if [[ -n "$seed_config_path" ]]; then
     if [[ ! -f "$seed_config_path" ]]; then
@@ -1070,15 +1070,15 @@ run_docker_bootstrap() {
       exit 1
     fi
     info "Seeding Docker config from $seed_config_path"
-    install -m 600 "$seed_config_path" "$docker_data_dir/.zeroclaw/config.toml"
-    seed_docker_secret_key_for_config "$seed_config_path" "$docker_data_dir/.zeroclaw" "$seed_secret_key_path"
+    install -m 600 "$seed_config_path" "$docker_data_dir/.llamafarm/config.toml"
+    seed_docker_secret_key_for_config "$seed_config_path" "$docker_data_dir/.llamafarm" "$seed_secret_key_path"
   fi
 
   if [[ "$SKIP_INSTALL" == true ]]; then
     warn "--skip-install has no effect with --docker."
   fi
 
-  maybe_stop_running_zeroclaw_containers
+  maybe_stop_running_llamafarm_containers
 
   docker_browser_runtime_bool="false"
   case "$(printf '%s' "$docker_browser_runtime_mode" | tr '[:upper:]' '[:lower:]')" in
@@ -1101,7 +1101,7 @@ run_docker_bootstrap() {
     *)
       docker_browser_runtime_bool="$(string_to_bool "$docker_browser_runtime_mode")"
       if [[ "$docker_browser_runtime_bool" == "invalid" ]]; then
-        warn "Invalid ZEROCLAW_DOCKER_BROWSER_RUNTIME='$docker_browser_runtime_mode' (expected auto/on/off). Defaulting to off."
+        warn "Invalid LLAMAFARM_DOCKER_BROWSER_RUNTIME='$docker_browser_runtime_mode' (expected auto/on/off). Defaulting to off."
         docker_browser_runtime_bool="false"
       fi
       ;;
@@ -1133,7 +1133,7 @@ run_docker_bootstrap() {
     docker_build_args=(build --target release -t "$docker_image")
     if [[ -n "$docker_build_features" ]]; then
       info "Docker build features: $docker_build_features"
-      docker_build_args+=(--build-arg "ZEROCLAW_CARGO_FEATURES=$docker_build_features")
+      docker_build_args+=(--build-arg "LLAMAFARM_CARGO_FEATURES=$docker_build_features")
     fi
     docker_build_args+=("$WORK_DIR")
     "$CONTAINER_CLI" "${docker_build_args[@]}"
@@ -1141,7 +1141,7 @@ run_docker_bootstrap() {
     info "Skipping Docker image build"
     if ! "$CONTAINER_CLI" image inspect "$docker_image" >/dev/null 2>&1; then
       warn "Local Docker image ($docker_image) was not found."
-      info "Pulling official ZeroClaw image ($fallback_image)"
+      info "Pulling official LlamaFarm image ($fallback_image)"
       if ! "$CONTAINER_CLI" pull "$fallback_image"; then
         error "Failed to pull fallback Docker image: $fallback_image"
         error "Run without --skip-build to build locally, or verify access to GHCR."
@@ -1154,8 +1154,8 @@ run_docker_bootstrap() {
     fi
   fi
 
-  config_mount="$docker_data_dir/.zeroclaw:/zeroclaw-data/.zeroclaw"
-  workspace_mount="$docker_data_dir/workspace:/zeroclaw-data/workspace"
+  config_mount="$docker_data_dir/.llamafarm:/llamafarm-data/.llamafarm"
+  workspace_mount="$docker_data_dir/workspace:/llamafarm-data/workspace"
   if [[ "$CONTAINER_CLI" == "podman" ]]; then
     config_mount+=":Z"
     workspace_mount+=":Z"
@@ -1172,7 +1172,7 @@ run_docker_bootstrap() {
     container_extra_run_args+=(--network "$container_network_name")
   fi
   if [[ -n "$docker_browser_webdriver_url" ]]; then
-    container_extra_env_args+=(-e "ZEROCLAW_DOCKER_WEBDRIVER_URL=$docker_browser_webdriver_url")
+    container_extra_env_args+=(-e "LLAMAFARM_DOCKER_WEBDRIVER_URL=$docker_browser_webdriver_url")
   fi
 
   info "Docker data directory: $docker_data_dir"
@@ -1186,8 +1186,8 @@ run_docker_bootstrap() {
     fi
 
     config_gateway_port_value=""
-    if [[ -f "$docker_data_dir/.zeroclaw/config.toml" ]]; then
-      config_gateway_port_value="$(config_gateway_port "$docker_data_dir/.zeroclaw/config.toml" || true)"
+    if [[ -f "$docker_data_dir/.llamafarm/config.toml" ]]; then
+      config_gateway_port_value="$(config_gateway_port "$docker_data_dir/.llamafarm/config.toml" || true)"
     fi
     docker_daemon_port="${config_gateway_port_value:-42617}"
     if [[ -z "$docker_daemon_host_port" ]]; then
@@ -1204,9 +1204,9 @@ run_docker_bootstrap() {
     fi
     daemon_cmd+=(
       -p "${docker_daemon_bind_host}:${docker_daemon_host_port}:${docker_daemon_port}"
-      -e HOME=/zeroclaw-data
-      -e ZEROCLAW_WORKSPACE=/zeroclaw-data/workspace
-      -e ZEROCLAW_DOCKER_BOOTSTRAP=1
+      -e HOME=/llamafarm-data
+      -e LLAMAFARM_WORKSPACE=/llamafarm-data/workspace
+      -e LLAMAFARM_DOCKER_BOOTSTRAP=1
     )
     if [[ ${#container_extra_env_args[@]} -gt 0 ]]; then
       daemon_cmd+=("${container_extra_env_args[@]}")
@@ -1238,9 +1238,9 @@ run_docker_bootstrap() {
 Use either:
   --api-key "sk-..."
 or:
-  ZEROCLAW_API_KEY="sk-..." ./zeroclaw_install.sh --docker
+  LLAMAFARM_API_KEY="sk-..." ./llamafarm_install.sh --docker
 or run interactive:
-  ./zeroclaw_install.sh --docker --interactive-onboard
+  ./llamafarm_install.sh --docker --interactive-onboard
 MSG
         exit 1
       fi
@@ -1260,9 +1260,9 @@ MSG
         "${container_run_namespace_args[@]}" \
         "${container_run_user_args[@]}" \
         "${container_extra_run_args[@]+${container_extra_run_args[@]}}" \
-        -e HOME=/zeroclaw-data \
-        -e ZEROCLAW_WORKSPACE=/zeroclaw-data/workspace \
-        -e ZEROCLAW_DOCKER_BOOTSTRAP=1 \
+        -e HOME=/llamafarm-data \
+        -e LLAMAFARM_WORKSPACE=/llamafarm-data/workspace \
+        -e LLAMAFARM_DOCKER_BOOTSTRAP=1 \
         "${container_extra_env_args[@]+${container_extra_env_args[@]}}" \
         -v "$config_mount" \
         -v "$workspace_mount" \
@@ -1272,9 +1272,9 @@ MSG
       "$CONTAINER_CLI" run --rm -it \
         "${container_run_user_args[@]}" \
         "${container_extra_run_args[@]+${container_extra_run_args[@]}}" \
-        -e HOME=/zeroclaw-data \
-        -e ZEROCLAW_WORKSPACE=/zeroclaw-data/workspace \
-        -e ZEROCLAW_DOCKER_BOOTSTRAP=1 \
+        -e HOME=/llamafarm-data \
+        -e LLAMAFARM_WORKSPACE=/llamafarm-data/workspace \
+        -e LLAMAFARM_DOCKER_BOOTSTRAP=1 \
         "${container_extra_env_args[@]+${container_extra_env_args[@]}}" \
         -v "$config_mount" \
         -v "$workspace_mount" \
@@ -1289,7 +1289,7 @@ MSG
 SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" >/dev/null 2>&1 && pwd || pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd || pwd)"
-REPO_URL="https://github.com/zeroclaw-labs/zeroclaw.git"
+REPO_URL="https://github.com/llamafarm-labs/llamafarm.git"
 ORIGINAL_ARG_COUNT=$#
 GUIDED_MODE="auto"
 
@@ -1308,12 +1308,12 @@ INTERACTIVE_ONBOARD=false
 SKIP_BUILD=false
 SKIP_INSTALL=false
 PREBUILT_INSTALLED=false
-CONTAINER_CLI="${ZEROCLAW_CONTAINER_CLI:-docker}"
-API_KEY="${ZEROCLAW_API_KEY:-}"
-PROVIDER="${ZEROCLAW_PROVIDER:-openrouter}"
-MODEL="${ZEROCLAW_MODEL:-}"
-LOCAL_CARGO_FEATURES="${ZEROCLAW_CARGO_FEATURES:-}"
-LOCAL_CONFIG_PATH="${ZEROCLAW_CONFIG_PATH:-$HOME/.zeroclaw/config.toml}"
+CONTAINER_CLI="${LLAMAFARM_CONTAINER_CLI:-docker}"
+API_KEY="${LLAMAFARM_API_KEY:-}"
+PROVIDER="${LLAMAFARM_PROVIDER:-openrouter}"
+MODEL="${LLAMAFARM_MODEL:-}"
+LOCAL_CARGO_FEATURES="${LLAMAFARM_CARGO_FEATURES:-}"
+LOCAL_CONFIG_PATH="${LLAMAFARM_CONFIG_PATH:-$HOME/.llamafarm/config.toml}"
 AUTO_CONFIG_FEATURES=""
 
 while [[ $# -gt 0 ]]; do
@@ -1496,11 +1496,11 @@ if [[ "$DOCKER_MODE" == true ]]; then
       warn "--install-rust is ignored with --docker."
   fi
 else
-  if [[ "$OS_NAME" == "Linux" && -z "${ZEROCLAW_DISABLE_ALPINE_AUTO_DEPS:-}" ]] && have_cmd apk; then
+  if [[ "$OS_NAME" == "Linux" && -z "${LLAMAFARM_DISABLE_ALPINE_AUTO_DEPS:-}" ]] && have_cmd apk; then
     find_missing_alpine_prereqs
     if [[ ${#ALPINE_MISSING_PKGS[@]} -gt 0 && "$INSTALL_SYSTEM_DEPS" == false ]]; then
       info "Detected Alpine with missing prerequisites: ${ALPINE_MISSING_PKGS[*]}"
-      info "Auto-enabling system dependency installation (set ZEROCLAW_DISABLE_ALPINE_AUTO_DEPS=1 to disable)."
+      info "Auto-enabling system dependency installation (set LLAMAFARM_DISABLE_ALPINE_AUTO_DEPS=1 to disable)."
       INSTALL_SYSTEM_DEPS=true
     fi
   fi
@@ -1541,7 +1541,7 @@ if [[ ! -f "$WORK_DIR/Cargo.toml" ]]; then
       exit 1
     fi
 
-    TEMP_DIR="$(mktemp -d -t zeroclaw-bootstrap-XXXXXX)"
+    TEMP_DIR="$(mktemp -d -t llamafarm-bootstrap-XXXXXX)"
     info "No local repository detected; cloning latest main branch"
     git clone --depth 1 "$REPO_URL" "$TEMP_DIR"
     WORK_DIR="$TEMP_DIR"
@@ -1549,7 +1549,7 @@ if [[ ! -f "$WORK_DIR/Cargo.toml" ]]; then
   fi
 fi
 
-info "ZeroClaw bootstrap"
+info "LlamaFarm bootstrap"
 echo "    workspace: $WORK_DIR"
 
 cd "$WORK_DIR"
@@ -1565,7 +1565,7 @@ fi
 
 if [[ "$DOCKER_MODE" == true ]]; then
   if [[ -n "$LOCAL_CARGO_FEATURES" ]]; then
-    warn "--cargo-features / ZEROCLAW_CARGO_FEATURES are ignored with --docker (use ZEROCLAW_DOCKER_CARGO_FEATURES)."
+    warn "--cargo-features / LLAMAFARM_CARGO_FEATURES are ignored with --docker (use LLAMAFARM_DOCKER_CARGO_FEATURES)."
   fi
   ensure_docker_ready
   if [[ "$RUN_ONBOARD" == false ]]; then
@@ -1582,31 +1582,31 @@ if [[ "$DOCKER_MODE" == true ]]; then
   echo
   echo "✅ Docker bootstrap complete."
   echo
-  echo "Your containerized ZeroClaw data is persisted under:"
+  echo "Your containerized LlamaFarm data is persisted under:"
   echo "  $DOCKER_DATA_DIR"
   echo
 
   if [[ "$DOCKER_DAEMON_MODE" == true ]]; then
-    daemon_name="${ZEROCLAW_DOCKER_DAEMON_NAME:-zeroclaw-daemon}"
+    daemon_name="${LLAMAFARM_DOCKER_DAEMON_NAME:-llamafarm-daemon}"
     echo "Daemon mode is active; onboarding was intentionally skipped."
     echo "  container: $daemon_name"
     echo "  logs:      $CONTAINER_CLI logs -f $daemon_name"
     echo "  stop:      $CONTAINER_CLI rm -f $daemon_name"
     echo
     echo "Optional next steps:"
-    echo "  ./zeroclaw_install.sh --docker --interactive-onboard"
+    echo "  ./llamafarm_install.sh --docker --interactive-onboard"
   elif [[ "$RUN_ONBOARD" == false ]]; then
     echo "Onboarding was intentionally skipped (pre-seeded config mode)."
     echo
     echo "Next steps:"
-    echo "  ./zeroclaw_install.sh --docker --docker-config ./config.toml --docker-daemon"
-    echo "  ./zeroclaw_install.sh --docker --interactive-onboard"
+    echo "  ./llamafarm_install.sh --docker --docker-config ./config.toml --docker-daemon"
+    echo "  ./llamafarm_install.sh --docker --interactive-onboard"
   else
     cat <<'DONE'
 Next steps:
-  ./zeroclaw_install.sh --docker --interactive-onboard
-  ./zeroclaw_install.sh --docker --api-key "sk-..." --provider openrouter
-  ./zeroclaw_install.sh --docker --docker-config ./config.toml --docker-daemon
+  ./llamafarm_install.sh --docker --interactive-onboard
+  ./llamafarm_install.sh --docker --api-key "sk-..." --provider openrouter
+  ./llamafarm_install.sh --docker --docker-config ./config.toml --docker-daemon
 DONE
   fi
   exit 0
@@ -1653,7 +1653,7 @@ if [[ "$PREBUILT_INSTALLED" == false && ( "$SKIP_BUILD" == false || "$SKIP_INSTA
   cat <<'MSG' >&2
 Install Rust first: https://rustup.rs/
 or re-run with:
-  ./zeroclaw_install.sh --install-rust
+  ./llamafarm_install.sh --install-rust
 MSG
   exit 1
 fi
@@ -1671,7 +1671,7 @@ else
 fi
 
 if [[ "$SKIP_INSTALL" == false ]]; then
-  info "Installing zeroclaw to cargo bin"
+  info "Installing llamafarm to cargo bin"
   INSTALL_CMD=(cargo install --path "$WORK_DIR" --force --locked)
   if [[ -n "$LOCAL_CARGO_FEATURES" ]]; then
     info "Applying local Cargo features for install: $LOCAL_CARGO_FEATURES"
@@ -1682,25 +1682,25 @@ else
   info "Skipping install"
 fi
 
-ZEROCLAW_BIN=""
-if have_cmd zeroclaw; then
-  ZEROCLAW_BIN="zeroclaw"
-elif [[ -x "$HOME/.cargo/bin/zeroclaw" ]]; then
-  ZEROCLAW_BIN="$HOME/.cargo/bin/zeroclaw"
-elif [[ -x "$WORK_DIR/target/release/zeroclaw" ]]; then
-  ZEROCLAW_BIN="$WORK_DIR/target/release/zeroclaw"
+LLAMAFARM_BIN=""
+if have_cmd llamafarm; then
+  LLAMAFARM_BIN="llamafarm"
+elif [[ -x "$HOME/.cargo/bin/llamafarm" ]]; then
+  LLAMAFARM_BIN="$HOME/.cargo/bin/llamafarm"
+elif [[ -x "$WORK_DIR/target/release/llamafarm" ]]; then
+  LLAMAFARM_BIN="$WORK_DIR/target/release/llamafarm"
 fi
 
 if [[ "$RUN_ONBOARD" == true ]]; then
-  if [[ -z "$ZEROCLAW_BIN" ]]; then
-    error "onboarding requested but zeroclaw binary is not available."
-    error "Run without --skip-install, or ensure zeroclaw is in PATH."
+  if [[ -z "$LLAMAFARM_BIN" ]]; then
+    error "onboarding requested but llamafarm binary is not available."
+    error "Run without --skip-install, or ensure llamafarm is in PATH."
     exit 1
   fi
 
   if [[ "$INTERACTIVE_ONBOARD" == true ]]; then
     info "Running interactive onboarding"
-    "$ZEROCLAW_BIN" onboard --interactive
+    "$LLAMAFARM_BIN" onboard --interactive
   else
     if [[ -z "$API_KEY" ]]; then
       cat <<'MSG'
@@ -1708,9 +1708,9 @@ if [[ "$RUN_ONBOARD" == true ]]; then
 Use either:
   --api-key "sk-..."
 or:
-  ZEROCLAW_API_KEY="sk-..." ./zeroclaw_install.sh --onboard
+  LLAMAFARM_API_KEY="sk-..." ./llamafarm_install.sh --onboard
 or run interactive:
-  ./zeroclaw_install.sh --interactive-onboard
+  ./llamafarm_install.sh --interactive-onboard
 MSG
       exit 1
     fi
@@ -1719,7 +1719,7 @@ MSG
     else
       info "Running quick onboarding (provider: $PROVIDER)"
     fi
-    ONBOARD_CMD=("$ZEROCLAW_BIN" onboard --api-key "$API_KEY" --provider "$PROVIDER")
+    ONBOARD_CMD=("$LLAMAFARM_BIN" onboard --api-key "$API_KEY" --provider "$PROVIDER")
     if [[ -n "$MODEL" ]]; then
       ONBOARD_CMD+=(--model "$MODEL")
     fi
@@ -1732,7 +1732,7 @@ cat <<'DONE'
 ✅ Bootstrap complete.
 
 Next steps:
-  zeroclaw status
-  zeroclaw agent -m "Hello, ZeroClaw!"
-  zeroclaw gateway
+  llamafarm status
+  llamafarm agent -m "Hello, LlamaFarm!"
+  llamafarm gateway
 DONE

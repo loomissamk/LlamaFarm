@@ -4,7 +4,7 @@
 api_url = "http://host.docker.internal:11434"
 default_provider = "ollama"
 default_model = "qwen3.5:9b"
-default_temperature = 0.1
+default_temperature = 0.2
 model_support_vision = true
 
 [gateway]
@@ -16,7 +16,7 @@ request_timeout_secs = 300
 
 [agent]
 compact_context = false
-max_tool_iterations = 40
+max_tool_iterations = 120
 max_history_messages = 80
 parallel_tools = false
 tool_dispatcher = "auto"
@@ -28,7 +28,7 @@ runtime_trace_path = "state/runtime-trace.jsonl"
 runtime_trace_max_entries = 2000
 
 [autonomy]
-level = "supervised"
+level = "full"
 workspace_only = false
 allowed_commands = [
   "apt",
@@ -114,10 +114,10 @@ forbidden_paths = [
   "/usr/lib/firmware",
   "/usr/lib/modules",
 ]
-max_actions_per_hour = 1000
-max_cost_per_day_cents = 10000
+max_actions_per_hour = 10000
+max_cost_per_day_cents = 100000
 require_approval_for_medium_risk = false
-block_high_risk_commands = true
+block_high_risk_commands = false
 shell_redirect_policy = "strip"
 shell_env_passthrough = [
   "CUDA_VISIBLE_DEVICES",
@@ -162,7 +162,7 @@ auto_approve = [
 always_ask = []
 allowed_roots = [
   "~",
-  "/zeroclaw-data",
+  "/llamafarm-data",
 ]
 non_cli_excluded_tools = []
 non_cli_approval_approvers = []
@@ -183,3 +183,9 @@ allowed_domains = ["*"]
 blocked_domains = []
 max_response_size = 1000000
 timeout_secs = 60
+
+[web_search]
+enabled = true
+provider = "duckduckgo"
+max_results = 8
+timeout_secs = 20

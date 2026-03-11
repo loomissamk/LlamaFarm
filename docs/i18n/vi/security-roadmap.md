@@ -7,7 +7,7 @@
 
 ## Tình trạng bảo mật hiện tại: nền tảng vững chắc
 
-ZeroClaw đã có **application-layer security xuất sắc**:
+LlamaFarm đã có **application-layer security xuất sắc**:
 
 ✅ Command allowlist (không phải blocklist)
 ✅ Bảo vệ path traversal
@@ -29,9 +29,9 @@ ZeroClaw đã có **application-layer security xuất sắc**:
 
 ---
 
-## So sánh: ZeroClaw vs PicoClaw vs production grade
+## So sánh: LlamaFarm vs PicoClaw vs production grade
 
-| Tính năng | PicoClaw | ZeroClaw hiện tại | ZeroClaw + lộ trình | Mục tiêu production |
+| Tính năng | PicoClaw | LlamaFarm hiện tại | LlamaFarm + lộ trình | Mục tiêu production |
 |---------|----------|--------------|-------------------|-------------------|
 | **Kích thước binary** | ~8MB | **3.4MB** ✅ | 3.5-4MB | < 5MB |
 | **RAM** | < 10MB | **< 5MB** ✅ | < 10MB | < 20MB |
@@ -97,7 +97,7 @@ ZeroClaw đã có **application-layer security xuất sắc**:
 | Certificate pinning cho channels | 2 ngày | Trung bình |
 | Xác minh config đã ký | 2 ngày | Trung bình |
 | Xuất audit tương thích SIEM | 2 ngày | Trung bình |
-| Tự kiểm tra bảo mật (`zeroclaw audit --check`) | 1 ngày | Thấp |
+| Tự kiểm tra bảo mật (`llamafarm audit --check`) | 1 ngày | Thấp |
 
 **Kết quả bàn giao**:
 - Tùy chọn cách ly thực thi dựa trên Docker
@@ -129,7 +129,7 @@ max_subprocesses = 10
 # Audit logging
 [security.audit]
 enabled = true
-log_path = "~/.config/zeroclaw/audit.log"
+log_path = "~/.config/llamafarm/audit.log"
 sign_events = true
 max_size_mb = 100
 
@@ -149,18 +149,18 @@ max_actions_per_hour = 20
 
 ```bash
 # Kiểm tra trạng thái bảo mật
-zeroclaw security --check
+llamafarm security --check
 # → ✓ Sandbox: Firejail active
 # → ✓ Audit logging enabled (42 events today)
 # → → Resource limits: 512MB mem, 50% CPU
 
 # Truy vấn audit log
-zeroclaw audit --user @alice --since 24h
-zeroclaw audit --risk high --violations-only
-zeroclaw audit --verify-signatures
+llamafarm audit --user @alice --since 24h
+llamafarm audit --risk high --violations-only
+llamafarm audit --verify-signatures
 
 # Kiểm tra sandbox
-zeroclaw sandbox --test
+llamafarm sandbox --test
 # → Testing isolation...
 #   ✓ Cannot read /etc/passwd
 #   ✓ Cannot access ~/.ssh
@@ -171,18 +171,18 @@ zeroclaw sandbox --test
 
 ## Tóm tắt
 
-**ZeroClaw đã an toàn hơn PicoClaw** với:
+**LlamaFarm đã an toàn hơn PicoClaw** với:
 - Binary nhỏ hơn 50% (3.4MB so với 8MB)
 - RAM ít hơn 50% (< 5MB so với < 10MB)
 - Startup nhanh hơn 100 lần (< 10ms so với < 1s)
 - Policy engine bảo mật toàn diện
 - Độ phủ kiểm thử rộng
 
-**Khi triển khai lộ trình này**, ZeroClaw sẽ trở thành:
+**Khi triển khai lộ trình này**, LlamaFarm sẽ trở thành:
 - Cấp production với OS-level sandboxing
 - Nhận biết tài nguyên với bảo vệ memory/CPU
 - Sẵn sàng audit với logging chống giả mạo
 - Sẵn sàng doanh nghiệp với các cấp độ bảo mật có thể cấu hình
 
 **Công sức ước tính**: 4-7 tuần để triển khai đầy đủ
-**Giá trị**: biến ZeroClaw từ "an toàn để kiểm thử" thành "an toàn cho production"
+**Giá trị**: biến LlamaFarm từ "an toàn để kiểm thử" thành "an toàn cho production"

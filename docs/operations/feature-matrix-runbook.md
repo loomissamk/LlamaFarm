@@ -58,8 +58,8 @@ Check-name stability rule:
 
 Verification commands:
 
-- `gh run list --repo zeroclaw-labs/zeroclaw --workflow feature-matrix.yml --limit 3`
-- `gh run view <run_id> --repo zeroclaw-labs/zeroclaw --json jobs --jq '.jobs[].name'`
+- `gh run list --repo llamafarm-labs/llamafarm --workflow feature-matrix.yml --limit 3`
+- `gh run view <run_id> --repo llamafarm-labs/llamafarm --json jobs --jq '.jobs[].name'`
 
 ## Failure Triage
 

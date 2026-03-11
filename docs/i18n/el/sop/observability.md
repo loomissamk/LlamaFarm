@@ -20,9 +20,9 @@
 ### 2.1 CLI σε επίπεδο ορισμού
 
 ```bash
-zeroclaw sop list
-zeroclaw sop validate [name]
-zeroclaw sop show <name>
+llamafarm sop list
+llamafarm sop validate [name]
+llamafarm sop show <name>
 ```
 
 ### 2.2 Εργαλεία κατάστασης εκτέλεσης runtime
@@ -37,5 +37,5 @@ zeroclaw sop show <name>
 ## 3. Μετρικά
 
 - Το `/metrics` εκθέτει μετρικά observer όταν `[observability] backend = "prometheus"`.
-- Τα τρέχοντα εξαγόμενα ονόματα είναι οικογένειες `zeroclaw_*` (γενικά μετρικά runtime).
+- Τα τρέχοντα εξαγόμενα ονόματα είναι οικογένειες `llamafarm_*` (γενικά μετρικά runtime).
 - Συγκεντρωτικά στοιχεία ειδικά για SOP είναι διαθέσιμα μέσω `sop_status` με `include_metrics: true`.

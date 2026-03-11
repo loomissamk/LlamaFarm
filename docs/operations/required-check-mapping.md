@@ -29,10 +29,10 @@ Feature matrix lane check names (informational, non-required):
 ## Verification Procedure
 
 1. Resolve latest workflow run IDs:
-   - `gh run list --repo zeroclaw-labs/zeroclaw --workflow feature-matrix.yml --limit 1`
-   - `gh run list --repo zeroclaw-labs/zeroclaw --workflow ci-run.yml --limit 1`
+   - `gh run list --repo llamafarm-labs/llamafarm --workflow feature-matrix.yml --limit 1`
+   - `gh run list --repo llamafarm-labs/llamafarm --workflow ci-run.yml --limit 1`
 2. Enumerate check/job names and compare to this mapping:
-   - `gh run view <run_id> --repo zeroclaw-labs/zeroclaw --json jobs --jq '.jobs[].name'`
+   - `gh run view <run_id> --repo llamafarm-labs/llamafarm --json jobs --jq '.jobs[].name'`
 3. If any merge-critical check name changed, update this file before changing branch protection policy.
 4. Export and commit branch/ruleset snapshots as documented in `docs/operations/branch-protection.md`.
 

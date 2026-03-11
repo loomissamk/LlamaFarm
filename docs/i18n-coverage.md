@@ -1,6 +1,6 @@
-# ZeroClaw i18n Coverage and Structure
+# LlamaFarm i18n Coverage and Structure
 
-This document defines the localization structure for ZeroClaw docs and tracks current coverage.
+This document defines the localization structure for LlamaFarm docs and tracks current coverage.
 
 Last refreshed: **February 24, 2026**.
 

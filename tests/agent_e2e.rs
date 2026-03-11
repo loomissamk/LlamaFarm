@@ -5,24 +5,24 @@
 //! external service dependencies. They complement the unit tests in
 //! `src/agent/tests.rs` by running at the integration test boundary.
 //!
-//! Ref: https://github.com/zeroclaw-labs/zeroclaw/issues/618 (item 6)
+//! Ref: https://github.com/llamafarm-labs/llamafarm/issues/618 (item 6)
 
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
-use zeroclaw::agent::agent::Agent;
-use zeroclaw::agent::dispatcher::{NativeToolDispatcher, XmlToolDispatcher};
-use zeroclaw::agent::memory_loader::MemoryLoader;
-use zeroclaw::config::MemoryConfig;
-use zeroclaw::memory;
-use zeroclaw::memory::Memory;
-use zeroclaw::observability::{NoopObserver, Observer};
-use zeroclaw::providers::traits::ChatMessage;
-use zeroclaw::providers::{
+use llamafarm::agent::agent::Agent;
+use llamafarm::agent::dispatcher::{NativeToolDispatcher, XmlToolDispatcher};
+use llamafarm::agent::memory_loader::MemoryLoader;
+use llamafarm::config::MemoryConfig;
+use llamafarm::memory;
+use llamafarm::memory::Memory;
+use llamafarm::observability::{NoopObserver, Observer};
+use llamafarm::providers::traits::ChatMessage;
+use llamafarm::providers::{
     ChatRequest, ChatResponse, ConversationMessage, Provider, ProviderRuntimeOptions, ToolCall,
 };
-use zeroclaw::tools::{Tool, ToolResult};
+use llamafarm::tools::{Tool, ToolResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Mock infrastructure
@@ -588,7 +588,7 @@ async fn e2e_multi_turn_with_memory_enrichment() {
     let (provider, recorded) =
         RecordingProvider::new(vec![text_response("answer 1"), text_response("answer 2")]);
 
-    let memory_context = "[Memory context]\n- project: zeroclaw\n\n";
+    let memory_context = "[Memory context]\n- project: llamafarm\n\n";
     let loader = StaticMemoryLoader::new(memory_context);
 
     let mut agent = build_recording_agent(Box::new(provider), vec![], Some(Box::new(loader)));
@@ -605,7 +605,7 @@ async fn e2e_multi_turn_with_memory_enrichment() {
     // Turn 1: user message is enriched
     let req1_user = requests[0].iter().find(|m| m.role == "user").unwrap();
     assert!(req1_user.content.contains("[Memory context]"));
-    assert!(req1_user.content.contains("project: zeroclaw"));
+    assert!(req1_user.content.contains("project: llamafarm"));
     assert!(req1_user.content.ends_with("first question"));
 
     // Turn 2: both user messages enriched, assistant from turn 1 present
@@ -666,13 +666,13 @@ async fn e2e_empty_memory_context_passthrough() {
 /// Sends a real multi-turn conversation to OpenAI Codex and verifies
 /// the model retains context from earlier messages.
 ///
-/// Requires valid OAuth credentials in `~/.zeroclaw/`.
+/// Requires valid OAuth credentials in `~/.llamafarm/`.
 /// Run manually: `cargo test e2e_live_openai_codex_multi_turn -- --ignored`
 #[tokio::test]
 #[ignore = "requires live OpenAI Codex API key"]
 async fn e2e_live_openai_codex_multi_turn() {
-    use zeroclaw::providers::openai_codex::OpenAiCodexProvider;
-    use zeroclaw::providers::traits::Provider;
+    use llamafarm::providers::openai_codex::OpenAiCodexProvider;
+    use llamafarm::providers::traits::Provider;
 
     let provider = OpenAiCodexProvider::new(&ProviderRuntimeOptions::default(), None).unwrap();
     let model = "gpt-5.3-codex";
@@ -716,18 +716,18 @@ async fn e2e_live_openai_codex_multi_turn() {
 /// 1. should_trigger correctly identifies research-worthy messages
 /// 2. run_research_phase executes tool calls and gathers context
 ///
-/// Requires valid credentials in `~/.zeroclaw/`.
+/// Requires valid credentials in `~/.llamafarm/`.
 /// Run manually: `cargo test e2e_live_research_phase -- --ignored --nocapture`
 #[tokio::test]
 #[ignore = "requires live provider API key"]
 async fn e2e_live_research_phase() {
     use std::sync::Arc;
-    use zeroclaw::agent::research::{run_research_phase, should_trigger};
-    use zeroclaw::config::{ResearchPhaseConfig, ResearchTrigger};
-    use zeroclaw::observability::NoopObserver;
-    use zeroclaw::providers::openai_codex::OpenAiCodexProvider;
-    use zeroclaw::providers::traits::Provider;
-    use zeroclaw::tools::{Tool, ToolResult};
+    use llamafarm::agent::research::{run_research_phase, should_trigger};
+    use llamafarm::config::{ResearchPhaseConfig, ResearchTrigger};
+    use llamafarm::observability::NoopObserver;
+    use llamafarm::providers::openai_codex::OpenAiCodexProvider;
+    use llamafarm::providers::traits::Provider;
+    use llamafarm::tools::{Tool, ToolResult};
 
     // ── Test should_trigger ──
     let config = ResearchPhaseConfig {
@@ -804,7 +804,7 @@ async fn e2e_live_research_phase() {
     let provider = OpenAiCodexProvider::new(&ProviderRuntimeOptions::default(), None)
         .expect("OpenAI Codex provider should initialize for research test");
     let tools: Vec<Box<dyn Tool>> = vec![Box::new(EchoTool)];
-    let observer: Arc<dyn zeroclaw::observability::Observer> = Arc::new(NoopObserver);
+    let observer: Arc<dyn llamafarm::observability::Observer> = Arc::new(NoopObserver);
 
     let research_config = ResearchPhaseConfig {
         enabled: true,
@@ -869,7 +869,7 @@ async fn e2e_live_research_phase() {
 /// This test uses mocks to verify the integration without external dependencies.
 #[tokio::test]
 async fn e2e_agent_research_phase_integration() {
-    use zeroclaw::config::{ResearchPhaseConfig, ResearchTrigger};
+    use llamafarm::config::{ResearchPhaseConfig, ResearchTrigger};
 
     // Create a recording provider to capture what the agent sends
     let (provider, recorded) = RecordingProvider::new(vec![
@@ -919,7 +919,7 @@ async fn e2e_agent_research_phase_integration() {
 /// Validates that Always trigger activates research on every message.
 #[tokio::test]
 async fn e2e_agent_research_always_trigger() {
-    use zeroclaw::config::{ResearchPhaseConfig, ResearchTrigger};
+    use llamafarm::config::{ResearchPhaseConfig, ResearchTrigger};
 
     let (provider, recorded) = RecordingProvider::new(vec![
         // Research phase response
@@ -965,8 +965,8 @@ async fn e2e_agent_research_always_trigger() {
 /// The provider returns XML tool calls in text, which should be parsed and executed.
 #[tokio::test]
 async fn e2e_agent_research_prompt_guided() {
-    use zeroclaw::config::{ResearchPhaseConfig, ResearchTrigger};
-    use zeroclaw::providers::traits::ProviderCapabilities;
+    use llamafarm::config::{ResearchPhaseConfig, ResearchTrigger};
+    use llamafarm::providers::traits::ProviderCapabilities;
 
     /// Mock provider that does NOT support native tools (like Gemini).
     /// Returns XML tool calls in text that should be parsed by research phase.
@@ -1079,7 +1079,7 @@ async fn e2e_agent_research_prompt_guided() {
 /// Validates that disabled research phase skips research entirely.
 #[tokio::test]
 async fn e2e_agent_research_disabled() {
-    use zeroclaw::config::{ResearchPhaseConfig, ResearchTrigger};
+    use llamafarm::config::{ResearchPhaseConfig, ResearchTrigger};
 
     let (provider, recorded) = RecordingProvider::new(vec![text_response("Direct response")]);
 

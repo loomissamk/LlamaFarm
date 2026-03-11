@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-POLICY_SCHEMA = "zeroclaw.docs-deploy-policy.v1"
+POLICY_SCHEMA = "llamafarm.docs-deploy-policy.v1"
 ALLOWED_DEPLOY_TARGETS = {"preview", "production"}
 
 
@@ -262,7 +262,7 @@ def main() -> int:
             violations.append("`rollback_ref` can only be used when deploy target is `production`.")
 
     report = {
-        "schema_version": "zeroclaw.docs-deploy-guard.v1",
+        "schema_version": "llamafarm.docs-deploy-guard.v1",
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "event_name": event_name,
         "git_ref": git_ref,

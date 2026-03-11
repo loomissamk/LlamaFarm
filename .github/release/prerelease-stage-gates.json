@@ -1,5 +1,5 @@
 {
-  "schema_version": "zeroclaw.prerelease-stage-gates.v1",
+  "schema_version": "llamafarm.prerelease-stage-gates.v1",
   "stage_order": ["alpha", "beta", "rc", "stable"],
   "required_previous_stage": {
     "beta": "alpha",

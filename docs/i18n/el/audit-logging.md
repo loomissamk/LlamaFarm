@@ -6,7 +6,7 @@
 
 ## Περιγραφή Προβλήματος
 
-Το ZeroClaw απαιτεί έναν μηχανισμό καταγραφής ελέγχου (audit trails) με προστασία από παραποίηση, προκειμένου να τεκμηριώνονται:
+Το LlamaFarm απαιτεί έναν μηχανισμό καταγραφής ελέγχου (audit trails) με προστασία από παραποίηση, προκειμένου να τεκμηριώνονται:
 - Η ταυτότητα του χρήστη που εκτέλεσε μια εντολή.
 - Η χρονική στιγμή και το κανάλι επικοινωνίας.
 - Οι πόροι που προσπελάστηκαν.
@@ -95,13 +95,13 @@ impl AuditLogger {
 ```toml
 [security.audit]
 enabled = true
-log_path = "~/.config/zeroclaw/audit.log"
+log_path = "~/.config/llamafarm/audit.log"
 max_size_mb = 100
 rotate = "daily"  # Επιλογές: daily | weekly | size
 
 # Προστασία ακεραιότητας (Tamper evidence)
 sign_events = true
-signing_key_path = "~/.config/zeroclaw/audit.key"
+signing_key_path = "~/.config/llamafarm/audit.key"
 
 # Πεδίο εφαρμογής καταγραφής
 log_commands = true
@@ -116,16 +116,16 @@ log_policy_violations = true
 
 ```bash
 # Αναζήτηση εντολών από συγκεκριμένο χρήστη
-zeroclaw audit --user @alice
+llamafarm audit --user @alice
 
 # Προβολή συμβάντων υψηλού κινδύνου
-zeroclaw audit --risk high
+llamafarm audit --risk high
 
 # Εμφάνιση παραβιάσεων πολιτικής του τελευταίου 24ώρου
-zeroclaw audit --since 24h --violations-only
+llamafarm audit --since 24h --violations-only
 
 # Επαλήθευση ακεραιότητας των αρχείων καταγραφής
-zeroclaw audit --verify-signatures
+llamafarm audit --verify-signatures
 ```
 
 ---

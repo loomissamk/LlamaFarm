@@ -10,7 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
-TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/zeroclaw-restricted-profile.XXXXXX")"
+TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/llamafarm-restricted-profile.XXXXXX")"
 cleanup() {
     rm -rf "${TMP_ROOT}"
 }
@@ -40,7 +40,7 @@ export USERPROFILE="${RESTRICTED_HOME}"
 export XDG_CONFIG_HOME="${RESTRICTED_HOME}/.config"
 export XDG_CACHE_HOME="${RESTRICTED_HOME}/.cache"
 export XDG_DATA_HOME="${RESTRICTED_HOME}/.local/share"
-export ZEROCLAW_WORKSPACE="${RESTRICTED_WORKSPACE}"
+export LLAMAFARM_WORKSPACE="${RESTRICTED_WORKSPACE}"
 mkdir -p "${XDG_CONFIG_HOME}" "${XDG_CACHE_HOME}" "${XDG_DATA_HOME}"
 
 # Keep credential/network assumptions explicit for this lane.

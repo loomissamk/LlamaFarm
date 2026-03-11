@@ -1,28 +1,28 @@
 # One-Click Bootstrap
 
-This page defines the fastest supported path to install and initialize ZeroClaw.
+This page defines the fastest supported path to install and initialize LlamaFarm.
 
 Last verified: **March 5, 2026**.
 
 ## Option 0: Homebrew (macOS/Linuxbrew)
 
 ```bash
-brew install zeroclaw
+brew install llamafarm
 ```
 
 ## Option A (Recommended): Clone + local script
 
 ```bash
-git clone https://github.com/zeroclaw-labs/zeroclaw.git
-cd zeroclaw
+git clone https://github.com/llamafarm-labs/llamafarm.git
+cd llamafarm
 ./bootstrap.sh
 ```
 
 Windows PowerShell equivalent:
 
 ```powershell
-git clone https://github.com/zeroclaw-labs/zeroclaw.git
-cd zeroclaw
+git clone https://github.com/llamafarm-labs/llamafarm.git
+cd llamafarm
 .\bootstrap.ps1
 ```
 
@@ -58,7 +58,7 @@ To bypass pre-built flow and force source compilation:
 
 ## Dual-mode bootstrap
 
-Default behavior is **app-only** (build/install ZeroClaw) and expects existing Rust toolchain.
+Default behavior is **app-only** (build/install LlamaFarm) and expects existing Rust toolchain.
 
 For fresh machines, enable environment bootstrap explicitly:
 
@@ -78,7 +78,7 @@ Notes:
 ## Option B: Remote one-liner
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw/main/scripts/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/llamafarm-labs/llamafarm/main/scripts/bootstrap.sh | bash
 ```
 
 For high-security environments, prefer Option A so you can review the script before execution.
@@ -86,7 +86,7 @@ For high-security environments, prefer Option A so you can review the script bef
 Legacy compatibility:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/llamafarm-labs/llamafarm/main/scripts/install.sh | bash
 ```
 
 This legacy endpoint prefers forwarding to `scripts/bootstrap.sh` and falls back to legacy source install if unavailable in that revision.
@@ -101,19 +101,19 @@ If you run Option B outside a repository checkout, the bootstrap script automati
 ./bootstrap.sh --docker
 ```
 
-This builds a local ZeroClaw image and launches onboarding inside a container while
-persisting config/workspace to `./.zeroclaw-docker`.
+This builds a local LlamaFarm image and launches onboarding inside a container while
+persisting config/workspace to `./.llamafarm-docker`.
 
 Container CLI defaults to `docker`. If Docker CLI is unavailable and `podman` exists,
-bootstrap auto-falls back to `podman`. You can also set `ZEROCLAW_CONTAINER_CLI`
-explicitly (for example: `ZEROCLAW_CONTAINER_CLI=podman ./bootstrap.sh --docker`).
+bootstrap auto-falls back to `podman`. You can also set `LLAMAFARM_CONTAINER_CLI`
+explicitly (for example: `LLAMAFARM_CONTAINER_CLI=podman ./bootstrap.sh --docker`).
 
 For Podman, bootstrap runs with `--userns keep-id` and `:Z` volume labels so
 workspace/config mounts remain writable inside the container.
 
 If you add `--skip-build`, bootstrap skips local image build. It first tries the local
-Docker tag (`ZEROCLAW_DOCKER_IMAGE`, default: `zeroclaw-bootstrap:local`); if missing,
-it pulls `ghcr.io/zeroclaw-labs/zeroclaw:latest` and tags it locally before running.
+Docker tag (`LLAMAFARM_DOCKER_IMAGE`, default: `llamafarm-bootstrap:local`); if missing,
+it pulls `ghcr.io/llamafarm-labs/llamafarm:latest` and tags it locally before running.
 
 ### Quick onboarding (non-interactive)
 
@@ -124,7 +124,7 @@ it pulls `ghcr.io/zeroclaw-labs/zeroclaw:latest` and tags it locally before runn
 Or with environment variables:
 
 ```bash
-ZEROCLAW_API_KEY="sk-..." ZEROCLAW_PROVIDER="openrouter" ./bootstrap.sh --onboard
+LLAMAFARM_API_KEY="sk-..." LLAMAFARM_PROVIDER="openrouter" ./bootstrap.sh --onboard
 ```
 
 ### Interactive onboarding
@@ -137,7 +137,7 @@ ZEROCLAW_API_KEY="sk-..." ZEROCLAW_PROVIDER="openrouter" ./bootstrap.sh --onboar
 
 - `--install-system-deps`
 - `--install-rust`
-- `--skip-build` (in `--docker` mode: use local image if present, otherwise pull `ghcr.io/zeroclaw-labs/zeroclaw:latest`)
+- `--skip-build` (in `--docker` mode: use local image if present, otherwise pull `ghcr.io/llamafarm-labs/llamafarm:latest`)
 - `--skip-install`
 - `--provider <id>`
 

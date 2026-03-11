@@ -1,5 +1,5 @@
 {
-  "schema_version": "zeroclaw.nightly-owner-routing.v1",
+  "schema_version": "llamafarm.nightly-owner-routing.v1",
   "owners": {
     "default": "@chumyin",
     "whatsapp-web": "@chumyin",

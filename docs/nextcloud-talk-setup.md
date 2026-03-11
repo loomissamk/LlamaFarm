@@ -1,6 +1,6 @@
 # Nextcloud Talk Setup
 
-This guide covers native Nextcloud Talk integration for ZeroClaw.
+This guide covers native Nextcloud Talk integration for LlamaFarm.
 
 ## 1. What this integration does
 
@@ -10,7 +10,7 @@ This guide covers native Nextcloud Talk integration for ZeroClaw.
 
 ## 2. Configuration
 
-Add this section in `~/.zeroclaw/config.toml`:
+Add this section in `~/.llamafarm/config.toml`:
 
 ```toml
 [channels_config.nextcloud_talk]
@@ -29,16 +29,16 @@ Field reference:
 
 Environment override:
 
-- `ZEROCLAW_NEXTCLOUD_TALK_WEBHOOK_SECRET` overrides `webhook_secret` when set.
+- `LLAMAFARM_NEXTCLOUD_TALK_WEBHOOK_SECRET` overrides `webhook_secret` when set.
 
 ## 3. Gateway endpoint
 
 Run the daemon or gateway and expose the webhook endpoint:
 
 ```bash
-zeroclaw daemon
+llamafarm daemon
 # or
-zeroclaw gateway --host 127.0.0.1 --port 3000
+llamafarm gateway --host 127.0.0.1 --port 3000
 ```
 
 Configure your Nextcloud Talk bot webhook URL to:
@@ -47,7 +47,7 @@ Configure your Nextcloud Talk bot webhook URL to:
 
 ## 4. Signature verification contract
 
-When `webhook_secret` is configured, ZeroClaw verifies:
+When `webhook_secret` is configured, LlamaFarm verifies:
 
 - header `X-Nextcloud-Talk-Random`
 - header `X-Nextcloud-Talk-Signature`
@@ -60,11 +60,11 @@ If verification fails, the gateway returns `401 Unauthorized`.
 
 ## 5. Message routing behavior
 
-- ZeroClaw accepts both payload variants:
+- LlamaFarm accepts both payload variants:
   - legacy Talk webhook payloads (`type = "message"`)
   - Activity Streams 2.0 payloads (`type = "Create"` + `object.type = "Note"`)
-- ZeroClaw ignores bot-originated webhook events (`actorType = bots` or `actor.type = "Application"`).
-- ZeroClaw ignores non-message/system events.
+- LlamaFarm ignores bot-originated webhook events (`actorType = bots` or `actor.type = "Application"`).
+- LlamaFarm ignores non-message/system events.
 - Reply routing uses the Talk room token from `object.token` (legacy) or `target.id` (AS2).
 - For actor allowlists, both full (`users/alice`) and short (`alice`) IDs are accepted.
 
@@ -88,7 +88,7 @@ Example Activity Streams 2.0 webhook payload:
 
 1. Set `allowed_users = ["*"]` for first-time validation.
 2. Send a test message in the target Talk room.
-3. Confirm ZeroClaw receives and replies in the same room.
+3. Confirm LlamaFarm receives and replies in the same room.
 4. Tighten `allowed_users` to explicit actor IDs.
 
 ## 7. Troubleshooting
