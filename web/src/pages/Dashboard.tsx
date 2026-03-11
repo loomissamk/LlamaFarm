@@ -119,7 +119,7 @@ export default function Dashboard() {
           <p className="text-lg font-semibold text-white">
             {formatUptime(status.uptime_seconds)}
           </p>
-          <p className="text-sm text-gray-400">English-only local UI</p>
+          <p className="text-sm text-gray-400">English</p>
         </div>
       </div>
 
