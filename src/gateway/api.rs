@@ -15,6 +15,8 @@ use std::{collections::BTreeMap, path::Path as FsPath};
 
 const MASKED_SECRET: &str = "***MASKED***";
 const WORKSPACE_EDITOR_FILES: &[&str] = &["AGENTS.md", "SOUL.md"];
+const GOD_CONFIG_PRESET_FILE: &str = "config.template.toml";
+const SAFE_CONFIG_PRESET_FILE: &str = "config.preset.safe.toml";
 
 // ── Bearer token auth extractor ─────────────────────────────────
 
@@ -226,6 +228,21 @@ pub struct WorkspaceFileUpdateBody {
     pub content: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct ConfigPresetEntry {
+    id: &'static str,
+    label: &'static str,
+    summary: &'static str,
+    highlights: Vec<&'static str>,
+    content: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ConfigPresetsPayload {
+    safe: ConfigPresetEntry,
+    god: ConfigPresetEntry,
+}
+
 #[derive(Debug, Serialize)]
 struct WorkspaceFilePayload {
     name: String,
@@ -253,6 +270,26 @@ struct OllamaUnloadReport {
 
 fn has_non_empty(value: Option<&str>) -> bool {
     value.is_some_and(|candidate| !candidate.trim().is_empty())
+}
+
+fn config_preset_path_candidates(file_name: &str) -> [String; 2] {
+    [
+        format!("/usr/share/llamafarm/{file_name}"),
+        format!("{}/dev/{file_name}", env!("CARGO_MANIFEST_DIR")),
+    ]
+}
+
+fn load_config_preset(file_name: &str) -> Result<String, String> {
+    let mut last_error = None;
+
+    for candidate in config_preset_path_candidates(file_name) {
+        match std::fs::read_to_string(&candidate) {
+            Ok(content) => return Ok(content),
+            Err(error) => last_error = Some(format!("{candidate}: {error}")),
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| format!("missing preset file {file_name}")))
 }
 
 fn config_revision(config: &crate::config::Config) -> String {
@@ -780,6 +817,70 @@ pub async fn handle_api_config_get(
         "format": "toml",
         "content": toml_str,
     }))
+    .into_response()
+}
+
+/// GET /api/config/presets — bundled Safe/God dashboard presets
+pub async fn handle_api_config_presets(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let safe_content = match load_config_preset(SAFE_CONFIG_PRESET_FILE) {
+        Ok(content) => content,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("Failed to load Safe config preset: {error}")
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let god_content = match load_config_preset(GOD_CONFIG_PRESET_FILE) {
+        Ok(content) => content,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("Failed to load God config preset: {error}")
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    Json(ConfigPresetsPayload {
+        safe: ConfigPresetEntry {
+            id: "safe",
+            label: "Safe",
+            summary: "Workspace-first supervised autonomy with smaller budgets and approval gates for riskier actions.",
+            highlights: vec![
+                "supervised approvals",
+                "workspace-only boundaries",
+                "smaller hourly budgets",
+                "web + search still available",
+            ],
+            content: safe_content,
+        },
+        god: ConfigPresetEntry {
+            id: "god",
+            label: "God",
+            summary: "Escalated local operator profile with much larger budgets, broader build/system tooling, and easier expansion into lower-level host access.",
+            highlights: vec![
+                "full autonomy",
+                "much larger iteration budgets",
+                "broader build + system commands",
+                "lower-level access knobs exposed",
+            ],
+            content: god_content,
+        },
+    })
     .into_response()
 }
 

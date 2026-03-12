@@ -324,7 +324,7 @@ WASM profile templates:
 
 Local host/operator profile template:
 
-- `dev/config.power.toml` — supervised high-power local profile with broad userland, Docker, web, memory, and delegation access, plus hard-deny guardrails for kernel/driver/firmware/initramfs/bootloader/disk-destructive actions.
+- `dev/config.template.toml` — the single high-power local profile with broad userland, Docker, web, memory, and delegation access, plus hard-deny guardrails for kernel/driver/firmware/initramfs/bootloader/disk-destructive actions.
 
 ## `[provider]`
 

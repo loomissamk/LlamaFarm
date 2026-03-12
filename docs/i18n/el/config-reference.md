@@ -36,7 +36,7 @@
 
 Τοπικό πρότυπο προφίλ:
 
-- `dev/config.power.toml`: ισχυρό τοπικό προφίλ operator με ευρεία πρόσβαση σε userland, Docker, web, memory και delegation, αλλά με σκληρό μπλοκάρισμα για kernel, drivers, firmware, initramfs, bootloader και καταστροφικές ενέργειες δίσκου.
+- `dev/config.template.toml`: το μοναδικό ισχυρό τοπικό προφίλ operator με ευρεία πρόσβαση σε userland, Docker, web, memory και delegation, αλλά με σκληρό μπλοκάρισμα για kernel, drivers, firmware, initramfs, bootloader και καταστροφικές ενέργειες δίσκου.
 
 ## 3. Μνήμη (Memory)
 

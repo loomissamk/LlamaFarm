@@ -36,8 +36,9 @@ this stack.
 ./dev/cli.sh up
 ```
 
-Builds the agent from source and starts the local stack with the power profile by
-default, including the Chromium WebDriver sidecar for the `browser` tool.
+Builds the agent from source and starts the local stack with the single
+high-power local profile, including the Chromium WebDriver sidecar for the
+`browser` tool.
 
 ### 2. Enter Agent Container (`llamafarm-dev`)
 
@@ -135,13 +136,13 @@ calc = "<64-char sha256>"
 formatter = "<64-char sha256>"
 ```
 
-## Power Local Profile
+## Local Operator Profile
 
-Use `dev/config.power.toml` when you want the dev stack to behave like a strong local engineering/operator agent while keeping hard blocks on kernel, firmware, bootloader, raw-disk, and privileged-container actions. The profile now allows broad home-directory access plus the dev data root, but still denies secret subdirectories and anti-brick system paths.
+`dev/config.template.toml` is the single local engineering/operator profile. It keeps the broad local access you asked for while still hard-blocking kernel, firmware, bootloader, raw-disk, and privileged-container actions. The profile allows broad home-directory access plus the dev data root, but still denies secret subdirectories and anti-brick system paths.
 
 For real host access to `lsblk`, `lsusb`, `nvidia-smi`, the local Docker
 daemon, and your Pop!_OS project directories, launch the Ollama local stack
-directly on the host with `dev/config.power.toml` instead of using the
+directly on the host with `dev/config.template.toml` instead of using the
 containerized dev stack.
 
 Fresh bootstrap:
@@ -151,9 +152,8 @@ rm -f .dev-state/.llamafarm/config.toml
 ./dev/cli.sh up
 ```
 
-This now uses the power profile by default. To go back, remove
-`.dev-state/.llamafarm/config.toml` and start again with
-`LLAMAFARM_DEV_PROFILE=default ./dev/cli.sh up`.
+This always uses the single local operator profile. To refresh it, remove
+`.dev-state/.llamafarm/config.toml` and start again with `./dev/cli.sh up`.
 
 ## Local CI/CD (Docker-Only)
 

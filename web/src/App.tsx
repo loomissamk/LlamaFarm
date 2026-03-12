@@ -7,7 +7,6 @@ import Cron from './pages/Cron';
 import Integrations from './pages/Integrations';
 import Memory from './pages/Memory';
 import Config from './pages/Config';
-import Models from './pages/Cost';
 import Logs from './pages/Logs';
 import Doctor from './pages/Doctor';
 import WorkspaceFiles from './pages/WorkspaceFiles';
@@ -24,8 +23,8 @@ export default function App() {
         <Route path="/memory" element={<Memory />} />
         <Route path="/workspace" element={<WorkspaceFiles />} />
         <Route path="/config" element={<Config />} />
-        <Route path="/models" element={<Models />} />
-        <Route path="/cost" element={<Navigate to="/models" replace />} />
+        <Route path="/models" element={<Navigate to="/integrations" replace />} />
+        <Route path="/cost" element={<Navigate to="/integrations" replace />} />
         <Route path="/logs" element={<Logs />} />
         <Route path="/doctor" element={<Doctor />} />
         <Route path="*" element={<Navigate to="/" replace />} />

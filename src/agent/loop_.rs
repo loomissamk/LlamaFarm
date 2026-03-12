@@ -4438,6 +4438,26 @@ mod tests {
     }
 
     #[test]
+    fn parse_tool_calls_maps_list_dir_alias_to_glob_search() {
+        let response = r#"{"tool":"list_dir","path":"src"}"#;
+        let (text, calls) = parse_tool_calls(response);
+        assert!(text.is_empty());
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "glob_search");
+        assert_eq!(calls[0].arguments["pattern"], "src/**/*");
+    }
+
+    #[test]
+    fn parse_tool_calls_maps_web_search_alias_to_real_tool() {
+        let response = r#"{"tool":"web_search","query":"rust traits"}"#;
+        let (text, calls) = parse_tool_calls(response);
+        assert!(text.is_empty());
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "web_search_tool");
+        assert_eq!(calls[0].arguments["query"], "rust traits");
+    }
+
+    #[test]
     fn parse_tool_calls_recovers_function_style_shell_call() {
         let response = "I'll run it now.\nshell(\"lsusb\")";
         let (text, calls) = parse_tool_calls(response);
@@ -4445,6 +4465,27 @@ mod tests {
         assert_eq!(calls[0].name, "shell");
         assert_eq!(calls[0].arguments["command"], "lsusb");
         assert!(text.contains("I'll run it now."));
+    }
+
+    #[test]
+    fn parse_tool_calls_recovers_function_style_shell_json_args() {
+        let response = r#"I'll run it now.
+shell({"hint":"lsblk"})"#;
+        let (text, calls) = parse_tool_calls(response);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(calls[0].arguments["hint"], "lsblk");
+        assert!(text.contains("I'll run it now."));
+    }
+
+    #[test]
+    fn parse_tool_calls_recovers_function_style_single_quoted_args() {
+        let response = "shell(command='lsusb')";
+        let (text, calls) = parse_tool_calls(response);
+        assert!(text.is_empty());
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(calls[0].arguments["command"], "lsusb");
     }
 
     #[test]
@@ -4478,6 +4519,36 @@ mod tests {
     }
 
     #[test]
+    fn parse_tool_calls_recovers_unlabeled_shell_block_after_action_cue() {
+        let response = "Running now:\n```\nlsblk\n```";
+        let (text, calls) = parse_tool_calls(response);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(calls[0].arguments["command"], "lsblk");
+        assert!(text.contains("Running now:"));
+    }
+
+    #[test]
+    fn parse_tool_calls_recovers_explicit_tool_block() {
+        let response = "tool: shell\ncommand: lsusb";
+        let (text, calls) = parse_tool_calls(response);
+        assert!(text.is_empty());
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(calls[0].arguments["command"], "lsusb");
+    }
+
+    #[test]
+    fn parse_tool_calls_recovers_tool_name_plus_json_block() {
+        let response = "shell\n{\"hint\":\"lsblk\"}";
+        let (text, calls) = parse_tool_calls(response);
+        assert!(text.is_empty());
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(calls[0].arguments["hint"], "lsblk");
+    }
+
+    #[test]
     fn parse_tool_calls_recovers_plain_shell_command() {
         let response = "lsusb";
         let (text, calls) = parse_tool_calls(response);
@@ -4485,6 +4556,16 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "shell");
         assert_eq!(calls[0].arguments["command"], "lsusb");
+    }
+
+    #[test]
+    fn parse_tool_calls_recovers_plain_build_command() {
+        let response = "cargo test";
+        let (text, calls) = parse_tool_calls(response);
+        assert!(text.is_empty());
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(calls[0].arguments["command"], "cargo test");
     }
 
     #[test]
@@ -4780,6 +4861,33 @@ I will now call the tool with this payload:
         assert_eq!(
             calls[0].arguments.get("command").unwrap().as_str().unwrap(),
             "lsusb"
+        );
+    }
+
+    #[test]
+    fn parse_tool_calls_handles_positional_bracket_shell_args() {
+        let response = r#"[TOOL_CALLS]shell[ARGS]{}[ARGS]lsusb[TOOL_CALLS]{}"#;
+
+        let (text, calls) = parse_tool_calls(response);
+        assert!(text.is_empty());
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(
+            calls[0].arguments.get("command").unwrap().as_str().unwrap(),
+            "lsusb"
+        );
+    }
+
+    #[test]
+    fn parse_tool_calls_normalizes_workspace_bootstrap_file_paths() {
+        let response = r#"file_read({"path":"agen.md"})"#;
+
+        let (_, calls) = parse_tool_calls(response);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "file_read");
+        assert_eq!(
+            calls[0].arguments.get("path").unwrap().as_str().unwrap(),
+            "AGENTS.md"
         );
     }
 
@@ -6101,7 +6209,9 @@ Let me check the result."#;
     #[test]
     fn map_tool_name_alias_direct_coverage() {
         assert_eq!(map_tool_name_alias("bash"), "shell");
-        assert_eq!(map_tool_name_alias("filelist"), "file_list");
+        assert_eq!(map_tool_name_alias("filelist"), "glob_search");
+        assert_eq!(map_tool_name_alias("edit_file"), "file_edit");
+        assert_eq!(map_tool_name_alias("web_search"), "web_search_tool");
         assert_eq!(map_tool_name_alias("memorystore"), "memory_store");
         assert_eq!(map_tool_name_alias("memoryforget"), "memory_forget");
         assert_eq!(map_tool_name_alias("http"), "http_request");
@@ -6116,10 +6226,12 @@ Let me check the result."#;
         assert_eq!(default_param_for_tool("shell"), "command");
         assert_eq!(default_param_for_tool("bash"), "command");
         assert_eq!(default_param_for_tool("file_read"), "path");
+        assert_eq!(default_param_for_tool("glob_search"), "pattern");
         assert_eq!(default_param_for_tool("memory_recall"), "query");
         assert_eq!(default_param_for_tool("memory_store"), "content");
         assert_eq!(default_param_for_tool("http_request"), "url");
         assert_eq!(default_param_for_tool("browser_open"), "url");
+        assert_eq!(default_param_for_tool("web_search_tool"), "query");
         assert_eq!(default_param_for_tool("unknown_tool"), "input");
     }
 

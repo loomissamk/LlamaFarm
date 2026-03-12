@@ -7554,12 +7554,12 @@ calc = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     }
 
     #[test]
-    async fn power_profile_template_deserializes() {
-        let raw = include_str!("../../dev/config.power.toml");
-        let parsed: Config = toml::from_str(raw).expect("power profile template should parse");
+    async fn dev_template_deserializes() {
+        let raw = include_str!("../../dev/config.template.toml");
+        let parsed: Config = toml::from_str(raw).expect("dev template should parse");
 
         assert_eq!(parsed.default_provider.as_deref(), Some("ollama"));
-        assert_eq!(parsed.autonomy.level, AutonomyLevel::Supervised);
+        assert_eq!(parsed.autonomy.level, AutonomyLevel::Full);
         assert!(!parsed.autonomy.workspace_only);
         assert!(parsed
             .autonomy

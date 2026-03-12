@@ -311,7 +311,7 @@ Lưu ý:
 
 Mẫu hồ sơ cục bộ:
 
-- `dev/config.power.toml` bật hồ sơ local/operator mạnh hơn: mở rộng userland, Docker, web, memory và delegation, nhưng vẫn chặn cứng thao tác kernel, driver, firmware, initramfs, bootloader và phá hủy đĩa.
+- `dev/config.template.toml` là hồ sơ local/operator mạnh duy nhất: mở rộng userland, Docker, web, memory và delegation, nhưng vẫn chặn cứng thao tác kernel, driver, firmware, initramfs, bootloader và phá hủy đĩa.
 
 ## `[memory]`
 

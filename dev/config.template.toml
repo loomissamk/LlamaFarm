@@ -1,36 +1,42 @@
-# Default local operator profile for the root Docker deployment.
-# This intentionally favors the older "show the real tool call and real stdout"
-# local workflow instead of the stricter minimal template.
+# God local engineering/operator profile.
+#
+# Intended use:
+# - full Ollama-first autonomy with broad userland, build, and Docker authority
+# - very large action/tool budgets for long local runs
+# - audit logging and emergency stop preserved
+# - enough room to widen into lower-level host access by editing the command and
+#   path allowlists below
+#
+# If you run Ollama directly on the host instead of the dev container,
+# change the Ollama URL below to `http://127.0.0.1:11434`.
 api_url = "http://host.docker.internal:11434"
 default_provider = "ollama"
-default_model = "qwen3.5:9b"
+default_model = "devstral-small-2:latest"
 default_temperature = 0.2
 model_support_vision = true
 
 [gateway]
 port = 42617
-host = "0.0.0.0"
+host = "127.0.0.1"
 require_pairing = false
-allow_public_bind = true
+allow_public_bind = false
 request_timeout_secs = 300
 
 [agent]
 compact_context = false
-max_tool_iterations = 120
-max_history_messages = 80
+max_tool_iterations = 256
+max_history_messages = 120
 parallel_tools = false
-tool_dispatcher = "auto"
-
-[observability]
-backend = "log"
-runtime_trace_mode = "rolling"
-runtime_trace_path = "state/runtime-trace.jsonl"
-runtime_trace_max_entries = 2000
+# Devstral via Ollama is more reliable with the XML dispatcher than native
+# function-calling in this local stack.
+tool_dispatcher = "xml"
 
 [autonomy]
 level = "full"
 workspace_only = false
 allowed_commands = [
+  "blkid",
+  "bun",
   "apt",
   "apt-get",
   "awk",
@@ -40,82 +46,153 @@ allowed_commands = [
   "cat",
   "chmod",
   "chown",
+  "clang",
+  "cmake",
   "cp",
   "curl",
   "cut",
   "date",
+  "dd",
   "df",
   "diff",
   "dirname",
+  "dmesg",
+  "dmidecode",
   "docker",
   "docker-compose",
+  "dotnet",
   "du",
   "echo",
   "env",
+  "fdisk",
   "file",
   "find",
+  "fio",
   "free",
+  "g++",
+  "gcc",
+  "gdb",
   "git",
+  "go",
+  "gradle",
   "grep",
+  "gzip",
   "head",
+  "hexdump",
+  "htop",
   "ip",
+  "iostat",
   "jq",
+  "java",
+  "javac",
+  "journalctl",
+  "kill",
+  "killall",
   "ln",
+  "lldb",
   "ls",
   "lsblk",
-  "lspci",
+  "lsmod",
+  "lsof",
   "lsusb",
+  "lspci",
+  "make",
+  "meson",
+  "mkfs",
+  "mkfs.ext4",
+  "mkfs.vfat",
   "mkdir",
+  "mongosh",
+  "mount",
   "mv",
+  "mvn",
   "netstat",
+  "ninja",
   "node",
   "npm",
+  "nvidia-smi",
+  "nvcc",
   "patch",
+  "parted",
+  "partprobe",
+  "perl",
+  "php",
   "ping",
+  "pip",
+  "pip3",
+  "pnpm",
   "ps",
   "pwd",
+  "pytest",
   "python",
   "python3",
   "readlink",
   "realpath",
   "rg",
-  "rm",
+  "ruby",
+  "rsync",
+  "rustc",
   "sed",
   "sh",
+  "smartctl",
   "sqlite3",
+  "sort",
   "ss",
   "stat",
+  "strace",
+  "strings",
+  "sysctl",
+  "systemctl",
+  "systemd-analyze",
   "tail",
+  "tar",
   "tee",
   "timeout",
+  "top",
   "touch",
+  "traceroute",
+  "udevadm",
   "uname",
+  "uniq",
+  "umount",
+  "unzip",
+  "watch",
   "wc",
   "wget",
+  "wipefs",
   "whoami",
   "xargs",
+  "yarn",
 ]
+# God still blocks raw device/kernel paths by default so a pasted preset does
+# not immediately hand the model firmware or live-device write access. To go
+# lower-level, widen `allowed_roots` and remove specific entries here on purpose.
 forbidden_paths = [
   "/boot",
   "/dev",
   "/efi",
+  "/etc",
   "/lib",
   "/lib64",
   "/lib/modules",
-  "/media",
-  "/mnt",
   "/proc",
   "/root",
   "/run",
   "/sbin",
   "/snap",
-  "/srv",
   "/sys",
+  "/tmp",
+  "/usr",
   "/usr/lib/firmware",
   "/usr/lib/modules",
+  "/var",
+  "~/.aws",
+  "~/.config",
+  "~/.gnupg",
+  "~/.ssh",
 ]
-max_actions_per_hour = 10000
-max_cost_per_day_cents = 100000
+max_actions_per_hour = 50000
+max_cost_per_day_cents = 500000
 require_approval_for_medium_risk = false
 block_high_risk_commands = false
 shell_redirect_policy = "strip"
@@ -161,14 +238,27 @@ auto_approve = [
 ]
 always_ask = []
 allowed_roots = [
+  "/",
   "~",
   "/llamafarm-data",
 ]
-non_cli_excluded_tools = []
-non_cli_approval_approvers = []
+non_cli_excluded_tools = [
+  "composio",
+  "image_info",
+  "proxy_config",
+  "pushover",
+  "screenshot",
+]
 non_cli_natural_language_approval_mode = "direct"
 
-[autonomy.non_cli_natural_language_approval_mode_by_channel]
+[browser]
+enabled = true
+allowed_domains = ["*"]
+browser_open = "disable"
+session_name = "llamafarm-local"
+backend = "auto"
+native_headless = true
+native_webdriver_url = "http://chromium:4444"
 
 [http_request]
 enabled = true
@@ -189,3 +279,167 @@ enabled = true
 provider = "duckduckgo"
 max_results = 8
 timeout_secs = 20
+
+[research]
+enabled = true
+trigger = "keywords"
+keywords = ["check", "compare", "find", "how", "inspect", "investigate", "search", "show", "where", "why"]
+max_iterations = 12
+show_progress = true
+
+[skills]
+prompt_injection_mode = "compact"
+
+[workspaces]
+enabled = true
+root = "workspaces"
+
+[agents_ipc]
+enabled = true
+db_path = "~/.llamafarm/agents.db"
+staleness_secs = 600
+
+[security.resources]
+max_memory_mb = 8192
+max_cpu_time_seconds = 3600
+max_subprocesses = 128
+memory_monitoring = true
+
+[security.audit]
+enabled = true
+log_path = "audit.log"
+max_size_mb = 250
+sign_events = true
+
+[security.estop]
+enabled = true
+state_file = "estop-state.json"
+require_otp_to_resume = false
+
+[hooks]
+enabled = true
+
+[hooks.builtin]
+command_logger = true
+
+[observability]
+backend = "log"
+runtime_trace_mode = "rolling"
+runtime_trace_path = "state/runtime-trace.jsonl"
+runtime_trace_max_entries = 2000
+
+# Goal loop stays disabled here until the runtime path is exercised end-to-end
+# for this operator profile.
+[goal_loop]
+enabled = false
+interval_minutes = 10
+step_timeout_secs = 300
+max_steps_per_cycle = 8
+
+[[model_routes]]
+hint = "planner"
+provider = "ollama"
+model = "qwen2.5-coder:14b"
+
+[[model_routes]]
+hint = "coder"
+provider = "ollama"
+model = "qwen2.5-coder:14b"
+
+[[model_routes]]
+hint = "verifier"
+provider = "ollama"
+model = "qwen2.5-coder:14b"
+
+[[model_routes]]
+hint = "operator"
+provider = "ollama"
+model = "qwen2.5-coder:14b"
+
+[agents.planner]
+provider = "ollama"
+model = "qwen2.5-coder:14b"
+temperature = 0.1
+max_depth = 2
+agentic = true
+allowed_tools = [
+  "content_search",
+  "delegate_coordination_status",
+  "file_read",
+  "glob_search",
+  "http_request",
+  "memory_recall",
+  "schedule",
+  "shell",
+  "web_fetch",
+  "web_search_tool",
+]
+max_iterations = 16
+
+[agents.coder]
+provider = "ollama"
+model = "qwen2.5-coder:14b"
+temperature = 0.1
+max_depth = 2
+agentic = true
+allowed_tools = [
+  "apply_patch",
+  "content_search",
+  "file_edit",
+  "file_read",
+  "file_write",
+  "git_operations",
+  "glob_search",
+  "memory_recall",
+  "process",
+  "shell",
+]
+max_iterations = 24
+
+[agents.verifier]
+provider = "ollama"
+model = "qwen2.5-coder:14b"
+temperature = 0.0
+max_depth = 2
+agentic = true
+allowed_tools = [
+  "content_search",
+  "file_read",
+  "git_operations",
+  "glob_search",
+  "http_request",
+  "memory_recall",
+  "process",
+  "shell",
+  "web_fetch",
+]
+max_iterations = 16
+
+[agents.operator]
+provider = "ollama"
+model = "qwen2.5-coder:14b"
+temperature = 0.1
+max_depth = 2
+agentic = true
+allowed_tools = [
+  "agents_inbox",
+  "agents_list",
+  "agents_send",
+  "content_search",
+  "cron_add",
+  "cron_list",
+  "cron_remove",
+  "cron_run",
+  "cron_runs",
+  "cron_update",
+  "delegate_coordination_status",
+  "file_read",
+  "glob_search",
+  "http_request",
+  "memory_recall",
+  "process",
+  "schedule",
+  "shell",
+  "web_fetch",
+]
+max_iterations = 20

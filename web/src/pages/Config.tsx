@@ -1,25 +1,33 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import {
-  Settings,
-  Save,
-  CheckCircle,
   AlertTriangle,
+  CheckCircle,
+  RefreshCcw,
+  Save,
+  Settings,
   ShieldAlert,
 } from 'lucide-react';
-import { getConfig, putConfig } from '@/lib/api';
+import type { ConfigPresetsResponse } from '@/types/api';
+import { getConfig, getConfigPresets, putConfig } from '@/lib/api';
+
+type PresetMode = 'safe' | 'god';
 
 export default function Config() {
+  const [liveConfig, setLiveConfig] = useState('');
   const [config, setConfig] = useState('');
+  const [presets, setPresets] = useState<ConfigPresetsResponse | null>(null);
+  const [presetMode, setPresetMode] = useState<PresetMode>('god');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
   useEffect(() => {
-    getConfig()
-      .then((data) => {
-        // The API may return either a raw string or a JSON string
-        setConfig(typeof data === 'string' ? data : JSON.stringify(data, null, 2));
+    Promise.all([getConfig(), getConfigPresets()])
+      .then(([currentConfig, presetData]) => {
+        setLiveConfig(currentConfig);
+        setConfig(currentConfig);
+        setPresets(presetData);
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
@@ -31,6 +39,7 @@ export default function Config() {
     setSuccess(null);
     try {
       await putConfig(config);
+      setLiveConfig(config);
       setSuccess('Configuration saved successfully.');
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to save configuration');
@@ -39,84 +48,198 @@ export default function Config() {
     }
   };
 
-  // Auto-dismiss success after 4 seconds
+  const handleReloadLive = () => {
+    setConfig(liveConfig);
+    setError(null);
+    setSuccess('Reloaded the current live configuration into the editor.');
+  };
+
+  const handleApplyPreset = () => {
+    if (!selectedPreset) {
+      return;
+    }
+
+    setConfig(selectedPreset.content);
+    setError(null);
+    setSuccess(`${selectedPreset.label} preset loaded into the editor. Save to apply it live.`);
+  };
+
   useEffect(() => {
     if (!success) return;
     const timer = setTimeout(() => setSuccess(null), 4000);
     return () => clearTimeout(timer);
   }, [success]);
 
-  if (loading) {
+  if (loading || !presets) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-500 border-t-transparent" />
+      <div className="flex h-64 items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
       </div>
     );
   }
 
+  const selectedPreset = presets[presetMode] ?? presets.god;
+  const lineCount = config.split('\n').length;
+  const isDirty = config !== liveConfig;
+
   return (
-    <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Settings className="h-5 w-5 text-blue-400" />
-          <h2 className="text-base font-semibold text-white">Configuration</h2>
+    <div className="space-y-6 p-6">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <Settings className="h-5 w-5 text-blue-400" />
+            <h2 className="text-base font-semibold text-white">Configuration</h2>
+          </div>
+          <p className="max-w-3xl text-sm text-gray-400">
+            Toggle between a safer preset and an escalated local operator profile, then edit the
+            raw TOML directly before saving.
+          </p>
         </div>
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
-        >
-          <Save className="h-4 w-4" />
-          {saving ? 'Saving...' : 'Save'}
-        </button>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={handleReloadLive}
+            disabled={saving}
+            className="inline-flex items-center gap-2 rounded-lg border border-gray-700 bg-gray-900 px-4 py-2 text-sm font-medium text-gray-200 transition-colors hover:border-gray-600 hover:bg-gray-800 disabled:opacity-50"
+          >
+            <RefreshCcw className="h-4 w-4" />
+            Reload Live
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
+          >
+            <Save className="h-4 w-4" />
+            {saving ? 'Saving...' : 'Save'}
+          </button>
+        </div>
       </div>
 
-      {/* Sensitive fields note */}
-      <div className="flex items-start gap-3 bg-yellow-900/20 border border-yellow-700/40 rounded-lg p-4">
-        <ShieldAlert className="h-5 w-5 text-yellow-400 flex-shrink-0 mt-0.5" />
+      <div className="rounded-2xl border border-gray-800 bg-gray-900/80 p-5">
+        <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+          <div className="space-y-4">
+            <div className="inline-flex rounded-xl border border-gray-800 bg-gray-950 p-1">
+              {(['safe', 'god'] as PresetMode[]).map((mode) => {
+                const active = mode === presetMode;
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setPresetMode(mode)}
+                    className={[
+                      'min-w-[132px] rounded-lg px-4 py-2 text-sm font-semibold transition-colors',
+                      active
+                        ? mode === 'safe'
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-amber-500 text-gray-950'
+                        : 'text-gray-400 hover:bg-gray-900 hover:text-white',
+                    ].join(' ')}
+                  >
+                    {mode === 'safe' ? 'Safe' : 'God'}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="space-y-3">
+              <div className="flex items-center gap-3">
+                <span
+                  className={[
+                    'inline-flex rounded-full px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.18em]',
+                    presetMode === 'safe'
+                      ? 'bg-emerald-900/50 text-emerald-300'
+                      : 'bg-amber-900/50 text-amber-200',
+                  ].join(' ')}
+                >
+                  {selectedPreset.label}
+                </span>
+                <span className="text-xs font-medium uppercase tracking-[0.18em] text-gray-500">
+                  editor preset
+                </span>
+              </div>
+              <p className="max-w-3xl text-sm text-gray-300">{selectedPreset.summary}</p>
+              <div className="flex flex-wrap gap-2">
+                {selectedPreset.highlights.map((highlight) => (
+                  <span
+                    key={highlight}
+                    className="rounded-full border border-gray-700 bg-gray-950 px-3 py-1 text-xs text-gray-300"
+                  >
+                    {highlight}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="min-w-[280px] rounded-xl border border-gray-800 bg-gray-950/80 p-4">
+            <p className="text-sm font-medium text-white">Preset controls</p>
+            <p className="mt-1 text-sm text-gray-400">
+              Loading a preset only replaces the editor contents. Nothing is applied live until
+              you press Save.
+            </p>
+            <button
+              type="button"
+              onClick={handleApplyPreset}
+              className={[
+                'mt-4 w-full rounded-lg px-4 py-2 text-sm font-semibold transition-colors',
+                presetMode === 'safe'
+                  ? 'bg-emerald-600 text-white hover:bg-emerald-500'
+                  : 'bg-amber-500 text-gray-950 hover:bg-amber-400',
+              ].join(' ')}
+            >
+              Load {selectedPreset.label} Into Editor
+            </button>
+            <div className="mt-4 flex items-center justify-between text-xs text-gray-500">
+              <span>{lineCount} lines in editor</span>
+              <span>{isDirty ? 'unsaved changes' : 'synced to live config'}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex items-start gap-3 rounded-lg border border-yellow-700/40 bg-yellow-900/20 p-4">
+        <ShieldAlert className="mt-0.5 h-5 w-5 flex-shrink-0 text-yellow-400" />
         <div>
-          <p className="text-sm text-yellow-300 font-medium">
-            Sensitive fields are masked
-          </p>
-          <p className="text-sm text-yellow-400/70 mt-0.5">
-            API keys, tokens, and passwords are hidden for security. To update a
-            masked field, replace the entire masked value with your new value.
+          <p className="text-sm font-medium text-yellow-300">Sensitive fields are masked</p>
+          <p className="mt-0.5 text-sm text-yellow-400/70">
+            API keys, tokens, and passwords are hidden for security. To update a masked field,
+            replace the entire masked value with your new value.
           </p>
         </div>
       </div>
 
-      {/* Success message */}
       {success && (
-        <div className="flex items-center gap-2 bg-green-900/30 border border-green-700 rounded-lg p-3">
-          <CheckCircle className="h-4 w-4 text-green-400 flex-shrink-0" />
+        <div className="flex items-center gap-2 rounded-lg border border-green-700 bg-green-900/30 p-3">
+          <CheckCircle className="h-4 w-4 flex-shrink-0 text-green-400" />
           <span className="text-sm text-green-300">{success}</span>
         </div>
       )}
 
-      {/* Error message */}
       {error && (
-        <div className="flex items-center gap-2 bg-red-900/30 border border-red-700 rounded-lg p-3">
-          <AlertTriangle className="h-4 w-4 text-red-400 flex-shrink-0" />
+        <div className="flex items-center gap-2 rounded-lg border border-red-700 bg-red-900/30 p-3">
+          <AlertTriangle className="h-4 w-4 flex-shrink-0 text-red-400" />
           <span className="text-sm text-red-300">{error}</span>
         </div>
       )}
 
-      {/* Config Editor */}
-      <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
-        <div className="flex items-center justify-between px-4 py-2 border-b border-gray-800 bg-gray-800/50">
-          <span className="text-xs text-gray-400 font-medium uppercase tracking-wider">
-            TOML Configuration
-          </span>
-          <span className="text-xs text-gray-500">
-            {config.split('\n').length} lines
-          </span>
+      <div className="overflow-hidden rounded-2xl border border-gray-800 bg-gray-900">
+        <div className="flex items-center justify-between border-b border-gray-800 bg-gray-800/50 px-4 py-3">
+          <div>
+            <span className="text-xs font-medium uppercase tracking-wider text-gray-400">
+              TOML Configuration
+            </span>
+            <p className="mt-1 text-xs text-gray-500">
+              Safe keeps approvals tighter. God widens budgets and system reach.
+            </p>
+          </div>
+          <span className="text-xs text-gray-500">{lineCount} lines</span>
         </div>
         <textarea
           value={config}
-          onChange={(e) => setConfig(e.target.value)}
+          onChange={(event) => setConfig(event.target.value)}
           spellCheck={false}
-          className="w-full min-h-[500px] bg-gray-950 text-gray-200 font-mono text-sm p-4 resize-y focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-inset"
+          className="min-h-[560px] w-full resize-y bg-gray-950 p-4 font-mono text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-inset"
           style={{ tabSize: 4 }}
         />
       </div>

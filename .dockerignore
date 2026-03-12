@@ -13,6 +13,8 @@ tests
 
 # Markdown files (README, CHANGELOG, etc.)
 *.md
+!AGENTS.md
+!SOUL.md
 
 # Images (unnecessary for build)
 *.png

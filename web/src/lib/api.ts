@@ -1,4 +1,5 @@
 import type {
+  ConfigPresetsResponse,
   StatusResponse,
   ToolSpec,
   CronJob,
@@ -145,6 +146,10 @@ export function putConfig(toml: string): Promise<void> {
     headers: { 'Content-Type': 'application/toml' },
     body: toml,
   });
+}
+
+export function getConfigPresets(): Promise<ConfigPresetsResponse> {
+  return apiFetch<ConfigPresetsResponse>('/api/config/presets');
 }
 
 export function getWorkspaceFile(name: string): Promise<WorkspaceFileResponse> {

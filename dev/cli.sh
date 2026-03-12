@@ -36,18 +36,13 @@ function load_env {
 }
 
 function ensure_config {
-    PROFILE="${LLAMAFARM_DEV_PROFILE:-${LLAMAFARM_DEV_PROFILE:-power}}"
     CONFIG_DIR="$HOST_TARGET_DIR/.llamafarm"
     CONFIG_FILE="$CONFIG_DIR/config.toml"
     WORKSPACE_DIR="$CONFIG_DIR/workspace"
     TEMPLATE_FILE="$BASE_DIR/config.template.toml"
 
-    if [ "$PROFILE" = "power" ]; then
-        TEMPLATE_FILE="$BASE_DIR/config.power.toml"
-    fi
-
     if [ ! -f "$CONFIG_FILE" ]; then
-        echo -e "${YELLOW}⚙️  Config file missing in .dev-state/.llamafarm. Creating '${PROFILE}' dev config from template...${NC}"
+        echo -e "${YELLOW}⚙️  Config file missing in .dev-state/.llamafarm. Creating the dev config from template...${NC}"
         mkdir -p "$WORKSPACE_DIR"
 
         # Copy template
@@ -70,9 +65,8 @@ function print_help {
     echo -e "  ${GREEN}ci${NC}      Run local CI checks in Docker (see ./dev/ci.sh)"
     echo -e "  ${GREEN}clean${NC}   Stop and wipe workspace data"
     echo ""
-    echo "Profiles:"
-    echo -e "  ${GREEN}./dev/cli.sh up${NC}                                Bootstrap the power local operator profile"
-    echo -e "  ${GREEN}LLAMAFARM_DEV_PROFILE=default ./dev/cli.sh up${NC} Bootstrap the default locked-down profile"
+    echo "Config:"
+    echo -e "  ${GREEN}./dev/cli.sh up${NC}  Bootstrap the single high-power local operator profile"
 }
 
 if [ -z "$1" ]; then

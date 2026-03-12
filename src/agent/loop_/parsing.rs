@@ -58,6 +58,367 @@ pub(super) fn normalize_shell_command_from_raw(raw: &str) -> Option<String> {
     Some(unwrapped.to_string())
 }
 
+fn normalize_string_argument(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let unwrapped = trimmed
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .or_else(|| {
+            trimmed
+                .strip_prefix('\'')
+                .and_then(|s| s.strip_suffix('\''))
+        })
+        .unwrap_or(trimmed)
+        .trim();
+
+    (!unwrapped.is_empty()).then(|| unwrapped.to_string())
+}
+
+fn normalize_known_workspace_file_path(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let normalized = trimmed.replace('\\', "/");
+    let lowered = normalized.to_ascii_lowercase();
+
+    match lowered.as_str() {
+        "agents.md" | "agent.md" | "agen.md" => "AGENTS.md".to_string(),
+        "soul.md" => "SOUL.md".to_string(),
+        "tools.md" | "tool.md" => "TOOLS.md".to_string(),
+        "identity.md" => "IDENTITY.md".to_string(),
+        "user.md" => "USER.md".to_string(),
+        "./agents.md" | "./agent.md" | "./agen.md" => "./AGENTS.md".to_string(),
+        "./soul.md" => "./SOUL.md".to_string(),
+        "./tools.md" | "./tool.md" => "./TOOLS.md".to_string(),
+        "./identity.md" => "./IDENTITY.md".to_string(),
+        "./user.md" => "./USER.md".to_string(),
+        _ => normalized,
+    }
+}
+
+fn extract_alias_string(
+    map: &serde_json::Map<String, serde_json::Value>,
+    aliases: &[&str],
+) -> Option<String> {
+    aliases.iter().find_map(|alias| {
+        map.get(*alias)
+            .and_then(serde_json::Value::as_str)
+            .and_then(normalize_string_argument)
+    })
+}
+
+fn normalize_path_arguments(
+    arguments: serde_json::Value,
+    raw_string_hint: Option<&str>,
+) -> serde_json::Value {
+    match arguments {
+        serde_json::Value::Object(mut map) => {
+            if let Some(path) = map
+                .get("path")
+                .and_then(|v| v.as_str())
+                .and_then(normalize_string_argument)
+            {
+                map.insert(
+                    "path".to_string(),
+                    serde_json::Value::String(normalize_known_workspace_file_path(&path)),
+                );
+                return serde_json::Value::Object(map);
+            }
+
+            if let Some(path) =
+                extract_alias_string(&map, &["file_path", "filepath", "filename", "target"])
+            {
+                map.insert(
+                    "path".to_string(),
+                    serde_json::Value::String(normalize_known_workspace_file_path(&path)),
+                );
+                return serde_json::Value::Object(map);
+            }
+
+            if let Some(raw) = raw_string_hint.and_then(normalize_string_argument) {
+                map.insert(
+                    "path".to_string(),
+                    serde_json::Value::String(normalize_known_workspace_file_path(&raw)),
+                );
+            }
+
+            serde_json::Value::Object(map)
+        }
+        serde_json::Value::String(raw) => normalize_string_argument(&raw)
+            .map(|path| serde_json::json!({ "path": normalize_known_workspace_file_path(&path) }))
+            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new())),
+        _ => raw_string_hint
+            .and_then(normalize_string_argument)
+            .map(|path| serde_json::json!({ "path": normalize_known_workspace_file_path(&path) }))
+            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new())),
+    }
+}
+
+fn normalize_file_write_arguments(
+    arguments: serde_json::Value,
+    raw_string_hint: Option<&str>,
+) -> serde_json::Value {
+    match arguments {
+        serde_json::Value::Object(mut map) => {
+            if map
+                .get("path")
+                .and_then(|v| v.as_str())
+                .and_then(normalize_string_argument)
+                .is_none()
+            {
+                if let Some(path) =
+                    extract_alias_string(&map, &["file_path", "filepath", "filename", "target"])
+                {
+                    map.insert(
+                        "path".to_string(),
+                        serde_json::Value::String(normalize_known_workspace_file_path(&path)),
+                    );
+                }
+            } else if let Some(path) = map
+                .get("path")
+                .and_then(|v| v.as_str())
+                .and_then(normalize_string_argument)
+            {
+                map.insert(
+                    "path".to_string(),
+                    serde_json::Value::String(normalize_known_workspace_file_path(&path)),
+                );
+            }
+
+            if map
+                .get("content")
+                .and_then(|v| v.as_str())
+                .and_then(normalize_string_argument)
+                .is_none()
+            {
+                if let Some(content) =
+                    extract_alias_string(&map, &["contents", "text", "body", "value"])
+                {
+                    map.insert("content".to_string(), serde_json::Value::String(content));
+                } else if let Some(raw) = raw_string_hint.and_then(normalize_string_argument) {
+                    map.insert("content".to_string(), serde_json::Value::String(raw));
+                }
+            }
+
+            serde_json::Value::Object(map)
+        }
+        _ => raw_string_hint
+            .and_then(normalize_string_argument)
+            .map(|content| serde_json::json!({ "content": content }))
+            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new())),
+    }
+}
+
+fn normalize_file_edit_arguments(
+    arguments: serde_json::Value,
+    raw_string_hint: Option<&str>,
+) -> serde_json::Value {
+    match arguments {
+        serde_json::Value::Object(mut map) => {
+            if map
+                .get("path")
+                .and_then(|v| v.as_str())
+                .and_then(normalize_string_argument)
+                .is_none()
+            {
+                if let Some(path) =
+                    extract_alias_string(&map, &["file_path", "filepath", "filename", "target"])
+                {
+                    map.insert(
+                        "path".to_string(),
+                        serde_json::Value::String(normalize_known_workspace_file_path(&path)),
+                    );
+                }
+            } else if let Some(path) = map
+                .get("path")
+                .and_then(|v| v.as_str())
+                .and_then(normalize_string_argument)
+            {
+                map.insert(
+                    "path".to_string(),
+                    serde_json::Value::String(normalize_known_workspace_file_path(&path)),
+                );
+            }
+
+            if map
+                .get("old_string")
+                .and_then(|v| v.as_str())
+                .and_then(normalize_string_argument)
+                .is_none()
+            {
+                if let Some(old_string) =
+                    extract_alias_string(&map, &["old_text", "old", "find", "search"])
+                {
+                    map.insert(
+                        "old_string".to_string(),
+                        serde_json::Value::String(old_string),
+                    );
+                }
+            }
+
+            if map
+                .get("new_string")
+                .and_then(|v| v.as_str())
+                .and_then(normalize_string_argument)
+                .is_none()
+            {
+                if let Some(new_string) =
+                    extract_alias_string(&map, &["new_text", "new", "replace", "replacement"])
+                {
+                    map.insert(
+                        "new_string".to_string(),
+                        serde_json::Value::String(new_string),
+                    );
+                } else if let Some(raw) = raw_string_hint.and_then(normalize_string_argument) {
+                    map.insert("new_string".to_string(), serde_json::Value::String(raw));
+                }
+            }
+
+            serde_json::Value::Object(map)
+        }
+        _ => serde_json::Value::Object(serde_json::Map::new()),
+    }
+}
+
+fn derive_glob_pattern(raw: &str) -> Option<String> {
+    let candidate = normalize_string_argument(raw)?;
+    if candidate.contains('*')
+        || candidate.contains('?')
+        || candidate.contains('[')
+        || candidate.contains('{')
+    {
+        return Some(candidate);
+    }
+
+    let trimmed = candidate.trim_end_matches('/');
+    if trimmed.is_empty() || trimmed == "." {
+        return Some("**/*".to_string());
+    }
+
+    Some(format!("{trimmed}/**/*"))
+}
+
+fn normalize_glob_search_arguments(
+    arguments: serde_json::Value,
+    raw_string_hint: Option<&str>,
+) -> serde_json::Value {
+    match arguments {
+        serde_json::Value::Object(mut map) => {
+            if map
+                .get("pattern")
+                .and_then(|v| v.as_str())
+                .and_then(derive_glob_pattern)
+                .is_some()
+            {
+                return serde_json::Value::Object(map);
+            }
+
+            if let Some(pattern) =
+                extract_alias_string(&map, &["path", "dir", "directory", "root"])
+                    .and_then(|raw| derive_glob_pattern(&raw))
+            {
+                map.insert("pattern".to_string(), serde_json::Value::String(pattern));
+                return serde_json::Value::Object(map);
+            }
+
+            if let Some(pattern) = raw_string_hint.and_then(derive_glob_pattern) {
+                map.insert("pattern".to_string(), serde_json::Value::String(pattern));
+            }
+
+            serde_json::Value::Object(map)
+        }
+        serde_json::Value::String(raw) => derive_glob_pattern(&raw)
+            .map(|pattern| serde_json::json!({ "pattern": pattern }))
+            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new())),
+        _ => raw_string_hint
+            .and_then(derive_glob_pattern)
+            .map(|pattern| serde_json::json!({ "pattern": pattern }))
+            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new())),
+    }
+}
+
+fn normalize_content_search_arguments(
+    arguments: serde_json::Value,
+    raw_string_hint: Option<&str>,
+) -> serde_json::Value {
+    match arguments {
+        serde_json::Value::Object(mut map) => {
+            if map
+                .get("pattern")
+                .and_then(|v| v.as_str())
+                .and_then(normalize_string_argument)
+                .is_some()
+            {
+                return serde_json::Value::Object(map);
+            }
+
+            if let Some(pattern) =
+                extract_alias_string(&map, &["query", "search", "text", "regex", "needle"])
+            {
+                map.insert("pattern".to_string(), serde_json::Value::String(pattern));
+                return serde_json::Value::Object(map);
+            }
+
+            if let Some(raw) = raw_string_hint.and_then(normalize_string_argument) {
+                map.insert("pattern".to_string(), serde_json::Value::String(raw));
+            }
+
+            serde_json::Value::Object(map)
+        }
+        serde_json::Value::String(raw) => normalize_string_argument(&raw)
+            .map(|pattern| serde_json::json!({ "pattern": pattern }))
+            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new())),
+        _ => raw_string_hint
+            .and_then(normalize_string_argument)
+            .map(|pattern| serde_json::json!({ "pattern": pattern }))
+            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new())),
+    }
+}
+
+fn normalize_web_search_arguments(
+    arguments: serde_json::Value,
+    raw_string_hint: Option<&str>,
+) -> serde_json::Value {
+    match arguments {
+        serde_json::Value::Object(mut map) => {
+            if map
+                .get("query")
+                .and_then(|v| v.as_str())
+                .and_then(normalize_string_argument)
+                .is_some()
+            {
+                return serde_json::Value::Object(map);
+            }
+
+            if let Some(query) =
+                extract_alias_string(&map, &["q", "search_query", "input", "text", "value"])
+            {
+                map.insert("query".to_string(), serde_json::Value::String(query));
+                return serde_json::Value::Object(map);
+            }
+
+            if let Some(raw) = raw_string_hint.and_then(normalize_string_argument) {
+                map.insert("query".to_string(), serde_json::Value::String(raw));
+            }
+
+            serde_json::Value::Object(map)
+        }
+        serde_json::Value::String(raw) => normalize_string_argument(&raw)
+            .map(|query| serde_json::json!({ "query": query }))
+            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new())),
+        _ => raw_string_hint
+            .and_then(normalize_string_argument)
+            .map(|query| serde_json::json!({ "query": query }))
+            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new())),
+    }
+}
+
 pub(super) fn normalize_shell_arguments(
     arguments: serde_json::Value,
     raw_string_hint: Option<&str>,
@@ -126,6 +487,12 @@ pub(super) fn normalize_tool_arguments(
 ) -> serde_json::Value {
     match map_tool_name_alias(tool_name) {
         "shell" => normalize_shell_arguments(arguments, raw_string_hint),
+        "file_read" => normalize_path_arguments(arguments, raw_string_hint),
+        "file_write" => normalize_file_write_arguments(arguments, raw_string_hint),
+        "file_edit" => normalize_file_edit_arguments(arguments, raw_string_hint),
+        "glob_search" => normalize_glob_search_arguments(arguments, raw_string_hint),
+        "content_search" => normalize_content_search_arguments(arguments, raw_string_hint),
+        "web_search_tool" => normalize_web_search_arguments(arguments, raw_string_hint),
         _ => arguments,
     }
 }
@@ -1003,14 +1370,40 @@ pub(super) fn parse_function_call_tool_calls(response: &str) -> Vec<ParsedToolCa
 pub(super) fn map_tool_name_alias(tool_name: &str) -> &str {
     match tool_name {
         // Shell variations (including GLM aliases that map to shell)
-        "shell" | "bash" | "sh" | "exec" | "command" | "cmd" | "browser_open" | "browser"
-        | "web_search" => "shell",
+        "shell"
+        | "bash"
+        | "sh"
+        | "exec"
+        | "command"
+        | "cmd"
+        | "run_command"
+        | "run_shell_command"
+        | "execute_command"
+        | "execute_shell_command"
+        | "exec_command"
+        | "terminal"
+        | "terminal_exec"
+        | "terminal_execute" => "shell",
+        "browser_open" | "browser" => "shell",
         // Messaging variations
         "send_message" | "sendmessage" => "message_send",
         // File tool variations
-        "fileread" | "file_read" | "readfile" | "read_file" | "file" => "file_read",
-        "filewrite" | "file_write" | "writefile" | "write_file" => "file_write",
-        "filelist" | "file_list" | "listfiles" | "list_files" => "file_list",
+        "fileread" | "file_read" | "readfile" | "read_file" | "open_file" | "file" => {
+            "file_read"
+        }
+        "filewrite" | "file_write" | "writefile" | "write_file" | "create_file"
+        | "save_file" | "write_to_file" => "file_write",
+        "fileedit" | "file_edit" | "editfile" | "edit_file" | "modify_file"
+        | "replace_in_file" => "file_edit",
+        "filelist" | "file_list" | "listfiles" | "list_files" | "list_dir"
+        | "list_directory" | "directory_list" => "glob_search",
+        // Search variations
+        "content_search" | "search_files" | "search_in_files" | "grep_search"
+        | "ripgrep_search" => "content_search",
+        "glob_search" | "find_files" | "glob" => "glob_search",
+        "web_search" | "web_search_tool" | "search_web" | "internet_search" => {
+            "web_search_tool"
+        }
         // Memory variations
         "memoryrecall" | "memory_recall" | "recall" | "memrecall" => "memory_recall",
         "memorystore" | "memory_store" | "store" | "memstore" => "memory_store",
@@ -1080,6 +1473,7 @@ pub(super) fn parse_glm_style_tool_calls(
                         }
                         _ => serde_json::json!({ param_name: value }),
                     };
+                    let arguments = normalize_tool_arguments(tool_name, arguments, Some(value));
 
                     calls.push((tool_name.to_string(), arguments, Some(line.to_string())));
                     continue;
@@ -1087,7 +1481,8 @@ pub(super) fn parse_glm_style_tool_calls(
 
                 if rest.starts_with('{') {
                     if let Ok(json_args) = serde_json::from_str::<serde_json::Value>(rest) {
-                        calls.push((tool_name.to_string(), json_args, Some(line.to_string())));
+                        let arguments = normalize_tool_arguments(tool_name, json_args, Some(rest));
+                        calls.push((tool_name.to_string(), arguments, Some(line.to_string())));
                     }
                 }
             }
@@ -1117,14 +1512,20 @@ pub(super) fn default_param_for_tool(tool: &str) -> &'static str {
         // All file tools default to "path"
         "file_read" | "fileread" | "readfile" | "read_file" | "file" | "file_write"
         | "filewrite" | "writefile" | "write_file" | "file_edit" | "fileedit" | "editfile"
-        | "edit_file" | "file_list" | "filelist" | "listfiles" | "list_files" => "path",
+        | "edit_file" => "path",
+        "glob_search" | "filelist" | "file_list" | "listfiles" | "list_files" | "list_dir"
+        | "list_directory" | "directory_list" | "find_files" | "glob" => "pattern",
+        "content_search" | "search_files" | "search_in_files" | "grep_search"
+        | "ripgrep_search" => "pattern",
         // Memory recall and forget both default to "query"
         "memory_recall" | "memoryrecall" | "recall" | "memrecall" | "memory_forget"
         | "memoryforget" | "forget" | "memforget" => "query",
         "memory_store" | "memorystore" | "store" | "memstore" => "content",
         // HTTP and browser tools default to "url"
-        "http_request" | "http" | "fetch" | "curl" | "wget" | "browser_open" | "browser"
-        | "web_search" => "url",
+        "http_request" | "http" | "fetch" | "curl" | "wget" | "browser_open" | "browser" => {
+            "url"
+        }
+        "web_search" | "web_search_tool" | "search_web" | "internet_search" => "query",
         _ => "input",
     }
 }
@@ -1159,7 +1560,7 @@ pub(super) fn parse_glm_shortened_body(body: &str) -> Option<ParsedToolCall> {
     // misparse the tool name in the first branch.
     let (tool_raw, value_part) = if let Some((tool, args)) = function_style {
         (tool, args)
-    } else if body.contains("=\"") {
+    } else if body.contains("=\"") || body.contains("='") {
         // Attribute-style: split at first whitespace to get tool name
         let split_pos = body.find(|c: char| c.is_whitespace()).unwrap_or(body.len());
         let tool = body[..split_pos].trim();
@@ -1189,37 +1590,27 @@ pub(super) fn parse_glm_shortened_body(body: &str) -> Option<ParsedToolCall> {
 
     let tool_name = map_tool_name_alias(tool_raw);
 
-    // Try attribute-style: `key="value" key2="value2"`
-    if value_part.contains("=\"") {
-        let mut args = serde_json::Map::new();
-        // Simple attribute parser: key="value" pairs
-        let mut rest = value_part;
-        while let Some(eq_pos) = rest.find("=\"") {
-            let key_start = rest[..eq_pos]
-                .rfind(|c: char| c.is_whitespace())
-                .map(|p| p + 1)
-                .unwrap_or(0);
-            let key = rest[key_start..eq_pos]
-                .trim()
-                .trim_matches(|c: char| c == ',' || c == ';');
-            let after_quote = &rest[eq_pos + 2..];
-            if let Some(end_quote) = after_quote.find('"') {
-                let value = &after_quote[..end_quote];
-                if !key.is_empty() {
-                    args.insert(
-                        key.to_string(),
-                        serde_json::Value::String(value.to_string()),
-                    );
-                }
-                rest = &after_quote[end_quote + 1..];
-            } else {
-                break;
-            }
+    if function_style.is_some() && (value_part.starts_with('{') || value_part.starts_with('[')) {
+        if let Ok(json_args) = serde_json::from_str::<serde_json::Value>(value_part) {
+            return Some(ParsedToolCall {
+                name: tool_name.to_string(),
+                arguments: normalize_tool_arguments(tool_name, json_args, Some(value_part)),
+                tool_call_id: None,
+            });
         }
+    }
+
+    // Try attribute-style: `key="value" key2="value2"`
+    if value_part.contains("=\"") || value_part.contains("='") {
+        let args = parse_attribute_pairs(value_part);
         if !args.is_empty() {
             return Some(ParsedToolCall {
                 name: tool_name.to_string(),
-                arguments: serde_json::Value::Object(args),
+                arguments: normalize_tool_arguments(
+                    tool_name,
+                    serde_json::Value::Object(args),
+                    None,
+                ),
                 tool_call_id: None,
             });
         }
@@ -1250,7 +1641,11 @@ pub(super) fn parse_glm_shortened_body(body: &str) -> Option<ParsedToolCall> {
         if !args.is_empty() {
             return Some(ParsedToolCall {
                 name: tool_name.to_string(),
-                arguments: serde_json::Value::Object(args),
+                arguments: normalize_tool_arguments(
+                    tool_name,
+                    serde_json::Value::Object(args),
+                    None,
+                ),
                 tool_call_id: None,
             });
         }
@@ -1276,7 +1671,7 @@ pub(super) fn parse_glm_shortened_body(body: &str) -> Option<ParsedToolCall> {
         };
         return Some(ParsedToolCall {
             name: tool_name.to_string(),
-            arguments,
+            arguments: normalize_tool_arguments(tool_name, arguments, Some(value_part)),
             tool_call_id: None,
         });
     }
@@ -1301,6 +1696,178 @@ fn strip_wrapping_json_code_fence(response: &str) -> &str {
     }
 
     trimmed
+}
+
+static ATTRIBUTE_PAIR_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"([a-zA-Z_][a-zA-Z0-9_-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')"#).unwrap()
+});
+
+fn parse_attribute_pairs(input: &str) -> serde_json::Map<String, serde_json::Value> {
+    let mut arguments = serde_json::Map::new();
+
+    for capture in ATTRIBUTE_PAIR_RE.captures_iter(input) {
+        let Some(key) = capture.get(1).map(|m| m.as_str().trim()) else {
+            continue;
+        };
+        if key.is_empty() {
+            continue;
+        }
+
+        let value = capture
+            .get(2)
+            .or_else(|| capture.get(3))
+            .map(|m| m.as_str())
+            .unwrap_or_default();
+        arguments.insert(key.to_string(), serde_json::Value::String(value.to_string()));
+    }
+
+    arguments
+}
+
+fn parse_simple_tool_scalar(raw: &str) -> serde_json::Value {
+    let Some(value) = normalize_string_argument(raw) else {
+        return serde_json::Value::Null;
+    };
+
+    match value.as_str() {
+        "true" | "yes" => serde_json::Value::Bool(true),
+        "false" | "no" => serde_json::Value::Bool(false),
+        _ => value
+            .parse::<i64>()
+            .map(serde_json::Value::from)
+            .or_else(|_| value.parse::<f64>().map(serde_json::Value::from))
+            .unwrap_or_else(|_| serde_json::Value::String(value)),
+    }
+}
+
+fn parse_simple_tool_key_value_body(body: &str) -> Option<serde_json::Value> {
+    let mut arguments = serde_json::Map::new();
+
+    for line in body.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        let Some((key_raw, value_raw)) = line
+            .split_once(':')
+            .or_else(|| line.split_once('='))
+            .map(|(key, value)| (key.trim(), value.trim()))
+        else {
+            return None;
+        };
+
+        if key_raw.is_empty() || value_raw.is_empty() {
+            return None;
+        }
+
+        let key_lower = key_raw.to_ascii_lowercase();
+        if matches!(key_lower.as_str(), "arguments" | "args" | "parameters" | "params")
+            && (value_raw.starts_with('{') || value_raw.starts_with('['))
+        {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(value_raw) else {
+                return None;
+            };
+            match value {
+                serde_json::Value::Object(object) => arguments.extend(object),
+                other => {
+                    arguments.insert("value".to_string(), other);
+                }
+            }
+            continue;
+        }
+
+        let value = parse_simple_tool_scalar(value_raw);
+        if value.is_null() {
+            return None;
+        }
+        arguments.insert(key_raw.to_string(), value);
+    }
+
+    (!arguments.is_empty()).then_some(serde_json::Value::Object(arguments))
+}
+
+fn parse_explicit_tool_header(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Some((key, value)) = trimmed
+        .split_once(':')
+        .or_else(|| trimmed.split_once('='))
+        .map(|(key, value)| (key.trim(), value.trim()))
+    {
+        if matches!(
+            key.to_ascii_lowercase().as_str(),
+            "tool" | "name" | "function" | "tool_name"
+        ) {
+            return (!value.is_empty()).then_some(value);
+        }
+    }
+
+    if let Some(value) = trimmed.strip_suffix(':').map(str::trim) {
+        if !value.is_empty() {
+            return Some(value);
+        }
+    }
+
+    Some(trimmed)
+}
+
+fn parse_explicit_tool_block_candidate(input: &str) -> Option<ParsedToolCall> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let first_newline = trimmed.find('\n')?;
+    let header_line = trimmed[..first_newline].trim();
+    let body = trimmed[first_newline + 1..].trim();
+    if body.is_empty() {
+        return None;
+    }
+
+    let tool_raw = parse_explicit_tool_header(header_line)?;
+    if !tool_raw.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+        return None;
+    }
+
+    let tool_name = map_tool_name_alias(tool_raw).to_string();
+    let arguments = if body.starts_with('{') || body.starts_with('[') {
+        let (value, consumed_end) = extract_first_json_value_with_end(body)?;
+        if !body[consumed_end..].trim().is_empty() {
+            return None;
+        }
+        normalize_tool_arguments(&tool_name, value, Some(body))
+    } else if let Some(arguments) = parse_simple_tool_key_value_body(body) {
+        normalize_tool_arguments(&tool_name, arguments, None)
+    } else if tool_name == "shell" && looks_like_direct_shell_command(body) {
+        serde_json::json!({ "command": body })
+    } else {
+        return None;
+    };
+
+    Some(ParsedToolCall {
+        name: tool_name,
+        arguments,
+        tool_call_id: None,
+    })
+}
+
+fn parse_explicit_tool_block_tool_calls(response: &str) -> Option<(String, Vec<ParsedToolCall>)> {
+    if let Some(call) = parse_explicit_tool_block_candidate(response) {
+        return Some((String::new(), vec![call]));
+    }
+
+    let mut lines = response.lines();
+    let first_line = lines.next()?.trim();
+    let rest = lines.collect::<Vec<_>>().join("\n");
+    if rest.trim().is_empty() {
+        return None;
+    }
+
+    if SHELL_BLOCK_INTENT_CUE_RE.is_match(first_line) || first_line.ends_with(':') {
+        let call = parse_explicit_tool_block_candidate(rest.trim())?;
+        return Some((first_line.to_string(), vec![call]));
+    }
+
+    None
 }
 
 fn parse_function_style_tool_calls(response: &str) -> Option<(String, Vec<ParsedToolCall>)> {
@@ -1329,31 +1896,59 @@ static FENCED_SHELL_BLOCK_RE: LazyLock<Regex> = LazyLock::new(|| {
         .unwrap()
 });
 
+static UNLABELED_FENCED_BLOCK_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?is)(?:```|''')\s*\n(.*?)(?:(?:```|''')|$)").unwrap());
+
 const DIRECT_SHELL_COMMAND_PREFIXES: &[&str] = &[
+    "./",
+    "../",
     "bash ",
+    "bun ",
+    "cargo ",
     "cat ",
+    "cd ",
+    "clang ",
+    "cmake ",
     "curl ",
     "date",
+    "deno ",
     "df ",
     "docker ",
     "docker-compose ",
+    "dotnet ",
     "du ",
     "echo ",
     "env",
     "find ",
+    "g++ ",
+    "gcc ",
     "git ",
+    "go ",
     "grep ",
+    "gradle ",
     "jq ",
+    "java ",
+    "javac ",
     "ls ",
     "lsblk",
     "lspci",
     "lsusb",
+    "make",
+    "mvn ",
     "node ",
+    "ninja ",
     "npm ",
+    "perl ",
+    "php ",
+    "pip ",
+    "pip3 ",
+    "pnpm ",
     "pwd",
+    "pytest",
     "python ",
     "python3 ",
     "rg ",
+    "ruby ",
     "sh ",
     "sqlite3 ",
     "ss ",
@@ -1361,6 +1956,7 @@ const DIRECT_SHELL_COMMAND_PREFIXES: &[&str] = &[
     "tail ",
     "uname",
     "whoami",
+    "yarn ",
 ];
 
 static SHELL_BLOCK_INTENT_CUE_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -1416,6 +2012,13 @@ fn looks_like_direct_shell_command(candidate: &str) -> bool {
         return false;
     }
 
+    if trimmed.starts_with("/bin/")
+        || trimmed.starts_with("/usr/bin/")
+        || trimmed.starts_with("/usr/local/bin/")
+    {
+        return true;
+    }
+
     let lowered = trimmed.to_ascii_lowercase();
     DIRECT_SHELL_COMMAND_PREFIXES
         .iter()
@@ -1459,6 +2062,82 @@ fn parse_json_wrapped_tool_calls(response: &str) -> Option<(String, Vec<ParsedTo
 
     if let Some(call) = parse_glm_shortened_body(inner) {
         return Some((String::new(), vec![call]));
+    }
+
+    None
+}
+
+fn looks_like_recoverable_shell_line(line: &str) -> bool {
+    let candidate = line
+        .split("&&")
+        .next()
+        .unwrap_or(line)
+        .split("||")
+        .next()
+        .unwrap_or(line)
+        .split(';')
+        .next()
+        .unwrap_or(line)
+        .trim();
+
+    looks_like_direct_shell_command(candidate)
+        || candidate.starts_with("./")
+        || candidate.starts_with("../")
+        || candidate.starts_with("/bin/")
+        || candidate.starts_with("/usr/bin/")
+        || candidate.starts_with("/usr/local/bin/")
+}
+
+fn parse_unlabeled_fenced_shell_tool_calls(response: &str) -> Option<(String, Vec<ParsedToolCall>)> {
+    let mut text_parts = Vec::new();
+    let mut calls = Vec::new();
+    let mut last_end = 0usize;
+
+    for capture in UNLABELED_FENCED_BLOCK_RE.captures_iter(response) {
+        let Some(full_match) = capture.get(0) else {
+            continue;
+        };
+
+        let before = &response[last_end..full_match.start()];
+        if !before.trim().is_empty() {
+            text_parts.push(before.trim().to_string());
+        }
+
+        let body = capture.get(1).map(|m| m.as_str()).unwrap_or("");
+        let intent_window = before
+            .lines()
+            .rev()
+            .take(3)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        if SHELL_BLOCK_INTENT_CUE_RE.is_match(intent_window.trim()) {
+            if let Some(command) = normalize_recoverable_shell_block(body) {
+                if command.lines().all(looks_like_recoverable_shell_line) {
+                    calls.push(ParsedToolCall {
+                        name: "shell".to_string(),
+                        arguments: serde_json::json!({ "command": command }),
+                        tool_call_id: None,
+                    });
+                    last_end = full_match.end();
+                    continue;
+                }
+            }
+        }
+
+        text_parts.push(full_match.as_str().trim().to_string());
+        last_end = full_match.end();
+    }
+
+    if !calls.is_empty() {
+        let after = &response[last_end..];
+        if !after.trim().is_empty() {
+            text_parts.push(after.trim().to_string());
+        }
+        return Some((text_parts.join("\n"), calls));
     }
 
     None
@@ -1540,6 +2219,15 @@ fn parse_bracket_tool_calls(response: &str) -> Option<(String, Vec<ParsedToolCal
         }
 
         let after_marker = &remaining[start + TOOL_CALL_MARKER.len()..];
+        let trimmed_after_marker = after_marker.trim_start();
+        if trimmed_after_marker.is_empty() {
+            remaining = trimmed_after_marker;
+            continue;
+        }
+        if let Some(rest) = trimmed_after_marker.strip_prefix("{}") {
+            remaining = rest;
+            continue;
+        }
         let Some(args_pos) = after_marker.find(ARGS_MARKER) else {
             break;
         };
@@ -1561,14 +2249,18 @@ fn parse_bracket_tool_calls(response: &str) -> Option<(String, Vec<ParsedToolCal
         };
 
         let mut arguments_value = value.clone();
-        let extra_consumed = merge_repeated_bracket_arg_pairs(
+        let (extra_consumed, positional_hint) = merge_repeated_bracket_arg_pairs(
+            &tool_name,
             &args_input[leading_ws + consumed_end..],
             &mut arguments_value,
         );
+        let raw_hint = positional_hint
+            .as_deref()
+            .or_else(|| raw_string_argument_hint(Some(&value)));
         let arguments = normalize_tool_arguments(
             &tool_name,
             arguments_value,
-            raw_string_argument_hint(Some(&value)),
+            raw_hint,
         );
         calls.push(ParsedToolCall {
             name: tool_name,
@@ -1586,15 +2278,21 @@ fn parse_bracket_tool_calls(response: &str) -> Option<(String, Vec<ParsedToolCal
     (!calls.is_empty()).then(|| (text_parts.join("\n"), calls))
 }
 
-fn merge_repeated_bracket_arg_pairs(rest: &str, arguments: &mut serde_json::Value) -> usize {
+fn merge_repeated_bracket_arg_pairs(
+    tool_name: &str,
+    rest: &str,
+    arguments: &mut serde_json::Value,
+) -> (usize, Option<String>) {
     const ARGS_MARKER: &str = "[ARGS]";
+    const TOOL_CALL_MARKER: &str = "[TOOL_CALLS]";
 
     let Some(args_map) = arguments.as_object_mut() else {
-        return 0;
+        return (0, None);
     };
 
     let mut consumed_total = 0;
     let mut remaining = rest;
+    let mut positional_hint = None;
 
     loop {
         let trimmed = remaining.trim_start();
@@ -1606,35 +2304,72 @@ fn merge_repeated_bracket_arg_pairs(rest: &str, arguments: &mut serde_json::Valu
         let after_marker = &trimmed[ARGS_MARKER.len()..];
         let trimmed_after_marker = after_marker.trim_start();
         let marker_ws = after_marker.len() - trimmed_after_marker.len();
-        let Some((key_value, key_consumed)) =
-            extract_first_json_value_with_end(trimmed_after_marker)
+        let Some((key_value, key_consumed)) = extract_first_json_value_with_end(trimmed_after_marker)
         else {
+            let raw_end = trimmed_after_marker
+                .find(TOOL_CALL_MARKER)
+                .unwrap_or(trimmed_after_marker.len());
+            let raw_value = trimmed_after_marker[..raw_end].trim();
+            if raw_value.is_empty() {
+                break;
+            }
+
+            positional_hint = Some(raw_value.to_string());
+            consumed_total += leading_ws + ARGS_MARKER.len() + marker_ws + raw_end;
             break;
         };
-        let Some(key) = key_value
+
+        let key_candidate = key_value
             .as_str()
             .map(str::trim)
-            .filter(|key| !key.is_empty())
-        else {
-            break;
-        };
+            .filter(|key| !key.is_empty());
 
         let after_key = &trimmed_after_marker[key_consumed..];
         let trimmed_after_key = after_key.trim_start();
         let value_ws = after_key.len() - trimmed_after_key.len();
-        let Some((arg_value, value_consumed)) =
-            extract_first_json_value_with_end(trimmed_after_key)
-        else {
-            break;
-        };
+        let value_looks_absent = trimmed_after_key.is_empty()
+            || trimmed_after_key.starts_with(ARGS_MARKER)
+            || trimmed_after_key.starts_with(TOOL_CALL_MARKER);
 
-        args_map.insert(key.to_string(), arg_value);
-        consumed_total +=
-            leading_ws + ARGS_MARKER.len() + marker_ws + key_consumed + value_ws + value_consumed;
-        remaining = &trimmed_after_key[value_consumed..];
+        if let Some(key) = key_candidate {
+            if value_looks_absent {
+                positional_hint = Some(key.to_string());
+                consumed_total += leading_ws + ARGS_MARKER.len() + marker_ws + key_consumed;
+                break;
+            }
+
+            let Some((arg_value, value_consumed)) =
+                extract_first_json_value_with_end(trimmed_after_key)
+            else {
+                positional_hint = Some(key.to_string());
+                consumed_total += leading_ws + ARGS_MARKER.len() + marker_ws + key_consumed;
+                break;
+            };
+
+            args_map.insert(key.to_string(), arg_value);
+            consumed_total +=
+                leading_ws + ARGS_MARKER.len() + marker_ws + key_consumed + value_ws + value_consumed;
+            remaining = &trimmed_after_key[value_consumed..];
+            continue;
+        }
+
+        let fallback_param = default_param_for_tool(tool_name);
+        args_map.insert(fallback_param.to_string(), key_value);
+        consumed_total += leading_ws + ARGS_MARKER.len() + marker_ws + key_consumed;
+        break;
     }
 
-    consumed_total
+    (
+        consumed_total,
+        positional_hint
+            .map(|hint| hint.trim().to_string())
+            .filter(|hint| !hint.is_empty()),
+    )
+}
+
+#[cfg(test)]
+pub(super) fn normalize_known_workspace_file_path_for_test(raw: &str) -> String {
+    normalize_known_workspace_file_path(raw)
 }
 
 // ── Tool-Call Parsing ─────────────────────────────────────────────────────
@@ -1690,6 +2425,12 @@ pub(crate) fn parse_tool_calls(response: &str) -> (String, Vec<ParsedToolCall>) 
     if let Some((wrapped_text, wrapped_calls)) = parse_json_wrapped_tool_calls(response) {
         if !wrapped_calls.is_empty() {
             return (wrapped_text, wrapped_calls);
+        }
+    }
+
+    if let Some((block_text, block_calls)) = parse_explicit_tool_block_tool_calls(response) {
+        if !block_calls.is_empty() {
+            return (block_text, block_calls);
         }
     }
 
@@ -1949,6 +2690,21 @@ pub(crate) fn parse_tool_calls(response: &str) -> (String, Vec<ParsedToolCall>) 
         }
     }
 
+    if calls.is_empty() {
+        if let Some((shell_text, shell_calls)) = parse_unlabeled_fenced_shell_tool_calls(remaining)
+        {
+            if !shell_calls.is_empty() {
+                text_parts = if shell_text.trim().is_empty() {
+                    Vec::new()
+                } else {
+                    vec![shell_text]
+                };
+                calls = shell_calls;
+                remaining = "";
+            }
+        }
+    }
+
     // XML attribute-style tool calls:
     // <minimax:toolcall>
     // <invoke name="shell">
@@ -2111,6 +2867,12 @@ pub(super) fn detect_tool_call_parse_issue(
         || trimmed.contains("shell(")
         || trimmed.contains("file_read(")
         || trimmed.contains("file_write(")
+        || trimmed.starts_with("tool:")
+        || trimmed.starts_with("tool =")
+        || trimmed.starts_with("name:")
+        || trimmed.starts_with("name =")
+        || trimmed.starts_with("function:")
+        || trimmed.starts_with("function =")
         || trimmed.contains("```tool file_")
         || trimmed.contains("```tool shell")
         || trimmed.contains("```tool web_")

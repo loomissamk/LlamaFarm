@@ -798,6 +798,7 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         // ── Web Dashboard API routes ──
         .route("/api/status", get(api::handle_api_status))
         .route("/api/config", get(api::handle_api_config_get))
+        .route("/api/config/presets", get(api::handle_api_config_presets))
         .route("/api/tools", get(api::handle_api_tools))
         .route(
             "/api/workspace-files/{name}",
@@ -2101,6 +2102,7 @@ mod tests {
             max_tool_iterations: 10,
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
+            runtime_state: None,
         };
 
         let response = handle_metrics(State(state), test_connect_info(), HeaderMap::new())
@@ -2157,6 +2159,7 @@ mod tests {
             max_tool_iterations: 10,
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
+            runtime_state: None,
         };
 
         let response = handle_metrics(State(state), test_connect_info(), HeaderMap::new())
@@ -2199,6 +2202,7 @@ mod tests {
             max_tool_iterations: 10,
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
+            runtime_state: None,
         };
 
         let response = handle_metrics(State(state), test_public_connect_info(), HeaderMap::new())
@@ -2242,6 +2246,7 @@ mod tests {
             max_tool_iterations: 10,
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
+            runtime_state: None,
         };
 
         let unauthorized =
@@ -2711,6 +2716,7 @@ Reminder set successfully."#;
             max_tool_iterations: 10,
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
+            runtime_state: None,
         };
 
         let mut headers = HeaderMap::new();
@@ -2779,6 +2785,7 @@ Reminder set successfully."#;
             max_tool_iterations: 10,
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
+            runtime_state: None,
         };
 
         let unauthorized = handle_agent(
@@ -2828,6 +2835,7 @@ Reminder set successfully."#;
             max_tool_iterations: 10,
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
+            runtime_state: None,
         };
 
         let response = handle_webhook(
@@ -2877,6 +2885,7 @@ Reminder set successfully."#;
             max_tool_iterations: 10,
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
+            runtime_state: None,
         };
 
         let response = handle_node_control(
@@ -2931,6 +2940,7 @@ Reminder set successfully."#;
             max_tool_iterations: 10,
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
+            runtime_state: None,
         };
 
         let response = handle_node_control(
@@ -2990,6 +3000,7 @@ Reminder set successfully."#;
             max_tool_iterations: 10,
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
+            runtime_state: None,
         };
 
         let headers = HeaderMap::new();
@@ -3071,6 +3082,7 @@ Reminder set successfully."#;
             max_tool_iterations: 10,
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
+            runtime_state: None,
         };
 
         let response = handle_webhook(
@@ -3124,6 +3136,7 @@ Reminder set successfully."#;
             max_tool_iterations: 10,
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
+            runtime_state: None,
         };
 
         let mut headers = HeaderMap::new();
@@ -3182,6 +3195,7 @@ Reminder set successfully."#;
             max_tool_iterations: 10,
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
+            runtime_state: None,
         };
 
         let mut headers = HeaderMap::new();
@@ -3245,6 +3259,7 @@ Reminder set successfully."#;
             max_tool_iterations: 10,
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
+            runtime_state: None,
         };
 
         let response = Box::pin(handle_nextcloud_talk_webhook(
@@ -3304,6 +3319,7 @@ Reminder set successfully."#;
             max_tool_iterations: 10,
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
+            runtime_state: None,
         };
 
         let mut headers = HeaderMap::new();
@@ -3360,6 +3376,7 @@ Reminder set successfully."#;
             max_tool_iterations: 10,
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
+            runtime_state: None,
         };
 
         let response = Box::pin(handle_qq_webhook(
@@ -3411,6 +3428,7 @@ Reminder set successfully."#;
             max_tool_iterations: 10,
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
+            runtime_state: None,
         };
 
         let mut headers = HeaderMap::new();

@@ -98,16 +98,21 @@ RUN apt-get update && apt-get install -y \
     pciutils \
     procps \
     ripgrep \
+    util-linux \
     usbutils \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /llamafarm-data /llamafarm-data
 COPY --from=builder /app/llamafarm /usr/local/bin/llamafarm
-
-# Overwrite minimal config with DEV template (Ollama defaults)
-COPY dev/config.template.toml /llamafarm-data/.llamafarm/config.toml
-RUN chown 65534:65534 /llamafarm-data/.llamafarm/config.toml && chmod 600 /llamafarm-data/.llamafarm/config.toml
+COPY dev/config.template.toml /usr/share/llamafarm/config.template.toml
+COPY dev/config.preset.safe.toml /usr/share/llamafarm/config.preset.safe.toml
+COPY AGENTS.md /usr/share/llamafarm/AGENTS.md
+COPY SOUL.md /usr/share/llamafarm/SOUL.md
+COPY scripts/docker/dev-entrypoint.sh /usr/local/bin/dev-entrypoint.sh
+RUN chmod 755 /usr/local/bin/dev-entrypoint.sh && \
+    chmod 644 /usr/share/llamafarm/config.template.toml /usr/share/llamafarm/config.preset.safe.toml && \
+    rm -f /llamafarm-data/.llamafarm/config.toml
 
 # Environment setup
 # Use consistent workspace path
@@ -118,20 +123,21 @@ ENV SHELL=/bin/bash
 # silently drift away from the chosen Ollama model.
 ENV LLAMAFARM_GATEWAY_PORT=42617
 
-# Note: API_KEY is intentionally NOT set here to avoid confusion.
-# It is set in config.toml as the Ollama URL.
-
 WORKDIR /llamafarm-data
-USER 65534:65534
+USER 0:0
 EXPOSE 42617
-ENTRYPOINT ["llamafarm"]
-CMD ["gateway"]
+ENTRYPOINT ["/usr/local/bin/dev-entrypoint.sh"]
+CMD ["llamafarm", "gateway"]
 
 # ── Stage 3: Production Runtime (Distroless) ─────────────────
 FROM gcr.io/distroless/cc-debian13:nonroot@sha256:84fcd3c223b144b0cb6edc5ecc75641819842a9679a3a58fd6294bec47532bf7 AS release
 
 COPY --from=builder /app/llamafarm /usr/local/bin/llamafarm
 COPY --from=builder /llamafarm-data /llamafarm-data
+COPY dev/config.template.toml /usr/share/llamafarm/config.template.toml
+COPY dev/config.preset.safe.toml /usr/share/llamafarm/config.preset.safe.toml
+COPY AGENTS.md /usr/share/llamafarm/AGENTS.md
+COPY SOUL.md /usr/share/llamafarm/SOUL.md
 
 # Environment setup
 ENV LLAMAFARM_WORKSPACE=/llamafarm-data/workspace

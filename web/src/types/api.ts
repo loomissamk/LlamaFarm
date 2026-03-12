@@ -151,6 +151,19 @@ export interface WorkspaceFileResponse {
   exists: boolean;
 }
 
+export interface ConfigPresetEntry {
+  id: 'safe' | 'god';
+  label: string;
+  summary: string;
+  highlights: string[];
+  content: string;
+}
+
+export interface ConfigPresetsResponse {
+  safe: ConfigPresetEntry;
+  god: ConfigPresetEntry;
+}
+
 export interface SSEEvent {
   type: string;
   timestamp?: string;

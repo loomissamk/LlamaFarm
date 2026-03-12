@@ -8,7 +8,6 @@ import {
   Puzzle,
   Brain,
   Settings,
-  DollarSign,
   Activity,
   Stethoscope,
 } from 'lucide-react';
@@ -23,7 +22,6 @@ const navItems = [
   { to: '/memory', icon: Brain, labelKey: 'nav.memory' },
   { to: '/workspace', icon: BookText, labelKey: 'nav.workspace' },
   { to: '/config', icon: Settings, labelKey: 'nav.config' },
-  { to: '/models', icon: DollarSign, labelKey: 'nav.cost' },
   { to: '/logs', icon: Activity, labelKey: 'nav.logs' },
   { to: '/doctor', icon: Stethoscope, labelKey: 'nav.doctor' },
 ];

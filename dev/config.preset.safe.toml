@@ -1,12 +1,12 @@
-# Power local engineering/operator profile.
+# Safe local operator preset.
 #
 # Intended use:
-# - full Ollama-first autonomy with broad userland + Docker authority
-# - large action/tool budgets for long local runs
-# - audit logging and emergency stop preserved
+# - safer local autonomy with workspace-only boundaries
+# - explicit approval for medium-risk actions
+# - enough shell/build access for normal coding work without broad host mutation
 #
-# If you run Ollama directly on the host instead of the dev container,
-# change the Ollama URL below to `http://127.0.0.1:11434`.
+# This preset is exposed in the dashboard config editor. The local Docker stack
+# still boots from `dev/config.template.toml` by default.
 api_url = "http://host.docker.internal:11434"
 default_provider = "ollama"
 default_model = "devstral-small-2:latest"
@@ -18,107 +18,60 @@ port = 42617
 host = "127.0.0.1"
 require_pairing = false
 allow_public_bind = false
-request_timeout_secs = 300
+request_timeout_secs = 180
 
 [agent]
 compact_context = false
-max_tool_iterations = 120
-max_history_messages = 80
+max_tool_iterations = 32
+max_history_messages = 60
 parallel_tools = false
-# Devstral via Ollama is more reliable with the XML dispatcher than native
-# function-calling in this local stack.
 tool_dispatcher = "xml"
 
 [autonomy]
-level = "full"
-workspace_only = false
+level = "supervised"
+workspace_only = true
 allowed_commands = [
-  "apt",
-  "apt-get",
   "awk",
   "bash",
-  "basename",
   "cargo",
   "cat",
   "cmake",
-  "cp",
-  "curl",
   "cut",
   "date",
   "df",
   "diff",
-  "dirname",
-  "docker",
-  "docker-compose",
   "du",
   "echo",
   "env",
   "file",
   "find",
-  "free",
   "git",
   "go",
   "grep",
-  "gzip",
   "head",
-  "hexdump",
-  "htop",
-  "ip",
   "jq",
-  "journalctl",
-  "ln",
   "ls",
   "lsblk",
-  "lsusb",
   "lspci",
+  "lsusb",
   "make",
-  "mkdir",
-  "mongosh",
-  "mv",
-  "netstat",
   "node",
   "npm",
-  "nvidia-smi",
-  "nvcc",
-  "patch",
-  "ping",
-  "pip",
-  "pip3",
-  "pnpm",
-  "ps",
   "pwd",
   "pytest",
   "python",
   "python3",
-  "readlink",
-  "realpath",
   "rg",
-  "rsync",
   "rustc",
   "sed",
   "sh",
-  "sqlite3",
   "sort",
-  "ss",
+  "sqlite3",
   "stat",
-  "strings",
-  "systemctl",
   "tail",
-  "tar",
-  "tee",
-  "timeout",
-  "top",
-  "touch",
-  "traceroute",
   "uname",
-  "uniq",
-  "unzip",
-  "watch",
   "wc",
-  "wget",
   "whoami",
-  "xargs",
-  "yarn",
 ]
 forbidden_paths = [
   "/boot",
@@ -149,10 +102,10 @@ forbidden_paths = [
   "~/.gnupg",
   "~/.ssh",
 ]
-max_actions_per_hour = 10000
-max_cost_per_day_cents = 100000
-require_approval_for_medium_risk = false
-block_high_risk_commands = false
+max_actions_per_hour = 240
+max_cost_per_day_cents = 10000
+require_approval_for_medium_risk = true
+block_high_risk_commands = true
 shell_redirect_policy = "strip"
 shell_env_passthrough = [
   "CUDA_VISIBLE_DEVICES",
@@ -161,40 +114,25 @@ shell_env_passthrough = [
   "OLLAMA_HOST",
 ]
 auto_approve = [
-  "agents_inbox",
-  "agents_list",
-  "agents_send",
-  "apply_patch",
-  "browser",
-  "browser_open",
   "content_search",
-  "cron_add",
-  "cron_list",
-  "cron_remove",
-  "cron_run",
-  "cron_runs",
-  "cron_update",
-  "delegate",
-  "delegate_coordination_status",
-  "file_edit",
   "file_read",
-  "file_write",
-  "git_operations",
   "glob_search",
-  "http_request",
-  "memory_forget",
   "memory_recall",
-  "memory_store",
-  "model_routing_config",
-  "pdf_read",
-  "process",
-  "schedule",
-  "shell",
-  "task_plan",
   "web_fetch",
   "web_search_tool",
 ]
-always_ask = []
+always_ask = [
+  "apply_patch",
+  "cron_add",
+  "cron_remove",
+  "cron_update",
+  "file_edit",
+  "file_write",
+  "git_operations",
+  "process",
+  "schedule",
+  "shell",
+]
 allowed_roots = [
   "~",
   "/llamafarm-data",
@@ -220,28 +158,28 @@ native_webdriver_url = "http://chromium:4444"
 [http_request]
 enabled = true
 allowed_domains = ["*"]
-max_response_size = 5000000
-timeout_secs = 60
+max_response_size = 2000000
+timeout_secs = 30
 
 [web_fetch]
 enabled = true
 provider = "fast_html2md"
 allowed_domains = ["*"]
 blocked_domains = []
-max_response_size = 1000000
-timeout_secs = 60
+max_response_size = 500000
+timeout_secs = 30
 
 [web_search]
 enabled = true
 provider = "duckduckgo"
-max_results = 8
-timeout_secs = 20
+max_results = 5
+timeout_secs = 15
 
 [research]
 enabled = true
 trigger = "keywords"
 keywords = ["check", "compare", "find", "how", "inspect", "investigate", "search", "show", "where", "why"]
-max_iterations = 6
+max_iterations = 3
 show_progress = true
 
 [skills]
@@ -257,9 +195,9 @@ db_path = "~/.llamafarm/agents.db"
 staleness_secs = 600
 
 [security.resources]
-max_memory_mb = 4096
-max_cpu_time_seconds = 1800
-max_subprocesses = 64
+max_memory_mb = 2048
+max_cpu_time_seconds = 900
+max_subprocesses = 24
 memory_monitoring = true
 
 [security.audit]
@@ -285,13 +223,11 @@ runtime_trace_mode = "rolling"
 runtime_trace_path = "state/runtime-trace.jsonl"
 runtime_trace_max_entries = 2000
 
-# Goal loop stays disabled here until the runtime path is exercised end-to-end
-# for this operator profile.
 [goal_loop]
 enabled = false
 interval_minutes = 10
 step_timeout_secs = 300
-max_steps_per_cycle = 5
+max_steps_per_cycle = 4
 
 [[model_routes]]
 hint = "planner"
@@ -331,7 +267,7 @@ allowed_tools = [
   "web_fetch",
   "web_search_tool",
 ]
-max_iterations = 10
+max_iterations = 8
 
 [agents.coder]
 provider = "ollama"
@@ -351,7 +287,7 @@ allowed_tools = [
   "process",
   "shell",
 ]
-max_iterations = 12
+max_iterations = 10
 
 [agents.verifier]
 provider = "ollama"
@@ -370,7 +306,7 @@ allowed_tools = [
   "shell",
   "web_fetch",
 ]
-max_iterations = 10
+max_iterations = 8
 
 [agents.operator]
 provider = "ollama"
@@ -399,4 +335,4 @@ allowed_tools = [
   "shell",
   "web_fetch",
 ]
-max_iterations = 12
+max_iterations = 10
