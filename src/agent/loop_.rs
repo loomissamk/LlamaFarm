@@ -183,7 +183,7 @@ const AUTO_CRON_DELIVERY_CHANNELS: &[&str] = &["telegram", "discord", "slack", "
 
 const NON_CLI_APPROVAL_WAIT_TIMEOUT_SECS: u64 = 300;
 const NON_CLI_APPROVAL_POLL_INTERVAL_MS: u64 = 250;
-const MISSING_TOOL_CALL_RETRY_PROMPT: &str = "Internal correction: your last reply implied follow-up action, but no valid tool call was emitted. If a tool is required, emit a real tool call now using the runtime's canonical tool syntax. Do not explain the command, do not output example JSON, and do not stop after one failed format attempt. Retry with a valid tool call immediately. If no tool is needed, provide the complete final answer now and do not defer action.";
+const MISSING_TOOL_CALL_RETRY_PROMPT: &str = "Internal correction: stay on the current user task. Your last reply implied follow-up action, but no valid tool call was emitted. If another tool step is still required, emit that tool call now and nothing else. For shell actions, prefer a single real command or the runtime's canonical shell tool syntax; do not wrap it in markdown, do not describe what you would run, and do not switch topics. If file creation or editing is needed, prefer the dedicated file tools. If shell-level file creation is still required, use a direct command and, for heredocs, use a quoted delimiter like << 'EOF'. If no tool is needed, provide the complete final answer now and do not defer action.";
 const DUPLICATE_TOOL_CALL_RETRY_PROMPT: &str = "Internal correction: the requested tool action was already completed earlier in this turn. Do not repeat the same tool call. Use the existing tool results and provide the final answer now.";
 const TOOL_UNAVAILABLE_RETRY_PROMPT_PREFIX: &str = "Internal correction: your prior reply claimed required tools were unavailable. Use only the runtime-allowed tools listed below. If tool use is needed, emit the real tool call now instead of refusing, narrating, or giving an example.";
 
@@ -4835,6 +4835,374 @@ I will now call the tool with this payload:
             calls[0].arguments.get("command").unwrap().as_str().unwrap(),
             "pwd"
         );
+    }
+
+    #[test]
+    fn parse_tool_calls_handles_direct_file_write_xml_tag_body() {
+        let response = r#"I'll write the file now.
+<file_write>
+path="smoke_js/add_two.mjs"
+content="console.log(2 + 3);"
+</file_write>"#;
+
+        let (text, calls) = parse_tool_calls(response);
+        assert_eq!(text, "I'll write the file now.");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "file_write");
+        assert_eq!(
+            calls[0].arguments.get("path").unwrap().as_str().unwrap(),
+            "smoke_js/add_two.mjs"
+        );
+        assert_eq!(
+            calls[0].arguments.get("content").unwrap().as_str().unwrap(),
+            "console.log(2 + 3);"
+        );
+    }
+
+    #[test]
+    fn parse_tool_calls_recovers_multiple_shell_blocks_after_create_cue() {
+        let response = r#"I'll create a simple Node.js script that adds 2 + 3 and runs it for you.
+
+```bash
+mkdir -p smoke_js
+cat > smoke_js/add_two.mjs << 'EOF'
+console.log(2 + 3);
+EOF
+```
+
+Now let me run the script:
+
+```bash
+node smoke_js/add_two.mjs
+```"#;
+
+        let (text, calls) = parse_tool_calls(response);
+        assert!(text.contains("I'll create a simple Node.js script"));
+        assert!(text.contains("Now let me run the script"));
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].name, "shell");
+        assert!(
+            calls[0]
+                .arguments
+                .get("command")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .contains("mkdir -p smoke_js")
+        );
+        assert_eq!(calls[1].name, "shell");
+        assert_eq!(
+            calls[1].arguments.get("command").unwrap().as_str().unwrap(),
+            "node smoke_js/add_two.mjs"
+        );
+    }
+
+    #[test]
+    fn parse_tool_calls_preserves_heredoc_body_indentation_in_shell_blocks() {
+        let response = r#"I'll create and run the Python file now.
+
+```bash
+cat > smoke_py/add_two.py << 'EOF'
+def add(a, b):
+    return a + b
+
+print(add(2, 3))
+EOF
+python3 smoke_py/add_two.py
+```"#;
+
+        let (text, calls) = parse_tool_calls(response);
+        assert!(text.contains("I'll create and run the Python file now."));
+        let command = calls
+            .iter()
+            .find_map(|call| {
+                call.arguments
+                    .get("command")
+                    .and_then(|value| value.as_str())
+                    .filter(|command| command.contains("cat > smoke_py/add_two.py << 'EOF'"))
+            })
+            .expect("expected recovered shell command containing quoted heredoc");
+        assert!(command.contains("cat > smoke_py/add_two.py << 'EOF'"));
+        assert!(command.contains("def add(a, b):"));
+        assert!(
+            command.contains("    return a + b"),
+            "expected preserved indentation in command: {command}"
+        );
+        assert!(command.contains("\n\nprint(add(2, 3))"));
+        assert!(command.contains("\nEOF\npython3 smoke_py/add_two.py"));
+    }
+
+    #[test]
+    fn parse_tool_calls_recovers_function_style_write_plus_shell_follow_up() {
+        let response = r#"I'll create the Python file for you and run it to show the output.
+
+```python
+file_write(path="smoke_py/add_two.py", content='def add(a, b):\n    return a + b\n\nprint(add(2, 3))\n')
+```
+
+Now let me run it with python3:
+
+```bash
+python3 smoke_py/add_two.py
+```"#;
+
+        let (text, calls) = parse_tool_calls(response);
+        assert!(text.contains("I'll create the Python file for you"));
+        assert!(text.contains("Now let me run it with python3"));
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].name, "file_write");
+        assert_eq!(
+            calls[0].arguments.get("path").unwrap().as_str().unwrap(),
+            "smoke_py/add_two.py"
+        );
+        assert_eq!(calls[1].name, "shell");
+        assert_eq!(
+            calls[1].arguments.get("command").unwrap().as_str().unwrap(),
+            "python3 smoke_py/add_two.py"
+        );
+    }
+
+    #[test]
+    fn parse_tool_calls_recovers_shell_block_after_ready_to_execute_cue() {
+        let response = r#"The file is now ready to be executed with Node.js:
+
+```bash
+node smoke_js/add_two.mjs
+```"#;
+
+        let (text, calls) = parse_tool_calls(response);
+        assert!(text.contains("ready to be executed with Node.js"));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(
+            calls[0].arguments.get("command").unwrap().as_str().unwrap(),
+            "node smoke_js/add_two.mjs"
+        );
+    }
+
+    #[test]
+    fn parse_tool_calls_recovers_shell_block_after_alternative_approach_cue() {
+        let response = r#"I'll use an alternative approach with echo to create the file:
+
+```bash
+echo 'console.log(2 + 3);' > smoke_js/add_two.mjs
+```"#;
+
+        let (text, calls) = parse_tool_calls(response);
+        assert!(text.contains("alternative approach"));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(
+            calls[0].arguments.get("command").unwrap().as_str().unwrap(),
+            "echo 'console.log(2 + 3);' > smoke_js/add_two.mjs"
+        );
+    }
+
+    #[test]
+    fn parse_tool_calls_recovers_shell_block_after_option_cue() {
+        let response = r#"Option 1: Run individual commands directly
+
+```bash
+echo "=== System Information ===" && uname -a && echo "" && echo "=== USB Devices ===" && lsusb
+```"#;
+
+        let (text, calls) = parse_tool_calls(response);
+        assert!(text.contains("Option 1"));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert!(
+            calls[0]
+                .arguments
+                .get("command")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .contains("uname -a")
+        );
+    }
+
+    #[test]
+    fn parse_tool_calls_recovers_shell_block_with_tool_code_hint() {
+        let response = r#"I'll create a shell script in the workspace.
+
+```bash
+mkdir -p smoke_sys
+cat > smoke_sys/check.sh << 'EOF'
+#!/bin/bash
+uname -a
+lsusb
+EOF
+chmod +x smoke_sys/check.sh
+./smoke_sys/check.sh
+```
+
+Let me execute this:
+
+<tool_code>shell</tool_code>"#;
+
+        let (text, calls) = parse_tool_calls(response);
+        assert!(text.contains("I'll create a shell script"));
+        assert!(text.contains("<tool_code>shell</tool_code>"));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        let command = calls[0].arguments.get("command").unwrap().as_str().unwrap();
+        assert!(command.contains("mkdir -p smoke_sys"));
+        assert!(command.contains("./smoke_sys/check.sh"));
+    }
+
+    #[test]
+    fn parse_tool_calls_recovers_explicit_shell_parameter_block() {
+        let response = r#"I'll create a Python file that adds 2 + 2 and run it for you.
+
+```python
+# smoke_py/add_two.py
+def add(a, b):
+    return a + b
+
+print(add(2, 2))
+```
+
+Let me write this file and execute it:
+
+<tool_code>shell</tool_code><parameter>command="mkdir -p smoke_py && cat > smoke_py/add_two.py << 'EOF'
+def add(a, b):
+    return a + b
+
+print(add(2, 2))
+EOF
+" />"#;
+
+        let (text, calls) = parse_tool_calls(response);
+        assert!(text.contains("I'll create a Python file"));
+        assert!(text.contains("```python"));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        let command = calls[0].arguments.get("command").unwrap().as_str().unwrap();
+        assert!(command.contains("cat > smoke_py/add_two.py << 'EOF'"));
+        assert!(command.contains("    return a + b"));
+        assert!(command.contains("print(add(2, 2))"));
+    }
+
+    #[test]
+    fn parse_tool_calls_recovers_bare_shell_marker_from_python_code_block() {
+        let response = r#"I'll create a Python file to add 2 + 2 and run it for you.
+
+```python
+# Create a Python file to add 2 + 2
+with open('add_two.py', 'w') as f:
+    f.write('''#!/usr/bin/env python3
+result = 2 + 2
+print(f"2 + 2 = {result}")
+''')
+
+# Run the script
+import subprocess
+subprocess.run(['python3', 'add_two.py'])
+```
+
+Let me execute this using the shell tool:
+
+<tool_code>shell</tool_code>"#;
+
+        let (text, calls) = parse_tool_calls(response);
+        assert!(text.contains("I'll create a Python file"));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        let command = calls[0].arguments.get("command").unwrap().as_str().unwrap();
+        assert!(command.starts_with("python3 - <<'PY'"));
+        assert!(command.contains("with open('add_two.py', 'w') as f:"));
+        assert!(command.contains("subprocess.run(['python3', 'add_two.py'])"));
+    }
+
+    #[test]
+    fn parse_tool_calls_recovers_malformed_direct_shell_command_tags() {
+        let response = r#"I'll create and run a Python file to add 2 + 2 for you.
+
+```python
+# Create the Python file
+result = 2 + 2
+print(f"2 + 2 = {result}")
+```
+
+Now let me run this script:
+
+```bash
+python3 /tmp/add_two.py
+```
+
+Let me execute this now:
+
+<shell command="cat > /tmp/add_two.py << 'EOF'
+# Simple Python script to add 2 + 2
+result = 2 + 2
+print(f"2 + 2 = {result}")
+EOF</shell>
+
+<shell command="python3 /tmp/add_two.py"</shell>"#;
+
+        let (text, calls) = parse_tool_calls(response);
+        assert!(text.contains("I'll create and run a Python file"));
+        assert!(calls.len() >= 2);
+        let write_command = calls
+            .iter()
+            .find_map(|call| {
+                (call.name == "shell")
+                    .then(|| call.arguments.get("command").and_then(|value| value.as_str()))
+                    .flatten()
+                    .filter(|command| command.contains("cat > /tmp/add_two.py << 'EOF'"))
+            })
+            .expect("expected recovered shell file-write command");
+        let run_command = calls
+            .iter()
+            .find_map(|call| {
+                (call.name == "shell")
+                    .then(|| call.arguments.get("command").and_then(|value| value.as_str()))
+                    .flatten()
+                    .filter(|command| *command == "python3 /tmp/add_two.py")
+            })
+            .expect("expected recovered shell run command");
+        assert!(write_command.contains("cat > /tmp/add_two.py << 'EOF'"));
+        assert!(write_command.contains(r#"print(f"2 + 2 = {result}")"#));
+        assert_eq!(run_command, "python3 /tmp/add_two.py");
+    }
+
+    #[test]
+    fn parse_tool_calls_decodes_escaped_newlines_in_direct_shell_command_tags() {
+        let response =
+            r#"<shell command="cat > smoke_js/add_two.mjs << 'EOF'\nconsole.log(2 + 3);\nEOF" />"#;
+
+        let (_, calls) = parse_tool_calls(response);
+        assert_eq!(calls.len(), 1);
+        let command = calls[0].arguments.get("command").unwrap().as_str().unwrap();
+        assert!(command.contains("cat > smoke_js/add_two.mjs << 'EOF'\nconsole.log(2 + 3);\nEOF"));
+        assert!(!command.contains("\\n"));
+    }
+
+    #[test]
+    fn parse_tool_calls_recovers_wrapper_attribute_parameters_payload() {
+        let response = r#"I need to inspect the workspace first.
+<tool_call name="shell" parameters='{"command":"ls -la"}' />"#;
+
+        let (text, calls) = parse_tool_calls(response);
+        assert!(text.contains("I need to inspect the workspace first."));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(
+            calls[0].arguments.get("command").unwrap().as_str().unwrap(),
+            "ls -la"
+        );
+    }
+
+    #[test]
+    fn parse_tool_calls_ignores_unknown_function_style_calls_in_code_examples() {
+        let response = r#"```python
+result = 2 + 2
+print(result)
+```"#;
+
+        let (text, calls) = parse_tool_calls(response);
+        assert!(calls.is_empty());
+        assert!(text.contains("print(result)"));
     }
 
     #[test]

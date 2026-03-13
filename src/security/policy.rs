@@ -1,6 +1,8 @@
 use parking_lot::Mutex;
+use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -49,6 +51,12 @@ pub enum ShellRedirectPolicy {
     ///
     /// Other redirect forms remain blocked by command policy.
     Strip,
+    /// Allow shell redirects after path validation.
+    ///
+    /// This is intended for trusted local profiles that need to support
+    /// common Ollama patterns such as `echo ... > file` and quoted heredocs
+    /// like `cat > file << 'EOF'`.
+    Allow,
 }
 
 /// Risk score for shell command execution.
@@ -202,6 +210,16 @@ fn expand_user_path(path: &str) -> PathBuf {
     }
 
     PathBuf::from(path)
+}
+
+fn is_allowed_pseudo_device_path(path: &Path) -> bool {
+    matches!(
+        path,
+        p if p == Path::new("/dev/null")
+            || p == Path::new("/dev/stdin")
+            || p == Path::new("/dev/stdout")
+            || p == Path::new("/dev/stderr")
+    )
 }
 
 const READ_ONLY_INSPECTION_ROOTS: &[&str] = &["/proc", "/sys"];
@@ -461,6 +479,7 @@ fn contains_unquoted_single_ampersand(command: &str) -> bool {
     let mut quote = QuoteState::None;
     let mut escaped = false;
     let mut chars = command.chars().peekable();
+    let mut previous_significant: Option<char> = None;
 
     while let Some(ch) = chars.next() {
         match quote {
@@ -485,6 +504,7 @@ fn contains_unquoted_single_ampersand(command: &str) -> bool {
             QuoteState::None => {
                 if escaped {
                     escaped = false;
+                    previous_significant = Some(ch);
                     continue;
                 }
                 if ch == '\\' {
@@ -495,11 +515,26 @@ fn contains_unquoted_single_ampersand(command: &str) -> bool {
                     '\'' => quote = QuoteState::Single,
                     '"' => quote = QuoteState::Double,
                     '&' => {
+                        let next_significant = chars
+                            .clone()
+                            .find(|next| !next.is_whitespace());
+                        if previous_significant == Some('>')
+                            || next_significant == Some('>')
+                        {
+                            previous_significant = Some('&');
+                            continue;
+                        }
                         if chars.next_if_eq(&'&').is_none() {
                             return true;
                         }
+                        previous_significant = Some('&');
+                        continue;
                     }
                     _ => {}
+                }
+
+                if !ch.is_whitespace() {
+                    previous_significant = Some(ch);
                 }
             }
         }
@@ -553,6 +588,96 @@ fn contains_unquoted_char(command: &str, target: char) -> bool {
     }
 
     false
+}
+
+#[derive(Debug, Clone)]
+struct HeredocPolicySpec {
+    delimiter: String,
+    strip_tabs: bool,
+    quoted: bool,
+}
+
+fn parse_heredoc_policy_spec(line: &str) -> Option<HeredocPolicySpec> {
+    static HEREDOC_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"(?x)
+            <<(?P<strip>-)?\s*
+            (?:
+                '(?P<single>[^'\n]+)'
+                |
+                "(?P<double>[^"\n]+)"
+                |
+                (?P<bare>[A-Za-z0-9_./:-]+)
+            )
+        "#)
+        .expect("valid heredoc regex")
+    });
+
+    let captures = HEREDOC_RE.captures(line)?;
+    let delimiter = captures
+        .name("single")
+        .or_else(|| captures.name("double"))
+        .or_else(|| captures.name("bare"))
+        .map(|value| value.as_str().to_string())?;
+
+    Some(HeredocPolicySpec {
+        delimiter,
+        strip_tabs: captures.name("strip").is_some(),
+        quoted: captures.name("single").is_some() || captures.name("double").is_some(),
+    })
+}
+
+fn heredoc_body_has_unsafe_expansion(line: &str) -> bool {
+    static HEREDOC_EXPANSION_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\$[A-Za-z_]").expect("valid heredoc expansion regex"));
+
+    line.contains('`')
+        || line.contains("$(")
+        || line.contains("${")
+        || line.contains("<(")
+        || line.contains(">(")
+        || HEREDOC_EXPANSION_RE.is_match(line)
+}
+
+fn strip_heredoc_bodies_for_policy(command: &str) -> Result<String, String> {
+    let mut sanitized = Vec::new();
+    let mut active: Option<HeredocPolicySpec> = None;
+
+    for line in command.lines() {
+        if let Some(spec) = active.as_ref() {
+            let candidate = if spec.strip_tabs {
+                line.trim_start_matches('\t').trim_end()
+            } else {
+                line.trim_end()
+            };
+
+            if candidate == spec.delimiter {
+                active = None;
+                continue;
+            }
+
+            if !spec.quoted && heredoc_body_has_unsafe_expansion(line) {
+                return Err(
+                    "Command blocked: unquoted heredoc body contains shell expansion".into(),
+                );
+            }
+
+            continue;
+        }
+
+        sanitized.push(line.to_string());
+        if let Some(spec) = parse_heredoc_policy_spec(line) {
+            active = Some(spec);
+        }
+    }
+
+    if let Some(spec) = active {
+        return Err(format!(
+            "Command blocked: unterminated heredoc for delimiter '{}'",
+            spec.delimiter
+        ));
+    }
+
+    Ok(sanitized.join("\n"))
 }
 
 fn is_token_boundary_char(ch: char) -> bool {
@@ -887,6 +1012,57 @@ fn is_allowlist_entry_match(allowed: &str, executable: &str, executable_base: &s
     allowed == executable_base
 }
 
+fn resolve_script_path_for_policy(command: &str, workspace_dir: &Path) -> PathBuf {
+    if command == "~" {
+        return home_dir().unwrap_or_else(|| PathBuf::from(command));
+    }
+
+    if let Some(stripped) = command.strip_prefix("~/") {
+        return home_dir()
+            .map(|home| home.join(stripped))
+            .unwrap_or_else(|| PathBuf::from(command));
+    }
+
+    let path = PathBuf::from(command);
+    if path.is_absolute() {
+        path
+    } else {
+        workspace_dir.join(path)
+    }
+}
+
+fn infer_script_interpreter_for_policy(path: &Path) -> Option<&'static str> {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("sh" | "bash" | "zsh") => return Some("bash"),
+        Some("py") => return Some("python3"),
+        Some("js" | "mjs" | "cjs") => return Some("node"),
+        _ => {}
+    }
+
+    let prefix = std::fs::read(path).ok()?;
+    let shebang = String::from_utf8_lossy(&prefix[..prefix.len().min(256)]).to_ascii_lowercase();
+    if !shebang.starts_with("#!") {
+        return None;
+    }
+
+    if shebang.contains("python") {
+        Some("python3")
+    } else if shebang.contains("node") {
+        Some("node")
+    } else if shebang.contains("bash") || shebang.contains("zsh") {
+        Some("bash")
+    } else if shebang.contains("sh") {
+        Some("sh")
+    } else {
+        None
+    }
+}
+
 fn path_is_under(path: &Path, root: &str) -> bool {
     path.starts_with(Path::new(root))
 }
@@ -1055,12 +1231,48 @@ fn inspect_apt_upgrade_for_denied_packages(_args: &[String]) -> Result<Vec<Strin
 }
 
 impl SecurityPolicy {
+    pub(crate) fn command_for_policy_validation(&self, command: &str) -> Result<String, String> {
+        match self.shell_redirect_policy {
+            ShellRedirectPolicy::Allow => strip_heredoc_bodies_for_policy(command),
+            ShellRedirectPolicy::Block | ShellRedirectPolicy::Strip => Ok(command.to_string()),
+        }
+    }
+
     /// Apply configured redirect policy to a shell command before validation/execution.
     pub fn apply_shell_redirect_policy(&self, command: &str) -> String {
         match self.shell_redirect_policy {
-            ShellRedirectPolicy::Block => command.to_string(),
+            ShellRedirectPolicy::Block | ShellRedirectPolicy::Allow => command.to_string(),
             ShellRedirectPolicy::Strip => strip_supported_redirects(command),
         }
+    }
+
+    fn is_workspace_script_execution_allowed(&self, executable: &str) -> bool {
+        let candidate = strip_wrapping_quotes(executable).trim();
+        if candidate.is_empty()
+            || !(looks_like_path(candidate)
+                || candidate.starts_with("./")
+                || candidate.starts_with("../")
+                || candidate.starts_with("~/"))
+        {
+            return false;
+        }
+
+        if !self.is_path_allowed(candidate) {
+            return false;
+        }
+
+        let resolved = resolve_script_path_for_policy(candidate, &self.workspace_dir);
+        if !self.is_resolved_path_allowed(&resolved) {
+            return false;
+        }
+
+        let Some(interpreter) = infer_script_interpreter_for_policy(&resolved) else {
+            return false;
+        };
+
+        self.allowed_commands.iter().any(|allowed| {
+            is_allowlist_entry_match(allowed, interpreter, interpreter)
+        })
     }
 
     fn hard_denied_apt_reason(&self, args: &[String]) -> Option<String> {
@@ -1496,20 +1708,21 @@ impl SecurityPolicy {
         approved: bool,
     ) -> Result<CommandRiskLevel, String> {
         let effective_command = self.apply_shell_redirect_policy(command);
+        let policy_command = self.command_for_policy_validation(&effective_command)?;
 
-        if let Some(reason) = self.hard_denied_command_reason(&effective_command) {
+        if let Some(reason) = self.hard_denied_command_reason(&policy_command) {
             return Err(reason);
         }
 
-        if !self.is_command_allowed(&effective_command) {
+        if !self.is_command_allowed(&policy_command) {
             return Err(format!("Command not allowed by security policy: {command}"));
         }
 
-        if let Some(path) = self.forbidden_path_argument(&effective_command) {
+        if let Some(path) = self.forbidden_path_argument(&policy_command) {
             return Err(format!("Path blocked by security policy: {path}"));
         }
 
-        let risk = self.command_risk_level(&effective_command);
+        let risk = self.command_risk_level(&policy_command);
 
         if risk == CommandRiskLevel::High {
             if self.block_high_risk_commands {
@@ -1571,7 +1784,10 @@ impl SecurityPolicy {
         // Block shell redirections (`<`, `>`, `>>`) — they can read/write
         // arbitrary paths and bypass path checks.
         // Ignore quoted literals, e.g. `echo "a>b"` and `echo "a<b"`.
-        if contains_unquoted_char(command, '>') || contains_unquoted_char(command, '<') {
+        if self.shell_redirect_policy != ShellRedirectPolicy::Allow
+            && (contains_unquoted_char(command, '>')
+                || contains_unquoted_char(command, '<'))
+        {
             return false;
         }
 
@@ -1599,7 +1815,8 @@ impl SecurityPolicy {
 
             if !self.allowed_commands.iter().any(|allowed| {
                 is_allowlist_entry_match(allowed, &parsed.executable, parsed.base.as_str())
-            }) {
+            }) && !self.is_workspace_script_execution_allowed(&parsed.executable)
+            {
                 return false;
             }
 
@@ -1800,6 +2017,10 @@ impl SecurityPolicy {
         // Expand "~" for consistent matching with forbidden paths and allowlists.
         let expanded_path = expand_user_path(path);
 
+        if is_allowed_pseudo_device_path(&expanded_path) {
+            return true;
+        }
+
         // Block absolute paths when workspace_only is set
         if self.workspace_only && expanded_path.is_absolute() {
             return false;
@@ -1855,6 +2076,10 @@ impl SecurityPolicy {
     /// Validate that a resolved path is inside the workspace or an allowed root.
     /// Call this AFTER joining `workspace_dir` + relative path and canonicalizing.
     pub fn is_resolved_path_allowed(&self, resolved: &Path) -> bool {
+        if is_allowed_pseudo_device_path(resolved) {
+            return true;
+        }
+
         if let Some(decision) = self.prefix_path_access_decision(resolved, true) {
             return decision;
         }
@@ -2416,6 +2641,15 @@ Inst fwupd [1.9.0] (1.9.1 Ubuntu:24.04/noble [amd64])\n";
     }
 
     #[test]
+    fn harmless_pseudo_device_paths_are_allowed() {
+        let p = default_policy();
+        assert!(p.is_path_allowed("/dev/null"));
+        assert!(p.is_path_allowed("/dev/stdout"));
+        assert!(p.is_resolved_path_allowed(Path::new("/dev/null")));
+        assert!(p.is_resolved_path_allowed(Path::new("/dev/stderr")));
+    }
+
+    #[test]
     fn absolute_paths_allowed_when_not_workspace_only() {
         let p = SecurityPolicy {
             workspace_only: false,
@@ -2476,7 +2710,7 @@ Inst fwupd [1.9.0] (1.9.1 Ubuntu:24.04/noble [amd64])\n";
             max_cost_per_day_cents: 1000,
             require_approval_for_medium_risk: false,
             block_high_risk_commands: false,
-            shell_redirect_policy: ShellRedirectPolicy::Strip,
+            shell_redirect_policy: ShellRedirectPolicy::Allow,
             shell_env_passthrough: vec!["DATABASE_URL".into()],
             ..crate::config::AutonomyConfig::default()
         };
@@ -2491,7 +2725,7 @@ Inst fwupd [1.9.0] (1.9.1 Ubuntu:24.04/noble [amd64])\n";
         assert_eq!(policy.max_cost_per_day_cents, 1000);
         assert!(!policy.require_approval_for_medium_risk);
         assert!(!policy.block_high_risk_commands);
-        assert_eq!(policy.shell_redirect_policy, ShellRedirectPolicy::Strip);
+        assert_eq!(policy.shell_redirect_policy, ShellRedirectPolicy::Allow);
         assert_eq!(policy.shell_env_passthrough, vec!["DATABASE_URL"]);
         assert_eq!(policy.workspace_dir, PathBuf::from("/tmp/test-workspace"));
     }
@@ -2812,6 +3046,92 @@ Inst fwupd [1.9.0] (1.9.1 Ubuntu:24.04/noble [amd64])\n";
         assert!(p
             .validate_command_execution("cat </etc/passwd", false)
             .is_err());
+    }
+
+    #[test]
+    fn allow_policy_preserves_redirects_for_execution() {
+        let p = SecurityPolicy {
+            shell_redirect_policy: ShellRedirectPolicy::Allow,
+            ..default_policy()
+        };
+
+        let command = "echo hello > out.txt";
+        assert_eq!(p.apply_shell_redirect_policy(command), command);
+    }
+
+    #[test]
+    fn allow_policy_permits_workspace_output_redirection() {
+        let p = SecurityPolicy {
+            shell_redirect_policy: ShellRedirectPolicy::Allow,
+            ..default_policy()
+        };
+
+        assert!(p
+            .validate_command_execution("echo hello > out.txt", false)
+            .is_ok());
+    }
+
+    #[test]
+    fn allow_policy_permits_quoted_heredoc_file_creation() {
+        let p = SecurityPolicy {
+            shell_redirect_policy: ShellRedirectPolicy::Allow,
+            ..default_policy()
+        };
+
+        assert!(p
+            .validate_command_execution(
+                "cat > smoke_js/add_two.mjs << 'EOF'\nconsole.log(2 + 3);\nEOF",
+                false
+            )
+            .is_ok());
+    }
+
+    #[test]
+    fn allow_policy_permits_dev_null_redirects() {
+        let p = SecurityPolicy {
+            shell_redirect_policy: ShellRedirectPolicy::Allow,
+            allowed_commands: vec!["cat".into(), "grep".into()],
+            ..default_policy()
+        };
+
+        assert!(p
+            .validate_command_execution("grep nope missing.txt >/dev/null 2>&1", false)
+            .is_ok());
+        assert!(p.validate_command_execution("cat </dev/null", false).is_ok());
+    }
+
+    #[test]
+    fn allow_policy_blocks_unsafe_unquoted_heredoc_expansion() {
+        let p = SecurityPolicy {
+            shell_redirect_policy: ShellRedirectPolicy::Allow,
+            ..default_policy()
+        };
+
+        let err = p
+            .validate_command_execution(
+                "cat > smoke_js/add_two.mjs <<EOF\n$(id)\nEOF",
+                false,
+            )
+            .unwrap_err();
+        assert!(err.contains("unquoted heredoc body contains shell expansion"));
+    }
+
+    #[test]
+    fn command_validation_allows_workspace_script_in_compound_command() {
+        let tmp = tempfile::TempDir::new().expect("temp dir");
+        let script = tmp.path().join("check.sh");
+        std::fs::write(&script, "#!/usr/bin/env bash\necho ok\n").expect("write script");
+
+        let p = SecurityPolicy {
+            workspace_dir: tmp.path().to_path_buf(),
+            allowed_commands: vec!["echo".into(), "bash".into(), "sh".into()],
+            ..default_policy()
+        };
+
+        assert!(p.is_command_allowed("echo preparing && ./check.sh"));
+        assert!(p
+            .validate_command_execution("echo preparing && ./check.sh", false)
+            .is_ok());
     }
 
     #[test]

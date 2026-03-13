@@ -151,12 +151,18 @@ export interface WorkspaceFileResponse {
   exists: boolean;
 }
 
+export interface ConfigPresetWorkspaceFile {
+  name: string;
+  content: string;
+}
+
 export interface ConfigPresetEntry {
   id: 'safe' | 'god';
   label: string;
   summary: string;
   highlights: string[];
   content: string;
+  workspace_files: ConfigPresetWorkspaceFile[];
 }
 
 export interface ConfigPresetsResponse {

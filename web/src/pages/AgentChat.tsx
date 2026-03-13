@@ -22,6 +22,8 @@ interface ChatMessage {
   kind: ChatMessageKind;
   content: string;
   timestamp: Date;
+  seedRole?: SeedChatMessage['role'];
+  seedContent?: string;
 }
 
 interface ChatSession {
@@ -39,6 +41,8 @@ interface PersistedChatMessage {
   kind: ChatMessageKind;
   content: string;
   timestamp: string;
+  seedRole?: SeedChatMessage['role'];
+  seedContent?: string;
 }
 
 interface PersistedChatSession {
@@ -53,6 +57,11 @@ interface PersistedChatSession {
 interface InitialChatState {
   sessions: ChatSession[];
   activeSessionId: string;
+}
+
+interface PendingToolCallSeed {
+  id: string;
+  name: string;
 }
 
 let fallbackMessageIdCounter = 0;
@@ -195,6 +204,17 @@ function loadPersistedSessions(): ChatSession[] {
               kind: message.kind,
               content: message.content,
               timestamp,
+              seedRole:
+                message.seedRole === 'user' ||
+                message.seedRole === 'assistant' ||
+                message.seedRole === 'tool' ||
+                message.seedRole === 'agent'
+                  ? message.seedRole
+                  : undefined,
+              seedContent:
+                typeof message.seedContent === 'string'
+                  ? message.seedContent
+                  : undefined,
             };
           })
           .filter((message): message is ChatMessage => message !== null)
@@ -239,6 +259,8 @@ function persistSessions(sessions: ChatSession[]): void {
           kind: message.kind,
           content: message.content,
           timestamp: message.timestamp.toISOString(),
+          seedRole: message.seedRole,
+          seedContent: message.seedContent,
         })),
       }));
 
@@ -307,13 +329,69 @@ function formatToolResultMessage(msg: WsMessage): string {
   return `[Tool ${status}] ${toolName}${duration}\n${output}`;
 }
 
+function normalizeSeedToolArgs(
+  toolName: string,
+  args: unknown,
+): Record<string, unknown> {
+  if (args && typeof args === 'object' && !Array.isArray(args)) {
+    const normalized = { ...(args as Record<string, unknown>) };
+    const hint =
+      typeof normalized.hint === 'string' ? normalized.hint.trim() : '';
+    if (toolName === 'shell' && hint && typeof normalized.command !== 'string') {
+      normalized.command = hint;
+    }
+    return normalized;
+  }
+
+  return {};
+}
+
+function buildAssistantToolCallSeed(
+  toolCallId: string,
+  toolName: string,
+  args: unknown,
+): string {
+  return JSON.stringify({
+    content: null,
+    tool_calls: [
+      {
+        id: toolCallId,
+        name: toolName,
+        arguments: JSON.stringify(normalizeSeedToolArgs(toolName, args)),
+      },
+    ],
+  });
+}
+
+function extractToolResultOutput(msg: WsMessage): string {
+  const output = msg.output?.trim();
+  return output && output.length > 0 ? msg.output! : '(no output)';
+}
+
+function buildToolResultSeed(
+  toolCallId: string,
+  toolName: string,
+  output: string,
+): string {
+  return JSON.stringify({
+    tool_call_id: toolCallId,
+    tool_name: toolName,
+    content: output,
+  });
+}
+
 function buildHistorySeed(messages: ChatMessage[]): SeedChatMessage[] {
   return messages
-    .filter((message) => message.role === 'user' || message.role === 'agent')
-    .map((message) => ({
-      role: message.role === 'agent' ? 'assistant' : 'user',
-      content: message.content,
-    }));
+    .flatMap((message) => {
+      const role =
+        message.seedRole ?? (message.role === 'agent' ? 'assistant' : 'user');
+      const content = (message.seedContent ?? message.content).trim();
+      if (!content) {
+        return [];
+      }
+
+      return [{ role, content }];
+    });
 }
 
 export default function AgentChat() {
@@ -334,6 +412,7 @@ export default function AgentChat() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const pendingContentRef = useRef<Record<string, string>>({});
+  const pendingToolCallsRef = useRef<Record<string, PendingToolCallSeed[]>>({});
   const activeSessionIdRef = useRef(activeSessionId);
 
   const activeSession = useMemo(
@@ -377,6 +456,7 @@ export default function AgentChat() {
         kind: ChatMessageKind,
         content: string,
         timestamp = new Date(),
+        seed?: Pick<ChatMessage, 'seedRole' | 'seedContent'>,
       ) => {
         setSessions((prev) => {
           const existing = prev.find((session) => session.id === sessionId);
@@ -396,6 +476,8 @@ export default function AgentChat() {
                 kind,
                 content,
                 timestamp,
+                seedRole: seed?.seedRole,
+                seedContent: seed?.seedContent,
               },
             ],
             updatedAt: timestamp,
@@ -430,25 +512,64 @@ export default function AgentChat() {
             pendingContentRef.current[sessionId] ??
             ''
           ).trim();
-          appendMessage('agent', 'message', content || EMPTY_DONE_FALLBACK);
+          appendMessage('agent', 'message', content || EMPTY_DONE_FALLBACK, new Date(), {
+            seedRole: 'assistant',
+            seedContent: content || EMPTY_DONE_FALLBACK,
+          });
           clearTypingForSession();
           break;
         }
 
-        case 'tool_call':
+        case 'tool_call': {
+          const toolName = msg.name ?? 'unknown';
+          const toolCallId = `ws_tool_${makeMessageId()}`;
+          const pendingCalls = pendingToolCallsRef.current[sessionId] ?? [];
+          pendingCalls.push({ id: toolCallId, name: toolName });
+          pendingToolCallsRef.current[sessionId] = pendingCalls;
           appendMessage(
             'agent',
             'tool_call',
-            `[Tool Call] ${msg.name ?? 'unknown'}(${JSON.stringify(msg.args ?? {})})`,
+            `[Tool Call] ${toolName}(${JSON.stringify(msg.args ?? {})})`,
+            new Date(),
+            {
+              seedRole: 'assistant',
+              seedContent: buildAssistantToolCallSeed(toolCallId, toolName, msg.args),
+            },
           );
           break;
+        }
 
-        case 'tool_result':
-          appendMessage('agent', 'tool_result', formatToolResultMessage(msg));
+        case 'tool_result': {
+          const toolName = msg.name ?? 'unknown';
+          const pendingCalls = pendingToolCallsRef.current[sessionId] ?? [];
+          const matchingIndex = pendingCalls.findIndex((call) => call.name === toolName);
+          const pendingIndex =
+            matchingIndex >= 0 ? matchingIndex : pendingCalls.length > 0 ? 0 : -1;
+          const [pendingCall] =
+            pendingIndex >= 0 ? pendingCalls.splice(pendingIndex, 1) : [];
+          if (pendingCalls.length > 0) {
+            pendingToolCallsRef.current[sessionId] = pendingCalls;
+          } else {
+            delete pendingToolCallsRef.current[sessionId];
+          }
+
+          const output = extractToolResultOutput(msg);
+          appendMessage('agent', 'tool_result', formatToolResultMessage(msg), new Date(), {
+            seedRole: 'tool',
+            seedContent: buildToolResultSeed(
+              pendingCall?.id ?? `ws_tool_${makeMessageId()}`,
+              toolName,
+              output,
+            ),
+          });
           break;
+        }
 
         case 'error':
-          appendMessage('agent', 'error', `[Error] ${msg.message ?? 'Unknown error'}`);
+          appendMessage('agent', 'error', `[Error] ${msg.message ?? 'Unknown error'}`, new Date(), {
+            seedRole: 'assistant',
+            seedContent: `[Error] ${msg.message ?? 'Unknown error'}`,
+          });
           clearTypingForSession();
           break;
       }
@@ -506,6 +627,7 @@ export default function AgentChat() {
 
     wsRef.current?.deleteSession(sessionId);
     delete pendingContentRef.current[sessionId];
+    delete pendingToolCallsRef.current[sessionId];
     setTypingSessionIds((prev) => prev.filter((id) => id !== sessionId));
 
     setSessions((prev) => {

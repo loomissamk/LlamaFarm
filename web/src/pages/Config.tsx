@@ -8,7 +8,7 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import type { ConfigPresetsResponse } from '@/types/api';
-import { getConfig, getConfigPresets, putConfig } from '@/lib/api';
+import { getConfig, getConfigPresets, putConfig, putWorkspaceFile } from '@/lib/api';
 
 type PresetMode = 'safe' | 'god';
 
@@ -61,7 +61,34 @@ export default function Config() {
 
     setConfig(selectedPreset.content);
     setError(null);
-    setSuccess(`${selectedPreset.label} preset loaded into the editor. Save to apply it live.`);
+    setSuccess(
+      `${selectedPreset.label} preset loaded into the editor. Use Apply Live to sync config plus AGENTS.md and SOUL.md.`,
+    );
+  };
+
+  const handleApplyPresetLive = async () => {
+    if (!selectedPreset) {
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      await putConfig(selectedPreset.content);
+      for (const file of selectedPreset.workspace_files) {
+        await putWorkspaceFile(file.name, file.content);
+      }
+      setLiveConfig(selectedPreset.content);
+      setConfig(selectedPreset.content);
+      setSuccess(
+        `${selectedPreset.label} bundle applied live. Configuration, AGENTS.md, and SOUL.md are now in sync.`,
+      );
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to apply preset bundle');
+    } finally {
+      setSaving(false);
+    }
   };
 
   useEffect(() => {
@@ -91,8 +118,8 @@ export default function Config() {
             <h2 className="text-base font-semibold text-white">Configuration</h2>
           </div>
           <p className="max-w-3xl text-sm text-gray-400">
-            Toggle between a safer preset and an escalated local operator profile, then edit the
-            raw TOML directly before saving.
+            Toggle between a safer autonomous bundle and an escalated God bundle, then edit the
+            raw TOML directly or apply the full runtime preset live.
           </p>
         </div>
 
@@ -175,12 +202,13 @@ export default function Config() {
           <div className="min-w-[280px] rounded-xl border border-gray-800 bg-gray-950/80 p-4">
             <p className="text-sm font-medium text-white">Preset controls</p>
             <p className="mt-1 text-sm text-gray-400">
-              Loading a preset only replaces the editor contents. Nothing is applied live until
-              you press Save.
+              Loading a preset only replaces the editor contents. Apply Live also syncs the
+              preset&apos;s AGENTS.md and SOUL.md bundle into the workspace.
             </p>
             <button
               type="button"
               onClick={handleApplyPreset}
+              disabled={saving}
               className={[
                 'mt-4 w-full rounded-lg px-4 py-2 text-sm font-semibold transition-colors',
                 presetMode === 'safe'
@@ -190,6 +218,29 @@ export default function Config() {
             >
               Load {selectedPreset.label} Into Editor
             </button>
+            <button
+              type="button"
+              onClick={handleApplyPresetLive}
+              disabled={saving}
+              className="mt-3 w-full rounded-lg border border-gray-700 bg-gray-900 px-4 py-2 text-sm font-semibold text-white transition-colors hover:border-gray-600 hover:bg-gray-800 disabled:opacity-50"
+            >
+              Apply {selectedPreset.label} Live
+            </button>
+            <div className="mt-4 rounded-lg border border-gray-800 bg-gray-950 px-3 py-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500">
+                Runtime Bundle
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {selectedPreset.workspace_files.map((file) => (
+                  <span
+                    key={file.name}
+                    className="rounded-full border border-gray-700 bg-gray-900 px-3 py-1 text-xs text-gray-300"
+                  >
+                    {file.name}
+                  </span>
+                ))}
+              </div>
+            </div>
             <div className="mt-4 flex items-center justify-between text-xs text-gray-500">
               <span>{lineCount} lines in editor</span>
               <span>{isDirty ? 'unsaved changes' : 'synced to live config'}</span>
@@ -230,7 +281,8 @@ export default function Config() {
               TOML Configuration
             </span>
             <p className="mt-1 text-xs text-gray-500">
-              Safe keeps approvals tighter. God widens budgets and system reach.
+              Safe stays autonomous inside tighter guardrails. God widens budgets, system reach,
+              and persona aggression.
             </p>
           </div>
           <span className="text-xs text-gray-500">{lineCount} lines</span>

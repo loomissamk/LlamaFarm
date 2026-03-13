@@ -18,7 +18,7 @@ export interface WebSocketClientOptions {
 }
 
 export interface SeedChatMessage {
-  role: 'user' | 'assistant' | 'agent';
+  role: 'user' | 'assistant' | 'agent' | 'tool';
   content: string;
 }
 

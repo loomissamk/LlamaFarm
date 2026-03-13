@@ -11,7 +11,7 @@
 # change the Ollama URL below to `http://127.0.0.1:11434`.
 api_url = "http://host.docker.internal:11434"
 default_provider = "ollama"
-default_model = "devstral-small-2:latest"
+default_model = "qwen3.5:9b"
 default_temperature = 0.2
 model_support_vision = true
 
@@ -24,11 +24,11 @@ request_timeout_secs = 300
 
 [agent]
 compact_context = false
-max_tool_iterations = 256
-max_history_messages = 120
+max_tool_iterations = 512
+max_history_messages = 160
 parallel_tools = false
-# Devstral via Ollama is more reliable with the XML dispatcher than native
-# function-calling in this local stack.
+# Local Ollama models on this machine are still more reliable with the XML
+# dispatcher than native function-calling in this stack.
 tool_dispatcher = "xml"
 
 [autonomy]
@@ -42,6 +42,7 @@ allowed_commands = [
   "awk",
   "bash",
   "basename",
+  "bpftrace",
   "cargo",
   "cat",
   "chmod",
@@ -64,6 +65,7 @@ allowed_commands = [
   "du",
   "echo",
   "env",
+  "ethtool",
   "fdisk",
   "file",
   "find",
@@ -72,6 +74,8 @@ allowed_commands = [
   "g++",
   "gcc",
   "gdb",
+  "getent",
+  "getfacl",
   "git",
   "go",
   "gradle",
@@ -82,6 +86,8 @@ allowed_commands = [
   "htop",
   "ip",
   "iostat",
+  "ip6tables",
+  "iptables",
   "jq",
   "java",
   "javac",
@@ -90,6 +96,7 @@ allowed_commands = [
   "killall",
   "ln",
   "lldb",
+  "losetup",
   "ls",
   "lsblk",
   "lsmod",
@@ -97,6 +104,7 @@ allowed_commands = [
   "lsusb",
   "lspci",
   "make",
+  "mdadm",
   "meson",
   "mkfs",
   "mkfs.ext4",
@@ -107,6 +115,7 @@ allowed_commands = [
   "mv",
   "mvn",
   "netstat",
+  "nft",
   "ninja",
   "node",
   "npm",
@@ -132,26 +141,35 @@ allowed_commands = [
   "ruby",
   "rsync",
   "rustc",
+  "scp",
   "sed",
+  "setfacl",
   "sh",
+  "sfdisk",
   "smartctl",
+  "socat",
   "sqlite3",
   "sort",
   "ss",
   "stat",
   "strace",
   "strings",
+  "ssh",
   "sysctl",
   "systemctl",
   "systemd-analyze",
   "tail",
   "tar",
+  "tcpdump",
   "tee",
   "timeout",
+  "tmux",
   "top",
   "touch",
+  "tr",
   "traceroute",
   "udevadm",
+  "ufw",
   "uname",
   "uniq",
   "umount",
@@ -161,6 +179,7 @@ allowed_commands = [
   "wget",
   "wipefs",
   "whoami",
+  "xfs_repair",
   "xargs",
   "yarn",
 ]
@@ -171,7 +190,6 @@ forbidden_paths = [
   "/boot",
   "/dev",
   "/efi",
-  "/etc",
   "/lib",
   "/lib64",
   "/lib/modules",
@@ -181,21 +199,20 @@ forbidden_paths = [
   "/sbin",
   "/snap",
   "/sys",
-  "/tmp",
-  "/usr",
   "/usr/lib/firmware",
   "/usr/lib/modules",
-  "/var",
   "~/.aws",
   "~/.config",
   "~/.gnupg",
   "~/.ssh",
 ]
-max_actions_per_hour = 50000
-max_cost_per_day_cents = 500000
+max_actions_per_hour = 200000
+max_cost_per_day_cents = 2000000
 require_approval_for_medium_risk = false
 block_high_risk_commands = false
-shell_redirect_policy = "strip"
+# God mode allows shell redirects after path validation so local Ollama models
+# can create files with `echo > file`, `cat > file << 'EOF'`, and similar flows.
+shell_redirect_policy = "allow"
 shell_env_passthrough = [
   "CUDA_VISIBLE_DEVICES",
   "DOCKER_HOST",
@@ -284,7 +301,7 @@ timeout_secs = 20
 enabled = true
 trigger = "keywords"
 keywords = ["check", "compare", "find", "how", "inspect", "investigate", "search", "show", "where", "why"]
-max_iterations = 12
+max_iterations = 16
 show_progress = true
 
 [skills]
@@ -300,9 +317,9 @@ db_path = "~/.llamafarm/agents.db"
 staleness_secs = 600
 
 [security.resources]
-max_memory_mb = 8192
-max_cpu_time_seconds = 3600
-max_subprocesses = 128
+max_memory_mb = 16384
+max_cpu_time_seconds = 7200
+max_subprocesses = 256
 memory_monitoring = true
 
 [security.audit]
@@ -354,7 +371,7 @@ model = "qwen2.5-coder:14b"
 [[model_routes]]
 hint = "operator"
 provider = "ollama"
-model = "qwen2.5-coder:14b"
+model = "qwen3.5:9b"
 
 [agents.planner]
 provider = "ollama"
@@ -374,7 +391,7 @@ allowed_tools = [
   "web_fetch",
   "web_search_tool",
 ]
-max_iterations = 16
+max_iterations = 24
 
 [agents.coder]
 provider = "ollama"
@@ -394,7 +411,7 @@ allowed_tools = [
   "process",
   "shell",
 ]
-max_iterations = 24
+max_iterations = 48
 
 [agents.verifier]
 provider = "ollama"
@@ -413,11 +430,11 @@ allowed_tools = [
   "shell",
   "web_fetch",
 ]
-max_iterations = 16
+max_iterations = 24
 
 [agents.operator]
 provider = "ollama"
-model = "qwen2.5-coder:14b"
+model = "qwen3.5:9b"
 temperature = 0.1
 max_depth = 2
 agentic = true
@@ -442,4 +459,4 @@ allowed_tools = [
   "shell",
   "web_fetch",
 ]
-max_iterations = 20
+max_iterations = 32

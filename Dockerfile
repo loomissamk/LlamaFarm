@@ -71,7 +71,7 @@ workspace_dir = "/llamafarm-data/workspace"
 config_path = "/llamafarm-data/.llamafarm/config.toml"
 api_url = "http://host.docker.internal:11434"
 default_provider = "ollama"
-default_model = "llama3.2"
+default_model = "qwen3.5:9b"
 default_temperature = 0.7
 
 [gateway]
@@ -84,20 +84,32 @@ EOF
 # ── Stage 2: Development Runtime (Debian) ────────────────────
 FROM debian:trixie-slim@sha256:f6e2cfac5cf956ea044b4bd75e6397b4372ad88fe00908045e9a0d21712ae3ba AS dev
 
-# Install essential runtime dependencies only (use docker-compose.override.yml for dev tools)
+# Install the local engineering runtime toolchain used by the God/Safe profiles.
 RUN apt-get update && apt-get install -y \
     bash \
+    build-essential \
     ca-certificates \
+    cmake \
     curl \
     file \
     git \
     iproute2 \
     iputils-ping \
     jq \
+    make \
     net-tools \
+    nodejs \
+    npm \
     pciutils \
     procps \
+    pkg-config \
+    python-is-python3 \
+    python3 \
+    python3-pip \
+    python3-venv \
     ripgrep \
+    rsync \
+    sqlite3 \
     util-linux \
     usbutils \
     wget \
@@ -107,8 +119,10 @@ COPY --from=builder /llamafarm-data /llamafarm-data
 COPY --from=builder /app/llamafarm /usr/local/bin/llamafarm
 COPY dev/config.template.toml /usr/share/llamafarm/config.template.toml
 COPY dev/config.preset.safe.toml /usr/share/llamafarm/config.preset.safe.toml
-COPY AGENTS.md /usr/share/llamafarm/AGENTS.md
-COPY SOUL.md /usr/share/llamafarm/SOUL.md
+COPY dev/workspace.preset.god.AGENTS.md /usr/share/llamafarm/workspace.preset.god.AGENTS.md
+COPY dev/workspace.preset.god.SOUL.md /usr/share/llamafarm/workspace.preset.god.SOUL.md
+COPY dev/workspace.preset.safe.AGENTS.md /usr/share/llamafarm/workspace.preset.safe.AGENTS.md
+COPY dev/workspace.preset.safe.SOUL.md /usr/share/llamafarm/workspace.preset.safe.SOUL.md
 COPY scripts/docker/dev-entrypoint.sh /usr/local/bin/dev-entrypoint.sh
 RUN chmod 755 /usr/local/bin/dev-entrypoint.sh && \
     chmod 644 /usr/share/llamafarm/config.template.toml /usr/share/llamafarm/config.preset.safe.toml && \
@@ -136,8 +150,10 @@ COPY --from=builder /app/llamafarm /usr/local/bin/llamafarm
 COPY --from=builder /llamafarm-data /llamafarm-data
 COPY dev/config.template.toml /usr/share/llamafarm/config.template.toml
 COPY dev/config.preset.safe.toml /usr/share/llamafarm/config.preset.safe.toml
-COPY AGENTS.md /usr/share/llamafarm/AGENTS.md
-COPY SOUL.md /usr/share/llamafarm/SOUL.md
+COPY dev/workspace.preset.god.AGENTS.md /usr/share/llamafarm/workspace.preset.god.AGENTS.md
+COPY dev/workspace.preset.god.SOUL.md /usr/share/llamafarm/workspace.preset.god.SOUL.md
+COPY dev/workspace.preset.safe.AGENTS.md /usr/share/llamafarm/workspace.preset.safe.AGENTS.md
+COPY dev/workspace.preset.safe.SOUL.md /usr/share/llamafarm/workspace.preset.safe.SOUL.md
 
 # Environment setup
 ENV LLAMAFARM_WORKSPACE=/llamafarm-data/workspace

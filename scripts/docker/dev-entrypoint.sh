@@ -5,8 +5,8 @@ DATA_DIR="/llamafarm-data"
 CONFIG_DIR="$DATA_DIR/.llamafarm"
 WORKSPACE_DIR="$DATA_DIR/workspace"
 CONFIG_TEMPLATE="/usr/share/llamafarm/config.template.toml"
-DEFAULT_AGENTS="/usr/share/llamafarm/AGENTS.md"
-DEFAULT_SOUL="/usr/share/llamafarm/SOUL.md"
+DEFAULT_AGENTS="/usr/share/llamafarm/workspace.preset.god.AGENTS.md"
+DEFAULT_SOUL="/usr/share/llamafarm/workspace.preset.god.SOUL.md"
 
 ensure_runtime_layout() {
   mkdir -p "$CONFIG_DIR" "$WORKSPACE_DIR"

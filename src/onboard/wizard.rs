@@ -729,7 +729,7 @@ fn default_model_for_provider(provider: &str) -> String {
         "minimax" => "MiniMax-M2.5".into(),
         "qwen" => "qwen-plus".into(),
         "qwen-code" => "qwen3-coder-plus".into(),
-        "ollama" => "llama3.2".into(),
+        "ollama" => "qwen3.5:9b".into(),
         "llamacpp" => "ggml-org/gpt-oss-20b-GGUF".into(),
         "sglang" | "vllm" | "osaurus" => "default".into(),
         "gemini" => "gemini-2.5-pro".into(),
@@ -1076,12 +1076,18 @@ fn curated_models_for_provider(provider_name: &str) -> Vec<(String, String)> {
         ],
         "ollama" => vec![
             (
-                "llama3.2".to_string(),
-                "Llama 3.2 (recommended local)".to_string(),
+                "qwen3.5:9b".to_string(),
+                "Qwen 3.5 9B (recommended local default)".to_string(),
             ),
-            ("mistral".to_string(), "Mistral 7B".to_string()),
-            ("codellama".to_string(), "Code Llama".to_string()),
-            ("phi3".to_string(), "Phi-3 (small, fast)".to_string()),
+            (
+                "qwen2.5-coder:14b".to_string(),
+                "Qwen 2.5 Coder 14B (recommended local coding model)".to_string(),
+            ),
+            (
+                "devstral-small-2:latest".to_string(),
+                "Devstral Small 2 (agentic local alternative)".to_string(),
+            ),
+            ("llama3.2".to_string(), "Llama 3.2 (fallback local)".to_string()),
         ],
         "llamacpp" => vec![
             (
@@ -6708,6 +6714,7 @@ mod tests {
         assert_eq!(default_model_for_provider("qwen"), "qwen-plus");
         assert_eq!(default_model_for_provider("qwen-intl"), "qwen-plus");
         assert_eq!(default_model_for_provider("qwen-code"), "qwen3-coder-plus");
+        assert_eq!(default_model_for_provider("ollama"), "qwen3.5:9b");
         assert_eq!(default_model_for_provider("glm-cn"), "glm-5");
         assert_eq!(default_model_for_provider("minimax-cn"), "MiniMax-M2.5");
         assert_eq!(default_model_for_provider("zai-cn"), "glm-5");

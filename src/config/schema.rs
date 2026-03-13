@@ -2358,6 +2358,7 @@ pub struct AutonomyConfig {
     ///
     /// - `block` (default): reject unquoted redirects.
     /// - `strip`: normalize common stderr/null redirects before execution.
+    /// - `allow`: permit redirects after workspace/path validation (used by God mode).
     #[serde(default)]
     pub shell_redirect_policy: ShellRedirectPolicy,
 
@@ -7264,7 +7265,7 @@ default_temperature = 0.7
                 max_cost_per_day_cents: 1000,
                 require_approval_for_medium_risk: false,
                 block_high_risk_commands: true,
-                shell_redirect_policy: ShellRedirectPolicy::Strip,
+                shell_redirect_policy: ShellRedirectPolicy::Allow,
                 shell_env_passthrough: vec!["DATABASE_URL".into()],
                 auto_approve: vec!["file_read".into()],
                 always_ask: vec![],

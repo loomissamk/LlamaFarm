@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 
 /// A single message in a conversation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ChatMessage {
     pub role: String,
     pub content: String,

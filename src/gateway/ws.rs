@@ -23,11 +23,13 @@ use axum::{
     response::IntoResponse,
 };
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
     collections::HashMap,
+    path::{Path, PathBuf},
     sync::LazyLock,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use uuid::Uuid;
 
@@ -35,8 +37,12 @@ const EMPTY_WS_RESPONSE_FALLBACK: &str =
     "Tool execution completed, but the model returned no final text response. Please ask me to summarize the result.";
 const WS_AUTOSAVE_MIN_MESSAGE_CHARS: usize = 20;
 const WS_CHAT_SUBPROTOCOL: &str = "llamafarm.v1";
+const WS_CHAT_STORE_REL_PATH: &str = "state/web-chat-sessions.json";
+const WS_PERSISTED_MAX_MESSAGES: usize = 800;
+const WS_PERSISTED_MAX_SESSIONS: usize = 64;
+const WS_RESTORED_CONTEXT_PREFIX: &str = "[Saved chat context restored]";
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct WsChatSession {
     history: Vec<ChatMessage>,
     temporary: bool,
@@ -44,6 +50,20 @@ struct WsChatSession {
 
 static WS_CHAT_SESSIONS: LazyLock<Mutex<HashMap<String, WsChatSession>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct PersistedWsChatSessions {
+    #[serde(default)]
+    sessions: HashMap<String, PersistedWsChatSession>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct PersistedWsChatSession {
+    #[serde(default)]
+    history: Vec<ChatMessage>,
+    #[serde(default)]
+    updated_at_unix: u64,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum WsDeltaEvent {
@@ -87,6 +107,7 @@ fn parse_seed_history(value: Option<&serde_json::Value>) -> Vec<ChatMessage> {
             let normalized_role = match role {
                 "assistant" | "agent" => "assistant",
                 "user" => "user",
+                "tool" => "tool",
                 _ => return None,
             };
 
@@ -98,38 +119,220 @@ fn parse_seed_history(value: Option<&serde_json::Value>) -> Vec<ChatMessage> {
         .collect()
 }
 
-fn load_ws_chat_history(
+fn resolve_ws_chat_store_path(config: &crate::config::Config) -> PathBuf {
+    config
+        .config_path
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| config.workspace_dir.clone())
+        .join(WS_CHAT_STORE_REL_PATH)
+}
+
+fn current_unix_timestamp_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default()
+}
+
+fn normalize_ws_history_for_storage(history: &[ChatMessage]) -> Vec<ChatMessage> {
+    let mut normalized: Vec<ChatMessage> = history
+        .iter()
+        .filter(|message| message.role != "system")
+        .filter_map(|message| {
+            if message.content.trim().is_empty() {
+                None
+            } else {
+                Some(message.clone())
+            }
+        })
+        .collect();
+
+    if normalized.len() > WS_PERSISTED_MAX_MESSAGES {
+        let keep_from = normalized.len() - WS_PERSISTED_MAX_MESSAGES;
+        normalized.drain(..keep_from);
+    }
+
+    normalized
+}
+
+fn select_resume_history(
+    history_seed: &[ChatMessage],
+    persisted_history: &[ChatMessage],
+) -> Vec<ChatMessage> {
+    let seeded = normalize_ws_history_for_storage(history_seed);
+    let persisted = normalize_ws_history_for_storage(persisted_history);
+
+    match seeded.len().cmp(&persisted.len()) {
+        std::cmp::Ordering::Greater => seeded,
+        std::cmp::Ordering::Less => persisted,
+        std::cmp::Ordering::Equal if !seeded.is_empty() => seeded,
+        std::cmp::Ordering::Equal => persisted,
+    }
+}
+
+async fn read_persisted_ws_chat_sessions(path: &Path) -> PersistedWsChatSessions {
+    let Ok(bytes) = tokio::fs::read(path).await else {
+        return PersistedWsChatSessions::default();
+    };
+    if bytes.is_empty() {
+        return PersistedWsChatSessions::default();
+    }
+
+    match serde_json::from_slice::<PersistedWsChatSessions>(&bytes) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            tracing::warn!(path = %path.display(), error = %error, "failed to parse persisted ws chat sessions");
+            PersistedWsChatSessions::default()
+        }
+    }
+}
+
+async fn write_persisted_ws_chat_sessions(
+    path: &Path,
+    sessions: &PersistedWsChatSessions,
+) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+
+    let tmp = path.with_extension("json.tmp");
+    let data = serde_json::to_vec_pretty(sessions)?;
+    tokio::fs::write(&tmp, data).await?;
+    tokio::fs::rename(&tmp, path).await?;
+    Ok(())
+}
+
+async fn persist_ws_chat_session(store_path: &Path, session_id: &str, history: &[ChatMessage]) {
+    let mut persisted = read_persisted_ws_chat_sessions(store_path).await;
+    persisted.sessions.insert(
+        session_id.to_string(),
+        PersistedWsChatSession {
+            history: normalize_ws_history_for_storage(history),
+            updated_at_unix: current_unix_timestamp_secs(),
+        },
+    );
+
+    if persisted.sessions.len() > WS_PERSISTED_MAX_SESSIONS {
+        let mut ordered: Vec<(String, u64)> = persisted
+            .sessions
+            .iter()
+            .map(|(session_id, session)| (session_id.clone(), session.updated_at_unix))
+            .collect();
+        ordered.sort_by_key(|(_, updated_at_unix)| *updated_at_unix);
+
+        let remove_count = persisted.sessions.len() - WS_PERSISTED_MAX_SESSIONS;
+        for (session_id, _) in ordered.into_iter().take(remove_count) {
+            persisted.sessions.remove(&session_id);
+        }
+    }
+
+    if let Err(error) = write_persisted_ws_chat_sessions(store_path, &persisted).await {
+        tracing::warn!(path = %store_path.display(), error = %error, "failed to persist ws chat session");
+    }
+}
+
+async fn delete_persisted_ws_chat_session(store_path: &Path, session_id: &str) {
+    let mut persisted = read_persisted_ws_chat_sessions(store_path).await;
+    if persisted.sessions.remove(session_id).is_none() {
+        return;
+    }
+
+    if let Err(error) = write_persisted_ws_chat_sessions(store_path, &persisted).await {
+        tracing::warn!(path = %store_path.display(), error = %error, "failed to delete persisted ws chat session");
+    }
+}
+
+async fn load_ws_chat_history(
     session_id: &str,
     temporary: bool,
     history_seed: &[ChatMessage],
+    store_path: &Path,
 ) -> Vec<ChatMessage> {
-    let mut sessions = WS_CHAT_SESSIONS.lock();
-    let entry = sessions.entry(session_id.to_string()).or_insert_with(|| WsChatSession {
-        history: history_seed.to_vec(),
-        temporary,
-    });
+    let seeded_history = normalize_ws_history_for_storage(history_seed);
+    let existing = {
+        let mut sessions = WS_CHAT_SESSIONS.lock();
+        if let Some(entry) = sessions.get_mut(session_id) {
+            entry.temporary = temporary;
+            let merged = select_resume_history(&seeded_history, &entry.history);
+            let changed = merged != entry.history;
+            if changed {
+                entry.history = merged.clone();
+            }
+            Some((entry.history.clone(), changed && !temporary))
+        } else {
+            None
+        }
+    };
 
-    if entry.history.is_empty() && !history_seed.is_empty() {
-        entry.history = history_seed.to_vec();
+    if let Some((history, should_persist)) = existing {
+        if should_persist {
+            persist_ws_chat_session(store_path, session_id, &history).await;
+        }
+        return history;
+    }
+
+    let persisted_history = if temporary {
+        Vec::new()
+    } else {
+        let mut persisted = read_persisted_ws_chat_sessions(store_path).await;
+        persisted
+            .sessions
+            .remove(session_id)
+            .map(|session| session.history)
+            .unwrap_or_default()
+    };
+    let initial_history = if seeded_history.is_empty() && !persisted_history.is_empty() {
+        build_restored_ws_chat_history(&persisted_history)
+    } else {
+        select_resume_history(&seeded_history, &persisted_history)
+    };
+
+    let mut sessions = WS_CHAT_SESSIONS.lock();
+    let entry = sessions
+        .entry(session_id.to_string())
+        .or_insert_with(|| WsChatSession {
+            history: initial_history.clone(),
+            temporary,
+        });
+
+    if entry.history.is_empty() && !initial_history.is_empty() {
+        entry.history = initial_history;
     }
     entry.temporary = temporary;
     entry.history.clone()
 }
 
-fn store_ws_chat_history(session_id: &str, history: &[ChatMessage], temporary: bool) {
-    let mut sessions = WS_CHAT_SESSIONS.lock();
-    sessions.insert(
-        session_id.to_string(),
-        WsChatSession {
-            history: history.to_vec(),
-            temporary,
-        },
-    );
+async fn store_ws_chat_history(
+    session_id: &str,
+    history: &[ChatMessage],
+    temporary: bool,
+    store_path: &Path,
+) {
+    let normalized = normalize_ws_history_for_storage(history);
+    {
+        let mut sessions = WS_CHAT_SESSIONS.lock();
+        sessions.insert(
+            session_id.to_string(),
+            WsChatSession {
+                history: normalized.clone(),
+                temporary,
+            },
+        );
+    }
+
+    if !temporary {
+        persist_ws_chat_session(store_path, session_id, &normalized).await;
+    }
 }
 
-fn delete_ws_chat_history(session_id: &str) {
-    let mut sessions = WS_CHAT_SESSIONS.lock();
-    sessions.remove(session_id);
+async fn delete_ws_chat_history(session_id: &str, store_path: &Path) {
+    {
+        let mut sessions = WS_CHAT_SESSIONS.lock();
+        sessions.remove(session_id);
+    }
+
+    delete_persisted_ws_chat_session(store_path, session_id).await;
 }
 
 fn sanitize_ws_response(response: &str, tools: &[Box<dyn crate::tools::Tool>]) -> String {
@@ -196,6 +399,112 @@ fn extract_latest_tool_output(history: &[ChatMessage]) -> Option<String> {
     }
 
     None
+}
+
+fn is_restored_context_message(content: &str) -> bool {
+    content.trim_start().starts_with(WS_RESTORED_CONTEXT_PREFIX)
+}
+
+fn is_assistant_tool_call_payload(content: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(content)
+        .ok()
+        .and_then(|value| value.get("tool_calls").cloned())
+        .is_some()
+}
+
+fn extract_latest_assistant_reply(history: &[ChatMessage]) -> Option<String> {
+    history.iter().rev().find_map(|message| {
+        if message.role != "assistant"
+            || is_assistant_tool_call_payload(&message.content)
+            || is_restored_context_message(&message.content)
+        {
+            return None;
+        }
+
+        let trimmed = message.content.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn build_ws_resume_context(history: &[ChatMessage]) -> Option<String> {
+    let latest_user = history.iter().rev().find_map(|message| {
+        if message.role != "user" {
+            return None;
+        }
+
+        let trimmed = message.content.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(crate::util::truncate_with_ellipsis(trimmed, 500))
+        }
+    });
+    let latest_tool_output =
+        extract_latest_tool_output(history).map(|value| crate::util::truncate_with_ellipsis(&value, 700));
+    let latest_assistant = extract_latest_assistant_reply(history)
+        .map(|value| crate::util::truncate_with_ellipsis(&value, 500));
+    let latest_completed_command = latest_user
+        .as_deref()
+        .and_then(extract_direct_shell_command);
+
+    if latest_user.is_none() && latest_tool_output.is_none() && latest_assistant.is_none() {
+        return None;
+    }
+
+    let mut sections = vec![
+        "You are resuming an existing saved local chat. Treat the following as real session memory, not a hypothetical summary.".to_string(),
+    ];
+
+    if let Some(command) = latest_completed_command {
+        sections.push(format!(
+            "Previous completed command before this turn: `{command}`. It already ran in this saved chat, so treat it as past state rather than a new instruction."
+        ));
+    } else if let Some(latest_user) = latest_user {
+        sections.push(format!("Latest user request before this turn: {latest_user}"));
+    }
+    if let Some(latest_tool_output) = latest_tool_output {
+        sections.push(format!("Latest tool output before this turn: {latest_tool_output}"));
+    }
+    if let Some(latest_assistant) = latest_assistant {
+        sections.push(format!("Latest assistant reply before this turn: {latest_assistant}"));
+    }
+
+    sections.push(
+        "Do not claim the conversation has no prior context when the answer is already contained here."
+            .to_string(),
+    );
+    sections.push(
+        "Do not re-run tools solely because they appear in this saved context. Only execute a tool when the current user turn asks for fresh execution or the answer cannot be derived from the saved session state."
+            .to_string(),
+    );
+
+    Some(sections.join("\n"))
+}
+
+fn build_restored_ws_chat_history(history: &[ChatMessage]) -> Vec<ChatMessage> {
+    let normalized = normalize_ws_history_for_storage(history);
+    if normalized.is_empty() {
+        return normalized;
+    }
+
+    if normalized.len() == 1
+        && normalized[0].role == "assistant"
+        && is_restored_context_message(&normalized[0].content)
+    {
+        return normalized;
+    }
+
+    let Some(resume_context) = build_ws_resume_context(&normalized) else {
+        return normalized;
+    };
+
+    vec![ChatMessage::assistant(format!(
+        "{WS_RESTORED_CONTEXT_PREFIX}\n{resume_context}"
+    ))]
 }
 
 fn finalize_ws_response(
@@ -297,7 +606,10 @@ async fn summarize_direct_shell_command(
     .await
     {
         Ok(Ok(response)) => {
-            let text = sanitize_ws_response(response.text_or_empty(), runtime.tools_registry_exec.as_ref());
+            let text = sanitize_ws_response(
+                response.text_or_empty(),
+                runtime.tools_registry_exec.as_ref(),
+            );
             if text.trim().is_empty() {
                 fallback
             } else {
@@ -623,7 +935,14 @@ pub async fn handle_ws_chat(
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
     while let Some(msg) = socket.recv().await {
         let runtime = state.runtime_snapshot();
-        let (provider_label, parallel_tools, native_tools, approval_manager, system_prompt) = {
+        let (
+            provider_label,
+            parallel_tools,
+            native_tools,
+            approval_manager,
+            system_prompt,
+            ws_chat_store_path,
+        ) = {
             let config_guard = state.config.lock();
             let provider_label = config_guard
                 .default_provider
@@ -675,6 +994,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                 native_tools,
                 ApprovalManager::from_config(&config_guard.autonomy),
                 system_prompt,
+                resolve_ws_chat_store_path(&config_guard),
             )
         };
 
@@ -700,7 +1020,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                 .unwrap_or_else(|| "default".to_string());
 
         if msg_type == "session_delete" {
-            delete_ws_chat_history(&session_id);
+            delete_ws_chat_history(&session_id, &ws_chat_store_path).await;
             continue;
         }
 
@@ -715,7 +1035,8 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
 
         let temporary = parsed["temporary"].as_bool().unwrap_or(false);
         let history_seed = parse_seed_history(parsed.get("history_seed"));
-        let mut history = load_ws_chat_history(&session_id, temporary, &history_seed);
+        let mut history =
+            load_ws_chat_history(&session_id, temporary, &history_seed, &ws_chat_store_path).await;
 
         if let Some(first) = history.first_mut() {
             if first.role == "system" {
@@ -725,6 +1046,9 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             }
         } else {
             history.push(ChatMessage::system(&system_prompt));
+        }
+        if let Some(resume_context) = build_ws_resume_context(&history[1..]) {
+            history.insert(1, ChatMessage::system(resume_context));
         }
 
         let history_before_turn = history.clone();
@@ -763,7 +1087,8 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
 
             match result {
                 Ok(response) => {
-                    store_ws_chat_history(&session_id, &history, temporary);
+                    store_ws_chat_history(&session_id, &history, temporary, &ws_chat_store_path)
+                        .await;
                     let done = serde_json::json!({
                         "type": "done",
                         "session_id": session_id,
@@ -778,7 +1103,13 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                     }));
                 }
                 Err(error) => {
-                    store_ws_chat_history(&session_id, &history_before_turn, temporary);
+                    store_ws_chat_history(
+                        &session_id,
+                        &history_before_turn,
+                        temporary,
+                        &ws_chat_store_path,
+                    )
+                    .await;
                     let sanitized = crate::providers::sanitize_api_error(&error.to_string());
                     let err = serde_json::json!({
                         "type": "error",
@@ -849,7 +1180,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                 let safe_response =
                     finalize_ws_response(&response, &history, runtime.tools_registry_exec.as_ref());
                 history.push(ChatMessage::assistant(&safe_response));
-                store_ws_chat_history(&session_id, &history, temporary);
+                store_ws_chat_history(&session_id, &history, temporary, &ws_chat_store_path).await;
 
                 // Send the full response as a done message
                 let done = serde_json::json!({
@@ -867,7 +1198,13 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                 }));
             }
             Err(e) => {
-                store_ws_chat_history(&session_id, &history_before_turn, temporary);
+                store_ws_chat_history(
+                    &session_id,
+                    &history_before_turn,
+                    temporary,
+                    &ws_chat_store_path,
+                )
+                .await;
                 let sanitized = crate::providers::sanitize_api_error(&e.to_string());
                 let err = serde_json::json!({
                     "type": "error",
@@ -921,6 +1258,7 @@ mod tests {
     use crate::tools::{Tool, ToolResult};
     use async_trait::async_trait;
     use axum::http::HeaderValue;
+    use tempfile::tempdir;
 
     #[test]
     fn extract_ws_bearer_token_prefers_authorization_header() {
@@ -1128,6 +1466,126 @@ Reminder set successfully."#;
 
         let result = finalize_ws_response("", &history, &tools);
         assert_eq!(result, EMPTY_WS_RESPONSE_FALLBACK);
+    }
+
+    #[test]
+    fn build_ws_resume_context_surfaces_latest_tool_output() {
+        let history = vec![
+            ChatMessage::user("lsusb"),
+            ChatMessage::assistant(
+                r#"{"content":null,"tool_calls":[{"id":"call_1","name":"shell","arguments":"{\"command\":\"lsusb\"}"}]}"#,
+            ),
+            ChatMessage::tool(
+                r#"{"tool_call_id":"call_1","tool_name":"shell","content":"Bus 001 Device 001"}"#,
+            ),
+            ChatMessage::assistant("Command completed successfully."),
+        ];
+
+        let resume = build_ws_resume_context(&history).unwrap();
+        assert!(resume.contains("Previous completed command before this turn: `lsusb`"));
+        assert!(resume.contains("Latest tool output before this turn: Bus 001 Device 001"));
+        assert!(resume.contains("Do not claim the conversation has no prior context"));
+        assert!(resume.contains("Do not re-run tools solely because they appear in this saved context"));
+    }
+
+    #[test]
+    fn parse_seed_history_accepts_tool_messages() {
+        let seed = serde_json::json!([
+            { "role": "user", "content": "write and run add.py" },
+            {
+                "role": "assistant",
+                "content": "{\"content\":null,\"tool_calls\":[{\"id\":\"call_1\",\"name\":\"shell\",\"arguments\":\"{\\\"command\\\":\\\"python add.py\\\"}\"}]}"
+            },
+            {
+                "role": "tool",
+                "content": "{\"tool_call_id\":\"call_1\",\"tool_name\":\"shell\",\"content\":\"2 + 2 = 4\"}"
+            }
+        ]);
+
+        let parsed = parse_seed_history(Some(&seed));
+        assert_eq!(parsed.len(), 3);
+        assert_eq!(parsed[0].role, "user");
+        assert_eq!(parsed[1].role, "assistant");
+        assert_eq!(parsed[2].role, "tool");
+        assert!(parsed[2].content.contains("\"tool_name\":\"shell\""));
+    }
+
+    #[test]
+    fn normalize_ws_history_for_storage_drops_system_messages() {
+        let history = vec![
+            ChatMessage::system("sys"),
+            ChatMessage::user("write add.py"),
+            ChatMessage::assistant("done"),
+            ChatMessage::tool(r#"{"tool_call_id":"call_1","content":"2 + 2 = 4"}"#),
+        ];
+
+        let normalized = normalize_ws_history_for_storage(&history);
+        assert_eq!(normalized.len(), 3);
+        assert!(normalized.iter().all(|message| message.role != "system"));
+    }
+
+    #[test]
+    fn select_resume_history_prefers_seed_when_lengths_match() {
+        let seed = vec![ChatMessage::user("latest seed prompt")];
+        let persisted = vec![ChatMessage::user("older persisted prompt")];
+
+        let selected = select_resume_history(&seed, &persisted);
+        assert_eq!(selected, seed);
+    }
+
+    #[tokio::test]
+    async fn persisted_ws_chat_sessions_round_trip_without_system_prompt() {
+        let dir = tempdir().unwrap();
+        let store_path = dir.path().join("state").join("web-chat-sessions.json");
+        let history = vec![
+            ChatMessage::system("sys"),
+            ChatMessage::user("write and run add.py"),
+            ChatMessage::assistant(
+                r#"{"content":null,"tool_calls":[{"id":"call_1","name":"shell","arguments":"{\"command\":\"python add.py\"}"}]}"#,
+            ),
+            ChatMessage::tool(
+                r#"{"tool_call_id":"call_1","tool_name":"shell","content":"2 + 2 = 4"}"#,
+            ),
+            ChatMessage::assistant("2 + 2 = 4"),
+        ];
+
+        persist_ws_chat_session(&store_path, "session-a", &history).await;
+
+        let persisted = read_persisted_ws_chat_sessions(&store_path).await;
+        let session = persisted.sessions.get("session-a").unwrap();
+        assert_eq!(session.history.len(), 4);
+        assert!(session
+            .history
+            .iter()
+            .all(|message| message.role != "system"));
+        assert_eq!(session.history.last().unwrap().content, "2 + 2 = 4");
+
+        delete_persisted_ws_chat_session(&store_path, "session-a").await;
+        let after_delete = read_persisted_ws_chat_sessions(&store_path).await;
+        assert!(!after_delete.sessions.contains_key("session-a"));
+    }
+
+    #[test]
+    fn build_restored_ws_chat_history_collapses_raw_tool_trace_into_summary() {
+        let history = vec![
+            ChatMessage::user("lsusb"),
+            ChatMessage::assistant(
+                r#"{"content":null,"tool_calls":[{"id":"call_1","name":"shell","arguments":"{\"command\":\"lsusb\"}"}]}"#,
+            ),
+            ChatMessage::tool(
+                r#"{"tool_call_id":"call_1","tool_name":"shell","content":"Bus 001 Device 001"}"#,
+            ),
+            ChatMessage::assistant("Command completed successfully."),
+        ];
+
+        let restored = build_restored_ws_chat_history(&history);
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].role, "assistant");
+        assert!(restored[0].content.starts_with(WS_RESTORED_CONTEXT_PREFIX));
+        assert!(restored[0]
+            .content
+            .contains("Previous completed command before this turn: `lsusb`"));
+        assert!(restored[0].content.contains("Bus 001 Device 001"));
     }
 
     #[test]

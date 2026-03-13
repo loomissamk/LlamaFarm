@@ -299,7 +299,7 @@ fn default_gateway_model(config: &Config) -> String {
     config
         .default_model
         .clone()
-        .unwrap_or_else(|| "llama3.2".to_string())
+        .unwrap_or_else(|| "qwen3.5:9b".to_string())
 }
 
 fn build_provider_runtime_options(config: &Config) -> providers::ProviderRuntimeOptions {

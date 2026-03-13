@@ -1,3 +1,4 @@
+use crate::agent::loop_::parsing::parse_tool_calls;
 use crate::multimodal;
 use crate::providers::traits::{
     ChatMessage, ChatResponse, Provider, ProviderCapabilities, TokenUsage, ToolCall,
@@ -498,112 +499,31 @@ impl OllamaProvider {
         trimmed
     }
 
-    fn parse_content_tool_calls(&self, content: &str) -> Vec<ToolCall> {
+    fn parse_content_tool_response(&self, content: &str) -> (Option<String>, Vec<ToolCall>) {
         let trimmed = Self::strip_json_code_fence(content);
         if trimmed.is_empty() {
-            return Vec::new();
+            return (None, Vec::new());
         }
 
-        fn parse_one(
-            provider: &OllamaProvider,
-            value: &serde_json::Value,
-            fallback_id: usize,
-        ) -> Option<ToolCall> {
-            let function = value.get("function").unwrap_or(value);
-            let name = function
-                .get("name")
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|name| !name.is_empty())?;
-            let arguments = function
-                .get("arguments")
-                .or_else(|| function.get("parameters"))
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!({}));
-            let wrapped = OllamaToolCall {
-                id: value
-                    .get("id")
-                    .and_then(serde_json::Value::as_str)
-                    .map(ToString::to_string),
-                function: OllamaFunction {
-                    name: name.to_string(),
-                    arguments,
-                },
-            };
-            let (name, args) = provider.extract_tool_name_and_args(&wrapped);
-            Some(ToolCall {
-                id: wrapped
-                    .id
-                    .unwrap_or_else(|| format!("content-tool-call-{fallback_id}")),
-                name,
-                arguments: serde_json::to_string(&args).unwrap_or_else(|_| "{}".to_string()),
+        let (text, parsed_calls) = parse_tool_calls(trimmed);
+        let tool_calls = parsed_calls
+            .into_iter()
+            .enumerate()
+            .map(|(idx, call)| ToolCall {
+                id: call
+                    .tool_call_id
+                    .unwrap_or_else(|| format!("content-tool-call-{idx}")),
+                name: call.name,
+                arguments: serde_json::to_string(&call.arguments)
+                    .unwrap_or_else(|_| "{}".to_string()),
             })
-        }
+            .collect();
 
-        fn parse_value(
-            provider: &OllamaProvider,
-            value: &serde_json::Value,
-            start_idx: usize,
-        ) -> Vec<ToolCall> {
-            let mut calls = Vec::new();
+        (Self::normalize_response_text(text), tool_calls)
+    }
 
-            if let Some(tool_calls) = value
-                .get("tool_calls")
-                .and_then(serde_json::Value::as_array)
-            {
-                for (idx, call) in tool_calls.iter().enumerate() {
-                    if let Some(parsed) = parse_one(provider, call, start_idx + idx) {
-                        calls.push(parsed);
-                    }
-                }
-                return calls;
-            }
-
-            if let Some(call) = parse_one(provider, value, start_idx) {
-                calls.push(call);
-                return calls;
-            }
-
-            if let Some(array) = value.as_array() {
-                for (idx, call) in array.iter().enumerate() {
-                    if let Some(parsed) = parse_one(provider, call, start_idx + idx) {
-                        calls.push(parsed);
-                    }
-                }
-            }
-
-            calls
-        }
-
-        let mut stream =
-            serde_json::Deserializer::from_str(trimmed).into_iter::<serde_json::Value>();
-        let mut parsed_values = Vec::new();
-        while let Some(item) = stream.next() {
-            match item {
-                Ok(value) => parsed_values.push(value),
-                Err(_) => {
-                    parsed_values.clear();
-                    break;
-                }
-            }
-        }
-
-        let mut calls = Vec::new();
-        if !parsed_values.is_empty() {
-            let mut next_idx = 0;
-            for value in &parsed_values {
-                let parsed = parse_value(self, value, next_idx);
-                next_idx += parsed.len().max(1);
-                calls.extend(parsed);
-            }
-            return calls;
-        }
-
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
-            return Vec::new();
-        };
-        calls.extend(parse_value(self, &value, 0));
-        calls
+    fn parse_content_tool_calls(&self, content: &str) -> Vec<ToolCall> {
+        self.parse_content_tool_response(content).1
     }
 }
 
@@ -776,14 +696,15 @@ impl Provider for OllamaProvider {
 
         // Some Ollama models advertise tool support but emit prompt-style JSON
         // tool calls in `message.content` instead of native `message.tool_calls`.
-        let prompt_tool_calls = self.parse_content_tool_calls(&response.message.content);
+        let (prompt_text, prompt_tool_calls) =
+            self.parse_content_tool_response(&response.message.content);
         if !prompt_tool_calls.is_empty() {
             tracing::debug!(
                 "Ollama returned {} prompt-style tool call(s) in content, promoting to native tool calls",
                 prompt_tool_calls.len()
             );
             return Ok(ChatResponse {
-                text: None,
+                text: prompt_text,
                 tool_calls: prompt_tool_calls,
                 usage,
                 reasoning_content: response.message.thinking.clone(),
@@ -1042,6 +963,44 @@ mod tests {
         assert_eq!(calls[0].arguments, r#"{"content":"ok","path":"a.txt"}"#);
         assert_eq!(calls[1].name, "file_read");
         assert_eq!(calls[1].arguments, r#"{"path":"a.txt"}"#);
+    }
+
+    #[test]
+    fn parse_content_tool_calls_handles_bracket_payload() {
+        let provider = OllamaProvider::new(None, None);
+        let calls =
+            provider.parse_content_tool_calls(r#"[TOOL_CALLS]shell[ARGS]{"command":"lsusb"}"#);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(calls[0].arguments, r#"{"command":"lsusb"}"#);
+    }
+
+    #[test]
+    fn parse_content_tool_calls_handles_function_style_call() {
+        let provider = OllamaProvider::new(None, None);
+        let calls = provider.parse_content_tool_calls(r#"shell("lsblk")"#);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(calls[0].arguments, r#"{"command":"lsblk"}"#);
+    }
+
+    #[test]
+    fn parse_content_tool_calls_handles_explicit_tool_header() {
+        let provider = OllamaProvider::new(None, None);
+        let calls = provider.parse_content_tool_calls("tool: shell\ncommand: lsusb");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(calls[0].arguments, r#"{"command":"lsusb"}"#);
+    }
+
+    #[test]
+    fn parse_content_tool_response_preserves_text_around_tool_call() {
+        let provider = OllamaProvider::new(None, None);
+        let (text, calls) = provider.parse_content_tool_response("Running it now.\nshell('lsblk')");
+        assert_eq!(text.as_deref(), Some("Running it now."));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(calls[0].arguments, r#"{"command":"lsblk"}"#);
     }
 
     #[test]

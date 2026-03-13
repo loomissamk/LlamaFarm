@@ -360,6 +360,16 @@ impl Tool for ShellTool {
         let effective_command = self
             .security
             .apply_shell_redirect_policy(&normalized_command);
+        let policy_command = match self.security.command_for_policy_validation(&effective_command) {
+            Ok(command) => command,
+            Err(reason) => {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(reason),
+                });
+            }
+        };
         let approved = args
             .get("approved")
             .and_then(|v| v.as_bool())
@@ -388,7 +398,15 @@ impl Tool for ShellTool {
         }
 
         let working_dir_str = working_dir.to_string_lossy().to_string();
-        if !self.security.is_path_allowed(&working_dir_str) {
+        let working_dir_allowed = if working_dir.is_absolute() {
+            let resolved = working_dir
+                .canonicalize()
+                .unwrap_or_else(|_| working_dir.clone());
+            self.security.is_resolved_path_allowed(&resolved)
+        } else {
+            self.security.is_path_allowed(&working_dir_str)
+        };
+        if !working_dir_allowed {
             return Ok(ToolResult {
                 success: false,
                 output: String::new(),
@@ -399,7 +417,7 @@ impl Tool for ShellTool {
             });
         }
 
-        if let Some(path) = self.security.forbidden_path_argument(&effective_command) {
+        if let Some(path) = self.security.forbidden_path_argument(&policy_command) {
             return Ok(ToolResult {
                 success: false,
                 output: String::new(),
@@ -512,6 +530,8 @@ mod tests {
     use crate::security::{
         AutonomyLevel, SecurityPolicy, ShellRedirectPolicy, SyscallAnomalyDetector,
     };
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use tempfile::TempDir;
 
     fn test_security(autonomy: AutonomyLevel) -> Arc<SecurityPolicy> {
@@ -838,6 +858,57 @@ mod tests {
             .as_deref()
             .unwrap_or("")
             .contains("not allowed"));
+    }
+
+    #[tokio::test]
+    async fn shell_allow_policy_supports_quoted_heredoc_file_creation() {
+        let tmp = TempDir::new().expect("temp dir");
+        let security = Arc::new(SecurityPolicy {
+            autonomy: AutonomyLevel::Supervised,
+            workspace_dir: tmp.path().to_path_buf(),
+            shell_redirect_policy: ShellRedirectPolicy::Allow,
+            ..SecurityPolicy::default()
+        });
+        let tool = ShellTool::new(security, test_runtime());
+
+        let result = tool
+            .execute(json!({"command": "cat > hello.txt << 'EOF'\nhello\nEOF"}))
+            .await
+            .expect("quoted heredoc should execute");
+        assert!(result.success, "{result:?}");
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("hello.txt")).expect("read output file"),
+            "hello\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shell_allows_compound_direct_workspace_script_execution() {
+        let tmp = TempDir::new().expect("temp dir");
+        let script = tmp.path().join("check.sh");
+        std::fs::write(&script, "#!/usr/bin/env bash\necho script-ok\n").expect("write script");
+        let mut perms = std::fs::metadata(&script)
+            .expect("script metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).expect("set executable bit");
+
+        let security = Arc::new(SecurityPolicy {
+            autonomy: AutonomyLevel::Supervised,
+            workspace_dir: tmp.path().to_path_buf(),
+            allowed_commands: vec!["echo".into(), "bash".into(), "sh".into()],
+            ..SecurityPolicy::default()
+        });
+        let tool = ShellTool::new(security, test_runtime());
+
+        let result = tool
+            .execute(json!({"command": "echo preparing && ./check.sh"}))
+            .await
+            .expect("compound script command should execute");
+        assert!(result.success);
+        assert!(result.output.contains("preparing"));
+        assert!(result.output.contains("script-ok"));
     }
 
     fn test_security_with_env_cmd() -> Arc<SecurityPolicy> {

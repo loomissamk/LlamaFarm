@@ -94,7 +94,7 @@ pub fn diagnose_gateway(config: &Config) -> Vec<DiagResult> {
 fn diagnose_with_mode(config: &Config, runtime_mode: RuntimeMode) -> Vec<DiagResult> {
     let mut items: Vec<DiagItem> = Vec::new();
 
-    check_config_semantics(config, &mut items);
+    check_config_semantics(config, runtime_mode, &mut items);
     check_workspace(config, &mut items);
     check_daemon_state(config, runtime_mode, &mut items);
     check_environment(&mut items);
@@ -431,7 +431,7 @@ pub fn run_traces(
 
 // ── Config semantic validation ───────────────────────────────────
 
-fn check_config_semantics(config: &Config, items: &mut Vec<DiagItem>) {
+fn check_config_semantics(config: &Config, runtime_mode: RuntimeMode, items: &mut Vec<DiagItem>) {
     let cat = "config";
 
     // Config file exists
@@ -606,10 +606,15 @@ fn check_config_semantics(config: &Config, items: &mut Vec<DiagItem>) {
 
     if has_channel {
         items.push(DiagItem::ok(cat, "at least one channel configured"));
+    } else if runtime_mode == RuntimeMode::GatewayOnly {
+        items.push(DiagItem::ok(
+            cat,
+            "no external channels configured — local web UI is ready; run `llamafarm onboard --channels-only` only if you want Telegram/Discord/etc.",
+        ));
     } else {
         items.push(DiagItem::warn(
             cat,
-            "no channels configured — run `llamafarm onboard` to set one up",
+            "no channels configured — run `llamafarm onboard --channels-only` to set one up",
         ));
     }
 
@@ -912,7 +917,14 @@ fn check_daemon_state(config: &Config, runtime_mode: RuntimeMode, items: &mut Ve
         }
 
         if channel_count == 0 {
-            items.push(DiagItem::warn(cat, "no channel components tracked yet"));
+            if runtime_mode == RuntimeMode::GatewayOnly {
+                items.push(DiagItem::ok(
+                    cat,
+                    "no external channel components tracked — gateway-only mode is serving the local web UI only",
+                ));
+            } else {
+                items.push(DiagItem::warn(cat, "no channel components tracked yet"));
+            }
         } else if stale > 0 {
             items.push(DiagItem::warn(
                 cat,
@@ -1086,7 +1098,7 @@ mod tests {
         let mut config = Config::default();
         config.default_temperature = 5.0;
         let mut items = Vec::new();
-        check_config_semantics(&config, &mut items);
+        check_config_semantics(&config, RuntimeMode::ExpectDaemonState, &mut items);
         let temp_item = items.iter().find(|i| i.message.contains("temperature"));
         assert!(temp_item.is_some());
         assert_eq!(temp_item.unwrap().severity, Severity::Error);
@@ -1097,7 +1109,7 @@ mod tests {
         let mut config = Config::default();
         config.default_temperature = 0.7;
         let mut items = Vec::new();
-        check_config_semantics(&config, &mut items);
+        check_config_semantics(&config, RuntimeMode::ExpectDaemonState, &mut items);
         let temp_item = items.iter().find(|i| i.message.contains("temperature"));
         assert!(temp_item.is_some());
         assert_eq!(temp_item.unwrap().severity, Severity::Ok);
@@ -1107,10 +1119,22 @@ mod tests {
     fn config_validation_warns_no_channels() {
         let config = Config::default();
         let mut items = Vec::new();
-        check_config_semantics(&config, &mut items);
+        check_config_semantics(&config, RuntimeMode::ExpectDaemonState, &mut items);
         let ch_item = items.iter().find(|i| i.message.contains("channel"));
         assert!(ch_item.is_some());
         assert_eq!(ch_item.unwrap().severity, Severity::Warn);
+    }
+
+    #[test]
+    fn config_validation_accepts_no_external_channels_in_gateway_only_mode() {
+        let config = Config::default();
+        let mut items = Vec::new();
+        check_config_semantics(&config, RuntimeMode::GatewayOnly, &mut items);
+        let ch_item = items
+            .iter()
+            .find(|item| item.message.contains("no external channels configured"));
+        assert!(ch_item.is_some());
+        assert_eq!(ch_item.unwrap().severity, Severity::Ok);
     }
 
     #[test]
@@ -1118,7 +1142,7 @@ mod tests {
         let mut config = Config::default();
         config.default_provider = Some("totally-fake".into());
         let mut items = Vec::new();
-        check_config_semantics(&config, &mut items);
+        check_config_semantics(&config, RuntimeMode::ExpectDaemonState, &mut items);
         let prov_item = items
             .iter()
             .find(|i| i.message.contains("default provider"));
@@ -1131,7 +1155,7 @@ mod tests {
         let mut config = Config::default();
         config.default_provider = Some("custom:".into());
         let mut items = Vec::new();
-        check_config_semantics(&config, &mut items);
+        check_config_semantics(&config, RuntimeMode::ExpectDaemonState, &mut items);
 
         let prov_item = items.iter().find(|item| {
             item.message
@@ -1146,7 +1170,7 @@ mod tests {
         let mut config = Config::default();
         config.default_provider = Some("custom:https://my-api.com".into());
         let mut items = Vec::new();
-        check_config_semantics(&config, &mut items);
+        check_config_semantics(&config, RuntimeMode::ExpectDaemonState, &mut items);
         let prov_item = items.iter().find(|i| i.message.contains("is valid"));
         assert!(prov_item.is_some());
         assert_eq!(prov_item.unwrap().severity, Severity::Ok);
@@ -1157,7 +1181,7 @@ mod tests {
         let mut config = Config::default();
         config.reliability.fallback_providers = vec!["fake-provider".into()];
         let mut items = Vec::new();
-        check_config_semantics(&config, &mut items);
+        check_config_semantics(&config, RuntimeMode::ExpectDaemonState, &mut items);
         let fb_item = items
             .iter()
             .find(|i| i.message.contains("fallback provider"));
@@ -1170,7 +1194,7 @@ mod tests {
         let mut config = Config::default();
         config.reliability.fallback_providers = vec!["custom:".into()];
         let mut items = Vec::new();
-        check_config_semantics(&config, &mut items);
+        check_config_semantics(&config, RuntimeMode::ExpectDaemonState, &mut items);
 
         let fb_item = items.iter().find(|item| {
             item.message
@@ -1191,7 +1215,7 @@ mod tests {
             api_key: None,
         }];
         let mut items = Vec::new();
-        check_config_semantics(&config, &mut items);
+        check_config_semantics(&config, RuntimeMode::ExpectDaemonState, &mut items);
         let route_item = items.iter().find(|i| i.message.contains("empty model"));
         assert!(route_item.is_some());
         assert_eq!(route_item.unwrap().severity, Severity::Warn);
@@ -1209,7 +1233,7 @@ mod tests {
         }];
 
         let mut items = Vec::new();
-        check_config_semantics(&config, &mut items);
+        check_config_semantics(&config, RuntimeMode::ExpectDaemonState, &mut items);
         let route_item = items.iter().find(|item| {
             item.message
                 .contains("embedding route \"semantic\" has empty model")
@@ -1230,7 +1254,7 @@ mod tests {
         }];
 
         let mut items = Vec::new();
-        check_config_semantics(&config, &mut items);
+        check_config_semantics(&config, RuntimeMode::ExpectDaemonState, &mut items);
         let route_item = items
             .iter()
             .find(|item| item.message.contains("uses invalid provider \"groq\""));
@@ -1244,7 +1268,7 @@ mod tests {
         config.memory.embedding_model = "hint:semantic".into();
 
         let mut items = Vec::new();
-        check_config_semantics(&config, &mut items);
+        check_config_semantics(&config, RuntimeMode::ExpectDaemonState, &mut items);
         let route_item = items.iter().find(|item| {
             item.message
                 .contains("no matching [[embedding_routes]] entry exists")
@@ -1322,7 +1346,7 @@ mod tests {
         );
 
         let mut items = Vec::new();
-        check_config_semantics(&config, &mut items);
+        check_config_semantics(&config, RuntimeMode::ExpectDaemonState, &mut items);
 
         let agent_messages: Vec<_> = items
             .iter()
@@ -1363,5 +1387,38 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].severity, Severity::Error);
         assert!(items[0].message.contains("is the daemon running?"));
+    }
+
+    #[test]
+    fn daemon_check_accepts_no_channel_components_in_gateway_only_mode() {
+        let tmp = TempDir::new().unwrap();
+        let mut config = Config::default();
+        config.config_path = tmp.path().join("config.toml");
+
+        let state_file = crate::daemon::state_file_path(&config);
+        std::fs::create_dir_all(state_file.parent().unwrap()).unwrap();
+        std::fs::write(
+            &state_file,
+            serde_json::json!({
+                "updated_at": Utc::now().to_rfc3339(),
+                "components": {
+                    "scheduler": {
+                        "status": "ok",
+                        "last_ok": Utc::now().to_rfc3339()
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let mut items = Vec::new();
+        check_daemon_state(&config, RuntimeMode::GatewayOnly, &mut items);
+
+        let channel_item = items
+            .iter()
+            .find(|item| item.message.contains("no external channel components tracked"));
+        assert!(channel_item.is_some());
+        assert_eq!(channel_item.unwrap().severity, Severity::Ok);
     }
 }

@@ -17,6 +17,10 @@ const MASKED_SECRET: &str = "***MASKED***";
 const WORKSPACE_EDITOR_FILES: &[&str] = &["AGENTS.md", "SOUL.md"];
 const GOD_CONFIG_PRESET_FILE: &str = "config.template.toml";
 const SAFE_CONFIG_PRESET_FILE: &str = "config.preset.safe.toml";
+const GOD_WORKSPACE_AGENTS_PRESET_FILE: &str = "workspace.preset.god.AGENTS.md";
+const GOD_WORKSPACE_SOUL_PRESET_FILE: &str = "workspace.preset.god.SOUL.md";
+const SAFE_WORKSPACE_AGENTS_PRESET_FILE: &str = "workspace.preset.safe.AGENTS.md";
+const SAFE_WORKSPACE_SOUL_PRESET_FILE: &str = "workspace.preset.safe.SOUL.md";
 
 // ── Bearer token auth extractor ─────────────────────────────────
 
@@ -201,7 +205,12 @@ struct IntegrationSettingsPayload {
 
 const OLLAMA_INTEGRATION_ID: &str = "ollama";
 const OLLAMA_INTEGRATION_NAME: &str = "Ollama";
-const OLLAMA_FALLBACK_MODELS: &[&str] = &["llama3.2", "qwen2.5-coder:7b", "phi4"];
+const OLLAMA_FALLBACK_MODELS: &[&str] = &[
+    "qwen3.5:9b",
+    "qwen2.5-coder:14b",
+    "devstral-small-2:latest",
+    "llama3.2",
+];
 
 #[derive(Debug, Default, Clone)]
 struct OllamaDashboardInfo {
@@ -235,12 +244,19 @@ struct ConfigPresetEntry {
     summary: &'static str,
     highlights: Vec<&'static str>,
     content: String,
+    workspace_files: Vec<ConfigPresetWorkspaceFile>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 struct ConfigPresetsPayload {
     safe: ConfigPresetEntry,
     god: ConfigPresetEntry,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ConfigPresetWorkspaceFile {
+    name: &'static str,
+    content: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -279,7 +295,7 @@ fn config_preset_path_candidates(file_name: &str) -> [String; 2] {
     ]
 }
 
-fn load_config_preset(file_name: &str) -> Result<String, String> {
+fn load_preset_file(file_name: &str) -> Result<String, String> {
     let mut last_error = None;
 
     for candidate in config_preset_path_candidates(file_name) {
@@ -829,7 +845,7 @@ pub async fn handle_api_config_presets(
         return e.into_response();
     }
 
-    let safe_content = match load_config_preset(SAFE_CONFIG_PRESET_FILE) {
+    let safe_content = match load_preset_file(SAFE_CONFIG_PRESET_FILE) {
         Ok(content) => content,
         Err(error) => {
             return (
@@ -842,7 +858,7 @@ pub async fn handle_api_config_presets(
         }
     };
 
-    let god_content = match load_config_preset(GOD_CONFIG_PRESET_FILE) {
+    let god_content = match load_preset_file(GOD_CONFIG_PRESET_FILE) {
         Ok(content) => content,
         Err(error) => {
             return (
@@ -855,30 +871,104 @@ pub async fn handle_api_config_presets(
         }
     };
 
+    let safe_workspace_agents = match load_preset_file(SAFE_WORKSPACE_AGENTS_PRESET_FILE) {
+        Ok(content) => content,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("Failed to load Safe AGENTS preset: {error}")
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let safe_workspace_soul = match load_preset_file(SAFE_WORKSPACE_SOUL_PRESET_FILE) {
+        Ok(content) => content,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("Failed to load Safe SOUL preset: {error}")
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let god_workspace_agents = match load_preset_file(GOD_WORKSPACE_AGENTS_PRESET_FILE) {
+        Ok(content) => content,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("Failed to load God AGENTS preset: {error}")
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let god_workspace_soul = match load_preset_file(GOD_WORKSPACE_SOUL_PRESET_FILE) {
+        Ok(content) => content,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("Failed to load God SOUL preset: {error}")
+                })),
+            )
+                .into_response();
+        }
+    };
+
     Json(ConfigPresetsPayload {
         safe: ConfigPresetEntry {
             id: "safe",
             label: "Safe",
-            summary: "Workspace-first supervised autonomy with smaller budgets and approval gates for riskier actions.",
+            summary: "Mostly autonomous local Ollama profile with tighter filesystem reach, lower budgets, and calmer runtime persona files.",
             highlights: vec![
-                "supervised approvals",
+                "default model: qwen3.5:9b",
+                "autonomous inside guardrails",
                 "workspace-only boundaries",
-                "smaller hourly budgets",
-                "web + search still available",
+                "lower budgets than god",
+                "safer AGENTS/SOUL bundle",
             ],
             content: safe_content,
+            workspace_files: vec![
+                ConfigPresetWorkspaceFile {
+                    name: "AGENTS.md",
+                    content: safe_workspace_agents,
+                },
+                ConfigPresetWorkspaceFile {
+                    name: "SOUL.md",
+                    content: safe_workspace_soul,
+                },
+            ],
         },
         god: ConfigPresetEntry {
             id: "god",
             label: "God",
-            summary: "Escalated local operator profile with much larger budgets, broader build/system tooling, and easier expansion into lower-level host access.",
+            summary: "Aggressive local Ollama profile with very large budgets, wider system reach, and a harder-edged persona bundle.",
             highlights: vec![
-                "full autonomy",
-                "much larger iteration budgets",
-                "broader build + system commands",
-                "lower-level access knobs exposed",
+                "default model: qwen3.5:9b",
+                "bigger iteration budgets",
+                "broader build + low-level commands",
+                "redirect + quoted-heredoc shell writes enabled",
+                "aggressive AGENTS/SOUL bundle",
             ],
             content: god_content,
+            workspace_files: vec![
+                ConfigPresetWorkspaceFile {
+                    name: "AGENTS.md",
+                    content: god_workspace_agents,
+                },
+                ConfigPresetWorkspaceFile {
+                    name: "SOUL.md",
+                    content: god_workspace_soul,
+                },
+            ],
         },
     })
     .into_response()
@@ -2363,7 +2453,7 @@ mod tests {
             .expect("ollama update should succeed");
 
         assert_eq!(updated.default_provider.as_deref(), Some("ollama"));
-        assert_eq!(updated.default_model.as_deref(), Some("llama3.2"));
+        assert_eq!(updated.default_model.as_deref(), Some("qwen3.5:9b"));
         assert!(
             updated.api_url.is_none(),
             "switching providers without api_url field should reset stale api_url"
