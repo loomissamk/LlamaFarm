@@ -15,6 +15,8 @@ For first-time setup and quick orientation.
 | Scenario | Command |
 |----------|---------|
 | I have an API key, want fastest setup | `llamafarm onboard --api-key sk-... --provider openrouter` |
+| I want the full local bundle (UI + Ollama + Chromium) | `./scripts/docker/up-bundle.sh` |
+| I want the full local bundle on an NVIDIA gaming box | `./scripts/docker/up-bundle-nvidia.sh` |
 | I want guided prompts | `llamafarm onboard --interactive` |
 | Config exists, just fix channels | `llamafarm onboard --channels-only` |
 | Config exists, I intentionally want full overwrite | `llamafarm onboard --force` |
@@ -27,6 +29,27 @@ For first-time setup and quick orientation.
 - Existing config protection: reruns require explicit confirmation (or `--force` in non-interactive flows)
 - Ollama cloud models (`:cloud`) require a remote `api_url` and API key (for example `api_url = "https://ollama.com"`).
 - Validate environment: `llamafarm status` + `llamafarm doctor`
+
+## Bundled Local Runtime
+
+For the single-container local stack with bundled LlamaFarm, Ollama, and
+Chromium:
+
+```bash
+git clone https://github.com/llamafarm-labs/llamafarm.git
+cd llamafarm
+./scripts/docker/up-bundle.sh
+```
+
+For gaming systems where you want the NVIDIA path explicitly:
+
+```bash
+git clone https://github.com/llamafarm-labs/llamafarm.git
+cd llamafarm
+./scripts/docker/up-bundle-nvidia.sh
+```
+
+Then open `http://127.0.0.1:42617`.
 
 ## Next
 

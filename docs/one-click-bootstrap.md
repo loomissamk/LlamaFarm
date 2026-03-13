@@ -2,7 +2,7 @@
 
 This page defines the fastest supported path to install and initialize LlamaFarm.
 
-Last verified: **March 5, 2026**.
+Last verified: **March 13, 2026**.
 
 ## Option 0: Homebrew (macOS/Linuxbrew)
 
@@ -92,6 +92,51 @@ curl -fsSL https://raw.githubusercontent.com/llamafarm-labs/llamafarm/main/scrip
 This legacy endpoint prefers forwarding to `scripts/bootstrap.sh` and falls back to legacy source install if unavailable in that revision.
 
 If you run Option B outside a repository checkout, the bootstrap script automatically clones a temporary workspace, builds, installs, and then cleans it up.
+
+## Option C: Bundled local runtime (LlamaFarm + Ollama + Chromium)
+
+Use this when you want the full local stack in one Docker container with the
+web UI, internal Ollama runtime, bundled Chromium/chromedriver, and automatic
+model pulls.
+
+Clone the repo, then run:
+
+```bash
+git clone https://github.com/llamafarm-labs/llamafarm.git
+cd llamafarm
+./scripts/docker/up-bundle.sh
+```
+
+The launcher auto-detects the best backend in this order:
+
+1. NVIDIA / CUDA
+2. AMD ROCm
+3. Vulkan (`/dev/dri`)
+4. CPU
+
+For a gaming laptop or desktop where you explicitly want the NVIDIA path:
+
+```bash
+git clone https://github.com/llamafarm-labs/llamafarm.git
+cd llamafarm
+./scripts/docker/up-bundle-nvidia.sh
+```
+
+What this bundled stack does:
+
+1. builds the local `llamafarm-local:bundle` image
+2. starts `LlamaFarm` on `http://127.0.0.1:42617`
+3. starts internal Ollama on `127.0.0.1:11434`
+4. starts internal Chromium WebDriver on `127.0.0.1:9515`
+5. auto-pulls `qwen3.5:9b` and `devstral-small-2:latest`
+
+Useful follow-ups:
+
+```bash
+docker logs -f LlamaFarm
+docker exec LlamaFarm ollama list
+docker exec LlamaFarm sh -lc 'tail -n 80 /tmp/ollama.log'
+```
 
 ## Optional onboarding modes
 

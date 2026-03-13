@@ -11,6 +11,10 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
+# ── Shared Ollama Runtime Bits ───────────────────────────────
+ARG OLLAMA_BASE_IMAGE=ollama/ollama:latest
+FROM ${OLLAMA_BASE_IMAGE} AS ollama_base
+
 # ── Stage 2: Build Rust Binary ────────────────────────────────
 FROM rust:1.93-slim@sha256:7e6fa79cf81be23fd45d857f75f583d80cfdbb11c91fa06180fd747fda37a61d AS builder
 
@@ -143,7 +147,86 @@ EXPOSE 42617
 ENTRYPOINT ["/usr/local/bin/dev-entrypoint.sh"]
 CMD ["llamafarm", "gateway"]
 
-# ── Stage 3: Production Runtime (Distroless) ─────────────────
+# ── Stage 3: Bundled Local Runtime (LlamaFarm + Ollama + Chromium) ──
+FROM debian:trixie-slim@sha256:f6e2cfac5cf956ea044b4bd75e6397b4372ad88fe00908045e9a0d21712ae3ba AS bundle
+
+RUN apt-get update && apt-get install -y \
+    bash \
+    build-essential \
+    ca-certificates \
+    cargo \
+    chromium \
+    chromium-driver \
+    chromium-sandbox \
+    cmake \
+    curl \
+    default-jdk-headless \
+    file \
+    git \
+    golang-go \
+    iproute2 \
+    iputils-ping \
+    jq \
+    make \
+    net-tools \
+    nodejs \
+    npm \
+    pciutils \
+    php-cli \
+    pkg-config \
+    procps \
+    python-is-python3 \
+    python3 \
+    python3-pip \
+    python3-venv \
+    ripgrep \
+    rsync \
+    ruby-full \
+    rustc \
+    sqlite3 \
+    util-linux \
+    usbutils \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /llamafarm-data /llamafarm-data
+COPY --from=builder /app/llamafarm /usr/local/bin/llamafarm
+COPY --from=ollama_base /usr/bin/ollama /usr/bin/ollama
+COPY --from=ollama_base /usr/lib/ollama /usr/lib/ollama
+COPY dev/config.template.toml /usr/share/llamafarm/config.template.toml
+COPY dev/config.preset.safe.toml /usr/share/llamafarm/config.preset.safe.toml
+COPY dev/workspace.preset.god.AGENTS.md /usr/share/llamafarm/workspace.preset.god.AGENTS.md
+COPY dev/workspace.preset.god.SOUL.md /usr/share/llamafarm/workspace.preset.god.SOUL.md
+COPY dev/workspace.preset.safe.AGENTS.md /usr/share/llamafarm/workspace.preset.safe.AGENTS.md
+COPY dev/workspace.preset.safe.SOUL.md /usr/share/llamafarm/workspace.preset.safe.SOUL.md
+COPY scripts/docker/bundle-entrypoint.sh /usr/local/bin/bundle-entrypoint.sh
+RUN chmod 755 /usr/local/bin/bundle-entrypoint.sh /usr/bin/ollama && \
+    ln -sf /usr/bin/ollama /usr/local/bin/ollama && \
+    chmod 644 /usr/share/llamafarm/config.template.toml /usr/share/llamafarm/config.preset.safe.toml && \
+    sed -i \
+      -e 's|http://host.docker.internal:11434|http://127.0.0.1:11434|g' \
+      -e 's|http://chromium:4444|http://127.0.0.1:9515|g' \
+      -e 's|qwen2.5-coder:14b|devstral-small-2:latest|g' \
+      /usr/share/llamafarm/config.template.toml /usr/share/llamafarm/config.preset.safe.toml && \
+    sed -i '/native_webdriver_url =/a native_chrome_path = "/usr/bin/chromium"' \
+      /usr/share/llamafarm/config.template.toml /usr/share/llamafarm/config.preset.safe.toml && \
+    rm -f /llamafarm-data/.llamafarm/config.toml
+
+ENV LLAMAFARM_WORKSPACE=/llamafarm-data/workspace
+ENV HOME=/llamafarm-data
+ENV SHELL=/bin/bash
+ENV CHROME_BIN=/usr/bin/chromium
+ENV OLLAMA_HOST=127.0.0.1:11434
+ENV OLLAMA_MODELS=/llamafarm-data/.ollama/models
+ENV LLAMAFARM_GATEWAY_PORT=42617
+
+WORKDIR /llamafarm-data
+USER 0:0
+EXPOSE 42617
+ENTRYPOINT ["/usr/local/bin/bundle-entrypoint.sh"]
+CMD ["llamafarm", "gateway"]
+
+# ── Stage 4: Production Runtime (Distroless) ─────────────────
 FROM gcr.io/distroless/cc-debian13:nonroot@sha256:84fcd3c223b144b0cb6edc5ecc75641819842a9679a3a58fd6294bec47532bf7 AS release
 
 COPY --from=builder /app/llamafarm /usr/local/bin/llamafarm
