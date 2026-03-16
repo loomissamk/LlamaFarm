@@ -10,6 +10,7 @@
 # Fallback:
 #   docker compose -f docker-compose.bundle.yml up -d --build
 #   open http://127.0.0.1:42617
+#   or set HOST_BIND_IP=0.0.0.0 for LAN access
 
 name: llamafarm-bundle
 
@@ -31,13 +32,21 @@ services:
       - LLAMAFARM_GATEWAY_HOST=0.0.0.0
       - LLAMAFARM_REQUIRE_PAIRING=false
       - LLAMAFARM_GATEWAY_PORT=${LLAMAFARM_GATEWAY_PORT:-42617}
+      - LLAMAFARM_RUNTIME_UID=${LLAMAFARM_RUNTIME_UID:-65534}
+      - LLAMAFARM_RUNTIME_GID=${LLAMAFARM_RUNTIME_GID:-65534}
       - OLLAMA_PULL_MODELS=${OLLAMA_PULL_MODELS:-qwen3.5:9b,devstral-small-2:latest,devstral-2:123b-cloud}
 
     volumes:
       - llamafarm-bundle-data:/llamafarm-data
+      # Mirror common host paths so the local-first bundle can work directly
+      # against the operator's files and attached storage.
+      - ${HOME}:${HOME}
+      - /srv:/srv
+      - /mnt:/mnt
+      - /media:/media
 
     ports:
-      - "127.0.0.1:${HOST_PORT:-42617}:${LLAMAFARM_GATEWAY_PORT:-42617}"
+      - "${HOST_BIND_IP:-127.0.0.1}:${HOST_PORT:-42617}:${LLAMAFARM_GATEWAY_PORT:-42617}"
 
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:${LLAMAFARM_GATEWAY_PORT:-42617}/health >/dev/null && curl -fsS http://127.0.0.1:11434/api/tags >/dev/null && curl -fsS http://127.0.0.1:9515/status >/dev/null"]

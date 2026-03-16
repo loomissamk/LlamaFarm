@@ -172,9 +172,26 @@ monitor_children() {
 }
 
 if [ "$(id -u)" = "0" ]; then
+  target_uid="${LLAMAFARM_RUNTIME_UID:-65534}"
+  target_gid="${LLAMAFARM_RUNTIME_GID:-65534}"
+
+  case "$target_uid" in
+    ''|*[!0-9]*)
+      echo "LLAMAFARM_RUNTIME_UID must be numeric, got: $target_uid" >&2
+      exit 1
+      ;;
+  esac
+
+  case "$target_gid" in
+    ''|*[!0-9]*)
+      echo "LLAMAFARM_RUNTIME_GID must be numeric, got: $target_gid" >&2
+      exit 1
+      ;;
+  esac
+
   ensure_runtime_layout
-  chown -R 65534:65534 "$DATA_DIR"
-  drop_args=(--reuid=65534 --regid=65534)
+  chown -R "$target_uid:$target_gid" "$DATA_DIR"
+  drop_args=(--reuid="$target_uid" --regid="$target_gid")
   if [ -n "${LLAMAFARM_SUPP_GROUPS:-}" ]; then
     drop_args+=(--groups "${LLAMAFARM_SUPP_GROUPS}")
   else

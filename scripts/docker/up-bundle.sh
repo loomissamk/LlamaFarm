@@ -6,6 +6,8 @@ BASE_COMPOSE="$ROOT_DIR/docker-compose.bundle.yml"
 GPU_MODE="${LLAMAFARM_GPU_MODE:-auto}"
 DEFAULT_PULL_MODELS="qwen3.5:9b,devstral-small-2:latest,devstral-2:123b-cloud"
 TMP_OVERRIDE=""
+RUNTIME_UID="${LLAMAFARM_RUNTIME_UID:-$(id -u)}"
+RUNTIME_GID="${LLAMAFARM_RUNTIME_GID:-$(id -g)}"
 
 cleanup() {
   if [ -n "$TMP_OVERRIDE" ] && [ -f "$TMP_OVERRIDE" ]; then
@@ -84,7 +86,13 @@ resolve_backend() {
 
 collect_group_ids() {
   local ids=()
+  local gid
   local candidate
+
+  for gid in $(id -G 2>/dev/null); do
+    ids+=("$gid")
+  done
+
   for candidate in /dev/dri/renderD* /dev/dri/card* /dev/kfd /dev/accel/*; do
     [ -e "$candidate" ] || continue
     ids+=("$(stat -c '%g' "$candidate")")
@@ -173,9 +181,12 @@ mapfile -t GROUP_IDS < <(collect_group_ids)
 write_override "$BACKEND" "$EXPOSE_DRI" "$EXPOSE_KFD" "$EXPOSE_ACCEL" "${GROUP_IDS[@]}"
 
 export OLLAMA_PULL_MODELS="${OLLAMA_PULL_MODELS:-$DEFAULT_PULL_MODELS}"
+export LLAMAFARM_RUNTIME_UID="$RUNTIME_UID"
+export LLAMAFARM_RUNTIME_GID="$RUNTIME_GID"
 
 echo "LlamaFarm bundle GPU backend: $BACKEND"
 echo "LlamaFarm bundle Ollama preload models: $OLLAMA_PULL_MODELS"
+echo "LlamaFarm bundle runtime user: ${LLAMAFARM_RUNTIME_UID}:${LLAMAFARM_RUNTIME_GID}"
 if [ "$EXPOSE_DRI" = "1" ]; then
   echo "Exposing /dev/dri to the container"
 fi
