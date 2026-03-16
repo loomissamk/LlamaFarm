@@ -1080,6 +1080,10 @@ fn curated_models_for_provider(provider_name: &str) -> Vec<(String, String)> {
                 "Qwen 3.5 9B (recommended local default)".to_string(),
             ),
             (
+                "devstral-2:123b-cloud".to_string(),
+                "Devstral 2 123B Cloud (best quality if signed in)".to_string(),
+            ),
+            (
                 "qwen2.5-coder:14b".to_string(),
                 "Qwen 2.5 Coder 14B (recommended local coding model)".to_string(),
             ),

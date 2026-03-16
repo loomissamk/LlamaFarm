@@ -1852,6 +1852,9 @@ pub(crate) fn build_tool_instructions_from_specs(tool_specs: &[crate::tools::Too
     instructions.push_str(
         "If the runtime says your previous tool format was invalid, immediately emit another real <tool_call> in the exact format above. Do not apologize, do not narrate the command, and do not stop at one failed attempt.\n\n",
     );
+    instructions.push_str(
+        "Do not wrap tool calls in ```json fences or return bare JSON without <tool_call> tags.\n\n",
+    );
     instructions.push_str("Tool selection guardrails:\n");
     instructions.push_str(
         "- Use `shell` for immediate local command execution (for example: lsusb, lsblk, lspci, pwd, git status, rg, cat).\n",
@@ -6334,6 +6337,61 @@ browser_open/url>https://example.com"#;
         assert!(
             calls.is_empty(),
             "raw JSON in text without tags should not be extracted"
+        );
+    }
+
+    #[test]
+    fn parse_tool_calls_fenced_json_tool_call_with_preamble() {
+        let response = r#"I'll search for the top news stories online for you.
+
+```json
+{"tool_name": "web_search_tool", "parameters": {"query": "top news stories today"}}
+```"#;
+        let (text, calls) = parse_tool_calls(response);
+        assert_eq!(calls.len(), 1, "should extract the fenced JSON tool call");
+        assert_eq!(calls[0].name, "web_search_tool");
+        assert_eq!(calls[0].arguments["query"], "top news stories today");
+        assert!(
+            text.contains("search for the top news stories online"),
+            "surrounding explanatory text should be preserved"
+        );
+    }
+
+    #[test]
+    fn parse_tool_calls_markdown_named_tool_call_with_parameters_line() {
+        let response = r#"I'll search for today's top news stories online.
+
+**web_search_tool**: Search for top news stories today
+Parameters: `{"properties":{"query":"top news stories today 2026-03-16","search_depth":"medium","search_type":"web_search"},"required":["query"],"type":"object"}`"#;
+        let (text, calls) = parse_tool_calls(response);
+        assert_eq!(calls.len(), 1, "should extract the markdown-style tool call");
+        assert_eq!(calls[0].name, "web_search_tool");
+        assert_eq!(calls[0].arguments["query"], "top news stories today 2026-03-16");
+        assert_eq!(calls[0].arguments["search_depth"], "medium");
+        assert_eq!(calls[0].arguments["search_type"], "web_search");
+        assert!(
+            text.contains("I'll search for today's top news stories online."),
+            "surrounding explanatory text should be preserved"
+        );
+    }
+
+    #[test]
+    fn parse_tool_calls_meta_wrapped_json_tool_call() {
+        let response = r#"I'll search online for information about current Ryzen CPUs.
+
+<tool_code>
+{"name": "web_search_tool", "parameters": {"query": "current Ryzen CPUs 2024 2025 latest AMD processors"}}
+</tool_code>"#;
+        let (text, calls) = parse_tool_calls(response);
+        assert_eq!(calls.len(), 1, "should extract the meta-wrapped JSON tool call");
+        assert_eq!(calls[0].name, "web_search_tool");
+        assert_eq!(
+            calls[0].arguments["query"],
+            "current Ryzen CPUs 2024 2025 latest AMD processors"
+        );
+        assert!(
+            text.contains("I'll search online for information about current Ryzen CPUs."),
+            "surrounding explanatory text should be preserved"
         );
     }
 

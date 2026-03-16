@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BASE_COMPOSE="$ROOT_DIR/docker-compose.bundle.yml"
 GPU_MODE="${LLAMAFARM_GPU_MODE:-auto}"
-DEFAULT_PULL_MODELS="qwen3.5:9b,qwen3.5:cloud,devstral-small-2:latest,devstral-2:123b-cloud"
+DEFAULT_PULL_MODELS="qwen3.5:9b,devstral-small-2:latest,devstral-2:123b-cloud"
 TMP_OVERRIDE=""
 
 cleanup() {

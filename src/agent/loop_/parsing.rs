@@ -387,6 +387,23 @@ fn normalize_web_search_arguments(
 ) -> serde_json::Value {
     match arguments {
         serde_json::Value::Object(mut map) => {
+            if let Some(properties) = map.get("properties").and_then(|value| value.as_object()) {
+                if properties
+                    .get("query")
+                    .and_then(|value| value.as_str())
+                    .and_then(normalize_string_argument)
+                    .is_some()
+                {
+                    let mut normalized = serde_json::Map::new();
+                    for key in ["query", "search_depth", "search_type"] {
+                        if let Some(value) = properties.get(key).cloned() {
+                            normalized.insert(key.to_string(), value);
+                        }
+                    }
+                    return serde_json::Value::Object(normalized);
+                }
+            }
+
             if map
                 .get("query")
                 .and_then(|v| v.as_str())
@@ -2853,6 +2870,164 @@ fn parse_json_wrapped_tool_calls(response: &str) -> Option<(String, Vec<ParsedTo
     None
 }
 
+fn parse_fenced_json_tool_calls(response: &str) -> Option<(String, Vec<ParsedToolCall>)> {
+    static JSON_FENCE_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?si)```json\s*(.*?)```|'''json\s*(.*?)'''").unwrap()
+    });
+
+    let mut calls = Vec::new();
+    let mut text_parts = Vec::new();
+    let mut last_end = 0;
+
+    for cap in JSON_FENCE_RE.captures_iter(response) {
+        let Some(full_match) = cap.get(0) else {
+            continue;
+        };
+
+        let before = &response[last_end..full_match.start()];
+        if !before.trim().is_empty() {
+            text_parts.push(before.trim().to_string());
+        }
+
+        let inner = cap
+            .get(1)
+            .or_else(|| cap.get(2))
+            .map(|m| m.as_str().trim())
+            .unwrap_or("");
+
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(inner) {
+            let parsed_calls = parse_tool_calls_from_json_value(&value);
+            if !parsed_calls.is_empty() {
+                calls.extend(parsed_calls);
+            }
+        }
+
+        last_end = full_match.end();
+    }
+
+    if calls.is_empty() {
+        return None;
+    }
+
+    let after = &response[last_end..];
+    if !after.trim().is_empty() {
+        text_parts.push(after.trim().to_string());
+    }
+
+    Some((text_parts.join("\n"), calls))
+}
+
+fn parse_meta_wrapped_json_tool_calls(response: &str) -> Option<(String, Vec<ParsedToolCall>)> {
+    static META_WRAPPED_JSON_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?si)<(?:tool_code|tool_name|tool)>\s*(.*?)\s*</(?:tool_code|tool_name|tool)>")
+            .unwrap()
+    });
+
+    let mut calls = Vec::new();
+    let mut text_parts = Vec::new();
+    let mut last_end = 0usize;
+
+    for cap in META_WRAPPED_JSON_RE.captures_iter(response) {
+        let Some(full_match) = cap.get(0) else {
+            continue;
+        };
+
+        let before = &response[last_end..full_match.start()];
+        if !before.trim().is_empty() {
+            text_parts.push(before.trim().to_string());
+        }
+
+        let inner = cap.get(1).map(|m| m.as_str().trim()).unwrap_or("");
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(inner) {
+            let parsed_calls = parse_tool_calls_from_json_value(&value);
+            if !parsed_calls.is_empty() {
+                calls.extend(parsed_calls);
+                last_end = full_match.end();
+                continue;
+            }
+        }
+
+        text_parts.push(full_match.as_str().trim().to_string());
+        last_end = full_match.end();
+    }
+
+    if calls.is_empty() {
+        return None;
+    }
+
+    let after = &response[last_end..];
+    if !after.trim().is_empty() {
+        text_parts.push(after.trim().to_string());
+    }
+
+    Some((text_parts.join("\n"), calls))
+}
+
+fn parse_markdown_named_tool_calls(response: &str) -> Option<(String, Vec<ParsedToolCall>)> {
+    static TOOL_LINE_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)^\s*\*\*(?P<tool>[a-z0-9_-]+)\*\*(?::\s*.*)?$").unwrap()
+    });
+    static PARAMETERS_LINE_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"(?i)^\s*(?:parameters|arguments)\s*:\s*`?(?P<json>\{.*\})`?\s*$"#).unwrap()
+    });
+
+    let lines: Vec<&str> = response.lines().collect();
+    let mut text_parts = Vec::new();
+    let mut calls = Vec::new();
+    let mut index = 0usize;
+
+    while index < lines.len() {
+        let trimmed = lines[index].trim();
+        let Some(tool_caps) = TOOL_LINE_RE.captures(trimmed) else {
+            if !trimmed.is_empty() {
+                text_parts.push(trimmed.to_string());
+            }
+            index += 1;
+            continue;
+        };
+
+        let tool_name = map_tool_name_alias(tool_caps.name("tool")?.as_str()).to_string();
+        if !is_supported_tool_name(&tool_name) {
+            text_parts.push(trimmed.to_string());
+            index += 1;
+            continue;
+        }
+
+        let mut params_index = index + 1;
+        while params_index < lines.len() && lines[params_index].trim().is_empty() {
+            params_index += 1;
+        }
+
+        let Some(params_line) = lines.get(params_index).map(|line| line.trim()) else {
+            text_parts.push(trimmed.to_string());
+            index += 1;
+            continue;
+        };
+
+        let Some(params_caps) = PARAMETERS_LINE_RE.captures(params_line) else {
+            text_parts.push(trimmed.to_string());
+            index += 1;
+            continue;
+        };
+
+        let json_text = params_caps.name("json")?.as_str();
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(json_text) else {
+            text_parts.push(trimmed.to_string());
+            index += 1;
+            continue;
+        };
+
+        calls.push(ParsedToolCall {
+            name: tool_name.clone(),
+            arguments: normalize_tool_arguments(&tool_name, value, None),
+            tool_call_id: None,
+        });
+        index = params_index + 1;
+    }
+
+    (!calls.is_empty()).then(|| (text_parts.join("\n"), calls))
+}
+
 fn command_from_executable_fence(language: &str, body: &str) -> Option<String> {
     let trimmed_body = body.trim_end();
     if trimmed_body.is_empty() {
@@ -3350,6 +3525,28 @@ pub(crate) fn parse_tool_calls(response: &str) -> (String, Vec<ParsedToolCall>) 
         }
     }
 
+    if let Some((fenced_json_text, fenced_json_calls)) = parse_fenced_json_tool_calls(response) {
+        if !fenced_json_calls.is_empty() {
+            return (fenced_json_text, fenced_json_calls);
+        }
+    }
+
+    if let Some((meta_wrapped_text, meta_wrapped_calls)) =
+        parse_meta_wrapped_json_tool_calls(response)
+    {
+        if !meta_wrapped_calls.is_empty() {
+            return (meta_wrapped_text, meta_wrapped_calls);
+        }
+    }
+
+    if let Some((markdown_named_text, markdown_named_calls)) =
+        parse_markdown_named_tool_calls(response)
+    {
+        if !markdown_named_calls.is_empty() {
+            return (markdown_named_text, markdown_named_calls);
+        }
+    }
+
     if let Some((shell_parameter_text, shell_parameter_calls)) =
         parse_explicit_shell_parameter_tool_calls(response)
     {
@@ -3825,6 +4022,12 @@ pub(super) fn detect_tool_call_parse_issue(
         || trimmed.contains("```tool_call")
         || trimmed.contains("```toolcall")
         || trimmed.contains("```tool-call")
+        || ((trimmed.contains("```json") || trimmed.contains("'''json"))
+            && (trimmed.contains("\"tool_name\"")
+                || trimmed.contains("\"tool\"")
+                || trimmed.contains("\"name\"")
+                || trimmed.contains("\"parameters\"")
+                || trimmed.contains("\"arguments\"")))
         || trimmed.contains("'''bash")
         || trimmed.contains("'''sh")
         || trimmed.contains("'''shell")

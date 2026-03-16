@@ -26,6 +26,7 @@ far with these Ollama models:
 
 - `qwen3.5:9b`
 - `devstral-small-2:latest`
+- `devstral-2:123b-cloud`
 
 Treat other local Ollama models as unvalidated until they have been tested in
 this stack.

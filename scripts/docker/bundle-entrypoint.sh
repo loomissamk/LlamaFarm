@@ -9,7 +9,7 @@ DEFAULT_AGENTS="/usr/share/llamafarm/workspace.preset.god.AGENTS.md"
 DEFAULT_SOUL="/usr/share/llamafarm/workspace.preset.god.SOUL.md"
 OLLAMA_HTTP_URL="http://127.0.0.1:11434"
 CHROMEDRIVER_STATUS_URL="http://127.0.0.1:${CHROMEDRIVER_PORT:-9515}/status"
-DEFAULT_PULL_MODELS="qwen3.5:9b,qwen3.5:cloud,devstral-small-2:latest,devstral-2:123b-cloud"
+DEFAULT_PULL_MODELS="qwen3.5:9b,devstral-small-2:latest,devstral-2:123b-cloud"
 
 OLLAMA_PID=""
 CHROMEDRIVER_PID=""

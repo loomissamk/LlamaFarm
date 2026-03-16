@@ -207,8 +207,8 @@ const OLLAMA_INTEGRATION_ID: &str = "ollama";
 const OLLAMA_INTEGRATION_NAME: &str = "Ollama";
 const OLLAMA_FALLBACK_MODELS: &[&str] = &[
     "qwen3.5:9b",
-    "qwen2.5-coder:14b",
     "devstral-small-2:latest",
+    "devstral-2:123b-cloud",
     "llama3.2",
 ];
 

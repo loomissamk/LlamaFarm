@@ -31,7 +31,7 @@ services:
       - LLAMAFARM_GATEWAY_HOST=0.0.0.0
       - LLAMAFARM_REQUIRE_PAIRING=false
       - LLAMAFARM_GATEWAY_PORT=${LLAMAFARM_GATEWAY_PORT:-42617}
-      - OLLAMA_PULL_MODELS=${OLLAMA_PULL_MODELS:-qwen3.5:9b,qwen3.5:cloud,devstral-small-2:latest,devstral-2:123b-cloud}
+      - OLLAMA_PULL_MODELS=${OLLAMA_PULL_MODELS:-qwen3.5:9b,devstral-small-2:latest,devstral-2:123b-cloud}
 
     volumes:
       - llamafarm-bundle-data:/llamafarm-data
