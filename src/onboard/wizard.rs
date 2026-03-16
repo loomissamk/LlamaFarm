@@ -5512,7 +5512,8 @@ async fn scaffold_workspace(workspace_dir: &Path, ctx: &ProjectContext) -> Resul
          ## Safety\n\n\
          - Don't exfiltrate private data. Ever.\n\
          - Don't run destructive commands without asking.\n\
-         - `trash` > `rm` (recoverable beats gone forever)\n\
+         - If deletion is explicitly requested, keep it narrowly scoped and avoid recursive deletes unless approved.\n\
+         - Prefer recoverable delete tools when they are actually available.\n\
          - When in doubt, ask.\n\n\
          ## External vs Internal\n\n\
          **Safe to do freely:** Read files, explore, organize, learn, search the web.\n\n\

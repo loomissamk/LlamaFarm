@@ -1531,12 +1531,22 @@ pub fn create_routed_provider_with_options(
             (!trimmed_key.is_empty()).then_some(trimmed_key)
         });
         let key = routed_credential.or(api_key);
-        // Only use api_url for routes targeting the same provider namespace.
-        let url = (route.provider == primary_name)
-            .then_some(api_url)
-            .flatten();
+        let routed_api_url = route.api_url.as_deref().and_then(|raw_url| {
+            let trimmed = raw_url.trim();
+            (!trimmed.is_empty()).then_some(trimmed)
+        });
+        // Route-level api_url wins. Otherwise inherit the top-level api_url only
+        // when targeting the same provider namespace.
+        let url = routed_api_url.or_else(|| {
+            (route.provider == primary_name)
+                .then_some(api_url)
+                .flatten()
+        });
 
-        let route_options = options.clone();
+        let mut route_options = options.clone();
+        if route.max_tokens.is_some() {
+            route_options.max_tokens_override = route.max_tokens;
+        }
 
         match create_resilient_provider_with_options(
             &route.provider,
@@ -1565,20 +1575,6 @@ pub fn create_routed_provider_with_options(
             }
         }
     }
-
-    // Build route table
-    let routes: Vec<(String, router::Route)> = model_routes
-        .iter()
-        .map(|r| {
-            (
-                r.hint.clone(),
-                router::Route {
-                    provider_name: r.provider.clone(),
-                    model: r.model.clone(),
-                },
-            )
-        })
-        .collect();
 
     Ok(Box::new(
         router::RouterProvider::new(providers, routes, default_model.to_string())
@@ -3132,7 +3128,32 @@ mod tests {
             hint: "reasoning".to_string(),
             provider: "openrouter".to_string(),
             model: "anthropic/claude-sonnet-4.6".to_string(),
+            api_url: None,
             max_tokens: Some(4096),
+            api_key: None,
+        }];
+
+        let provider = create_routed_provider_with_options(
+            "openrouter",
+            Some("openrouter-test-key"),
+            None,
+            &reliability,
+            &routes,
+            "anthropic/claude-sonnet-4.6",
+            &ProviderRuntimeOptions::default(),
+        );
+        assert!(provider.is_ok());
+    }
+
+    #[test]
+    fn routed_provider_accepts_per_route_api_url_override() {
+        let reliability = crate::config::ReliabilityConfig::default();
+        let routes = vec![crate::config::ModelRouteConfig {
+            hint: "local".to_string(),
+            provider: "llamacpp".to_string(),
+            model: "ggml-org/gpt-oss-20b-GGUF".to_string(),
+            api_url: Some("http://127.0.0.1:8081/v1".to_string()),
+            max_tokens: None,
             api_key: None,
         }];
 

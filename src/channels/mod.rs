@@ -3978,7 +3978,8 @@ pub fn build_system_prompt_with_mode(
         "- Do not exfiltrate private data.\n\
          - Do not run destructive commands without asking.\n\
          - Do not bypass oversight or approval mechanisms.\n\
-         - Prefer `trash` over `rm` (recoverable beats gone forever).\n\
+         - If deletion is explicitly requested, keep it narrowly scoped and avoid recursive deletes unless approved.\n\
+         - Prefer recoverable delete tools when they are actually available.\n\
          - When in doubt, ask before acting externally.\n\n",
     );
 
@@ -8320,6 +8321,7 @@ BTC is currently around $65,000 based on latest tool output."#
             hint: "fast".to_string(),
             provider: "openai-codex".to_string(),
             model: "gpt-5.3-codex".to_string(),
+            api_url: None,
             max_tokens: Some(512),
             api_key: Some("route-specific-key".to_string()),
         }];
@@ -9121,7 +9123,7 @@ BTC is currently around $65,000 based on latest tool output."#
 
         assert!(prompt.contains("Do not exfiltrate private data"));
         assert!(prompt.contains("Do not run destructive commands"));
-        assert!(prompt.contains("Prefer `trash` over `rm`"));
+        assert!(prompt.contains("keep it narrowly scoped"));
     }
 
     #[test]

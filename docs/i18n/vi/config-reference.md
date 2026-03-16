@@ -340,6 +340,8 @@ Route hint giúp tên tích hợp ổn định khi model ID thay đổi.
 | `hint` | _bắt buộc_ | Tên hint tác vụ (ví dụ `"reasoning"`, `"fast"`, `"code"`, `"summarize"`) |
 | `provider` | _bắt buộc_ | Provider đích (phải khớp tên provider đã biết) |
 | `model` | _bắt buộc_ | Model sử dụng với provider đó |
+| `api_url` | chưa đặt | URL API tùy chỉnh theo từng route; hữu ích khi chạy nhiều runtime cục bộ cùng loại provider |
+| `max_tokens` | chưa đặt | Giới hạn số token đầu ra theo route được chuyển tới provider API (tùy chọn) |
 | `api_key` | chưa đặt | API key tùy chỉnh cho provider của route này (tùy chọn) |
 
 ### `[[embedding_routes]]`
@@ -361,12 +363,23 @@ hint = "reasoning"
 provider = "openrouter"
 model = "provider/model-id"
 
+[[model_routes]]
+hint = "local-intel"
+provider = "llamacpp"
+model = "ggml-org/gpt-oss-20b-GGUF"
+api_url = "http://127.0.0.1:8081/v1"
+
 [[embedding_routes]]
 hint = "semantic"
 provider = "openai"
 model = "text-embedding-3-small"
 dimensions = 1536
 ```
+
+Ghi chú:
+
+- `model_routes[].api_url` sẽ ghi đè `api_url` cấp cao nhất chỉ cho route đó.
+- Đây là cách được hỗ trợ để trỏ các hint khác nhau tới các endpoint suy luận cục bộ riêng biệt.
 
 Chiến lược nâng cấp:
 

@@ -1267,8 +1267,8 @@ pub(crate) async fn run_tool_call_loop(
         }
 
         if tool_calls.is_empty() {
-            let completion_claim_signal =
-                looks_like_unverified_action_completion_without_tool_call(&display_text);
+            let completion_claim_signal = !successful_tool_execution_seen
+                && looks_like_unverified_action_completion_without_tool_call(&display_text);
             let tool_unavailable_signal =
                 looks_like_tool_unavailability_claim(&display_text, &tool_specs);
             let missing_tool_call_signal =
@@ -4109,6 +4109,52 @@ mod tests {
         .expect("loop should retry once when model wrongly claims file tools are unavailable");
 
         assert_eq!(result, "done after file tool");
+        assert_eq!(invocations.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn run_tool_call_loop_accepts_completion_claim_after_real_tool_execution() {
+        let provider = ScriptedProvider::from_text_responses(vec![
+            r#"<tool_call>
+{"name":"count_tool","arguments":{"value":"delete"}}
+</tool_call>"#,
+            "Done. The file has been deleted from the workspace.",
+        ]);
+
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(CountingTool::new(
+            "count_tool",
+            Arc::clone(&invocations),
+        ))];
+
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("delete the file"),
+        ];
+        let observer = NoopObserver;
+
+        let result = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None,
+            "cli",
+            &crate::config::MultimodalConfig::default(),
+            5,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .await
+        .expect("completion text after a successful tool run should be accepted");
+
+        assert!(result.contains("deleted from the workspace"));
         assert_eq!(invocations.load(Ordering::SeqCst), 1);
     }
 

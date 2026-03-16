@@ -223,6 +223,8 @@ fn is_allowed_pseudo_device_path(path: &Path) -> bool {
 }
 
 const READ_ONLY_INSPECTION_ROOTS: &[&str] = &["/proc", "/sys"];
+const SAFE_DELETE_LONG_FLAGS: &[&str] =
+    &["--", "--force", "--interactive", "--interactive=never", "--verbose"];
 const HARD_DENIED_COMMANDS: &[&str] = &[
     "modprobe",
     "insmod",
@@ -1195,6 +1197,46 @@ fn apt_upgrade_is_simulation(args: &[String]) -> bool {
     })
 }
 
+fn delete_flag_is_safe(flag: &str) -> bool {
+    if SAFE_DELETE_LONG_FLAGS.contains(&flag) {
+        return true;
+    }
+
+    let Some(short_flags) = flag.strip_prefix('-') else {
+        return false;
+    };
+    if short_flags.is_empty() || short_flags.starts_with('-') {
+        return false;
+    }
+
+    short_flags.chars().all(|ch| matches!(ch, 'f' | 'i' | 'v'))
+}
+
+fn has_delete_glob_pattern(arg: &str) -> bool {
+    arg.contains('*') || arg.contains('?') || arg.contains('[') || arg.contains(']')
+}
+
+fn normalize_delete_target(raw_target: &str) -> Option<&str> {
+    let target = strip_wrapping_quotes(raw_target).trim();
+    if target.is_empty()
+        || target == "."
+        || target == ".."
+        || target.contains('\0')
+        || has_delete_glob_pattern(target)
+    {
+        return None;
+    }
+
+    if Path::new(target)
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return None;
+    }
+
+    Some(target)
+}
+
 #[cfg(not(target_os = "windows"))]
 fn inspect_apt_upgrade_for_denied_packages(args: &[String]) -> Result<Vec<String>, String> {
     if apt_upgrade_is_simulation(args) {
@@ -1589,11 +1631,19 @@ impl SecurityPolicy {
 
             let joined_segment = skip_env_assignments(&segment).to_ascii_lowercase();
 
+            if matches!(parsed.base.as_str(), "rm" | "trash") {
+                if self.is_safe_delete_command(&parsed.args) {
+                    saw_medium = true;
+                    continue;
+                }
+
+                return CommandRiskLevel::High;
+            }
+
             // High-risk commands
             if matches!(
                 parsed.base.as_str(),
-                "rm" | "mkfs"
-                    | "dd"
+                "mkfs" | "dd"
                     | "shutdown"
                     | "reboot"
                     | "halt"
@@ -1863,8 +1913,40 @@ impl SecurityPolicy {
             "python" | "python3" => !args
                 .iter()
                 .any(|arg| PYTHON_DENIED_FLAGS.contains(&arg.as_str())),
+            "rm" | "trash" => self.is_safe_delete_command(args),
             _ => true,
         }
+    }
+
+    fn is_safe_delete_command(&self, args: &[String]) -> bool {
+        let mut saw_target = false;
+        let mut stop_parsing_flags = false;
+
+        for arg in args {
+            if !stop_parsing_flags && arg == "--" {
+                stop_parsing_flags = true;
+                continue;
+            }
+
+            if !stop_parsing_flags && arg.starts_with('-') {
+                if !delete_flag_is_safe(arg) {
+                    return false;
+                }
+                continue;
+            }
+
+            let Some(target) = normalize_delete_target(arg) else {
+                return false;
+            };
+
+            if looks_like_path(target) && !self.is_path_allowed(target) {
+                return false;
+            }
+
+            saw_target = true;
+        }
+
+        saw_target
     }
 
     /// Return the first path-like argument blocked by path policy.
@@ -2421,6 +2503,18 @@ mod tests {
     }
 
     #[test]
+    fn command_risk_medium_for_safe_delete_commands() {
+        let p = SecurityPolicy {
+            allowed_commands: vec!["rm".into()],
+            ..SecurityPolicy::default()
+        };
+        assert_eq!(
+            p.command_risk_level("rm -f cnn_over_rnn_model.h5 cnn_over_rnn.py"),
+            CommandRiskLevel::Medium
+        );
+    }
+
+    #[test]
     fn command_risk_high_for_dangerous_commands() {
         let p = SecurityPolicy {
             allowed_commands: vec!["rm".into()],
@@ -2460,6 +2554,36 @@ mod tests {
         let result = p.validate_command_execution("rm -rf tmp_test_dir", true);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("high-risk"));
+    }
+
+    #[test]
+    fn validate_command_allows_non_recursive_rm_for_allowed_paths() {
+        let p = SecurityPolicy {
+            autonomy: AutonomyLevel::Full,
+            allowed_commands: vec!["rm".into()],
+            require_approval_for_medium_risk: false,
+            block_high_risk_commands: false,
+            ..SecurityPolicy::default()
+        };
+
+        let result =
+            p.validate_command_execution("rm -f cnn_over_rnn_model.h5 cnn_over_rnn.py", false);
+        assert_eq!(result.unwrap(), CommandRiskLevel::Medium);
+    }
+
+    #[test]
+    fn validate_command_rejects_delete_globs() {
+        let p = SecurityPolicy {
+            autonomy: AutonomyLevel::Full,
+            allowed_commands: vec!["rm".into()],
+            require_approval_for_medium_risk: false,
+            block_high_risk_commands: false,
+            ..SecurityPolicy::default()
+        };
+
+        let result = p.validate_command_execution("rm -f *.h5", false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not allowed"));
     }
 
     #[test]

@@ -146,7 +146,7 @@ impl PromptSection for SafetySection {
     }
 
     fn build(&self, _ctx: &PromptContext<'_>) -> Result<String> {
-        Ok("## Safety\n\n- Do not exfiltrate private data.\n- Do not run destructive commands without asking.\n- Do not bypass oversight or approval mechanisms.\n- Prefer `trash` over `rm`.\n- When in doubt, ask before acting externally.".into())
+        Ok("## Safety\n\n- Do not exfiltrate private data.\n- Do not run destructive commands without asking.\n- Do not bypass oversight or approval mechanisms.\n- If deletion is explicitly requested, keep it narrowly scoped and avoid recursive deletes unless approved.\n- Prefer recoverable delete tools when they are actually available.\n- When in doubt, ask before acting externally.".into())
     }
 }
 

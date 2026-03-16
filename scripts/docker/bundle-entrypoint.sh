@@ -9,7 +9,7 @@ DEFAULT_AGENTS="/usr/share/llamafarm/workspace.preset.god.AGENTS.md"
 DEFAULT_SOUL="/usr/share/llamafarm/workspace.preset.god.SOUL.md"
 OLLAMA_HTTP_URL="http://127.0.0.1:11434"
 CHROMEDRIVER_STATUS_URL="http://127.0.0.1:${CHROMEDRIVER_PORT:-9515}/status"
-DEFAULT_PULL_MODELS="qwen3.5:9b,devstral-small-2:latest"
+DEFAULT_PULL_MODELS="qwen3.5:9b,qwen3.5:cloud,devstral-small-2:latest,devstral-2:123b-cloud"
 
 OLLAMA_PID=""
 CHROMEDRIVER_PID=""
@@ -32,6 +32,42 @@ ensure_runtime_layout() {
   if [ ! -f "$WORKSPACE_DIR/SOUL.md" ] && [ -f "$DEFAULT_SOUL" ]; then
     cp "$DEFAULT_SOUL" "$WORKSPACE_DIR/SOUL.md"
   fi
+
+  ensure_bundle_config_defaults
+}
+
+ensure_bundle_config_defaults() {
+  local config_path="$CONFIG_DIR/config.toml"
+  [ -f "$config_path" ] || return 0
+
+  python3 - "$config_path" <<'PY'
+from pathlib import Path
+import sys
+
+config_path = Path(sys.argv[1])
+text = config_path.read_text()
+required_commands = ["rm"]
+marker = "allowed_commands = ["
+start = text.find(marker)
+if start == -1:
+    sys.exit(0)
+
+end = text.find("\n]", start)
+if end == -1:
+    sys.exit(0)
+
+changed = False
+for command in required_commands:
+    token = f"\"{command}\""
+    if token in text:
+        continue
+    text = text[:end] + f'  "{command}",\n' + text[end:]
+    end += len(f'  "{command}",\n')
+    changed = True
+
+if changed:
+    config_path.write_text(text)
+PY
 }
 
 wait_for_http() {
@@ -56,6 +92,7 @@ model_present() {
 
 ensure_models() {
   local raw_models
+  local failed=0
   raw_models="${OLLAMA_PULL_MODELS:-$DEFAULT_PULL_MODELS}"
   IFS=',' read -r -a requested_models <<<"$raw_models"
 
@@ -70,8 +107,13 @@ ensure_models() {
     fi
 
     echo "pulling ollama model: $model"
-    ollama pull "$model"
+    if ! ollama pull "$model"; then
+      echo "failed to pull ollama model: $model" >&2
+      failed=1
+    fi
   done
+
+  return "$failed"
 }
 
 pull_models_background() {

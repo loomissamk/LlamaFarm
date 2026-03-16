@@ -27,7 +27,7 @@ For first-time setup and quick orientation.
 - Quick onboarding: `llamafarm onboard --api-key "sk-..." --provider openrouter`
 - Interactive onboarding: `llamafarm onboard --interactive`
 - Existing config protection: reruns require explicit confirmation (or `--force` in non-interactive flows)
-- Ollama cloud models (`:cloud`) require a remote `api_url` and API key (for example `api_url = "https://ollama.com"`).
+- Ollama cloud models (`:cloud`) work with a local signed-in Ollama runtime (`ollama signin`) or a remote `api_url`; direct remote endpoints still require an API key.
 - Validate environment: `llamafarm status` + `llamafarm doctor`
 
 ## Bundled Local Runtime

@@ -21,3 +21,4 @@ Source anglaise:
 
 - Ajout de `provider.reasoning_level` (OpenAI Codex `/responses`). Voir la source anglaise pour les détails.
 - Valeur par défaut de `agent.max_tool_iterations` augmentée à `20` (fallback sûr si `0`).
+- Ajout de `model_routes[].api_url` pour remplacer `api_url` route par route. Utile pour cibler plusieurs endpoints locaux séparés du même type de provider.

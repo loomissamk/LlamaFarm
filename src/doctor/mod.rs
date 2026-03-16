@@ -449,7 +449,7 @@ fn check_config_semantics(config: &Config, runtime_mode: RuntimeMode, items: &mu
 
     // Provider validity
     if let Some(ref provider) = config.default_provider {
-        if let Some(reason) = provider_validation_error(provider) {
+        if let Some(reason) = provider_validation_error(provider, None) {
             items.push(DiagItem::error(
                 cat,
                 format!("default provider \"{provider}\" is invalid: {reason}"),
@@ -518,7 +518,7 @@ fn check_config_semantics(config: &Config, runtime_mode: RuntimeMode, items: &mu
 
     // Reliability: fallback providers
     for fb in &config.reliability.fallback_providers {
-        if let Some(reason) = provider_validation_error(fb) {
+        if let Some(reason) = provider_validation_error(fb, None) {
             items.push(DiagItem::warn(
                 cat,
                 format!("fallback provider \"{fb}\" is invalid: {reason}"),
@@ -531,7 +531,7 @@ fn check_config_semantics(config: &Config, runtime_mode: RuntimeMode, items: &mu
         if route.hint.is_empty() {
             items.push(DiagItem::warn(cat, "model route with empty hint"));
         }
-        if let Some(reason) = provider_validation_error(&route.provider) {
+        if let Some(reason) = provider_validation_error(&route.provider, route.api_url.as_deref()) {
             items.push(DiagItem::warn(
                 cat,
                 format!(
@@ -623,7 +623,7 @@ fn check_config_semantics(config: &Config, runtime_mode: RuntimeMode, items: &mu
     agent_names.sort();
     for name in agent_names {
         let agent = config.agents.get(name).unwrap();
-        if let Some(reason) = provider_validation_error(&agent.provider) {
+        if let Some(reason) = provider_validation_error(&agent.provider, None) {
             items.push(DiagItem::warn(
                 cat,
                 format!(
@@ -635,8 +635,8 @@ fn check_config_semantics(config: &Config, runtime_mode: RuntimeMode, items: &mu
     }
 }
 
-fn provider_validation_error(name: &str) -> Option<String> {
-    match crate::providers::create_provider(name, None) {
+fn provider_validation_error(name: &str, api_url: Option<&str>) -> Option<String> {
+    match crate::providers::create_provider_with_url(name, None, api_url) {
         Ok(_) => None,
         Err(err) => Some(
             err.to_string()
@@ -1056,14 +1056,15 @@ mod tests {
 
     #[test]
     fn provider_validation_checks_custom_url_shape() {
-        assert!(provider_validation_error("openrouter").is_none());
-        assert!(provider_validation_error("custom:https://example.com").is_none());
-        assert!(provider_validation_error("anthropic-custom:https://example.com").is_none());
+        assert!(provider_validation_error("openrouter", None).is_none());
+        assert!(provider_validation_error("custom:https://example.com", None).is_none());
+        assert!(provider_validation_error("anthropic-custom:https://example.com", None).is_none());
 
-        let invalid_custom = provider_validation_error("custom:").unwrap_or_default();
+        let invalid_custom = provider_validation_error("custom:", None).unwrap_or_default();
         assert!(invalid_custom.contains("requires a URL"));
 
-        let invalid_unknown = provider_validation_error("totally-fake").unwrap_or_default();
+        let invalid_unknown =
+            provider_validation_error("totally-fake", None).unwrap_or_default();
         assert!(invalid_unknown.contains("Unknown provider"));
     }
 
@@ -1211,6 +1212,7 @@ mod tests {
             hint: "fast".into(),
             provider: "groq".into(),
             model: String::new(),
+            api_url: None,
             max_tokens: None,
             api_key: None,
         }];

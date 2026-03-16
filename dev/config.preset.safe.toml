@@ -64,6 +64,7 @@ allowed_commands = [
   "python3",
   "readlink",
   "realpath",
+  "rm",
   "rg",
   "rsync",
   "rustc",

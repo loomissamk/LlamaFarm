@@ -144,23 +144,23 @@ impl OllamaProvider {
 
     fn resolve_request_details(&self, model: &str) -> anyhow::Result<(String, bool)> {
         let requests_cloud = model.ends_with(":cloud");
-        let normalized_model = model.strip_suffix(":cloud").unwrap_or(model).to_string();
+        let is_local_endpoint = self.is_local_endpoint();
+        let normalized_model = if requests_cloud && !is_local_endpoint {
+            model.strip_suffix(":cloud").unwrap_or(model).to_string()
+        } else {
+            model.to_string()
+        };
 
-        if requests_cloud && self.is_local_endpoint() {
-            anyhow::bail!(
-                "Model '{}' requested cloud routing, but Ollama endpoint is local. Configure api_url with a remote Ollama endpoint.",
-                model
-            );
-        }
-
-        if requests_cloud && self.api_key.is_none() {
+        // Local Ollama instances can proxy cloud-model requests after
+        // `ollama signin`, so only direct remote ollama.com usage needs an API key.
+        if requests_cloud && !is_local_endpoint && self.api_key.is_none() {
             anyhow::bail!(
                 "Model '{}' requested cloud routing, but no API key is configured. Set OLLAMA_API_KEY or config api_key.",
                 model
             );
         }
 
-        let should_auth = self.api_key.is_some() && !self.is_local_endpoint();
+        let should_auth = self.api_key.is_some() && !is_local_endpoint;
 
         Ok((normalized_model, should_auth))
     }
@@ -822,14 +822,11 @@ mod tests {
     }
 
     #[test]
-    fn cloud_suffix_with_local_endpoint_errors() {
-        let p = OllamaProvider::new(None, Some("ollama-key"));
-        let error = p
-            .resolve_request_details("qwen3:cloud")
-            .expect_err("cloud suffix should fail on local endpoint");
-        assert!(error
-            .to_string()
-            .contains("requested cloud routing, but Ollama endpoint is local"));
+    fn cloud_suffix_with_local_endpoint_is_allowed_without_api_key() {
+        let p = OllamaProvider::new(None, None);
+        let (model, should_auth) = p.resolve_request_details("qwen3:cloud").unwrap();
+        assert_eq!(model, "qwen3:cloud");
+        assert!(!should_auth);
     }
 
     #[test]

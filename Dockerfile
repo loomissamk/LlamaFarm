@@ -1,5 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
+ARG OLLAMA_BASE_IMAGE=ollama/ollama:latest
+
 # ── Stage 1: Build Web UI ─────────────────────────────────────
 FROM node:22-bookworm-slim AS web_builder
 
@@ -12,7 +14,6 @@ COPY web/ ./
 RUN npm run build
 
 # ── Shared Ollama Runtime Bits ───────────────────────────────
-ARG OLLAMA_BASE_IMAGE=ollama/ollama:latest
 FROM ${OLLAMA_BASE_IMAGE} AS ollama_base
 
 # ── Stage 2: Build Rust Binary ────────────────────────────────
