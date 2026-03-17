@@ -3,6 +3,7 @@ use crate::multimodal;
 use crate::providers::traits::{
     ChatMessage, ChatResponse, Provider, ProviderCapabilities, TokenUsage, ToolCall,
 };
+use crate::util::is_ollama_cloud_model;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -143,7 +144,7 @@ impl OllamaProvider {
     }
 
     fn resolve_request_details(&self, model: &str) -> anyhow::Result<(String, bool)> {
-        let requests_cloud = model.ends_with(":cloud");
+        let requests_cloud = is_ollama_cloud_model(model);
         let is_local_endpoint = self.is_local_endpoint();
         let normalized_model = if requests_cloud && !is_local_endpoint {
             model.strip_suffix(":cloud").unwrap_or(model).to_string()
@@ -838,6 +839,27 @@ mod tests {
         assert!(error
             .to_string()
             .contains("requested cloud routing, but no API key is configured"));
+    }
+
+    #[test]
+    fn cloud_catalog_tag_without_api_key_errors() {
+        let p = OllamaProvider::new(Some("https://ollama.com"), None);
+        let error = p
+            .resolve_request_details("devstral-2:123b-cloud")
+            .expect_err("cloud tag should require API key");
+        assert!(error
+            .to_string()
+            .contains("requested cloud routing, but no API key is configured"));
+    }
+
+    #[test]
+    fn cloud_catalog_tag_keeps_model_name_for_remote_endpoint() {
+        let p = OllamaProvider::new(Some("https://ollama.com"), Some("ollama-key"));
+        let (model, should_auth) = p
+            .resolve_request_details("devstral-2:123b-cloud")
+            .unwrap();
+        assert_eq!(model, "devstral-2:123b-cloud");
+        assert!(should_auth);
     }
 
     #[test]

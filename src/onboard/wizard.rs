@@ -18,6 +18,7 @@ use crate::providers::{
     is_moonshot_alias, is_qianfan_alias, is_qwen_alias, is_qwen_oauth_alias, is_zai_alias,
     is_zai_cn_alias,
 };
+use crate::util::is_ollama_cloud_model;
 use anyhow::{bail, Context, Result};
 use console::style;
 use dialoguer::{Confirm, Input, Select};
@@ -1568,7 +1569,7 @@ fn fetch_live_models_for_provider(
                 // Local endpoints should not surface cloud-only suffixes.
                 fetch_ollama_models()?
                     .into_iter()
-                    .filter(|model_id| !model_id.ends_with(":cloud"))
+                    .filter(|model_id| !is_ollama_cloud_model(model_id))
                     .collect()
             }
         }

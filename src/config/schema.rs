@@ -1,6 +1,7 @@
 use crate::config::traits::ChannelConfig;
 use crate::providers::{is_glm_alias, is_zai_alias};
 use crate::security::{AutonomyLevel, DomainMatcher, ShellRedirectPolicy};
+use crate::util::is_ollama_cloud_model;
 use anyhow::{Context, Result};
 use directories::UserDirs;
 use schemars::JsonSchema;
@@ -6352,15 +6353,15 @@ impl Config {
             .as_deref()
             .is_some_and(|provider| provider.trim().eq_ignore_ascii_case("ollama"))
             && self
-                .default_model
-                .as_deref()
-                .is_some_and(|model| model.trim().ends_with(":cloud"))
+            .default_model
+            .as_deref()
+            .is_some_and(is_ollama_cloud_model)
         {
             if !is_local_ollama_endpoint(self.api_url.as_deref())
                 && !has_ollama_cloud_credential(self.api_key.as_deref())
             {
                 anyhow::bail!(
-                    "default_model uses ':cloud' with provider 'ollama' and a remote api_url, but no API key is configured. Set api_key or OLLAMA_API_KEY."
+                    "default_model uses an Ollama cloud-routed model with provider 'ollama' and a remote api_url, but no API key is configured. Set api_key or OLLAMA_API_KEY."
                 );
             }
         }
@@ -9471,7 +9472,24 @@ provider_api = "not-a-real-mode"
 
         let error = config.validate().expect_err("expected validation to fail");
         assert!(error.to_string().contains(
-            "default_model uses ':cloud' with provider 'ollama' and a remote api_url, but no API key is configured"
+            "default_model uses an Ollama cloud-routed model with provider 'ollama' and a remote api_url, but no API key is configured"
+        ));
+    }
+
+    #[test]
+    async fn validate_ollama_cloud_tag_model_rejects_remote_endpoint_without_key() {
+        let _env_guard = env_override_lock().await;
+        let config = Config {
+            default_provider: Some("ollama".to_string()),
+            default_model: Some("devstral-2:123b-cloud".to_string()),
+            api_url: Some("https://ollama.com/api".to_string()),
+            api_key: None,
+            ..Config::default()
+        };
+
+        let error = config.validate().expect_err("expected validation to fail");
+        assert!(error.to_string().contains(
+            "default_model uses an Ollama cloud-routed model with provider 'ollama' and a remote api_url, but no API key is configured"
         ));
     }
 

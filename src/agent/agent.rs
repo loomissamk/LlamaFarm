@@ -312,12 +312,16 @@ impl Agent {
             &model_name,
         )?;
 
-        let dispatcher_choice = config.agent.tool_dispatcher.as_str();
-        let tool_dispatcher: Box<dyn ToolDispatcher> = match dispatcher_choice {
-            "native" => Box::new(NativeToolDispatcher),
-            "xml" => Box::new(XmlToolDispatcher),
-            _ if provider.supports_native_tools() => Box::new(NativeToolDispatcher),
-            _ => Box::new(XmlToolDispatcher),
+        let native_tools_enabled = crate::agent::loop_::configured_native_tools_enabled(
+            &config.agent.tool_dispatcher,
+            provider_name,
+            &model_name,
+            provider.supports_native_tools(),
+        );
+        let tool_dispatcher: Box<dyn ToolDispatcher> = if native_tools_enabled {
+            Box::new(NativeToolDispatcher)
+        } else {
+            Box::new(XmlToolDispatcher)
         };
 
         let route_model_by_hint: HashMap<String, String> = config
