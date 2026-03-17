@@ -9,7 +9,7 @@ use crate::providers::{
 use crate::runtime;
 use crate::security::SecurityPolicy;
 use crate::tools::{self, Tool};
-use crate::util::{is_ollama_cloud_model, truncate_with_ellipsis};
+use crate::util::truncate_with_ellipsis;
 use anyhow::Result;
 use futures_util::StreamExt;
 use regex::{Regex, RegexSet};
@@ -34,7 +34,7 @@ use execution::{
 };
 #[cfg(test)]
 use history::{apply_compaction_summary, build_compaction_transcript};
-pub(crate) use history::{auto_compact_history, trim_history};
+use history::{auto_compact_history, trim_history};
 #[allow(unused_imports)]
 use parsing::{
     default_param_for_tool, detect_tool_call_parse_issue, extract_json_values, map_tool_name_alias,
@@ -103,27 +103,11 @@ pub(crate) fn scrub_credentials(input: &str) -> String {
         .to_string()
 }
 
-fn auto_prefers_xml_tool_dispatcher(provider_name: &str, model: &str) -> bool {
-    provider_name.trim().eq_ignore_ascii_case("ollama") && !is_ollama_cloud_model(model)
-}
-
 pub(crate) fn configured_native_tools_enabled(
     tool_dispatcher: &str,
-    provider_name: &str,
-    model: &str,
     provider_supports_native_tools: bool,
 ) -> bool {
-    let dispatcher = tool_dispatcher.trim();
-    if dispatcher.eq_ignore_ascii_case("xml") {
-        return false;
-    }
-
-    if dispatcher.eq_ignore_ascii_case("auto") && auto_prefers_xml_tool_dispatcher(provider_name, model)
-    {
-        return false;
-    }
-
-    provider_supports_native_tools
+    !tool_dispatcher.trim().eq_ignore_ascii_case("xml") && provider_supports_native_tools
 }
 
 fn inject_prompt_tool_fallback_instructions(
@@ -238,20 +222,6 @@ static TOOL_UNAVAILABLE_CLAIM_REGEX: LazyLock<Regex> = LazyLock::new(|| {
             i\s+(?:cannot|can't)(?:\s+\w+){0,3}\s+(?:access|use|perform|create|edit|write|read|run|execute|open|browse)|
             i\s+am\s+unable\s+to|
             no\s+(?:tool|tools|function|functions)\s+(?:available|access)
-        )\b",
-    )
-    .unwrap()
-});
-
-/// Detect provider fallback text that admits the model did not complete the turn.
-/// This should trigger one corrective retry instead of being surfaced as a final answer.
-static INCOMPLETE_INTERNAL_RESPONSE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?ix)
-        \b(
-            i\s+did(?:\s+not|n't)\s+complete\s+my\s+response|
-            could\s+you\s+try\s+asking\s+again|
-            i\s+could(?:\s+not|n't)\s+get\s+a\s+complete\s+response
         )\b",
     )
     .unwrap()
@@ -569,11 +539,6 @@ fn looks_like_tool_unavailability_claim(text: &str, tool_specs: &[crate::tools::
         || (claims_generic_tool_access && !tool_specs.is_empty())
 }
 
-fn looks_like_incomplete_internal_response(text: &str) -> bool {
-    let trimmed = text.trim();
-    !trimmed.is_empty() && INCOMPLETE_INTERNAL_RESPONSE_REGEX.is_match(trimmed)
-}
-
 fn build_tool_unavailable_retry_prompt(tool_specs: &[crate::tools::ToolSpec]) -> String {
     const MAX_TOOLS_IN_PROMPT: usize = 24;
     let tool_list = tool_specs
@@ -586,34 +551,6 @@ fn build_tool_unavailable_retry_prompt(tool_specs: &[crate::tools::ToolSpec]) ->
     format!(
         "{TOOL_UNAVAILABLE_RETRY_PROMPT_PREFIX}\nRuntime tools: {tool_list}\nEmit the correct tool call now if tool use is required. Otherwise provide the final answer without claiming missing tools."
     )
-}
-
-fn render_successful_tool_outputs_for_final_answer(
-    outputs: &[(String, String)],
-) -> Option<String> {
-    let rendered: Vec<(String, String)> = outputs
-        .iter()
-        .filter_map(|(tool_name, output)| {
-            let trimmed = output.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some((tool_name.clone(), trimmed.to_string()))
-            }
-        })
-        .collect();
-
-    match rendered.len() {
-        0 => None,
-        1 => rendered.into_iter().next().map(|(_, output)| output),
-        _ => Some(
-            rendered
-                .into_iter()
-                .map(|(tool_name, output)| format!("{tool_name}:\n{output}"))
-                .collect::<Vec<_>>()
-                .join("\n\n"),
-        ),
-    }
 }
 
 #[derive(Debug)]
@@ -981,7 +918,6 @@ pub(crate) async fn run_tool_call_loop(
     let mut duplicate_tool_call_retry_used = false;
     let mut missing_tool_call_retry_prompt: Option<String> = None;
     let mut successful_tool_execution_seen = false;
-    let mut last_successful_tool_reply: Option<String> = None;
     let mut prompt_tool_fallback_used = false;
     let bypass_non_cli_approval_for_turn =
         approval.is_some_and(|mgr| channel_name != "cli" && mgr.consume_non_cli_allow_all_once());
@@ -1335,13 +1271,8 @@ pub(crate) async fn run_tool_call_loop(
                 && looks_like_unverified_action_completion_without_tool_call(&display_text);
             let tool_unavailable_signal =
                 looks_like_tool_unavailability_claim(&display_text, &tool_specs);
-            let incomplete_internal_response_signal =
-                looks_like_incomplete_internal_response(&display_text);
             let missing_tool_call_signal =
-                parse_issue_detected
-                    || completion_claim_signal
-                    || tool_unavailable_signal
-                    || incomplete_internal_response_signal;
+                parse_issue_detected || completion_claim_signal || tool_unavailable_signal;
             let missing_tool_call_followthrough = !missing_tool_call_retry_used
                 && iteration + 1 < max_iterations
                 && !tool_specs.is_empty()
@@ -1365,8 +1296,6 @@ pub(crate) async fn run_tool_call_loop(
                     "parse_issue_detected"
                 } else if tool_unavailable_signal {
                     "tool_unavailable_claim_detected"
-                } else if incomplete_internal_response_signal {
-                    "incomplete_internal_response_detected"
                 } else {
                     "completion_claim_text_detected"
                 };
@@ -1414,11 +1343,7 @@ pub(crate) async fn run_tool_call_loop(
                         ),
                     }),
                 );
-                if tool_unavailable_signal
-                    && !parse_issue_detected
-                    && !completion_claim_signal
-                    && !incomplete_internal_response_signal
-                {
+                if tool_unavailable_signal && !parse_issue_detected && !completion_claim_signal {
                     tracing::warn!(
                         "Model still claims missing tools after corrective retry; returning text response."
                     );
@@ -1492,7 +1417,6 @@ pub(crate) async fn run_tool_call_loop(
         let mut individual_results: Vec<(Option<String>, String)> = Vec::new();
         let mut ordered_results: Vec<Option<(String, Option<String>, ToolExecutionOutcome)>> =
             (0..tool_calls.len()).map(|_| None).collect();
-        let mut successful_outputs_for_reply: Vec<(String, String)> = Vec::new();
         let allow_parallel_execution =
             parallel_tools_enabled && should_execute_tools_in_parallel(&tool_calls, approval);
         let mut executable_indices: Vec<usize> = Vec::new();
@@ -1758,7 +1682,6 @@ pub(crate) async fn run_tool_call_loop(
         {
             if outcome.success {
                 successful_tool_execution_seen = true;
-                successful_outputs_for_reply.push((call.name.clone(), outcome.output.clone()));
             }
             runtime_trace::record_event(
                 "tool_call_result",
@@ -1810,12 +1733,6 @@ pub(crate) async fn run_tool_call_loop(
             }
 
             ordered_results[*idx] = Some((call.name.clone(), call.tool_call_id.clone(), outcome));
-        }
-
-        if let Some(rendered) =
-            render_successful_tool_outputs_for_final_answer(&successful_outputs_for_reply)
-        {
-            last_successful_tool_reply = Some(rendered);
         }
 
         for (tool_name, tool_call_id, outcome) in ordered_results.into_iter().flatten() {
@@ -1891,67 +1808,6 @@ pub(crate) async fn run_tool_call_loop(
             }
             continue;
         }
-
-        let duplicate_only_stalled = successful_tool_execution_seen
-            && duplicate_tool_call_retry_used
-            && duplicate_tool_call_count > 0
-            && duplicate_tool_call_count == tool_calls.len();
-        if duplicate_only_stalled {
-            let final_text = last_successful_tool_reply
-                .clone()
-                .filter(|text| !text.trim().is_empty())
-                .or_else(|| {
-                    let trimmed = display_text.trim();
-                    if trimmed.is_empty() {
-                        None
-                    } else {
-                        Some(trimmed.to_string())
-                    }
-                })
-                .unwrap_or_else(|| {
-                    "The requested tool action already completed earlier in this turn.".to_string()
-                });
-
-            runtime_trace::record_event(
-                "tool_call_duplicate_followthrough_finalized",
-                Some(channel_name),
-                Some(provider_name),
-                Some(model),
-                Some(&turn_id),
-                Some(true),
-                Some("duplicate-only follow-up finalized from prior successful tool output"),
-                serde_json::json!({
-                    "iteration": iteration + 1,
-                    "duplicate_tool_call_count": duplicate_tool_call_count,
-                    "used_grounded_tool_output": last_successful_tool_reply.is_some(),
-                }),
-            );
-
-            if let Some(ref tx) = on_delta {
-                let _ = tx.send(DRAFT_CLEAR_SENTINEL.to_string()).await;
-                let mut chunk = String::new();
-                for word in final_text.split_inclusive(char::is_whitespace) {
-                    if cancellation_token
-                        .as_ref()
-                        .is_some_and(CancellationToken::is_cancelled)
-                    {
-                        return Err(ToolLoopCancelled.into());
-                    }
-                    chunk.push_str(word);
-                    if chunk.len() >= STREAM_CHUNK_MIN_CHARS
-                        && tx.send(std::mem::take(&mut chunk)).await.is_err()
-                    {
-                        break;
-                    }
-                }
-                if !chunk.is_empty() {
-                    let _ = tx.send(chunk).await;
-                }
-            }
-
-            history.push(ChatMessage::assistant(final_text.clone()));
-            return Ok(final_text);
-        }
     }
 
     runtime_trace::record_event(
@@ -2003,11 +1859,6 @@ pub(crate) fn build_tool_instructions_from_specs(tool_specs: &[crate::tools::Too
     instructions.push_str(
         "- Use `shell` for immediate local command execution (for example: lsusb, lsblk, lspci, pwd, git status, rg, cat).\n",
     );
-    if tool_specs.iter().any(|tool| tool.name == "task_plan") {
-        instructions.push_str(
-            "- For complex or multi-step work, start by using `task_plan` to create a short checklist and update it as progress changes.\n",
-        );
-    }
     instructions.push_str(
         "- Use `cron_add` or `schedule` only when the user explicitly wants delayed, scheduled, or recurring execution. Never use them for an immediate one-off command.\n",
     );
@@ -2374,8 +2225,6 @@ pub async fn run(
     };
     let native_tools = configured_native_tools_enabled(
         &config.agent.tool_dispatcher,
-        provider_name,
-        &model_name,
         provider.supports_native_tools(),
     );
     let mut system_prompt = crate::channels::build_system_prompt_with_mode(
@@ -2389,6 +2238,10 @@ pub async fn run(
         config.skills.prompt_injection_mode,
     );
 
+    // Append structured tool-use instructions with schemas (only for non-native providers)
+    if !native_tools {
+        system_prompt.push_str(&build_tool_instructions(&tools_registry));
+    }
     system_prompt.push_str(&build_shell_policy_instructions(&config.autonomy));
     system_prompt.push_str(&build_runtime_tool_availability_notice(&tools_registry));
 
@@ -2782,8 +2635,6 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
     };
     let native_tools = configured_native_tools_enabled(
         &config.agent.tool_dispatcher,
-        provider_name,
-        &model_name,
         provider.supports_native_tools(),
     );
     let mut system_prompt = crate::channels::build_system_prompt_with_mode(
@@ -2796,6 +2647,9 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
         native_tools,
         config.skills.prompt_injection_mode,
     );
+    if !native_tools {
+        system_prompt.push_str(&build_tool_instructions(&tools_registry));
+    }
     system_prompt.push_str(&build_shell_policy_instructions(&config.autonomy));
     system_prompt.push_str(&build_runtime_tool_availability_notice(&tools_registry));
 
@@ -2860,44 +2714,13 @@ mod tests {
 
     #[test]
     fn configured_native_tools_enabled_honors_xml_override() {
-        assert!(!configured_native_tools_enabled(
-            "xml",
-            "ollama",
-            "qwen3.5:9b",
-            true
-        ));
+        assert!(!configured_native_tools_enabled("xml", true));
     }
 
     #[test]
     fn configured_native_tools_enabled_uses_provider_capability_outside_xml_mode() {
-        assert!(configured_native_tools_enabled(
-            "auto",
-            "openai",
-            "gpt-4o",
-            true
-        ));
-        assert!(!configured_native_tools_enabled(
-            "native",
-            "openai",
-            "gpt-4o",
-            false
-        ));
-    }
-
-    #[test]
-    fn configured_native_tools_enabled_prefers_xml_for_local_ollama_auto_mode() {
-        assert!(!configured_native_tools_enabled(
-            "auto",
-            "ollama",
-            "qwen3.5:9b",
-            true
-        ));
-        assert!(configured_native_tools_enabled(
-            "auto",
-            "ollama",
-            "devstral-2:123b-cloud",
-            true
-        ));
+        assert!(configured_native_tools_enabled("auto", true));
+        assert!(!configured_native_tools_enabled("native", false));
     }
 
     #[test]
@@ -4006,72 +3829,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_tool_call_loop_finalizes_after_repeated_duplicate_only_follow_up() {
-        let provider = ScriptedProvider::from_text_responses(vec![
-            r#"<tool_call>
-{"name":"shell","arguments":{"command":"lsusb"}}
-</tool_call>"#,
-            r#"<tool_call>
-{"name":"shell","arguments":{"command":"lsusb"}}
-</tool_call>"#,
-            r#"<tool_call>
-{"name":"shell","arguments":{"command":"lsusb"}}
-</tool_call>"#,
-        ]);
-
-        let invocations = Arc::new(AtomicUsize::new(0));
-        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(CommandEchoTool::new(
-            "shell",
-            Arc::clone(&invocations),
-        ))];
-
-        let mut history = vec![
-            ChatMessage::system("test-system"),
-            ChatMessage::user("run lsusb"),
-        ];
-        let observer = NoopObserver;
-
-        let result = run_tool_call_loop(
-            &provider,
-            &mut history,
-            &tools_registry,
-            &observer,
-            "mock-provider",
-            "mock-model",
-            0.0,
-            true,
-            None,
-            "cli",
-            &crate::config::MultimodalConfig::default(),
-            5,
-            None,
-            None,
-            None,
-            &[],
-        )
-        .await
-        .expect("loop should stop after duplicate-only follow-up repeats");
-
-        assert_eq!(result, "ran:lsusb");
-        assert_eq!(
-            invocations.load(Ordering::SeqCst),
-            1,
-            "the original tool call should execute once"
-        );
-        assert!(
-            history
-                .iter()
-                .any(|msg| msg.role == "user" && msg.content == DUPLICATE_TOOL_CALL_RETRY_PROMPT),
-            "loop should still inject a corrective prompt before finalizing"
-        );
-        let final_message = history
-            .last()
-            .expect("assistant fallback response should be appended");
-        assert_eq!(final_message.role, "assistant");
-        assert_eq!(final_message.content, "ran:lsusb");
-    }
-
-    #[tokio::test]
     async fn run_tool_call_loop_switches_native_mode_to_prompt_fallback_after_parse_issue() {
         let provider = ScriptedProvider::from_text_responses(vec![
             r#"{"tool":"shell","command":"lsusb""#,
@@ -4256,59 +4013,6 @@ mod tests {
             invocations.load(Ordering::SeqCst),
             1,
             "recovery retry should enforce one real tool execution"
-        );
-    }
-
-    #[tokio::test]
-    async fn run_tool_call_loop_retries_when_response_is_incomplete_internal_fallback() {
-        let provider = ScriptedProvider::from_text_responses(vec![
-            "I was thinking about this: The user wants me to run lsusb and summarize the result.... but I didn't complete my response. Could you try asking again?",
-            r#"<tool_call>
-{"name":"shell","arguments":{"command":"lsusb"}}
-</tool_call>"#,
-            "done after retry",
-        ]);
-
-        let invocations = Arc::new(AtomicUsize::new(0));
-        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(CommandEchoTool::new(
-            "shell",
-            Arc::clone(&invocations),
-        ))];
-
-        let mut history = vec![
-            ChatMessage::system("test-system"),
-            ChatMessage::user("run lsusb"),
-        ];
-        let observer = NoopObserver;
-
-        let result = run_tool_call_loop(
-            &provider,
-            &mut history,
-            &tools_registry,
-            &observer,
-            "mock-provider",
-            "mock-model",
-            0.0,
-            true,
-            None,
-            "cli",
-            &crate::config::MultimodalConfig::default(),
-            5,
-            None,
-            None,
-            None,
-            &[],
-        )
-        .await
-        .expect("incomplete internal fallback text should trigger a retry");
-
-        assert_eq!(result, "done after retry");
-        assert_eq!(invocations.load(Ordering::SeqCst), 1);
-        assert!(
-            history
-                .iter()
-                .any(|msg| msg.role == "user" && msg.content == MISSING_TOOL_CALL_RETRY_PROMPT),
-            "loop should inject a corrective retry after incomplete internal fallback text"
         );
     }
 
@@ -4737,15 +4441,6 @@ mod tests {
         assert!(!looks_like_tool_unavailability_claim(
             "I can't directly run `lsusb` for you, but I can explain what it does.",
             &browser_tools
-        ));
-    }
-
-    #[test]
-    fn looks_like_incomplete_internal_response_detects_provider_fallback_text() {
-        let text = "I was thinking about this: run lsusb... but I didn't complete my response. Could you try asking again?";
-        assert!(looks_like_incomplete_internal_response(text));
-        assert!(!looks_like_incomplete_internal_response(
-            "I was thinking about this approach and here is the complete answer."
         ));
     }
 
@@ -5210,36 +4905,6 @@ content="console.log(2 + 3);"
         assert_eq!(
             calls[0].arguments.get("content").unwrap().as_str().unwrap(),
             "console.log(2 + 3);"
-        );
-    }
-
-    #[test]
-    fn parse_tool_calls_handles_direct_shell_xml_tag_with_attributes_and_inner_text() {
-        let response = r#"I'll inspect the workspace now.
-<shell tool_id="shell">ls -la rust_kernel/src/</shell>"#;
-
-        let (text, calls) = parse_tool_calls(response);
-        assert_eq!(text, "I'll inspect the workspace now.");
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].name, "shell");
-        assert_eq!(
-            calls[0].arguments.get("command").unwrap().as_str().unwrap(),
-            "ls -la rust_kernel/src/"
-        );
-    }
-
-    #[test]
-    fn parse_tool_calls_handles_direct_file_read_xml_tag_with_attributes_and_inner_text() {
-        let response =
-            r#"<file_read tool_id="file_read">rust_kernel/src/main.rs</file_read>"#;
-
-        let (text, calls) = parse_tool_calls(response);
-        assert!(text.is_empty());
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].name, "file_read");
-        assert_eq!(
-            calls[0].arguments.get("path").unwrap().as_str().unwrap(),
-            "rust_kernel/src/main.rs"
         );
     }
 
@@ -5982,8 +5647,7 @@ Tail"#;
             &crate::config::AutonomyConfig::default(),
             std::path::Path::new("/tmp"),
         ));
-        let mut tools = tools::default_tools(security.clone());
-        tools.push(Box::new(crate::tools::TaskPlanTool::new(security)));
+        let tools = tools::default_tools(security);
         let instructions = build_tool_instructions(&tools);
 
         assert!(instructions.contains("## Tool Use Protocol"));
@@ -5991,8 +5655,6 @@ Tail"#;
         assert!(instructions.contains("shell"));
         assert!(instructions.contains("file_read"));
         assert!(instructions.contains("file_write"));
-        assert!(instructions.contains("task_plan"));
-        assert!(instructions.contains("complex or multi-step work"));
     }
 
     #[test]

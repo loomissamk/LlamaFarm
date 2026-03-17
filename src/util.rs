@@ -59,19 +59,6 @@ pub fn floor_utf8_char_boundary(s: &str, index: usize) -> usize {
     i
 }
 
-/// Returns true when an Ollama model ID uses cloud routing semantics.
-///
-/// Supports both the documented `:cloud` suffix and catalog tags such as
-/// `devstral-2:123b-cloud`.
-pub(crate) fn is_ollama_cloud_model(model: &str) -> bool {
-    let Some((_, tag)) = model.trim().rsplit_once(':') else {
-        return false;
-    };
-
-    let tag = tag.trim();
-    tag.eq_ignore_ascii_case("cloud") || tag.to_ascii_lowercase().ends_with("-cloud")
-}
-
 /// Utility enum for handling optional values.
 pub enum MaybeSet<T> {
     Set(T),
@@ -187,17 +174,5 @@ mod tests {
         assert_eq!(floor_utf8_char_boundary(s, 2), 1);
         // Index 5 is inside "你" (3-byte char), floor should move back to 3.
         assert_eq!(floor_utf8_char_boundary(s, 5), 3);
-    }
-
-    #[test]
-    fn test_is_ollama_cloud_model_detects_documented_suffix() {
-        assert!(is_ollama_cloud_model("glm-5:cloud"));
-        assert!(is_ollama_cloud_model("gpt-oss:120b:cloud"));
-    }
-
-    #[test]
-    fn test_is_ollama_cloud_model_detects_catalog_cloud_tag() {
-        assert!(is_ollama_cloud_model("devstral-2:123b-cloud"));
-        assert!(!is_ollama_cloud_model("qwen3.5:9b"));
     }
 }

@@ -85,7 +85,6 @@ Lưu ý:
 - Nếu tin nhắn kênh vượt giá trị này, runtime trả về: `Agent exceeded maximum tool iterations (<value>)`.
 - Trong vòng lặp tool của CLI, gateway và channel, các lời gọi tool độc lập được thực thi đồng thời mặc định khi không cần phê duyệt; thứ tự kết quả giữ ổn định.
 - `parallel_tools` áp dụng cho API `Agent::turn()`. Không ảnh hưởng đến vòng lặp runtime của CLI, gateway hay channel.
-- `tool_dispatcher = "auto"` sẽ ưu tiên chế độ XML cho model Ollama cục bộ không phải model cloud-routed (ví dụ `glm-5:cloud` hoặc `devstral-2:123b-cloud`), vì đường đi này hiện ổn định hơn native function-calling với các model local nhỏ hơn trong runtime này. Đặt `tool_dispatcher = "native"` nếu muốn ép native.
 
 ## `[agents.<name>]`
 

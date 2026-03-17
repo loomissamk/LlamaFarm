@@ -860,15 +860,9 @@ fn is_supported_tool_name(tool_name: &str) -> bool {
     )
 }
 
-/// Match opening XML tags: `<tag_name>` or `<tag_name attr="...">`.
-/// Does NOT use backreferences.
+/// Match opening XML tags: `<tag_name>`.  Does NOT use backreferences.
 static XML_OPEN_TAG_RE: LazyLock<Regex> =
-    LazyLock::new(|| {
-        Regex::new(
-            r#"(?is)<([a-zA-Z_][a-zA-Z0-9_-]*)(?:\s+(?:"[^"]*"|'[^']*'|[^"'<>])*)?>"#,
-        )
-        .unwrap()
-    });
+    LazyLock::new(|| Regex::new(r"<([a-zA-Z_][a-zA-Z0-9_-]*)>").unwrap());
 
 /// MiniMax XML invoke format:
 /// `<invoke name="shell"><parameter name="command">pwd</parameter></invoke>`

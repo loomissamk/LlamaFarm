@@ -480,11 +480,6 @@ pub fn build_tool_instructions_text(tools: &[ToolSpec]) -> String {
     instructions.push_str(
         "- Use `shell` for immediate local command execution (for example: lsusb, lsblk, lspci, pwd, git status, rg, cat).\n",
     );
-    if tools.iter().any(|tool| tool.name == "task_plan") {
-        instructions.push_str(
-            "- For complex or multi-step work, start by using `task_plan` to create a short checklist and update it as progress changes.\n",
-        );
-    }
     instructions.push_str(
         "- Use `cron_add` or `schedule` only when the user explicitly wants delayed, scheduled, or recurring execution. Never use them for an immediate one-off command.\n",
     );
@@ -715,16 +710,6 @@ mod tests {
                     }
                 }),
             },
-            ToolSpec {
-                name: "task_plan".to_string(),
-                description: "Manage a task checklist".to_string(),
-                parameters: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "action": {"type": "string"}
-                    }
-                }),
-            },
         ];
 
         let instructions = build_tool_instructions_text(&tools);
@@ -739,8 +724,6 @@ mod tests {
         assert!(instructions.contains("Execute commands"));
         assert!(instructions.contains("**file_read**"));
         assert!(instructions.contains("Read files"));
-        assert!(instructions.contains("**task_plan**"));
-        assert!(instructions.contains("complex or multi-step work"));
 
         // Check for parameters
         assert!(instructions.contains("Parameters:"));

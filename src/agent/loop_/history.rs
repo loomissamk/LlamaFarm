@@ -14,7 +14,7 @@ const COMPACTION_MAX_SUMMARY_CHARS: usize = 2_000;
 
 /// Trim conversation history to prevent unbounded growth.
 /// Preserves the system prompt (first message if role=system) and the most recent messages.
-pub(crate) fn trim_history(history: &mut Vec<ChatMessage>, max_history: usize) {
+pub(super) fn trim_history(history: &mut Vec<ChatMessage>, max_history: usize) {
     // Nothing to trim if within limit
     let has_system = history.first().map_or(false, |m| m.role == "system");
     let non_system_count = if has_system {
@@ -56,7 +56,7 @@ pub(super) fn apply_compaction_summary(
     history.splice(start..compact_end, std::iter::once(summary_msg));
 }
 
-pub(crate) async fn auto_compact_history(
+pub(super) async fn auto_compact_history(
     history: &mut Vec<ChatMessage>,
     provider: &dyn Provider,
     model: &str,

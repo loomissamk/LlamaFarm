@@ -10,10 +10,7 @@
 //! ```
 
 use super::{AppState, GatewayRuntimeSnapshot};
-use crate::agent::loop_::{
-    auto_compact_history, run_tool_call_loop, trim_history, DRAFT_CLEAR_SENTINEL,
-    DRAFT_PROGRESS_SENTINEL,
-};
+use crate::agent::loop_::{run_tool_call_loop, DRAFT_CLEAR_SENTINEL, DRAFT_PROGRESS_SENTINEL};
 use crate::approval::ApprovalManager;
 use crate::memory::MemoryCategory;
 use crate::providers::{ChatMessage, ChatRequest};
@@ -43,7 +40,6 @@ const WS_CHAT_SUBPROTOCOL: &str = "llamafarm.v1";
 const WS_CHAT_STORE_REL_PATH: &str = "state/web-chat-sessions.json";
 const WS_PERSISTED_MAX_MESSAGES: usize = 800;
 const WS_PERSISTED_MAX_SESSIONS: usize = 64;
-const WS_RESTORED_HISTORY_KEEP_MESSAGES: usize = 12;
 const WS_RESTORED_CONTEXT_PREFIX: &str = "[Saved chat context restored]";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -416,69 +412,6 @@ fn is_assistant_tool_call_payload(content: &str) -> bool {
         .is_some()
 }
 
-fn extract_latest_compaction_summary(history: &[ChatMessage]) -> Option<String> {
-    history.iter().rev().find_map(|message| {
-        if message.role != "assistant" {
-            return None;
-        }
-
-        let trimmed = message.content.trim();
-        trimmed
-            .starts_with("[Compaction summary]")
-            .then(|| trimmed.to_string())
-    })
-}
-
-fn convert_tool_message_to_restore_safe_user_message(message: &ChatMessage) -> Option<ChatMessage> {
-    let trimmed = message.content.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
-        let tool_name = value
-            .get("tool_name")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        let content = value
-            .get("content")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())?;
-
-        let rendered = match tool_name {
-            Some(name) => format!("[Tool results]\n<tool_result name=\"{name}\">\n{content}\n</tool_result>"),
-            None => format!("[Tool results]\n<tool_result>\n{content}\n</tool_result>"),
-        };
-        return Some(ChatMessage::user(rendered));
-    }
-
-    Some(ChatMessage::user(format!(
-        "[Tool results]\n<tool_result>\n{trimmed}\n</tool_result>"
-    )))
-}
-
-fn restore_safe_chat_message(message: &ChatMessage) -> Option<ChatMessage> {
-    let trimmed = message.content.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    match message.role.as_str() {
-        "user" => Some(ChatMessage::user(trimmed)),
-        "assistant" => {
-            if is_assistant_tool_call_payload(trimmed) {
-                None
-            } else {
-                Some(ChatMessage::assistant(trimmed))
-            }
-        }
-        "tool" => convert_tool_message_to_restore_safe_user_message(message),
-        _ => None,
-    }
-}
-
 fn extract_latest_assistant_reply(history: &[ChatMessage]) -> Option<String> {
     history.iter().rev().find_map(|message| {
         if message.role != "assistant"
@@ -565,36 +498,13 @@ fn build_restored_ws_chat_history(history: &[ChatMessage]) -> Vec<ChatMessage> {
         return normalized;
     }
 
-    let restore_safe: Vec<ChatMessage> = normalized
-        .iter()
-        .filter_map(restore_safe_chat_message)
-        .collect();
-    if restore_safe.is_empty() {
-        let Some(resume_context) = build_ws_resume_context(&normalized) else {
-            return Vec::new();
-        };
-        return vec![ChatMessage::assistant(format!(
-            "{WS_RESTORED_CONTEXT_PREFIX}\n{resume_context}"
-        ))];
-    }
+    let Some(resume_context) = build_ws_resume_context(&normalized) else {
+        return normalized;
+    };
 
-    let keep_from = restore_safe
-        .len()
-        .saturating_sub(WS_RESTORED_HISTORY_KEEP_MESSAGES);
-    let mut restored = Vec::new();
-
-    if keep_from > 0 {
-        if let Some(summary) = extract_latest_compaction_summary(&restore_safe[..keep_from]) {
-            restored.push(ChatMessage::assistant(summary));
-        } else if let Some(resume_context) = build_ws_resume_context(&restore_safe[..keep_from]) {
-            restored.push(ChatMessage::assistant(format!(
-                "{WS_RESTORED_CONTEXT_PREFIX}\n{resume_context}"
-            )));
-        }
-    }
-
-    restored.extend(restore_safe.into_iter().skip(keep_from));
-    restored
+    vec![ChatMessage::assistant(format!(
+        "{WS_RESTORED_CONTEXT_PREFIX}\n{resume_context}"
+    ))]
 }
 
 fn finalize_ws_response(
@@ -1030,7 +940,6 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             parallel_tools,
             native_tools,
             approval_manager,
-            max_history_messages,
             system_prompt,
             ws_chat_store_path,
         ) = {
@@ -1053,8 +962,6 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             };
             let native_tools = crate::agent::loop_::configured_native_tools_enabled(
                 &config_guard.agent.tool_dispatcher,
-                &provider_label,
-                &runtime.model,
                 runtime.provider.supports_native_tools(),
             );
             let mut system_prompt = crate::channels::build_system_prompt_with_mode(
@@ -1067,6 +974,11 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                 native_tools,
                 config_guard.skills.prompt_injection_mode,
             );
+            if !native_tools {
+                system_prompt.push_str(&crate::agent::loop_::build_tool_instructions(
+                    runtime.tools_registry_exec.as_ref(),
+                ));
+            }
             system_prompt.push_str(&crate::agent::loop_::build_shell_policy_instructions(
                 &config_guard.autonomy,
             ));
@@ -1081,7 +993,6 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                 config_guard.agent.parallel_tools,
                 native_tools,
                 ApprovalManager::from_config(&config_guard.autonomy),
-                config_guard.agent.max_history_messages,
                 system_prompt,
                 resolve_ws_chat_store_path(&config_guard),
             )
@@ -1176,14 +1087,6 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
 
             match result {
                 Ok(response) => {
-                    let _ = auto_compact_history(
-                        &mut history,
-                        runtime.provider.as_ref(),
-                        &runtime.model,
-                        max_history_messages,
-                    )
-                    .await;
-                    trim_history(&mut history, max_history_messages);
                     store_ws_chat_history(&session_id, &history, temporary, &ws_chat_store_path)
                         .await;
                     let done = serde_json::json!({
@@ -1277,14 +1180,6 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                 let safe_response =
                     finalize_ws_response(&response, &history, runtime.tools_registry_exec.as_ref());
                 history.push(ChatMessage::assistant(&safe_response));
-                let _ = auto_compact_history(
-                    &mut history,
-                    runtime.provider.as_ref(),
-                    &runtime.model,
-                    max_history_messages,
-                )
-                .await;
-                trim_history(&mut history, max_history_messages);
                 store_ws_chat_history(&session_id, &history, temporary, &ws_chat_store_path).await;
 
                 // Send the full response as a done message
@@ -1671,7 +1566,7 @@ Reminder set successfully."#;
     }
 
     #[test]
-    fn build_restored_ws_chat_history_keeps_recent_safe_transcript() {
+    fn build_restored_ws_chat_history_collapses_raw_tool_trace_into_summary() {
         let history = vec![
             ChatMessage::user("lsusb"),
             ChatMessage::assistant(
@@ -1684,29 +1579,13 @@ Reminder set successfully."#;
         ];
 
         let restored = build_restored_ws_chat_history(&history);
-        assert_eq!(restored.len(), 3);
-        assert_eq!(restored[0].role, "user");
-        assert_eq!(restored[0].content, "lsusb");
-        assert_eq!(restored[1].role, "user");
-        assert!(restored[1].content.contains("[Tool results]"));
-        assert!(restored[1].content.contains("Bus 001 Device 001"));
-        assert_eq!(restored[2].role, "assistant");
-        assert_eq!(restored[2].content, "Command completed successfully.");
-    }
-
-    #[test]
-    fn build_restored_ws_chat_history_keeps_compaction_summary_when_truncated() {
-        let mut history = vec![ChatMessage::assistant(
-            "[Compaction summary]\n- user wants concise answers",
-        )];
-        for i in 0..(WS_RESTORED_HISTORY_KEEP_MESSAGES + 2) {
-            history.push(ChatMessage::user(format!("user {i}")));
-        }
-
-        let restored = build_restored_ws_chat_history(&history);
+        assert_eq!(restored.len(), 1);
         assert_eq!(restored[0].role, "assistant");
-        assert!(restored[0].content.contains("[Compaction summary]"));
-        assert_eq!(restored.len(), WS_RESTORED_HISTORY_KEEP_MESSAGES + 1);
+        assert!(restored[0].content.starts_with(WS_RESTORED_CONTEXT_PREFIX));
+        assert!(restored[0]
+            .content
+            .contains("Previous completed command before this turn: `lsusb`"));
+        assert!(restored[0].content.contains("Bus 001 Device 001"));
     }
 
     #[test]
