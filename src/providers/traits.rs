@@ -491,6 +491,9 @@ pub fn build_tool_instructions_text(tools: &[ToolSpec]) -> String {
     instructions.push_str(
         "Continue using tools with the results until the task is actually complete, then give the final answer.\n\n",
     );
+    instructions.push_str(
+        "Ground the final answer in the actual tool results. Do not reinterpret file contents as tool names or availability errors. For `file_read`, answer from the returned contents. For `file_write`, do not invent contents that were not in the write arguments or a verified read-back.\n\n",
+    );
     instructions.push_str("### Available Tools\n\n");
 
     for tool in tools {

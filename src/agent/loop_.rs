@@ -227,6 +227,24 @@ static TOOL_UNAVAILABLE_CLAIM_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     .unwrap()
 });
 
+static FILE_WRITE_CONTENT_LITERAL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)content(?:[^a-z0-9\n]{0,20})(?:"([^"\n]{1,200})"|`([^`\n]{1,200})`)"#)
+        .unwrap()
+});
+
+#[derive(Debug, Clone)]
+struct SuccessfulToolRecord {
+    name: String,
+    arguments: serde_json::Value,
+    output: String,
+}
+
+#[derive(Debug, Clone)]
+struct FailedToolRecord {
+    name: String,
+    output: String,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct NonCliApprovalPrompt {
     pub request_id: String,
@@ -551,6 +569,534 @@ fn build_tool_unavailable_retry_prompt(tool_specs: &[crate::tools::ToolSpec]) ->
     format!(
         "{TOOL_UNAVAILABLE_RETRY_PROMPT_PREFIX}\nRuntime tools: {tool_list}\nEmit the correct tool call now if tool use is required. Otherwise provide the final answer without claiming missing tools."
     )
+}
+
+fn build_tool_result_grounding_retry_prompt(records: &[SuccessfulToolRecord]) -> String {
+    let mut prompt = String::from(
+        "Internal correction: use the verified tool results below and provide the final answer now. Do not reinterpret tool output as a missing or invalid tool. Do not ask the user to clarify unless the tool results are genuinely insufficient. For `file_read`, answer directly from the file contents in the tool result. For `file_write`, do not invent file contents; only mention content that appeared in the write arguments or a verified read-back.\n\nVerified tool results:\n",
+    );
+
+    for record in records.iter().rev().take(4).rev() {
+        let args = serde_json::to_string(&record.arguments).unwrap_or_else(|_| "{}".to_string());
+        let output = truncate_with_ellipsis(&record.output, 240);
+        let _ = writeln!(&mut prompt, "- {} {} => {}", record.name, args, output);
+    }
+
+    prompt.push_str("\nProvide the grounded final answer now.");
+    prompt
+}
+
+fn build_failed_tool_retry_prompt(records: &[FailedToolRecord]) -> String {
+    let Some(record) = records.last() else {
+        return MISSING_TOOL_CALL_RETRY_PROMPT.to_string();
+    };
+
+    let output = truncate_with_ellipsis(record.output.trim(), 240);
+    let mut prompt = format!(
+        "Internal correction: your last tool call for `{}` failed with this runtime result:\n{}\n\nEmit a corrected real <tool_call> now and nothing else. Do not ask the user how to proceed, do not explain the schema, and do not switch topics.",
+        record.name, output
+    );
+
+    if record.name == "task_plan" {
+        prompt.push_str(
+            "\nFor `task_plan` create requests, derive the plan directly from the user's current request and emit a non-empty `tasks` array with `{ \"title\": \"...\" }` items.",
+        );
+    } else if record.name == "shell" {
+        let lowered = output.to_ascii_lowercase();
+        if lowered.contains("can't open file")
+            || lowered.contains("no such file or directory")
+            || lowered.contains("not found")
+        {
+            prompt.push_str(
+                "\nIf the command failed because a file path does not exist, reuse the exact real path from earlier successful file tools or create the file first with `file_write`, then rerun the shell command. Do not use placeholder paths like `/path/to/script.py` unless that exact file was actually created.",
+            );
+        }
+        if lowered.contains("command not allowed by security policy")
+            || lowered.contains("missing 'command' parameter")
+        {
+            prompt.push_str(
+                "\nEmit a real `shell` tool call with a plain command string. Do not send `shell(command=\"...\")` as shell input, and do not paste raw script bodies into `shell` when `file_write` should create the file.",
+            );
+        }
+    }
+
+    prompt
+}
+
+fn extract_file_read_content(output: &str) -> Option<String> {
+    let mut lines = Vec::new();
+
+    for line in output.lines() {
+        let trimmed = line.trim_end();
+        if trimmed.starts_with('[') && trimmed.ends_with("lines total]") {
+            break;
+        }
+
+        if let Some((prefix, rest)) = trimmed.split_once(": ") {
+            if prefix.chars().all(|ch| ch.is_ascii_digit()) {
+                lines.push(rest.to_string());
+                continue;
+            }
+        }
+
+        if !trimmed.is_empty() {
+            lines.push(trimmed.to_string());
+        }
+    }
+
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+fn looks_like_tool_result_misinterpretation(text: &str) -> bool {
+    let lowered = text.trim().to_ascii_lowercase();
+    if lowered.is_empty() {
+        return false;
+    }
+
+    [
+        "doesn't appear to be a valid tool",
+        "does not appear to be a valid tool",
+        "available toolset",
+        "available tools",
+        "i have access to tools like",
+        "could you clarify what you'd like",
+        "what would you like to accomplish",
+        "i understand the correction",
+        "i'll use the available runtime tools",
+        "what would you like me to help you with",
+        "what would you like me to do next",
+        "what would you like to do next",
+        "please let me know how you'd like to proceed",
+        "please share more context",
+        "to help you better",
+        "would you like me to search for pdf files",
+        "path to the pdf file",
+        "pdf read operation failed",
+        "i need to actually create the file using the file_write tool",
+        "<tool_result name=",
+    ]
+    .iter()
+    .any(|needle| lowered.contains(needle))
+}
+
+fn looks_like_irrelevant_code_dump(text: &str) -> bool {
+    text.contains("```") && text.lines().count() >= 12
+}
+
+fn looks_like_file_read_answer_mismatch(text: &str, records: &[SuccessfulToolRecord]) -> bool {
+    let Some(record) = records
+        .iter()
+        .rev()
+        .find(|record| record.name == "file_read")
+    else {
+        return false;
+    };
+
+    let Some(expected_content) = extract_file_read_content(&record.output) else {
+        return false;
+    };
+
+    if text.contains(&expected_content) {
+        return false;
+    }
+
+    looks_like_tool_result_misinterpretation(text) || looks_like_irrelevant_code_dump(text)
+}
+
+fn looks_like_file_write_content_mismatch(text: &str, records: &[SuccessfulToolRecord]) -> bool {
+    let Some(record) = records
+        .iter()
+        .rev()
+        .find(|record| record.name == "file_write")
+    else {
+        return false;
+    };
+
+    let Some(expected_content) = record
+        .arguments
+        .get("content")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|content| !content.is_empty() && !content.contains('\n'))
+    else {
+        return false;
+    };
+
+    if text.contains(expected_content) {
+        return false;
+    }
+
+    FILE_WRITE_CONTENT_LITERAL_REGEX
+        .captures_iter(text)
+        .filter_map(|caps| caps.get(1).or_else(|| caps.get(2)))
+        .map(|capture| capture.as_str().trim())
+        .any(|captured| !captured.is_empty() && captured != expected_content)
+}
+
+fn looks_like_task_plan_followup_question(text: &str, records: &[SuccessfulToolRecord]) -> bool {
+    let Some(record) = records
+        .iter()
+        .rev()
+        .find(|record| record.name == "task_plan")
+    else {
+        return false;
+    };
+
+    let action = record
+        .arguments
+        .get("action")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    if action != "create" && action != "list" {
+        return false;
+    }
+
+    let lowered = text.trim().to_ascii_lowercase();
+    if lowered.is_empty() {
+        return false;
+    }
+
+    [
+        "would you like me to",
+        "what would you like to do next",
+        "what would you like me to do next",
+        "could you please provide more details",
+        "please let me know how you'd like to proceed",
+        "please share more context",
+        "to help you better",
+        "what were the tasks about",
+        "proceed with executing",
+    ]
+    .iter()
+    .any(|needle| lowered.contains(needle))
+}
+
+fn looks_like_failed_tool_followthrough(text: &str, records: &[FailedToolRecord]) -> bool {
+    let Some(record) = records.last() else {
+        return false;
+    };
+
+    let lowered = text.trim().to_ascii_lowercase();
+    if lowered.is_empty() {
+        return false;
+    }
+
+    match record.name.as_str() {
+        "task_plan" => [
+            "task_plan tool requires",
+            "parameter 'tasks'",
+            "non-empty array of task objects",
+            "let me create a simple task plan",
+            "use this example task plan",
+            "specific project or task you have in mind",
+            "would you like me to",
+        ]
+        .iter()
+        .any(|needle| lowered.contains(needle)),
+        "shell" => [
+            "would you like me to create it first",
+            "would you like me to write it first",
+            "please provide the correct path",
+            "please share the correct path",
+            "the file path doesn't exist",
+            "the file path does not exist",
+            "the file doesn't exist",
+            "the file does not exist",
+            "create it first",
+            "/path/to/script.py",
+        ]
+        .iter()
+        .any(|needle| lowered.contains(needle)),
+        _ => false,
+    }
+}
+
+fn should_retry_with_tool_result_grounding(text: &str, records: &[SuccessfulToolRecord]) -> bool {
+    looks_like_tool_result_misinterpretation(text)
+        || looks_like_file_read_answer_mismatch(text, records)
+        || looks_like_file_write_content_mismatch(text, records)
+        || looks_like_task_plan_followup_question(text, records)
+}
+
+fn record_argument_string<'a>(record: &'a SuccessfulToolRecord, key: &str) -> Option<&'a str> {
+    record.arguments.get(key).and_then(|value| value.as_str())
+}
+
+fn command_mentions_path(command: &str, path: &str) -> bool {
+    if command.contains(path) {
+        return true;
+    }
+
+    path.rsplit('/')
+        .next()
+        .is_some_and(|name| !name.is_empty() && command.contains(name))
+}
+
+fn shell_command_runs_python_script(command: &str, path: &str) -> bool {
+    let lowered = command.to_ascii_lowercase();
+    lowered.contains("python") && command_mentions_path(command, path)
+}
+
+fn shell_output_confirms_cleanup(output: &str) -> bool {
+    let lowered = output.to_ascii_lowercase();
+    lowered.contains("deleted successfully")
+        || lowered.contains("file deleted")
+        || lowered.contains("removed successfully")
+}
+
+fn shell_command_removes_path(command: &str, path: &str) -> bool {
+    command.contains("rm ") && command_mentions_path(command, path)
+}
+
+fn synthesize_python_execution_answer(records: &[SuccessfulToolRecord]) -> Option<String> {
+    for (idx, run_record) in records.iter().enumerate().rev() {
+        if run_record.name != "shell" {
+            continue;
+        }
+
+        let command = record_argument_string(run_record, "command")?;
+        let file_write_record = records[..=idx].iter().rev().find(|record| {
+            record.name == "file_write"
+                && record_argument_string(record, "path").is_some_and(|path| {
+                    path.ends_with(".py") && shell_command_runs_python_script(command, path)
+                })
+        })?;
+
+        let path = record_argument_string(file_write_record, "path")?;
+        let output = run_record.output.trim();
+        if output.is_empty() {
+            continue;
+        }
+
+        let contents = records
+            .iter()
+            .rev()
+            .find(|record| {
+                record.name == "file_read"
+                    && record_argument_string(record, "path")
+                        .is_some_and(|candidate| candidate == path)
+            })
+            .and_then(|record| extract_file_read_content(&record.output))
+            .or_else(|| {
+                record_argument_string(file_write_record, "content")
+                    .map(str::trim)
+                    .filter(|content| !content.is_empty())
+                    .map(ToString::to_string)
+            });
+
+        let cleanup_verified = shell_output_confirms_cleanup(output)
+            || records.iter().any(|record| {
+                record.name == "shell"
+                    && record_argument_string(record, "command")
+                        .is_some_and(|candidate| shell_command_removes_path(candidate, path))
+            });
+
+        let mut answer = format!("The script `{path}` was created and executed successfully.");
+        answer.push_str("\n\nOutput:\n\n```text\n");
+        answer.push_str(output);
+        answer.push_str("\n```");
+
+        if let Some(contents) = contents {
+            answer.push_str("\n\nScript contents:\n\n```python\n");
+            answer.push_str(&contents);
+            answer.push_str("\n```");
+        }
+
+        if cleanup_verified {
+            answer.push_str("\n\nThe file was deleted after execution.");
+        }
+
+        return Some(answer);
+    }
+
+    None
+}
+
+fn should_short_circuit_after_tool_execution(records: &[SuccessfulToolRecord]) -> bool {
+    // Short-circuit immediately after a successful task_plan create so local models
+    // cannot embellish the plan in prose before execution has started.
+    let has_task_plan_create = records.iter().any(|record| {
+        record.name == "task_plan"
+            && record
+                .arguments
+                .get("action")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                == "create"
+    });
+    if has_task_plan_create {
+        // Only short-circuit if this is the last (most recent) significant tool, i.e. no
+        // non-task_plan execution tools followed it — we don't want to suppress the
+        // final answer after a real execution turn that happened to start with a plan.
+        let last_non_plan = records
+            .iter()
+            .rev()
+            .find(|r| r.name != "task_plan")
+            .map(|r| r.name.as_str());
+        let last_is_plan = records.last().is_some_and(|r| r.name == "task_plan");
+        if last_is_plan || last_non_plan.is_none() {
+            return true;
+        }
+    }
+
+    // Short-circuit after file_write + shell (python execution) with non-empty output.
+    // We stop as soon as the script has run — cleanup is optional, the result is already
+    // available. Without this, local models spin through additional iterations and time out.
+    for (idx, run_record) in records.iter().enumerate().rev() {
+        if run_record.name != "shell" {
+            continue;
+        }
+
+        let command = match record_argument_string(run_record, "command") {
+            Some(command) => command,
+            None => continue,
+        };
+        let _path = match records[..=idx].iter().rev().find_map(|record| {
+            (record.name == "file_write")
+                .then(|| record_argument_string(record, "path"))
+                .flatten()
+                .filter(|path| {
+                    path.ends_with(".py") && shell_command_runs_python_script(command, path)
+                })
+        }) {
+            Some(path) => path,
+            None => continue,
+        };
+
+        if run_record.output.trim().is_empty() {
+            continue;
+        }
+
+        // Non-empty shell output after a matching file_write — we're done.
+        return true;
+    }
+
+    false
+}
+
+fn synthesize_grounded_final_answer(records: &[SuccessfulToolRecord]) -> Option<String> {
+    let last_task_plan = records
+        .iter()
+        .rev()
+        .find(|record| record.name == "task_plan");
+    if let Some(record) = last_task_plan {
+        let action = record
+            .arguments
+            .get("action")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        if action == "create" {
+            if let Some(tasks) = record
+                .arguments
+                .get("tasks")
+                .and_then(|value| value.as_array())
+            {
+                let titles = tasks
+                    .iter()
+                    .filter_map(|task| task.get("title").and_then(|value| value.as_str()))
+                    .map(str::trim)
+                    .filter(|title| !title.is_empty())
+                    .collect::<Vec<_>>();
+                if !titles.is_empty() {
+                    let mut answer = format!("Task plan created with {} steps:", titles.len());
+                    for (idx, title) in titles.iter().enumerate() {
+                        answer.push_str(&format!("\n{}. {}", idx + 1, title));
+                    }
+                    return Some(answer);
+                }
+            }
+        }
+
+        if action == "list" && !record.output.trim().is_empty() {
+            return Some(record.output.trim().to_string());
+        }
+    }
+
+    let last_file_read = records
+        .iter()
+        .rev()
+        .find(|record| record.name == "file_read");
+    if let Some(record) = last_file_read {
+        let path = record
+            .arguments
+            .get("path")
+            .and_then(|value| value.as_str())
+            .unwrap_or("the file");
+        if let Some(content) = extract_file_read_content(&record.output) {
+            return Some(format!(
+                "The file `{path}` contains:\n\n```\n{content}\n```"
+            ));
+        }
+    }
+
+    if let Some(answer) = synthesize_python_execution_answer(records) {
+        return Some(answer);
+    }
+
+    let last_file_write = records
+        .iter()
+        .rev()
+        .find(|record| record.name == "file_write");
+    if let Some(record) = last_file_write {
+        let path = record
+            .arguments
+            .get("path")
+            .and_then(|value| value.as_str())
+            .unwrap_or("the file");
+        if let Some(content) = record
+            .arguments
+            .get("content")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|content| !content.is_empty() && !content.contains('\n'))
+        {
+            return Some(format!(
+                "The file `{path}` was written successfully with content:\n\n```\n{content}\n```"
+            ));
+        }
+
+        return Some(format!("The file `{path}` was written successfully."));
+    }
+
+    None
+}
+
+async fn return_final_response(
+    history: &mut Vec<ChatMessage>,
+    final_text: String,
+    on_delta: Option<&tokio::sync::mpsc::Sender<String>>,
+    cancellation_token: Option<&CancellationToken>,
+    response_text: Option<&str>,
+    response_streamed_live: bool,
+) -> Result<String> {
+    if let Some(tx) = on_delta {
+        let should_emit_post_hoc_chunks =
+            !response_streamed_live || response_text.is_none_or(|text| final_text != text);
+        if !should_emit_post_hoc_chunks {
+            history.push(ChatMessage::assistant(final_text.clone()));
+            return Ok(final_text);
+        }
+
+        let _ = tx.send(DRAFT_CLEAR_SENTINEL.to_string()).await;
+        let mut chunk = String::new();
+        for word in final_text.split_inclusive(char::is_whitespace) {
+            if cancellation_token.is_some_and(CancellationToken::is_cancelled) {
+                return Err(ToolLoopCancelled.into());
+            }
+            chunk.push_str(word);
+            if chunk.len() >= STREAM_CHUNK_MIN_CHARS
+                && tx.send(std::mem::take(&mut chunk)).await.is_err()
+            {
+                break;
+            }
+        }
+        if !chunk.is_empty() {
+            let _ = tx.send(chunk).await;
+        }
+    }
+
+    history.push(ChatMessage::assistant(final_text.clone()));
+    Ok(final_text)
 }
 
 #[derive(Debug)]
@@ -916,8 +1462,15 @@ pub(crate) async fn run_tool_call_loop(
     let mut seen_tool_signatures: HashSet<(String, String)> = HashSet::new();
     let mut missing_tool_call_retry_used = false;
     let mut duplicate_tool_call_retry_used = false;
+    let mut tool_result_grounding_retry_used = false;
     let mut missing_tool_call_retry_prompt: Option<String> = None;
     let mut successful_tool_execution_seen = false;
+    // Rolling window of previous no-tool-call response texts for detecting repeated intent.
+    let mut prior_no_tool_response_texts: Vec<String> = Vec::new();
+    // Cumulative retry counter for trace events.
+    let mut retry_count: usize = 0;
+    let mut recent_successful_tool_records: Vec<SuccessfulToolRecord> = Vec::new();
+    let mut recent_failed_tool_records: Vec<FailedToolRecord> = Vec::new();
     let mut prompt_tool_fallback_used = false;
     let bypass_non_cli_approval_for_turn =
         approval.is_some_and(|mgr| channel_name != "cli" && mgr.consume_non_cli_allow_all_once());
@@ -1243,7 +1796,39 @@ pub(crate) async fn run_tool_call_loop(
                     }
                     continue;
                 }
-                return Err(e);
+                if successful_tool_execution_seen {
+                    if let Some(fallback) =
+                        synthesize_grounded_final_answer(&recent_successful_tool_records)
+                    {
+                        runtime_trace::record_event(
+                            "llm_error_grounded_fallback",
+                            Some(channel_name),
+                            Some(provider_name),
+                            Some(model),
+                            Some(&turn_id),
+                            Some(true),
+                            Some("using grounded fallback after post-tool llm error"),
+                            serde_json::json!({
+                                "iteration": iteration + 1,
+                                "error": safe_error,
+                                "text": scrub_credentials(&fallback),
+                            }),
+                        );
+                        (
+                            fallback.clone(),
+                            fallback.clone(),
+                            Vec::new(),
+                            fallback,
+                            Vec::new(),
+                            false,
+                            false,
+                        )
+                    } else {
+                        return Err(e);
+                    }
+                } else {
+                    return Err(e);
+                }
             }
         };
 
@@ -1267,18 +1852,120 @@ pub(crate) async fn run_tool_call_loop(
         }
 
         if tool_calls.is_empty() {
+            // ── Repeated-intent guard ──────────────────────────────────────────────────
+            // If the model keeps emitting the same no-tool-call text after a retry, stop
+            // spending tokens: return a grounded answer (when available) or bail fast.
+            // Match on the first 160 chars of trimmed text to catch paraphrased repeats.
+            let text_key = display_text
+                .trim()
+                .chars()
+                .take(160)
+                .collect::<String>()
+                .to_ascii_lowercase();
+            let is_repeated_intent = !text_key.is_empty()
+                && retry_count > 0
+                && prior_no_tool_response_texts
+                    .iter()
+                    .any(|prev| prev == &text_key);
+            prior_no_tool_response_texts.push(text_key);
+            if prior_no_tool_response_texts.len() > 4 {
+                let drain_to = prior_no_tool_response_texts.len() - 4;
+                prior_no_tool_response_texts.drain(..drain_to);
+            }
+            if is_repeated_intent {
+                runtime_trace::record_event(
+                    "repeated_intent_fast_exit",
+                    Some(channel_name),
+                    Some(provider_name),
+                    Some(model),
+                    Some(&turn_id),
+                    Some(false),
+                    Some("model repeated intent text without a tool call; fast-exiting"),
+                    serde_json::json!({
+                        "iteration": iteration + 1,
+                        "retry_count": retry_count,
+                        "response_excerpt": truncate_with_ellipsis(
+                            &scrub_credentials(&display_text),
+                            240
+                        ),
+                    }),
+                );
+                if let Some(final_text) =
+                    synthesize_grounded_final_answer(&recent_successful_tool_records)
+                {
+                    return return_final_response(
+                        history,
+                        final_text,
+                        on_delta.as_ref(),
+                        cancellation_token.as_ref(),
+                        None,
+                        false,
+                    )
+                    .await;
+                }
+                anyhow::bail!(
+                    "Model repeated intent text without a tool call after {} retries",
+                    retry_count
+                );
+            }
+
             let completion_claim_signal = !successful_tool_execution_seen
                 && looks_like_unverified_action_completion_without_tool_call(&display_text);
             let tool_unavailable_signal =
                 looks_like_tool_unavailability_claim(&display_text, &tool_specs);
-            let missing_tool_call_signal =
-                parse_issue_detected || completion_claim_signal || tool_unavailable_signal;
+            let missing_tool_call_signal = parse_issue_detected
+                || completion_claim_signal
+                || tool_unavailable_signal
+                || (!successful_tool_execution_seen
+                    && looks_like_failed_tool_followthrough(
+                        &display_text,
+                        &recent_failed_tool_records,
+                    ));
             let missing_tool_call_followthrough = !missing_tool_call_retry_used
                 && iteration + 1 < max_iterations
                 && !tool_specs.is_empty()
                 && missing_tool_call_signal;
 
             if missing_tool_call_followthrough {
+                // If tools already succeeded and we can synthesize a grounded answer, return
+                // it immediately instead of queuing a retry that risks a downstream 502.
+                // This handles the case where the model emits JSON-ish success prose after a
+                // successful tool call — the turn is done; don't spend another LLM round.
+                if successful_tool_execution_seen && !recent_successful_tool_records.is_empty() {
+                    if let Some(final_text) =
+                        synthesize_grounded_final_answer(&recent_successful_tool_records)
+                    {
+                        runtime_trace::record_event(
+                            "tool_call_grounded_early_exit",
+                            Some(channel_name),
+                            Some(provider_name),
+                            Some(model),
+                            Some(&turn_id),
+                            Some(true),
+                            Some("tools succeeded; skipping followthrough retry, returning grounded answer"),
+                            serde_json::json!({
+                                "iteration": iteration + 1,
+                                "retry_count": retry_count,
+                                "text": scrub_credentials(&final_text),
+                            }),
+                        );
+                        return return_final_response(
+                            history,
+                            final_text,
+                            on_delta.as_ref(),
+                            cancellation_token.as_ref(),
+                            None,
+                            false,
+                        )
+                        .await;
+                    }
+                }
+
+                let failed_tool_followthrough = !successful_tool_execution_seen
+                    && looks_like_failed_tool_followthrough(
+                        &display_text,
+                        &recent_failed_tool_records,
+                    );
                 let switched_to_prompt_tool_mode =
                     use_native_tools && !prompt_tool_fallback_used && !tool_specs.is_empty();
                 if switched_to_prompt_tool_mode {
@@ -1287,13 +1974,18 @@ pub(crate) async fn run_tool_call_loop(
                     inject_prompt_tool_fallback_instructions(history, tools_registry);
                 }
                 missing_tool_call_retry_used = true;
-                missing_tool_call_retry_prompt = Some(if tool_unavailable_signal {
+                retry_count += 1;
+                missing_tool_call_retry_prompt = Some(if failed_tool_followthrough {
+                    build_failed_tool_retry_prompt(&recent_failed_tool_records)
+                } else if tool_unavailable_signal {
                     build_tool_unavailable_retry_prompt(&tool_specs)
                 } else {
                     MISSING_TOOL_CALL_RETRY_PROMPT.to_string()
                 });
                 let retry_reason = if parse_issue_detected {
                     "parse_issue_detected"
+                } else if failed_tool_followthrough {
+                    "tool_error_followthrough_detected"
                 } else if tool_unavailable_signal {
                     "tool_unavailable_claim_detected"
                 } else {
@@ -1309,6 +2001,7 @@ pub(crate) async fn run_tool_call_loop(
                     Some(retry_reason),
                     serde_json::json!({
                         "iteration": iteration + 1,
+                        "retry_count": retry_count,
                         "switched_to_prompt_tool_mode": switched_to_prompt_tool_mode,
                         "response_excerpt": truncate_with_ellipsis(
                             &scrub_credentials(&display_text),
@@ -1325,6 +2018,50 @@ pub(crate) async fn run_tool_call_loop(
                 }
                 continue;
             }
+
+            let grounding_issue = successful_tool_execution_seen
+                && !recent_successful_tool_records.is_empty()
+                && should_retry_with_tool_result_grounding(
+                    &display_text,
+                    &recent_successful_tool_records,
+                );
+            let can_retry_grounding = grounding_issue
+                && !tool_result_grounding_retry_used
+                && iteration + 1 < max_iterations;
+            if can_retry_grounding {
+                tool_result_grounding_retry_used = true;
+                retry_count += 1;
+                missing_tool_call_retry_prompt = Some(build_tool_result_grounding_retry_prompt(
+                    &recent_successful_tool_records,
+                ));
+                runtime_trace::record_event(
+                    "tool_result_grounding_retry",
+                    Some(channel_name),
+                    Some(provider_name),
+                    Some(model),
+                    Some(&turn_id),
+                    Some(false),
+                    Some("tool_result_grounding_retry"),
+                    serde_json::json!({
+                        "iteration": iteration + 1,
+                        "retry_count": retry_count,
+                        "response_excerpt": truncate_with_ellipsis(
+                            &scrub_credentials(&display_text),
+                            240
+                        ),
+                    }),
+                );
+                if let Some(ref tx) = on_delta {
+                    let _ = tx
+                        .send(format!(
+                            "{DRAFT_PROGRESS_SENTINEL}\u{21bb} Retrying: grounding final answer in verified tool results\n"
+                        ))
+                        .await;
+                }
+                continue;
+            }
+
+            let mut final_text = display_text.clone();
 
             if missing_tool_call_signal && missing_tool_call_retry_used {
                 runtime_trace::record_event(
@@ -1343,12 +2080,66 @@ pub(crate) async fn run_tool_call_loop(
                         ),
                     }),
                 );
-                if tool_unavailable_signal && !parse_issue_detected && !completion_claim_signal {
+                if successful_tool_execution_seen {
+                    if let Some(fallback) =
+                        synthesize_grounded_final_answer(&recent_successful_tool_records)
+                    {
+                        final_text = fallback;
+                        runtime_trace::record_event(
+                            "tool_call_followthrough_grounded_fallback",
+                            Some(channel_name),
+                            Some(provider_name),
+                            Some(model),
+                            Some(&turn_id),
+                            Some(true),
+                            Some("using grounded fallback after repeated followthrough failure"),
+                            serde_json::json!({
+                                "iteration": iteration + 1,
+                                "text": scrub_credentials(&final_text),
+                            }),
+                        );
+                    } else if tool_unavailable_signal
+                        && !parse_issue_detected
+                        && !completion_claim_signal
+                    {
+                        tracing::warn!(
+                            "Model still claims missing tools after corrective retry; returning text response."
+                        );
+                    } else {
+                        anyhow::bail!(
+                            "Model repeatedly deferred action without emitting a tool call"
+                        );
+                    }
+                } else if tool_unavailable_signal
+                    && !parse_issue_detected
+                    && !completion_claim_signal
+                {
                     tracing::warn!(
                         "Model still claims missing tools after corrective retry; returning text response."
                     );
                 } else {
                     anyhow::bail!("Model repeatedly deferred action without emitting a tool call");
+                }
+            }
+
+            if grounding_issue && !can_retry_grounding {
+                if let Some(fallback) =
+                    synthesize_grounded_final_answer(&recent_successful_tool_records)
+                {
+                    final_text = fallback;
+                    runtime_trace::record_event(
+                        "tool_result_grounding_fallback",
+                        Some(channel_name),
+                        Some(provider_name),
+                        Some(model),
+                        Some(&turn_id),
+                        Some(true),
+                        Some("using grounded fallback after ungrounded final answer"),
+                        serde_json::json!({
+                            "iteration": iteration + 1,
+                            "text": scrub_credentials(&final_text),
+                        }),
+                    );
                 }
             }
 
@@ -1362,44 +2153,23 @@ pub(crate) async fn run_tool_call_loop(
                 None,
                 serde_json::json!({
                     "iteration": iteration + 1,
-                    "text": scrub_credentials(&display_text),
+                    "retry_count": retry_count,
+                    "stop_reason": if retry_count == 0 { "clean" } else { "after_retries" },
+                    "text": scrub_credentials(&final_text),
                 }),
             );
             // No tool calls — this is the final response.
             // If a streaming sender is provided, relay the text in small chunks
             // so the channel can progressively update the draft message.
-            if let Some(ref tx) = on_delta {
-                let should_emit_post_hoc_chunks =
-                    !response_streamed_live || display_text != response_text;
-                if !should_emit_post_hoc_chunks {
-                    history.push(ChatMessage::assistant(response_text.clone()));
-                    return Ok(display_text);
-                }
-                // Clear accumulated progress lines before streaming the final answer.
-                let _ = tx.send(DRAFT_CLEAR_SENTINEL.to_string()).await;
-                // Split on whitespace boundaries, accumulating chunks of at least
-                // STREAM_CHUNK_MIN_CHARS characters for progressive draft updates.
-                let mut chunk = String::new();
-                for word in display_text.split_inclusive(char::is_whitespace) {
-                    if cancellation_token
-                        .as_ref()
-                        .is_some_and(CancellationToken::is_cancelled)
-                    {
-                        return Err(ToolLoopCancelled.into());
-                    }
-                    chunk.push_str(word);
-                    if chunk.len() >= STREAM_CHUNK_MIN_CHARS
-                        && tx.send(std::mem::take(&mut chunk)).await.is_err()
-                    {
-                        break; // receiver dropped
-                    }
-                }
-                if !chunk.is_empty() {
-                    let _ = tx.send(chunk).await;
-                }
-            }
-            history.push(ChatMessage::assistant(response_text.clone()));
-            return Ok(display_text);
+            return return_final_response(
+                history,
+                final_text,
+                on_delta.as_ref(),
+                cancellation_token.as_ref(),
+                Some(&response_text),
+                response_streamed_live,
+            )
+            .await;
         }
 
         // Print any text the LLM produced alongside tool calls (unless silent)
@@ -1586,6 +2356,46 @@ pub(crate) async fn run_tool_call_loop(
                 }
             }
 
+            // ── Planner-churn suppression (TODO #9) ─────────────────────────────────
+            // Suppress opportunistic task_plan calls that arrive after real execution
+            // tools have already run. A direct "write, run, delete" prompt should not
+            // reopen planning once execution has started.
+            if tool_name == "task_plan" && successful_tool_execution_seen {
+                let execution_started = recent_successful_tool_records.iter().any(|r| {
+                    !matches!(
+                        r.name.as_str(),
+                        "task_plan" | "memory_store" | "memory_recall"
+                    )
+                });
+                if execution_started {
+                    let suppressed = "Skipped task_plan call: execution has already started this turn. Use the existing plan and continue executing.".to_string();
+                    runtime_trace::record_event(
+                        "planner_churn_suppressed",
+                        Some(channel_name),
+                        Some(provider_name),
+                        Some(model),
+                        Some(&turn_id),
+                        Some(false),
+                        Some("task_plan suppressed after execution started"),
+                        serde_json::json!({
+                            "iteration": iteration + 1,
+                            "arguments": scrub_credentials(&tool_args.to_string()),
+                        }),
+                    );
+                    ordered_results[idx] = Some((
+                        tool_name.clone(),
+                        call.tool_call_id.clone(),
+                        ToolExecutionOutcome {
+                            output: suppressed.clone(),
+                            success: false,
+                            error_reason: Some(suppressed),
+                            duration: Duration::ZERO,
+                        },
+                    ));
+                    continue;
+                }
+            }
+
             let signature = tool_call_signature(&tool_name, &tool_args);
             if !seen_tool_signatures.insert(signature) {
                 duplicate_tool_call_count += 1;
@@ -1674,6 +2484,8 @@ pub(crate) async fn run_tool_call_loop(
             )
             .await?
         };
+        let mut current_successful_tool_records = Vec::new();
+        let mut current_failed_tool_records = Vec::new();
 
         for ((idx, call), outcome) in executable_indices
             .iter()
@@ -1682,6 +2494,16 @@ pub(crate) async fn run_tool_call_loop(
         {
             if outcome.success {
                 successful_tool_execution_seen = true;
+                current_successful_tool_records.push(SuccessfulToolRecord {
+                    name: call.name.clone(),
+                    arguments: call.arguments.clone(),
+                    output: outcome.output.clone(),
+                });
+            } else {
+                current_failed_tool_records.push(FailedToolRecord {
+                    name: call.name.clone(),
+                    output: outcome.output.clone(),
+                });
             }
             runtime_trace::record_event(
                 "tool_call_result",
@@ -1735,6 +2557,24 @@ pub(crate) async fn run_tool_call_loop(
             ordered_results[*idx] = Some((call.name.clone(), call.tool_call_id.clone(), outcome));
         }
 
+        let iteration_had_failed_tools = !current_failed_tool_records.is_empty();
+
+        if !current_successful_tool_records.is_empty() {
+            recent_successful_tool_records.extend(current_successful_tool_records);
+            let recent_len = recent_successful_tool_records.len();
+            if recent_len > 12 {
+                recent_successful_tool_records.drain(..recent_len - 12);
+            }
+        }
+
+        if !current_failed_tool_records.is_empty() {
+            recent_failed_tool_records.extend(current_failed_tool_records);
+            let recent_len = recent_failed_tool_records.len();
+            if recent_len > 8 {
+                recent_failed_tool_records.drain(..recent_len - 8);
+            }
+        }
+
         for (tool_name, tool_call_id, outcome) in ordered_results.into_iter().flatten() {
             individual_results.push((tool_call_id, outcome.output.clone()));
             let _ = writeln!(
@@ -1775,6 +2615,37 @@ pub(crate) async fn run_tool_call_loop(
                     "content": result,
                 });
                 history.push(ChatMessage::tool(tool_msg.to_string()));
+            }
+        }
+
+        if !iteration_had_failed_tools
+            && should_short_circuit_after_tool_execution(&recent_successful_tool_records)
+        {
+            if let Some(final_text) =
+                synthesize_grounded_final_answer(&recent_successful_tool_records)
+            {
+                runtime_trace::record_event(
+                    "tool_execution_grounded_fast_exit",
+                    Some(channel_name),
+                    Some(provider_name),
+                    Some(model),
+                    Some(&turn_id),
+                    Some(true),
+                    Some("returning grounded final answer after verified tool completion"),
+                    serde_json::json!({
+                        "iteration": iteration + 1,
+                        "text": scrub_credentials(&final_text),
+                    }),
+                );
+                return return_final_response(
+                    history,
+                    final_text,
+                    on_delta.as_ref(),
+                    cancellation_token.as_ref(),
+                    None,
+                    false,
+                )
+                .await;
             }
         }
 
@@ -1820,6 +2691,8 @@ pub(crate) async fn run_tool_call_loop(
         Some("agent exceeded maximum tool iterations"),
         serde_json::json!({
             "max_iterations": max_iterations,
+            "retry_count": retry_count,
+            "stop_reason": "max_iterations_exhausted",
         }),
     );
     anyhow::bail!("Agent exceeded maximum tool iterations ({max_iterations})")
@@ -1869,6 +2742,9 @@ pub(crate) fn build_tool_instructions_from_specs(tool_specs: &[crate::tools::Too
     instructions.push_str("After tool execution, results appear in <tool_result> tags. ");
     instructions.push_str(
         "Continue using tools with the results until the task is actually complete, then give the final answer.\n\n",
+    );
+    instructions.push_str(
+        "Ground the final answer in the actual tool results. Do not reinterpret file contents as tool names or availability errors. For `file_read`, answer from the returned contents. For `file_write`, do not invent contents that were not in the write arguments or a verified read-back.\n\n",
     );
     instructions.push_str("### Available Tools\n\n");
 
@@ -3114,6 +3990,128 @@ mod tests {
         }
     }
 
+    struct StaticOutputTool {
+        name: String,
+        output: String,
+        success: bool,
+        invocations: Arc<AtomicUsize>,
+    }
+
+    impl StaticOutputTool {
+        fn new(name: &str, output: &str, invocations: Arc<AtomicUsize>) -> Self {
+            Self {
+                name: name.to_string(),
+                output: output.to_string(),
+                success: true,
+                invocations,
+            }
+        }
+
+        fn failing(name: &str, error: &str, invocations: Arc<AtomicUsize>) -> Self {
+            Self {
+                name: name.to_string(),
+                output: error.to_string(),
+                success: false,
+                invocations,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Tool for StaticOutputTool {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn description(&self) -> &str {
+            "Returns a fixed tool output for grounding tests"
+        }
+
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" },
+                    "content": { "type": "string" }
+                }
+            })
+        }
+
+        async fn execute(
+            &self,
+            _args: serde_json::Value,
+        ) -> anyhow::Result<crate::tools::ToolResult> {
+            self.invocations.fetch_add(1, Ordering::SeqCst);
+            Ok(crate::tools::ToolResult {
+                success: self.success,
+                output: if self.success {
+                    self.output.clone()
+                } else {
+                    String::new()
+                },
+                error: if self.success {
+                    None
+                } else {
+                    Some(self.output.clone())
+                },
+            })
+        }
+    }
+
+    struct ResultScriptedProvider {
+        responses: Arc<Mutex<VecDeque<anyhow::Result<ChatResponse>>>>,
+        capabilities: ProviderCapabilities,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl ResultScriptedProvider {
+        fn from_results(
+            responses: Vec<anyhow::Result<ChatResponse>>,
+            calls: Arc<AtomicUsize>,
+        ) -> Self {
+            Self {
+                responses: Arc::new(Mutex::new(responses.into())),
+                capabilities: ProviderCapabilities::default(),
+                calls,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Provider for ResultScriptedProvider {
+        fn capabilities(&self) -> ProviderCapabilities {
+            self.capabilities.clone()
+        }
+
+        async fn chat_with_system(
+            &self,
+            _system_prompt: Option<&str>,
+            _message: &str,
+            _model: &str,
+            _temperature: f64,
+        ) -> anyhow::Result<String> {
+            anyhow::bail!("chat_with_system should not be used in result scripted provider tests");
+        }
+
+        async fn chat(
+            &self,
+            _request: ChatRequest<'_>,
+            _model: &str,
+            _temperature: f64,
+        ) -> anyhow::Result<ChatResponse> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let mut responses = self
+                .responses
+                .lock()
+                .expect("responses lock should be valid");
+            responses.pop_front().unwrap_or_else(|| {
+                Err(anyhow::anyhow!(
+                    "result scripted provider exhausted responses"
+                ))
+            })
+        }
+    }
+
     struct DelayTool {
         name: String,
         delay_ms: u64,
@@ -4162,6 +5160,716 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_tool_call_loop_accepts_json_wrapper_final_text_after_file_write() {
+        let provider = ScriptedProvider::from_text_responses(vec![
+            r#"{"content":"writing file","tool_calls":[{"id":"call_1","name":"file_write","arguments":"{\"path\":\"/tmp/smoke.txt\",\"content\":\"tool smoke cloud\"}"}]}"#,
+            r#"{"content":"File written successfully.","tool_calls":[]}"#,
+        ])
+        .with_native_tool_support();
+
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(StaticOutputTool::new(
+            "file_write",
+            "Written 16 bytes to /tmp/smoke.txt",
+            Arc::clone(&invocations),
+        ))];
+
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("write the file"),
+        ];
+        let observer = NoopObserver;
+
+        let result = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None,
+            "cli",
+            &crate::config::MultimodalConfig::default(),
+            4,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .await
+        .expect("json wrapper final text after real file_write should be accepted");
+
+        assert_eq!(result, "File written successfully.");
+        assert_eq!(invocations.load(Ordering::SeqCst), 1);
+        assert!(
+            history
+                .iter()
+                .any(|msg| msg.role == "assistant" && msg.content == "File written successfully."),
+            "assistant history should keep the unwrapped final text"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_tool_call_loop_falls_back_to_grounded_file_read_answer() {
+        let provider = ScriptedProvider::from_text_responses(vec![
+            r#"<tool_call>
+{"name":"file_read","arguments":{"path":"rust_kernel/src/main.rs"}}
+</tool_call>"#,
+            "The string `tool smoke qwen` doesn't appear to be a valid tool in my available toolset.",
+            "The string `tool smoke qwen` doesn't appear to be a valid tool in my available toolset.",
+        ]);
+
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(StaticOutputTool::new(
+            "file_read",
+            "1: tool smoke qwen",
+            Arc::clone(&invocations),
+        ))];
+
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("read the file"),
+        ];
+        let observer = NoopObserver;
+
+        let result = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None,
+            "cli",
+            &crate::config::MultimodalConfig::default(),
+            5,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .await
+        .expect("ungrounded post-file_read answer should fall back to a grounded answer");
+
+        assert_eq!(
+            result,
+            "The file `rust_kernel/src/main.rs` contains:\n\n```\ntool smoke qwen\n```"
+        );
+        assert_eq!(invocations.load(Ordering::SeqCst), 1);
+        assert!(
+            history.iter().any(|msg| {
+                msg.role == "user"
+                    && msg
+                        .content
+                        .starts_with("Internal correction: use the verified tool results below")
+            }),
+            "loop should inject a grounding retry prompt before using the fallback"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_tool_call_loop_falls_back_to_grounded_file_write_answer() {
+        let provider = ScriptedProvider::from_text_responses(vec![
+            r#"<tool_call>
+{"name":"file_write","arguments":{"path":"rust_kernel/src/main.rs","content":"tool smoke qwen"}}
+</tool_call>"#,
+            r#"Done. I wrote content "Hello" to rust_kernel/src/main.rs."#,
+            r#"Done. I wrote content "Hello" to rust_kernel/src/main.rs."#,
+        ]);
+
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(StaticOutputTool::new(
+            "file_write",
+            "Written 15 bytes to rust_kernel/src/main.rs",
+            Arc::clone(&invocations),
+        ))];
+
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("write the file"),
+        ];
+        let observer = NoopObserver;
+
+        let result = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None,
+            "cli",
+            &crate::config::MultimodalConfig::default(),
+            5,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .await
+        .expect("invented file contents after file_write should fall back to grounded answer");
+
+        assert_eq!(
+            result,
+            "The file `rust_kernel/src/main.rs` was written successfully with content:\n\n```\ntool smoke qwen\n```"
+        );
+        assert_eq!(invocations.load(Ordering::SeqCst), 1);
+        assert!(
+            history.iter().any(|msg| {
+                msg.role == "user"
+                    && msg
+                        .content
+                        .starts_with("Internal correction: use the verified tool results below")
+            }),
+            "loop should inject a grounding retry prompt before using the fallback"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_tool_call_loop_falls_back_to_grounded_file_read_after_meta_correction_text() {
+        let provider = ScriptedProvider::from_text_responses(vec![
+            r#"<tool_call>
+{"name":"file_read","arguments":{"path":"rust_kernel/src/main.rs"}}
+</tool_call>"#,
+            "I understand the correction. I'll use the available runtime tools as needed.\n\nWhat would you like me to help you with?",
+            "I understand the correction. I'll use the available runtime tools as needed.\n\nWhat would you like me to help you with?",
+        ]);
+
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(StaticOutputTool::new(
+            "file_read",
+            "1: tool smoke qwen",
+            Arc::clone(&invocations),
+        ))];
+
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("read the file"),
+        ];
+        let observer = NoopObserver;
+
+        let result = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None,
+            "cli",
+            &crate::config::MultimodalConfig::default(),
+            5,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .await
+        .expect("meta correction text after file_read should fall back to grounded content");
+
+        assert_eq!(
+            result,
+            "The file `rust_kernel/src/main.rs` contains:\n\n```\ntool smoke qwen\n```"
+        );
+        assert_eq!(invocations.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn run_tool_call_loop_uses_grounded_fallback_after_post_tool_provider_error() {
+        let provider_calls = Arc::new(AtomicUsize::new(0));
+        let provider = ResultScriptedProvider::from_results(
+            vec![
+                Ok(ChatResponse {
+                    text: Some(
+                        r#"<tool_call>
+{"name":"file_read","arguments":{"path":"rust_kernel/src/main.rs"}}
+</tool_call>"#
+                            .to_string(),
+                    ),
+                    tool_calls: Vec::new(),
+                    usage: None,
+                    reasoning_content: None,
+                }),
+                Err(anyhow::anyhow!("upstream timeout after tool execution")),
+            ],
+            Arc::clone(&provider_calls),
+        );
+
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(StaticOutputTool::new(
+            "file_read",
+            "1: tool smoke qwen",
+            Arc::clone(&invocations),
+        ))];
+
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("read the file"),
+        ];
+        let observer = NoopObserver;
+
+        let result = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None,
+            "cli",
+            &crate::config::MultimodalConfig::default(),
+            4,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .await
+        .expect("post-tool provider error should fall back to grounded tool output");
+
+        assert_eq!(
+            result,
+            "The file `rust_kernel/src/main.rs` contains:\n\n```\ntool smoke qwen\n```"
+        );
+        assert_eq!(provider_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(invocations.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn run_tool_call_loop_falls_back_to_grounded_task_plan_summary() {
+        let provider = ScriptedProvider::from_text_responses(vec![
+            r#"<tool_call>
+{"name":"task_plan","arguments":{"action":"create","tasks":[{"title":"Write a file"},{"title":"Read the file"},{"title":"Delete the file"}]}}
+</tool_call>"#,
+            "I see that 3 tasks have been created. What would you like to do next?",
+            "I see that 3 tasks have been created. What would you like to do next?",
+        ]);
+
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(StaticOutputTool::new(
+            "task_plan",
+            "Created 3 task(s).",
+            Arc::clone(&invocations),
+        ))];
+
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("create the plan"),
+        ];
+        let observer = NoopObserver;
+
+        let result = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None,
+            "cli",
+            &crate::config::MultimodalConfig::default(),
+            5,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .await
+        .expect("task_plan follow-up question should fall back to a grounded plan summary");
+
+        assert_eq!(
+            result,
+            "Task plan created with 3 steps:\n1. Write a file\n2. Read the file\n3. Delete the file"
+        );
+        assert_eq!(invocations.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn run_tool_call_loop_falls_back_to_grounded_task_plan_after_tool_result_leak() {
+        let provider = ScriptedProvider::from_text_responses(vec![
+            r#"<tool_call>
+{"name":"task_plan","arguments":{"action":"create","tasks":[{"title":"Write a file"},{"title":"Read the file"},{"title":"Delete the file"}]}}
+</tool_call>"#,
+            "I see that 3 tasks have been created. Let me check the details of what was planned:\n\n<tool_result name=\"task_plan\">\n</tool_result>\n\nCould you please provide more details about what you'd like me to plan?",
+            "I see that 3 tasks have been created. Let me check the details of what was planned:\n\n<tool_result name=\"task_plan\">\n</tool_result>\n\nCould you please provide more details about what you'd like me to plan?",
+        ]);
+
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(StaticOutputTool::new(
+            "task_plan",
+            "Created 3 task(s).",
+            Arc::clone(&invocations),
+        ))];
+
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("create the plan"),
+        ];
+        let observer = NoopObserver;
+
+        let result = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None,
+            "cli",
+            &crate::config::MultimodalConfig::default(),
+            5,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .await
+        .expect("task_plan tool_result leak should fall back to the grounded plan summary");
+
+        assert_eq!(
+            result,
+            "Task plan created with 3 steps:\n1. Write a file\n2. Read the file\n3. Delete the file"
+        );
+        assert_eq!(invocations.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn run_tool_call_loop_repairs_failed_task_plan_then_falls_back_to_grounded_summary() {
+        let provider = ScriptedProvider::from_text_responses(vec![
+            r#"<tool_call>
+{"name":"task_plan","arguments":{"action":"create"}}
+</tool_call>"#,
+            "I see the task_plan tool requires a 'tasks' parameter with a non-empty array of task objects. Let me create a simple task plan for you:\n\nWould you like me to:\n1. Use this example task plan, or\n2. Create a task plan based on a specific project or task you have in mind?",
+            r#"<tool_call>
+{"name":"task_plan","arguments":{"action":"create","tasks":[{"title":"Write a file"},{"title":"Read the file"},{"title":"Delete the file"}]}}
+</tool_call>"#,
+            "I see that 3 tasks have been created. What would you like me to do next?",
+            "I see that 3 tasks have been created. What would you like me to do next?",
+        ]);
+
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(
+            crate::tools::task_plan::TaskPlanTool::new(Arc::new(SecurityPolicy::default())),
+        )];
+
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("create a 3-step task plan: write a file, read it, delete it"),
+        ];
+        let observer = NoopObserver;
+
+        let result = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None,
+            "cli",
+            &crate::config::MultimodalConfig::default(),
+            7,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .await
+        .expect("failed task_plan should trigger a repair retry and grounded summary");
+
+        assert_eq!(
+            result,
+            "Task plan created with 3 steps:\n1. Write a file\n2. Read the file\n3. Delete the file"
+        );
+        assert!(
+            history.iter().any(|msg| {
+                msg.role == "user"
+                    && msg.content.starts_with(
+                        "Internal correction: your last tool call for `task_plan` failed",
+                    )
+            }),
+            "loop should inject a failed-tool repair retry prompt"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_tool_call_loop_falls_back_to_grounded_file_write_after_unrelated_pdf_error() {
+        let provider = ScriptedProvider::from_text_responses(vec![
+            r#"<tool_call>
+{"name":"file_write","arguments":{"path":"rust_kernel/src/main.rs","content":"tool smoke qwen"}}
+</tool_call>"#,
+            "The PDF read operation failed because the file path couldn't be resolved. Would you like me to search for PDF files first?",
+            "The PDF read operation failed because the file path couldn't be resolved. Would you like me to search for PDF files first?",
+        ]);
+
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(StaticOutputTool::new(
+            "file_write",
+            "Written 15 bytes to rust_kernel/src/main.rs",
+            Arc::clone(&invocations),
+        ))];
+
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("write the file"),
+        ];
+        let observer = NoopObserver;
+
+        let result = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None,
+            "cli",
+            &crate::config::MultimodalConfig::default(),
+            5,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .await
+        .expect("unrelated pdf error after file_write should fall back to grounded write result");
+
+        assert_eq!(
+            result,
+            "The file `rust_kernel/src/main.rs` was written successfully with content:\n\n```\ntool smoke qwen\n```"
+        );
+        assert_eq!(invocations.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn run_tool_call_loop_falls_back_to_grounded_file_write_after_markdown_summary_mismatch()
+    {
+        let provider = ScriptedProvider::from_text_responses(vec![
+            r#"<tool_call>
+{"name":"file_write","arguments":{"path":"/llamafarm-data/workspace/tool_smoke_qwen_postpatch.txt","content":"tool smoke qwen postpatch"}}
+</tool_call>"#,
+            "The file has been successfully written!\n\n**Summary:**\n- **File:** `/llamafarm-data/workspace/tool_smoke_qwen_postpatch.txt`\n- **Content:** `Hello World`\n- **Size:** 25 bytes",
+            "The file has been successfully written!\n\n**Summary:**\n- **File:** `/llamafarm-data/workspace/tool_smoke_qwen_postpatch.txt`\n- **Content:** `Hello World`\n- **Size:** 25 bytes",
+        ]);
+
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(StaticOutputTool::new(
+            "file_write",
+            "Written 25 bytes to /llamafarm-data/workspace/tool_smoke_qwen_postpatch.txt",
+            Arc::clone(&invocations),
+        ))];
+
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("write the file"),
+        ];
+        let observer = NoopObserver;
+
+        let result = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None,
+            "cli",
+            &crate::config::MultimodalConfig::default(),
+            5,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .await
+        .expect("markdown summary mismatch after file_write should fall back to grounded content");
+
+        assert_eq!(
+            result,
+            "The file `/llamafarm-data/workspace/tool_smoke_qwen_postpatch.txt` was written successfully with content:\n\n```\ntool smoke qwen postpatch\n```"
+        );
+        assert_eq!(invocations.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn run_tool_call_loop_fast_exits_after_verified_python_execution() {
+        let provider_calls = Arc::new(AtomicUsize::new(0));
+        let provider = ResultScriptedProvider::from_results(
+            vec![
+                Ok(ChatResponse {
+                    text: Some(
+                        r##"<tool_call>
+{"name":"file_write","arguments":{"path":"/tmp/add_two_plus_three.py","content":"#!/usr/bin/env python3\nimport os\n\nresult = 2 + 3\nprint(f\"2 + 3 = {result}\")\nprint(\"File contents:\")\nprint(\"#!/usr/bin/env python3\")\nos.remove(__file__)\nprint(\"File deleted successfully.\")\n"}}
+</tool_call>"##
+                            .to_string(),
+                    ),
+                    tool_calls: Vec::new(),
+                    usage: None,
+                    reasoning_content: None,
+                }),
+                Ok(ChatResponse {
+                    text: Some(
+                        r#"<tool_call>
+{"name":"shell","arguments":{"command":"python3 /tmp/add_two_plus_three.py"}}
+</tool_call>"#
+                            .to_string(),
+                    ),
+                    tool_calls: Vec::new(),
+                    usage: None,
+                    reasoning_content: None,
+                }),
+                Err(anyhow::anyhow!("provider should not be called after grounded fast exit")),
+            ],
+            Arc::clone(&provider_calls),
+        );
+
+        let file_write_invocations = Arc::new(AtomicUsize::new(0));
+        let shell_invocations = Arc::new(AtomicUsize::new(0));
+        let tools_registry: Vec<Box<dyn Tool>> = vec![
+            Box::new(StaticOutputTool::new(
+                "file_write",
+                "Written 212 bytes to /tmp/add_two_plus_three.py",
+                Arc::clone(&file_write_invocations),
+            )),
+            Box::new(StaticOutputTool::new(
+                "shell",
+                "2 + 3 = 5\nFile contents:\n#!/usr/bin/env python3\nFile deleted successfully.",
+                Arc::clone(&shell_invocations),
+            )),
+        ];
+
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user(
+                "write a python file to add 2 + 3 print its output and the files contents then delete the file after execution",
+            ),
+        ];
+        let observer = NoopObserver;
+
+        let result = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None,
+            "cli",
+            &crate::config::MultimodalConfig::default(),
+            5,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .await
+        .expect("verified python execution should return immediately from tool results");
+
+        assert!(result.contains(
+            "The script `/tmp/add_two_plus_three.py` was created and executed successfully."
+        ));
+        assert!(result.contains("2 + 3 = 5"));
+        assert!(result.contains("Script contents:"));
+        assert!(result.contains("The file was deleted after execution."));
+        assert_eq!(provider_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(file_write_invocations.load(Ordering::SeqCst), 1);
+        assert_eq!(shell_invocations.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn run_tool_call_loop_repairs_failed_shell_placeholder_path() {
+        let provider = ScriptedProvider::from_text_responses(vec![
+            r#"<tool_call>
+{"name":"shell","arguments":{"command":"python3 /path/to/script.py"}}
+</tool_call>"#,
+            "The file path doesn't exist. Would you like me to create it first?",
+            r#"<tool_call>
+{"name":"file_write","arguments":{"path":"add_two_plus_three.py","content":"print(2 + 3)"}}
+</tool_call>"#,
+            "done after creating the file",
+        ]);
+
+        let shell_invocations = Arc::new(AtomicUsize::new(0));
+        let file_write_invocations = Arc::new(AtomicUsize::new(0));
+        let tools_registry: Vec<Box<dyn Tool>> = vec![
+            Box::new(StaticOutputTool::failing(
+                "shell",
+                "python3: can't open file '/path/to/script.py': [Errno 2] No such file or directory",
+                Arc::clone(&shell_invocations),
+            )),
+            Box::new(StaticOutputTool::new(
+                "file_write",
+                "Written 12 bytes to add_two_plus_three.py",
+                Arc::clone(&file_write_invocations),
+            )),
+        ];
+
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("run the python script"),
+        ];
+        let observer = NoopObserver;
+
+        let result = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None,
+            "cli",
+            &crate::config::MultimodalConfig::default(),
+            6,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .await
+        .expect("failed placeholder-path shell call should trigger a repair retry");
+
+        assert_eq!(result, "done after creating the file");
+        assert_eq!(shell_invocations.load(Ordering::SeqCst), 1);
+        assert_eq!(file_write_invocations.load(Ordering::SeqCst), 1);
+        assert!(
+            history.iter().any(|msg| {
+                msg.role == "user"
+                    && msg
+                        .content
+                        .starts_with("Internal correction: your last tool call for `shell` failed")
+                    && msg
+                        .content
+                        .contains("Do not use placeholder paths like `/path/to/script.py`")
+            }),
+            "loop should inject shell-specific repair guidance after placeholder-path failures"
+        );
+    }
+
+    #[tokio::test]
     async fn run_tool_call_loop_allows_text_only_planning_without_tool_call() {
         let provider = ScriptedProvider::from_text_responses(vec![
             "We were previously discussing gmail integration. Goal 1 is done. Our next task is Goal 2 — Gmail API via OAuth. Here is the implementation plan before any tool actions.",
@@ -4484,6 +6192,34 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "shell");
         assert_eq!(calls[0].arguments["command"], "lsusb");
+    }
+
+    #[test]
+    fn parse_tool_calls_recovers_single_key_task_plan_json() {
+        let response = r#"{"task_plan":{"steps":[{"description":"Write a file"},{"description":"Read the file"},{"description":"Delete the file"}]}}"#;
+        let (text, calls) = parse_tool_calls(response);
+        assert!(text.is_empty());
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "task_plan");
+        assert_eq!(calls[0].arguments["action"], "create");
+        assert_eq!(calls[0].arguments["tasks"][0]["title"], "Write a file");
+        assert_eq!(calls[0].arguments["tasks"][1]["title"], "Read the file");
+        assert_eq!(calls[0].arguments["tasks"][2]["title"], "Delete the file");
+    }
+
+    #[test]
+    fn parse_tool_calls_recovers_fenced_single_key_task_plan_json() {
+        let response = r#"```json
+{"task_plan":{"steps":[{"description":"Write a file"},{"description":"Read the file"},{"description":"Delete the file"}]}}
+```"#;
+        let (text, calls) = parse_tool_calls(response);
+        assert!(text.is_empty());
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "task_plan");
+        assert_eq!(calls[0].arguments["action"], "create");
+        assert_eq!(calls[0].arguments["tasks"][0]["title"], "Write a file");
+        assert_eq!(calls[0].arguments["tasks"][1]["title"], "Read the file");
+        assert_eq!(calls[0].arguments["tasks"][2]["title"], "Delete the file");
     }
 
     #[test]
@@ -4930,15 +6666,13 @@ node smoke_js/add_two.mjs
         assert!(text.contains("Now let me run the script"));
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].name, "shell");
-        assert!(
-            calls[0]
-                .arguments
-                .get("command")
-                .unwrap()
-                .as_str()
-                .unwrap()
-                .contains("mkdir -p smoke_js")
-        );
+        assert!(calls[0]
+            .arguments
+            .get("command")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("mkdir -p smoke_js"));
         assert_eq!(calls[1].name, "shell");
         assert_eq!(
             calls[1].arguments.get("command").unwrap().as_str().unwrap(),
@@ -5059,15 +6793,13 @@ echo "=== System Information ===" && uname -a && echo "" && echo "=== USB Device
         assert!(text.contains("Option 1"));
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "shell");
-        assert!(
-            calls[0]
-                .arguments
-                .get("command")
-                .unwrap()
-                .as_str()
-                .unwrap()
-                .contains("uname -a")
-        );
+        assert!(calls[0]
+            .arguments
+            .get("command")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("uname -a"));
     }
 
     #[test]
@@ -5196,7 +6928,11 @@ EOF</shell>
             .iter()
             .find_map(|call| {
                 (call.name == "shell")
-                    .then(|| call.arguments.get("command").and_then(|value| value.as_str()))
+                    .then(|| {
+                        call.arguments
+                            .get("command")
+                            .and_then(|value| value.as_str())
+                    })
                     .flatten()
                     .filter(|command| command.contains("cat > /tmp/add_two.py << 'EOF'"))
             })
@@ -5205,7 +6941,11 @@ EOF</shell>
             .iter()
             .find_map(|call| {
                 (call.name == "shell")
-                    .then(|| call.arguments.get("command").and_then(|value| value.as_str()))
+                    .then(|| {
+                        call.arguments
+                            .get("command")
+                            .and_then(|value| value.as_str())
+                    })
                     .flatten()
                     .filter(|command| *command == "python3 /tmp/add_two.py")
             })
@@ -5869,12 +7609,18 @@ Done."#;
 
     #[test]
     fn parse_tool_calls_handles_empty_tool_calls_array() {
-        // Recovery: Empty tool_calls array returns original response (no tool parsing)
+        // Recovery: Empty tool_calls array should unwrap content text and avoid false parse issues.
         let response = r#"{"content": "Hello", "tool_calls": []}"#;
         let (text, calls) = parse_tool_calls(response);
-        // When tool_calls is empty, the entire JSON is returned as text
-        assert!(text.contains("Hello"));
+        assert_eq!(text, "Hello");
         assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn detect_tool_call_parse_issue_ignores_json_wrapper_with_empty_tool_calls() {
+        let response = r#"{"content":"File written successfully.","tool_calls":[]}"#;
+        let issue = detect_tool_call_parse_issue(response, &[]);
+        assert!(issue.is_none());
     }
 
     #[test]
@@ -6066,6 +7812,34 @@ Done."#;
         assert_eq!(
             result.arguments.get("command").and_then(|v| v.as_str()),
             Some("date")
+        );
+    }
+
+    #[test]
+    fn parse_tool_call_value_normalizes_task_plan_steps_without_action() {
+        let value = serde_json::json!({
+            "tool": "task_plan",
+            "parameters": {
+                "steps": [
+                    {"step": 1, "description": "Write a file"},
+                    {"step": 2, "description": "Read the file"},
+                    {"step": 3, "description": "Delete the file"}
+                ]
+            }
+        });
+        let result = parse_tool_call_value(&value).expect("task plan call should parse");
+        assert_eq!(result.name, "task_plan");
+        assert_eq!(
+            result.arguments.get("action").and_then(|v| v.as_str()),
+            Some("create")
+        );
+        assert_eq!(
+            result
+                .arguments
+                .get("tasks")
+                .and_then(|v| v.as_array())
+                .map(|tasks| tasks.len()),
+            Some(3)
         );
     }
 
@@ -6364,9 +8138,16 @@ browser_open/url>https://example.com"#;
 **web_search_tool**: Search for top news stories today
 Parameters: `{"properties":{"query":"top news stories today 2026-03-16","search_depth":"medium","search_type":"web_search"},"required":["query"],"type":"object"}`"#;
         let (text, calls) = parse_tool_calls(response);
-        assert_eq!(calls.len(), 1, "should extract the markdown-style tool call");
+        assert_eq!(
+            calls.len(),
+            1,
+            "should extract the markdown-style tool call"
+        );
         assert_eq!(calls[0].name, "web_search_tool");
-        assert_eq!(calls[0].arguments["query"], "top news stories today 2026-03-16");
+        assert_eq!(
+            calls[0].arguments["query"],
+            "top news stories today 2026-03-16"
+        );
         assert_eq!(calls[0].arguments["search_depth"], "medium");
         assert_eq!(calls[0].arguments["search_type"], "web_search");
         assert!(
@@ -6383,7 +8164,11 @@ Parameters: `{"properties":{"query":"top news stories today 2026-03-16","search_
 {"name": "web_search_tool", "parameters": {"query": "current Ryzen CPUs 2024 2025 latest AMD processors"}}
 </tool_code>"#;
         let (text, calls) = parse_tool_calls(response);
-        assert_eq!(calls.len(), 1, "should extract the meta-wrapped JSON tool call");
+        assert_eq!(
+            calls.len(),
+            1,
+            "should extract the meta-wrapped JSON tool call"
+        );
         assert_eq!(calls[0].name, "web_search_tool");
         assert_eq!(
             calls[0].arguments["query"],
@@ -6603,6 +8388,16 @@ Let me check the result."#;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "shell");
         assert_eq!(calls[0].arguments["command"], "date");
+        assert!(text.is_empty());
+    }
+
+    #[test]
+    fn parse_tool_calls_handles_generic_self_closing_tool_tag() {
+        let input = r#"<tool name="file_read" parameters='{"path":"AGENTS.md"}'/>"#;
+        let (text, calls) = parse_tool_calls(input);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "file_read");
+        assert_eq!(calls[0].arguments["path"], "AGENTS.md");
         assert!(text.is_empty());
     }
 

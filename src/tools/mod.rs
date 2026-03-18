@@ -47,6 +47,7 @@ pub mod memory_forget;
 pub mod memory_recall;
 pub mod memory_store;
 pub mod model_routing_config;
+pub mod ollama_model;
 pub mod pdf_read;
 pub mod process;
 pub mod proxy_config;
@@ -96,6 +97,7 @@ pub use memory_forget::MemoryForgetTool;
 pub use memory_recall::MemoryRecallTool;
 pub use memory_store::MemoryStoreTool;
 pub use model_routing_config::ModelRoutingConfigTool;
+pub use ollama_model::OllamaModelTool;
 pub use pdf_read::PdfReadTool;
 pub use process::ProcessTool;
 pub use proxy_config::ProxyConfigTool;
@@ -269,6 +271,10 @@ pub fn all_tools_with_runtime(
         Arc::new(ModelRoutingConfigTool::new(
             config.clone(),
             security.clone(),
+        )),
+        Arc::new(OllamaModelTool::new(
+            security.clone(),
+            root_config.api_url.clone(),
         )),
         Arc::new(ProxyConfigTool::new(config.clone(), security.clone())),
         Arc::new(PushoverTool::new(
