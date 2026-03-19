@@ -616,6 +616,28 @@ fn summarize_direct_file_read(path: &str, raw_output: &str, success: bool) -> St
     }
 }
 
+fn summarize_direct_ollama_model(
+    action: &str,
+    name: Option<&str>,
+    raw_output: &str,
+    success: bool,
+) -> String {
+    let subject = match name {
+        Some(name) => format!("`{action} {name}`"),
+        None => format!("`{action}`"),
+    };
+
+    if success {
+        if raw_output.trim().is_empty() {
+            format!("Ollama command {subject} completed successfully.")
+        } else {
+            format!("Ollama command {subject} completed successfully. Raw tool output is shown above.")
+        }
+    } else {
+        format!("Ollama command {subject} failed. Raw tool output is shown above.")
+    }
+}
+
 fn websocket_memory_key() -> String {
     format!("webchat_msg_{}", Uuid::new_v4())
 }
@@ -824,6 +846,106 @@ fn extract_direct_file_read_path(message: &str) -> Option<String> {
 
         if looks_like_direct_file_path(path) {
             return Some(path.to_string());
+        }
+    }
+
+    None
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DirectOllamaModelRequest {
+    action: String,
+    name: Option<String>,
+}
+
+fn normalize_direct_ollama_model_action(raw: &str) -> Option<&'static str> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "list" | "ls" => Some("list"),
+        "running" | "ps" => Some("running"),
+        "pull" => Some("pull"),
+        "show" => Some("show"),
+        "delete" | "remove" | "rm" => Some("delete"),
+        _ => None,
+    }
+}
+
+fn looks_like_direct_ollama_model_name(candidate: &str) -> bool {
+    let trimmed = candidate.trim();
+    !trimmed.is_empty()
+        && trimmed.lines().count() == 1
+        && trimmed.chars().all(|ch| {
+            ch.is_ascii_alphanumeric() || matches!(ch, '.' | ':' | '-' | '_' | '/')
+        })
+        && trimmed.chars().any(|ch| ch.is_ascii_alphabetic())
+}
+
+fn parse_direct_ollama_model_request(raw: &str) -> Option<DirectOllamaModelRequest> {
+    let trimmed = raw.trim().trim_matches('`');
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let has_ollama_prefix = trimmed.starts_with("ollama ") || trimmed.starts_with("Ollama ");
+    let without_ollama = trimmed
+        .strip_prefix("ollama ")
+        .or_else(|| trimmed.strip_prefix("Ollama "))
+        .unwrap_or(trimmed)
+        .trim();
+    let (raw_action, remainder) = without_ollama.split_once(char::is_whitespace).map_or(
+        (without_ollama, ""),
+        |(action, rest)| (action, rest.trim()),
+    );
+    let action = normalize_direct_ollama_model_action(raw_action)?;
+
+    if !has_ollama_prefix
+        && (!matches!(action, "pull" | "show" | "delete")
+            || !looks_like_direct_ollama_model_name(remainder))
+    {
+        return None;
+    }
+
+    let name = if remainder.is_empty() {
+        None
+    } else if looks_like_direct_ollama_model_name(remainder) {
+        Some(remainder.to_string())
+    } else {
+        return None;
+    };
+
+    Some(DirectOllamaModelRequest {
+        action: action.to_string(),
+        name,
+    })
+}
+
+fn extract_direct_ollama_model_request(message: &str) -> Option<DirectOllamaModelRequest> {
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Some(parsed) = parse_direct_ollama_model_request(trimmed) {
+        return Some(parsed);
+    }
+
+    for prefix in [
+        "run ",
+        "execute ",
+        "run this exact command:",
+        "run this exact command",
+        "execute this exact command:",
+        "execute this exact command",
+        "run this command:",
+        "execute this command:",
+    ] {
+        if let Some(rest) = trimmed
+            .to_ascii_lowercase()
+            .strip_prefix(prefix)
+            .map(|_| trimmed[prefix.len()..].trim())
+        {
+            if let Some(parsed) = parse_direct_ollama_model_request(rest) {
+                return Some(parsed);
+            }
         }
     }
 
@@ -1106,6 +1228,107 @@ async fn execute_direct_file_read(
     Ok(final_response)
 }
 
+async fn execute_direct_ollama_model(
+    socket: &mut WebSocket,
+    session_id: &str,
+    runtime: &GatewayRuntimeSnapshot,
+    history: &mut Vec<ChatMessage>,
+    request: &DirectOllamaModelRequest,
+) -> anyhow::Result<String> {
+    let Some(ollama_tool) = runtime
+        .tools_registry_exec
+        .iter()
+        .find(|tool| tool.name() == "ollama_model")
+    else {
+        anyhow::bail!("ollama_model tool is not available in this runtime");
+    };
+
+    let hint = match request.name.as_deref() {
+        Some(name) => format!("{} {}", request.action, name),
+        None => request.action.clone(),
+    };
+    emit_ws_delta_event(
+        socket,
+        session_id,
+        WsDeltaEvent::ToolCall {
+            name: "ollama_model".to_string(),
+            hint: Some(hint),
+        },
+    )
+    .await;
+
+    let started_at = Instant::now();
+    let mut arguments = serde_json::Map::new();
+    arguments.insert(
+        "action".to_string(),
+        serde_json::Value::String(request.action.clone()),
+    );
+    if let Some(name) = request.name.as_deref() {
+        arguments.insert("name".to_string(), serde_json::Value::String(name.to_string()));
+    }
+    let arguments_value = serde_json::Value::Object(arguments);
+
+    let tool_result = ollama_tool
+        .execute(arguments_value.clone())
+        .await
+        .map_err(|error| anyhow::anyhow!("ollama_model execution failed: {error}"))?;
+
+    let raw_output = if tool_result.output.trim().is_empty() {
+        tool_result.error.clone().unwrap_or_default()
+    } else {
+        tool_result.output.clone()
+    };
+
+    emit_ws_delta_event(
+        socket,
+        session_id,
+        WsDeltaEvent::ToolResult {
+            name: "ollama_model".to_string(),
+            success: tool_result.success,
+            duration_secs: Some(started_at.elapsed().as_secs()),
+            output: if raw_output.trim().is_empty() {
+                "(no output)".to_string()
+            } else {
+                raw_output.clone()
+            },
+        },
+    )
+    .await;
+
+    let tool_call_id = format!("ws_ollama_model_{}", Uuid::new_v4());
+    let assistant_tool_call = json!({
+        "content": serde_json::Value::Null,
+        "tool_calls": [{
+            "id": tool_call_id,
+            "name": "ollama_model",
+            "arguments": serde_json::to_string(&arguments_value)
+                .unwrap_or_else(|_| "{}".to_string()),
+        }],
+    });
+    history.push(ChatMessage::assistant(assistant_tool_call.to_string()));
+    history.push(ChatMessage::tool(
+        json!({
+            "tool_call_id": tool_call_id,
+            "tool_name": "ollama_model",
+            "content": if raw_output.trim().is_empty() {
+                "(no output)".to_string()
+            } else {
+                raw_output.clone()
+            },
+        })
+        .to_string(),
+    ));
+
+    let final_response = summarize_direct_ollama_model(
+        &request.action,
+        request.name.as_deref(),
+        &raw_output,
+        tool_result.success,
+    );
+    history.push(ChatMessage::assistant(&final_response));
+    Ok(final_response)
+}
+
 /// GET /ws/chat — WebSocket upgrade for agent chat
 pub async fn handle_ws_chat(
     State(state): State<AppState>,
@@ -1273,6 +1496,60 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             let result =
                 execute_direct_file_read(&mut socket, &session_id, &runtime, &mut history, &path)
                     .await;
+
+            match result {
+                Ok(response) => {
+                    store_ws_chat_history(&session_id, &history, temporary, &ws_chat_store_path)
+                        .await;
+                    let done = serde_json::json!({
+                        "type": "done",
+                        "session_id": session_id,
+                        "full_response": response,
+                    });
+                    let _ = socket.send(Message::Text(done.to_string().into())).await;
+
+                    let _ = state.event_tx.send(serde_json::json!({
+                        "type": "agent_end",
+                        "provider": provider_label,
+                        "model": runtime.model,
+                    }));
+                }
+                Err(error) => {
+                    store_ws_chat_history(
+                        &session_id,
+                        &history_before_turn,
+                        temporary,
+                        &ws_chat_store_path,
+                    )
+                    .await;
+                    let sanitized = crate::providers::sanitize_api_error(&error.to_string());
+                    let err = serde_json::json!({
+                        "type": "error",
+                        "session_id": session_id,
+                        "message": sanitized,
+                    });
+                    let _ = socket.send(Message::Text(err.to_string().into())).await;
+
+                    let _ = state.event_tx.send(serde_json::json!({
+                        "type": "error",
+                        "component": "ws_chat",
+                        "message": sanitized,
+                    }));
+                }
+            }
+
+            continue;
+        }
+
+        if let Some(request) = extract_direct_ollama_model_request(&content) {
+            let result = execute_direct_ollama_model(
+                &mut socket,
+                &session_id,
+                &runtime,
+                &mut history,
+                &request,
+            )
+            .await;
 
             match result {
                 Ok(response) => {
@@ -1923,6 +2200,43 @@ Reminder set successfully."#;
         );
         assert_eq!(
             extract_direct_file_read_path("read all files in rust_kernel directory"),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_direct_ollama_model_request_recovers_explicit_commands() {
+        assert_eq!(
+            extract_direct_ollama_model_request("ollama pull nemotron-3-super"),
+            Some(DirectOllamaModelRequest {
+                action: "pull".to_string(),
+                name: Some("nemotron-3-super".to_string()),
+            })
+        );
+        assert_eq!(
+            extract_direct_ollama_model_request("run ollama ps"),
+            Some(DirectOllamaModelRequest {
+                action: "running".to_string(),
+                name: None,
+            })
+        );
+        assert_eq!(
+            extract_direct_ollama_model_request("pull qwen2.5-coder:14b"),
+            Some(DirectOllamaModelRequest {
+                action: "pull".to_string(),
+                name: Some("qwen2.5-coder:14b".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn extract_direct_ollama_model_request_rejects_normal_chat() {
+        assert_eq!(
+            extract_direct_ollama_model_request("can you pull the latest changes?"),
+            None
+        );
+        assert_eq!(
+            extract_direct_ollama_model_request("tell me about ollama pull"),
             None
         );
     }

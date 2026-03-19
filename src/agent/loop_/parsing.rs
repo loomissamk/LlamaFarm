@@ -78,6 +78,38 @@ fn normalize_string_argument(raw: &str) -> Option<String> {
     (!unwrapped.is_empty()).then(|| unwrapped.to_string())
 }
 
+fn normalize_ollama_model_action(raw: &str) -> Option<&'static str> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "list" | "ls" => Some("list"),
+        "running" | "ps" => Some("running"),
+        "pull" => Some("pull"),
+        "show" => Some("show"),
+        "delete" | "remove" | "rm" => Some("delete"),
+        _ => None,
+    }
+}
+
+fn parse_ollama_model_hint(raw: &str) -> Option<(String, Option<String>)> {
+    let normalized = normalize_string_argument(raw)?;
+    let trimmed = normalized.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let without_ollama = trimmed
+        .strip_prefix("ollama ")
+        .or_else(|| trimmed.strip_prefix("Ollama "))
+        .unwrap_or(trimmed)
+        .trim();
+    let (raw_action, remainder) = without_ollama.split_once(char::is_whitespace).map_or(
+        (without_ollama, ""),
+        |(action, rest)| (action, rest.trim()),
+    );
+    let action = normalize_ollama_model_action(raw_action)?.to_string();
+    let name = normalize_string_argument(remainder);
+    Some((action, name))
+}
+
 fn normalize_known_workspace_file_path(raw: &str) -> String {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -637,7 +669,118 @@ pub(super) fn normalize_tool_arguments(
         "content_search" => normalize_content_search_arguments(arguments, raw_string_hint),
         "web_search_tool" => normalize_web_search_arguments(arguments, raw_string_hint),
         "task_plan" => normalize_task_plan_arguments(arguments, raw_string_hint),
+        "ollama_model" => normalize_ollama_model_arguments(arguments, raw_string_hint),
         _ => arguments,
+    }
+}
+
+fn normalize_ollama_model_arguments(
+    arguments: serde_json::Value,
+    raw_string_hint: Option<&str>,
+) -> serde_json::Value {
+    fn action_from_hint(raw: &str) -> Option<String> {
+        parse_ollama_model_hint(raw).map(|(action, _)| action)
+    }
+
+    fn populate_from_hint(
+        map: &mut serde_json::Map<String, serde_json::Value>,
+        hint: Option<&str>,
+    ) {
+        let Some((action, name)) = hint.and_then(parse_ollama_model_hint) else {
+            return;
+        };
+
+        if map
+            .get("action")
+            .and_then(serde_json::Value::as_str)
+            .and_then(normalize_ollama_model_action)
+            .is_none()
+        {
+            map.insert("action".to_string(), serde_json::Value::String(action));
+        }
+
+        if map
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .and_then(normalize_string_argument)
+            .is_none()
+        {
+            if let Some(name) = name {
+                map.insert("name".to_string(), serde_json::Value::String(name));
+            }
+        }
+    }
+
+    match arguments {
+        serde_json::Value::Object(mut map) => {
+            if map
+                .get("action")
+                .and_then(serde_json::Value::as_str)
+                .and_then(normalize_ollama_model_action)
+                .is_none()
+            {
+                if let Some(action) =
+                    extract_alias_string(&map, &["hint", "operation", "op", "mode"])
+                        .and_then(|value| action_from_hint(&value))
+                {
+                    map.insert("action".to_string(), serde_json::Value::String(action));
+                }
+            } else if let Some(action) = map
+                .get("action")
+                .and_then(serde_json::Value::as_str)
+                .and_then(normalize_ollama_model_action)
+            {
+                map.insert(
+                    "action".to_string(),
+                    serde_json::Value::String(action.to_string()),
+                );
+            }
+
+            if map
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .and_then(normalize_string_argument)
+                .is_none()
+            {
+                if let Some(name) =
+                    extract_alias_string(&map, &["model", "model_name", "tag", "id"])
+                {
+                    map.insert("name".to_string(), serde_json::Value::String(name));
+                }
+            } else if let Some(name) = map
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .and_then(normalize_string_argument)
+            {
+                map.insert("name".to_string(), serde_json::Value::String(name));
+            }
+
+            let hint = extract_alias_string(&map, &["hint", "input", "text", "value"]);
+            populate_from_hint(&mut map, hint.as_deref().or(raw_string_hint));
+            serde_json::Value::Object(map)
+        }
+        serde_json::Value::String(raw) => parse_ollama_model_hint(&raw)
+            .or_else(|| raw_string_hint.and_then(parse_ollama_model_hint))
+            .map(|(action, name)| {
+                let mut map = serde_json::Map::new();
+                map.insert("action".to_string(), serde_json::Value::String(action));
+                if let Some(name) = name {
+                    map.insert("name".to_string(), serde_json::Value::String(name));
+                }
+                serde_json::Value::Object(map)
+            })
+            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new())),
+        _ => raw_string_hint
+            .and_then(parse_ollama_model_hint)
+            .map(|(action, name)| {
+                let mut map = serde_json::Map::new();
+                map.insert("action".to_string(), serde_json::Value::String(action));
+                if let Some(name) = name {
+                    map.insert("name".to_string(), serde_json::Value::String(name));
+                }
+                serde_json::Value::Object(map)
+            })
+            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new())),
     }
 }
 
@@ -4352,4 +4495,47 @@ pub(super) fn parse_structured_tool_calls(tool_calls: &[ToolCall]) -> Vec<Parsed
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn normalize_ollama_model_arguments_recovers_action_and_name_from_hint() {
+        assert_eq!(
+            normalize_tool_arguments(
+                "ollama_model",
+                json!({ "hint": "pull qwen2.5-coder:14b" }),
+                None
+            ),
+            json!({
+                "hint": "pull qwen2.5-coder:14b",
+                "action": "pull",
+                "name": "qwen2.5-coder:14b"
+            })
+        );
+    }
+
+    #[test]
+    fn normalize_ollama_model_arguments_accepts_model_alias_and_raw_string() {
+        assert_eq!(
+            normalize_tool_arguments(
+                "ollama_model",
+                json!({ "action": "rm", "model": "nemotron-3-super" }),
+                None
+            ),
+            json!({
+                "action": "delete",
+                "model": "nemotron-3-super",
+                "name": "nemotron-3-super"
+            })
+        );
+
+        assert_eq!(
+            normalize_tool_arguments("ollama_model", json!("ollama ps"), None),
+            json!({ "action": "running" })
+        );
+    }
 }
