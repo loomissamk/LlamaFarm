@@ -1,16 +1,16 @@
+use crate::memory::{Memory, MemoryCategory};
 use crate::providers::{ChatMessage, Provider};
 use crate::util::truncate_with_ellipsis;
 use anyhow::Result;
 use std::fmt::Write;
-
-/// Keep this many most-recent non-system messages after compaction.
-const COMPACTION_KEEP_RECENT_MESSAGES: usize = 20;
+use uuid::Uuid;
 
 /// Safety cap for compaction source transcript passed to the summarizer.
 const COMPACTION_MAX_SOURCE_CHARS: usize = 12_000;
 
 /// Max characters retained in stored compaction summary.
 const COMPACTION_MAX_SUMMARY_CHARS: usize = 2_000;
+const COMPACTION_SUMMARY_KEY_PREFIX: &str = "conversation_summary";
 
 /// Trim conversation history to prevent unbounded growth.
 /// Preserves the system prompt (first message if role=system) and the most recent messages.
@@ -56,11 +56,16 @@ pub(super) fn apply_compaction_summary(
     history.splice(start..compact_end, std::iter::once(summary_msg));
 }
 
+fn compaction_summary_memory_key() -> String {
+    format!("{COMPACTION_SUMMARY_KEY_PREFIX}_{}", Uuid::new_v4())
+}
+
 pub(super) async fn auto_compact_history(
     history: &mut Vec<ChatMessage>,
     provider: &dyn Provider,
     model: &str,
     max_history: usize,
+    memory: Option<&dyn Memory>,
 ) -> Result<bool> {
     let has_system = history.first().map_or(false, |m| m.role == "system");
     let non_system_count = if has_system {
@@ -74,7 +79,7 @@ pub(super) async fn auto_compact_history(
     }
 
     let start = if has_system { 1 } else { 0 };
-    let keep_recent = COMPACTION_KEEP_RECENT_MESSAGES.min(non_system_count);
+    let keep_recent = max_history.min(non_system_count);
     let compact_count = non_system_count.saturating_sub(keep_recent);
     if compact_count == 0 {
         return Ok(false);
@@ -101,6 +106,16 @@ pub(super) async fn auto_compact_history(
 
     let summary = truncate_with_ellipsis(&summary_raw, COMPACTION_MAX_SUMMARY_CHARS);
     apply_compaction_summary(history, start, compact_end, &summary);
+
+    if let Some(memory) = memory {
+        let key = compaction_summary_memory_key();
+        if let Err(err) = memory
+            .store(&key, summary.trim(), MemoryCategory::Daily, None)
+            .await
+        {
+            tracing::warn!("failed to persist compaction summary: {err}");
+        }
+    }
 
     Ok(true)
 }

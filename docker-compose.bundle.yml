@@ -5,9 +5,15 @@
 # - local Ollama runtime inside the same container
 # - local Chromium + chromedriver inside the same container
 #
-# Quick start:
+# Quick start (auto GPU detection):
 #   ./scripts/docker/up-bundle.sh
-# Fallback:
+#
+# NVIDIA gaming desktop (explicit GPU passthrough):
+#   ./scripts/docker/up-bundle-nvidia.sh
+#   -- or --
+#   docker compose -f docker-compose.bundle.yml -f docker-compose.bundle.nvidia.yml up -d --build
+#
+# CPU-only / generic fallback:
 #   docker compose -f docker-compose.bundle.yml up -d --build
 #   open http://127.0.0.1:42617
 #   or set HOST_BIND_IP=0.0.0.0 for LAN access

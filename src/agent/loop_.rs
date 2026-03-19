@@ -776,6 +776,7 @@ fn is_internal_tool_loop_user_message(content: &str) -> bool {
     trimmed.starts_with("[Tool results]")
         || trimmed.starts_with("Internal correction:")
         || trimmed.starts_with("Internal continuation:")
+        || trimmed.starts_with("Internal working state:")
 }
 
 fn latest_external_user_request(history: &[ChatMessage]) -> Option<&str> {
@@ -879,8 +880,20 @@ struct TaskPlanProgress {
     completed: usize,
 }
 
-fn task_plan_progress_snapshot(records: &[SuccessfulToolRecord]) -> Option<TaskPlanProgress> {
-    let mut statuses: BTreeMap<usize, String> = BTreeMap::new();
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TaskPlanItemSnapshot {
+    id: usize,
+    title: String,
+    status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TaskPlanSnapshot {
+    items: Vec<TaskPlanItemSnapshot>,
+}
+
+fn task_plan_snapshot(records: &[SuccessfulToolRecord]) -> Option<TaskPlanSnapshot> {
+    let mut items: BTreeMap<usize, TaskPlanItemSnapshot> = BTreeMap::new();
 
     for record in records {
         if record.name != "task_plan" {
@@ -895,18 +908,31 @@ fn task_plan_progress_snapshot(records: &[SuccessfulToolRecord]) -> Option<TaskP
 
         match action {
             "create" => {
-                statuses.clear();
+                items.clear();
                 if let Some(tasks) = record
                     .arguments
                     .get("tasks")
                     .and_then(|value| value.as_array())
                 {
                     for (idx, task) in tasks.iter().enumerate() {
+                        let title = task
+                            .get("title")
+                            .and_then(|value| value.as_str())
+                            .map(str::trim)
+                            .filter(|title| !title.is_empty())
+                            .unwrap_or("Untitled task");
                         let status = task
                             .get("status")
                             .and_then(|value| value.as_str())
                             .unwrap_or("pending");
-                        statuses.insert(idx + 1, status.to_string());
+                        items.insert(
+                            idx + 1,
+                            TaskPlanItemSnapshot {
+                                id: idx + 1,
+                                title: title.to_string(),
+                                status: status.to_string(),
+                            },
+                        );
                     }
                 }
             }
@@ -926,37 +952,127 @@ fn task_plan_progress_snapshot(records: &[SuccessfulToolRecord]) -> Option<TaskP
                 else {
                     continue;
                 };
-                if let Some(existing) = statuses.get_mut(&id) {
-                    *existing = status.to_string();
+                if let Some(existing) = items.get_mut(&id) {
+                    existing.status = status.to_string();
                 }
             }
+            "delete" => items.clear(),
             _ => {}
         }
     }
 
-    if statuses.is_empty() {
-        None
-    } else {
-        Some(TaskPlanProgress {
-            total: statuses.len(),
-            completed: statuses
-                .values()
-                .filter(|status| status.as_str() == "completed")
-                .count(),
-        })
-    }
+    (!items.is_empty()).then(|| TaskPlanSnapshot {
+        items: items.into_values().collect(),
+    })
+}
+
+fn task_plan_progress_snapshot(records: &[SuccessfulToolRecord]) -> Option<TaskPlanProgress> {
+    let snapshot = task_plan_snapshot(records)?;
+    Some(TaskPlanProgress {
+        total: snapshot.items.len(),
+        completed: snapshot
+            .items
+            .iter()
+            .filter(|item| item.status == "completed")
+            .count(),
+    })
 }
 
 fn build_task_plan_execution_followup_prompt(records: &[SuccessfulToolRecord]) -> Option<String> {
+    let snapshot = task_plan_snapshot(records)?;
     let progress = task_plan_progress_snapshot(records)?;
     if progress.completed >= progress.total {
         return None;
     }
 
-    Some(format!(
-        "Internal continuation: a task plan is active ({}/{} completed). If the last action finished a planned step, emit a `task_plan` update for that step, then continue with the next incomplete step using real tools. Do not ask the user what to do next unless blocked.",
+    let mut prompt = format!(
+        "Internal continuation: a task plan is active ({}/{} completed).",
         progress.completed, progress.total
-    ))
+    );
+
+    prompt.push_str("\nActive task plan:");
+    for item in snapshot.items.iter().take(8) {
+        prompt.push_str(&format!(
+            "\n- [{}] [{}] {}",
+            item.id, item.status, item.title
+        ));
+    }
+
+    if let Some(next_step) = snapshot
+        .items
+        .iter()
+        .find(|item| item.status != "completed")
+    {
+        prompt.push_str(&format!(
+            "\nNext incomplete step: [{}] {}",
+            next_step.id, next_step.title
+        ));
+    }
+
+    prompt.push_str(
+        "\nIf the last action finished a planned step, emit a `task_plan` update for that step, then continue with the next incomplete step using real tools. Do not ask the user what to do next unless blocked.",
+    );
+
+    Some(prompt)
+}
+
+fn build_working_state_prompt(
+    history: &[ChatMessage],
+    successful_records: &[SuccessfulToolRecord],
+    failed_records: &[FailedToolRecord],
+) -> Option<String> {
+    if successful_records.is_empty() && failed_records.is_empty() {
+        return None;
+    }
+
+    let mut lines = vec!["Internal working state:".to_string()];
+
+    if let Some(request) = latest_external_user_request(history) {
+        lines.push(format!(
+            "- Current user task: {}",
+            truncate_with_ellipsis(request.trim(), 240)
+        ));
+    }
+
+    if let Some(snapshot) = task_plan_snapshot(successful_records) {
+        lines.push("- Active task plan:".to_string());
+        for item in snapshot.items.iter().take(8) {
+            lines.push(format!("- [{}] [{}] {}", item.id, item.status, item.title));
+        }
+        if let Some(next_step) = snapshot
+            .items
+            .iter()
+            .find(|item| item.status != "completed")
+        {
+            lines.push(format!(
+                "- Next incomplete step: [{}] {}",
+                next_step.id, next_step.title
+            ));
+        }
+    }
+
+    let recent_results = successful_records.iter().rev().take(3).collect::<Vec<_>>();
+    if !recent_results.is_empty() {
+        lines.push("- Recent verified tool results:".to_string());
+        for record in recent_results.into_iter().rev() {
+            let output = truncate_with_ellipsis(&scrub_credentials(record.output.trim()), 180);
+            lines.push(format!("- {} => {}", record.name, output));
+        }
+    }
+
+    if let Some(record) = failed_records.last() {
+        lines.push(format!(
+            "- Last tool error: {} => {}",
+            record.name,
+            truncate_with_ellipsis(&scrub_credentials(record.output.trim()), 180)
+        ));
+    }
+
+    lines.push(
+        "- Use this only as grounding for the current task. Continue with real tool calls when action is still required.".to_string(),
+    );
+
+    Some(lines.join("\n"))
 }
 
 fn looks_like_failed_tool_followthrough(text: &str, records: &[FailedToolRecord]) -> bool {
@@ -1706,8 +1822,17 @@ pub(crate) async fn run_tool_call_loop(
             .into());
         }
 
+        let mut request_history = history.clone();
+        if let Some(working_state_prompt) = build_working_state_prompt(
+            history,
+            &recent_successful_tool_records,
+            &recent_failed_tool_records,
+        ) {
+            request_history.push(ChatMessage::user(working_state_prompt));
+        }
+
         let prepared_messages =
-            multimodal::prepare_messages_for_provider(history, multimodal_config).await?;
+            multimodal::prepare_messages_for_provider(&request_history, multimodal_config).await?;
 
         // ── Progress: LLM thinking ────────────────────────────
         if let Some(ref tx) = on_delta {
@@ -1722,7 +1847,7 @@ pub(crate) async fn run_tool_call_loop(
         observer.record_event(&ObserverEvent::LlmRequest {
             provider: provider_name.to_string(),
             model: model.to_string(),
-            messages_count: history.len(),
+            messages_count: request_history.len(),
         });
         runtime_trace::record_event(
             "llm_request",
@@ -1734,7 +1859,7 @@ pub(crate) async fn run_tool_call_loop(
             None,
             serde_json::json!({
                 "iteration": iteration + 1,
-                "messages_count": history.len(),
+                "messages_count": request_history.len(),
             }),
         );
 
@@ -1742,7 +1867,7 @@ pub(crate) async fn run_tool_call_loop(
 
         // Fire void hook before LLM call
         if let Some(hooks) = hooks {
-            hooks.fire_llm_input(history, model).await;
+            hooks.fire_llm_input(&request_history, model).await;
         }
 
         // Unified path via Provider::chat so provider-specific native tool logic
@@ -3083,6 +3208,25 @@ pub(crate) fn build_runtime_tool_availability_notice(tools_registry: &[Box<dyn T
     )
 }
 
+pub(crate) fn build_ipc_state_usage_instructions(tools_registry: &[Box<dyn Tool>]) -> String {
+    let has_state_tools = tools_registry.iter().any(|tool| {
+        matches!(
+            tool.name(),
+            "state_get" | "state_set" | "agents_list" | "agents_send"
+        )
+    });
+    if !has_state_tools {
+        return String::new();
+    }
+
+    "\n## IPC State Usage\n\n\
+     - `state_get` and `state_set` are shared inter-agent state tools, not your default local scratchpad.\n\
+     - Only call `state_get` when the user explicitly asks for shared state or a prior tool result established the key.\n\
+     - Do not probe guessed keys like `task` or `current_task` to recover the local task.\n\
+     - Use the current turn, `task_plan`, and verified tool results for local task tracking.\n"
+        .to_string()
+}
+
 pub(crate) fn build_auto_plan_execute_instructions() -> String {
     "\n## Auto Plan & Execute\n\n\
      If the current user request contains multiple actionable steps, create a short `task_plan` first and then continue executing the plan in the same turn.\n\
@@ -3362,6 +3506,7 @@ pub async fn run(
     }
     system_prompt.push_str(&build_shell_policy_instructions(&config.autonomy));
     system_prompt.push_str(&build_runtime_tool_availability_notice(&tools_registry));
+    system_prompt.push_str(&build_ipc_state_usage_instructions(&tools_registry));
     system_prompt.push_str(&build_auto_plan_execute_instructions());
 
     // ── Approval manager (supervised mode) ───────────────────────
@@ -3588,6 +3733,7 @@ pub async fn run(
                 provider.as_ref(),
                 model_name,
                 config.agent.max_history_messages,
+                Some(mem.as_ref()),
             )
             .await
             {
@@ -3771,6 +3917,7 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
     }
     system_prompt.push_str(&build_shell_policy_instructions(&config.autonomy));
     system_prompt.push_str(&build_runtime_tool_availability_notice(&tools_registry));
+    system_prompt.push_str(&build_ipc_state_usage_instructions(&tools_registry));
     system_prompt.push_str(&build_auto_plan_execute_instructions());
 
     let mem_context = build_context(mem.as_ref(), message, config.memory.min_relevance_score).await;
@@ -4056,6 +4203,91 @@ mod tests {
             responses
                 .pop_front()
                 .ok_or_else(|| anyhow::anyhow!("scripted provider exhausted responses"))
+        }
+    }
+
+    struct RecordingScriptedProvider {
+        responses: Arc<Mutex<VecDeque<ChatResponse>>>,
+        recorded_requests: Arc<Mutex<Vec<Vec<ChatMessage>>>>,
+        capabilities: ProviderCapabilities,
+    }
+
+    impl RecordingScriptedProvider {
+        fn from_text_responses(responses: Vec<&str>) -> Self {
+            let scripted = responses
+                .into_iter()
+                .map(|text| ChatResponse {
+                    text: Some(text.to_string()),
+                    tool_calls: Vec::new(),
+                    usage: None,
+                    reasoning_content: None,
+                })
+                .collect();
+            Self {
+                responses: Arc::new(Mutex::new(scripted)),
+                recorded_requests: Arc::new(Mutex::new(Vec::new())),
+                capabilities: ProviderCapabilities::default(),
+            }
+        }
+
+        fn recorded_requests(&self) -> Vec<Vec<ChatMessage>> {
+            self.recorded_requests
+                .lock()
+                .expect("recorded request lock should be valid")
+                .clone()
+        }
+    }
+
+    #[async_trait]
+    impl Provider for RecordingScriptedProvider {
+        fn capabilities(&self) -> ProviderCapabilities {
+            self.capabilities.clone()
+        }
+
+        async fn chat_with_system(
+            &self,
+            _system_prompt: Option<&str>,
+            _message: &str,
+            _model: &str,
+            _temperature: f64,
+        ) -> anyhow::Result<String> {
+            anyhow::bail!(
+                "chat_with_system should not be used in recording scripted provider tests"
+            );
+        }
+
+        async fn chat(
+            &self,
+            request: ChatRequest<'_>,
+            _model: &str,
+            _temperature: f64,
+        ) -> anyhow::Result<ChatResponse> {
+            self.recorded_requests
+                .lock()
+                .expect("recorded request lock should be valid")
+                .push(request.messages.to_vec());
+            let mut responses = self
+                .responses
+                .lock()
+                .expect("responses lock should be valid");
+            responses
+                .pop_front()
+                .ok_or_else(|| anyhow::anyhow!("scripted provider exhausted responses"))
+        }
+    }
+
+    struct SummarizingProvider;
+
+    #[async_trait]
+    impl Provider for SummarizingProvider {
+        async fn chat_with_system(
+            &self,
+            _system_prompt: Option<&str>,
+            _message: &str,
+            _model: &str,
+            _temperature: f64,
+        ) -> anyhow::Result<String> {
+            Ok("- preserved context summary".to_string())
         }
     }
 
@@ -6212,6 +6444,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_tool_call_loop_injects_working_state_after_task_plan_creation() {
+        let provider = RecordingScriptedProvider::from_text_responses(vec![
+            r#"<tool_call>{"name":"task_plan","arguments":{"action":"create","tasks":[{"title":"Inspect rust_kernel"},{"title":"Create plan"},{"title":"Execute plan"}]}}</tool_call>"#,
+            "Plan is active.",
+        ]);
+
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(
+            crate::tools::task_plan::TaskPlanTool::new(Arc::new(SecurityPolicy::default())),
+        )];
+
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("inspect rust_kernel, create a plan, then execute it"),
+        ];
+        let observer = NoopObserver;
+
+        let result = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None,
+            "cli",
+            &crate::config::MultimodalConfig::default(),
+            6,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .await
+        .expect("working-state injection flow should complete");
+
+        assert_eq!(result, "Plan is active.");
+        let recorded_requests = provider.recorded_requests();
+        assert!(recorded_requests.len() >= 2);
+        let second_request = &recorded_requests[1];
+        let working_state = second_request
+            .iter()
+            .find(|message| {
+                message.role == "user" && message.content.starts_with("Internal working state:")
+            })
+            .expect("second request should include an internal working state message");
+
+        assert!(working_state.content.contains("Current user task"));
+        assert!(working_state
+            .content
+            .contains("[1] [pending] Inspect rust_kernel"));
+        assert!(working_state
+            .content
+            .contains("Next incomplete step: [1] Inspect rust_kernel"));
+    }
+
+    #[tokio::test]
     async fn run_tool_call_loop_native_mode_preserves_fallback_tool_call_ids() {
         let provider = ScriptedProvider::from_text_responses(vec![
             r#"{"content":"Need to call tool","tool_calls":[{"id":"call_abc","name":"count_tool","arguments":"{\"value\":\"X\"}"}]}"#,
@@ -7757,6 +8047,54 @@ Tail"#;
     }
 
     #[test]
+    fn build_ipc_state_usage_instructions_warns_against_guessed_keys() {
+        let tools: Vec<Box<dyn Tool>> = vec![Box::new(CountingTool::new(
+            "state_get",
+            Arc::new(AtomicUsize::new(0)),
+        ))];
+
+        let instructions = build_ipc_state_usage_instructions(&tools);
+
+        assert!(instructions.contains("shared inter-agent state"));
+        assert!(instructions.contains("Do not probe guessed keys"));
+        assert!(instructions.contains("current_task"));
+    }
+
+    #[test]
+    fn build_task_plan_execution_followup_prompt_includes_next_step_title() {
+        let records = vec![
+            SuccessfulToolRecord {
+                name: "task_plan".into(),
+                arguments: serde_json::json!({
+                    "action": "create",
+                    "tasks": [
+                        { "title": "Write a file" },
+                        { "title": "Run it" },
+                        { "title": "Delete it" }
+                    ]
+                }),
+                output: "Created 3 task(s).".into(),
+            },
+            SuccessfulToolRecord {
+                name: "task_plan".into(),
+                arguments: serde_json::json!({
+                    "action": "update",
+                    "id": 1,
+                    "status": "completed"
+                }),
+                output: "Task [1] updated to completed.".into(),
+            },
+        ];
+
+        let prompt =
+            build_task_plan_execution_followup_prompt(&records).expect("task plan should exist");
+
+        assert!(prompt.contains("[1] [completed] Write a file"));
+        assert!(prompt.contains("[2] [pending] Run it"));
+        assert!(prompt.contains("Next incomplete step: [2] Run it"));
+    }
+
+    #[test]
     fn tools_to_openai_format_produces_valid_schema() {
         use crate::security::SecurityPolicy;
         let security = Arc::new(SecurityPolicy::from_config(
@@ -7844,6 +8182,35 @@ Tail"#;
         assert!(history[1].content.contains("Compaction summary"));
         assert!(history[2].content.contains("recent 1"));
         assert!(history[3].content.contains("recent 2"));
+    }
+
+    #[tokio::test]
+    async fn auto_compact_history_persists_summary_to_memory() {
+        let tmp = TempDir::new().unwrap();
+        let mem = SqliteMemory::new(tmp.path()).unwrap();
+        let provider = SummarizingProvider;
+        let mut history = vec![
+            ChatMessage::system("sys"),
+            ChatMessage::user("old 1"),
+            ChatMessage::assistant("old 2"),
+            ChatMessage::user("old 3"),
+            ChatMessage::assistant("recent 1"),
+            ChatMessage::user("recent 2"),
+        ];
+
+        let compacted = auto_compact_history(&mut history, &provider, "mock-model", 3, Some(&mem))
+            .await
+            .expect("compaction should succeed");
+
+        assert!(compacted);
+        let daily_entries = mem
+            .list(Some(&MemoryCategory::Daily), None)
+            .await
+            .expect("daily memories should list");
+        assert!(daily_entries.iter().any(|entry| {
+            entry.key.starts_with("conversation_summary_")
+                && entry.content.contains("preserved context summary")
+        }));
     }
 
     #[test]

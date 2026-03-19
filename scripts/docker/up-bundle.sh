@@ -34,8 +34,14 @@ have_accel_device() {
   compgen -G '/dev/accel/*' >/dev/null
 }
 
+have_nvidia_gpu() {
+  # Fast path: nvidia-smi is present and reports at least one GPU.
+  command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1
+}
+
 docker_nvidia_works() {
-  command -v nvidia-smi >/dev/null 2>&1 || return 1
+  have_nvidia_gpu || return 1
+  # Verify Docker can actually expose the GPU before committing to nvidia mode.
   docker run --rm --gpus all --entrypoint /bin/sh ollama/ollama:latest \
     -lc 'test -e /dev/nvidiactl' >/dev/null 2>&1
 }
