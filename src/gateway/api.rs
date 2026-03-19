@@ -73,7 +73,12 @@ fn parse_cron_schedule(
     run_at: Option<&str>,
     every_ms: Option<u64>,
 ) -> Result<crate::cron::Schedule, String> {
-    match schedule_kind.unwrap_or("cron").trim().to_ascii_lowercase().as_str() {
+    match schedule_kind
+        .unwrap_or("cron")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "cron" => {
             let expr = schedule
                 .map(str::trim)
@@ -209,11 +214,7 @@ struct IntegrationSettingsPayload {
 
 const OLLAMA_INTEGRATION_ID: &str = "ollama";
 const OLLAMA_INTEGRATION_NAME: &str = "Ollama";
-const OLLAMA_FALLBACK_MODELS: &[&str] = &[
-    "qwen3.5:9b",
-    "devstral-small-2:latest",
-    "llama3.2",
-];
+const OLLAMA_FALLBACK_MODELS: &[&str] = &["qwen3.5:9b", "devstral-small-2:latest", "llama3.2"];
 
 #[derive(Debug, Default, Clone)]
 struct OllamaDashboardInfo {
@@ -302,10 +303,10 @@ struct WorkspaceBlobWritePayload {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct WorkspacePathMutationPayload {
-    status: &'static str,
-    path: String,
-    kind: &'static str,
+pub(super) struct WorkspacePathMutationPayload {
+    pub(super) status: &'static str,
+    pub(super) path: String,
+    pub(super) kind: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -357,7 +358,10 @@ fn config_revision(config: &crate::config::Config) -> String {
 }
 
 fn normalize_ollama_base_url(config: &crate::config::Config) -> String {
-    let raw = config.api_url.as_deref().unwrap_or("http://localhost:11434");
+    let raw = config
+        .api_url
+        .as_deref()
+        .unwrap_or("http://localhost:11434");
     let trimmed = raw.trim().trim_end_matches('/');
     let trimmed = trimmed.strip_suffix("/api").unwrap_or(trimmed);
     if trimmed.is_empty() {
@@ -515,7 +519,79 @@ fn workspace_parent_path(relative: &str) -> Option<String> {
 }
 
 fn workspace_entry_kind(is_dir: bool) -> &'static str {
-    if is_dir { "directory" } else { "file" }
+    if is_dir {
+        "directory"
+    } else {
+        "file"
+    }
+}
+
+pub(super) async fn create_workspace_directory(
+    config: &crate::config::Config,
+    raw_path: Option<&str>,
+) -> Result<WorkspacePathMutationPayload, String> {
+    let (target_path, relative_path) = resolve_workspace_path(config, raw_path)?;
+
+    if relative_path.is_empty() {
+        return Err("Directory path must include a folder name".to_string());
+    }
+
+    if let Ok(metadata) = tokio::fs::metadata(&target_path).await {
+        return Err(if metadata.is_dir() {
+            "Workspace directory already exists".to_string()
+        } else {
+            "Workspace path already exists as a file".to_string()
+        });
+    }
+
+    tokio::fs::create_dir_all(&target_path)
+        .await
+        .map_err(|error| format!("Failed to create workspace directory: {error}"))?;
+
+    Ok(WorkspacePathMutationPayload {
+        status: "ok",
+        path: relative_path,
+        kind: "directory",
+    })
+}
+
+pub(super) async fn delete_workspace_path(
+    config: &crate::config::Config,
+    raw_path: Option<&str>,
+) -> Result<WorkspacePathMutationPayload, String> {
+    let (target_path, relative_path) = resolve_workspace_path(config, raw_path)?;
+
+    if relative_path.is_empty() {
+        return Err("Refusing to delete the workspace root".to_string());
+    }
+
+    let metadata = tokio::fs::symlink_metadata(&target_path)
+        .await
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                "Workspace path not found".to_string()
+            } else {
+                format!("Failed to inspect workspace path: {error}")
+            }
+        })?;
+
+    let file_type = metadata.file_type();
+    let is_directory = file_type.is_dir();
+    if is_directory {
+        tokio::fs::remove_dir_all(&target_path)
+            .await
+            .map_err(|error| format!("Failed to delete workspace path: {error}"))?;
+    } else {
+        tokio::fs::remove_file(&target_path)
+            .await
+            .map_err(|error| format!("Failed to delete workspace path: {error}"))?;
+    }
+
+    Ok(WorkspacePathMutationPayload {
+        status: "ok",
+        path: relative_path,
+        kind: workspace_entry_kind(is_directory),
+    })
 }
 
 fn workspace_download_name(relative: &str, is_dir: bool) -> String {
@@ -548,7 +624,10 @@ fn workspace_download_name(relative: &str, is_dir: bool) -> String {
 fn download_content_disposition(filename: &str) -> String {
     format!(
         "attachment; filename=\"{}\"",
-        filename.replace('"', "_").replace('\r', "_").replace('\n', "_")
+        filename
+            .replace('"', "_")
+            .replace('\r', "_")
+            .replace('\n', "_")
     )
 }
 
@@ -1129,7 +1208,9 @@ pub async fn handle_api_workspace_file_get(
         Err(error) => {
             return (
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": error, "allowed_files": WORKSPACE_EDITOR_FILES })),
+                Json(
+                    serde_json::json!({ "error": error, "allowed_files": WORKSPACE_EDITOR_FILES }),
+                ),
             )
                 .into_response();
         }
@@ -1176,7 +1257,9 @@ pub async fn handle_api_workspace_file_put(
         Err(error) => {
             return (
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": error, "allowed_files": WORKSPACE_EDITOR_FILES })),
+                Json(
+                    serde_json::json!({ "error": error, "allowed_files": WORKSPACE_EDITOR_FILES }),
+                ),
             )
                 .into_response();
         }
@@ -1333,9 +1416,11 @@ pub async fn handle_api_workspace_browser(
     entries.sort_by(|left, right| {
         let left_dir = left.kind == "directory";
         let right_dir = right.kind == "directory";
-        right_dir
-            .cmp(&left_dir)
-            .then_with(|| left.name.to_ascii_lowercase().cmp(&right.name.to_ascii_lowercase()))
+        right_dir.cmp(&left_dir).then_with(|| {
+            left.name
+                .to_ascii_lowercase()
+                .cmp(&right.name.to_ascii_lowercase())
+        })
     });
 
     Json(WorkspaceBrowserPayload {
@@ -1469,19 +1554,19 @@ pub async fn handle_api_workspace_download(
 
     let is_dir = metadata.is_dir();
     let download_name = workspace_download_name(&relative_path, is_dir);
-    let content_disposition = match HeaderValue::from_str(&download_content_disposition(&download_name))
-    {
-        Ok(value) => value,
-        Err(error) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "error": format!("Failed to build download headers: {error}")
-                })),
-            )
-                .into_response();
-        }
-    };
+    let content_disposition =
+        match HeaderValue::from_str(&download_content_disposition(&download_name)) {
+            Ok(value) => value,
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": format!("Failed to build download headers: {error}")
+                    })),
+                )
+                    .into_response();
+            }
+        };
 
     let (content_type, body_bytes) = if is_dir {
         let archive_target = if relative_path.is_empty() {
@@ -1569,55 +1654,38 @@ pub async fn handle_api_workspace_directory_put(
     }
 
     let config = state.config.lock().clone();
-    let (target_path, relative_path) = match resolve_workspace_path(&config, query.path.as_deref())
-    {
-        Ok(value) => value,
-        Err(error) => {
-            return (
+    match create_workspace_directory(&config, query.path.as_deref()).await {
+        Ok(payload) => Json(payload).into_response(),
+        Err(error) if error == "Directory path must include a folder name" => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": error })),
+        )
+            .into_response(),
+        Err(error)
+            if error == "Workspace directory already exists"
+                || error == "Workspace path already exists as a file" =>
+        {
+            (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({ "error": error })),
+            )
+                .into_response()
+        }
+        Err(error)
+            if error.starts_with("Workspace paths") || error.starts_with("Workspace path may") =>
+        {
+            (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": error })),
             )
-                .into_response();
+                .into_response()
         }
-    };
-
-    if relative_path.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Directory path must include a folder name" })),
-        )
-            .into_response();
-    }
-
-    if let Ok(metadata) = tokio::fs::metadata(&target_path).await {
-        let error = if metadata.is_dir() {
-            "Workspace directory already exists"
-        } else {
-            "Workspace path already exists as a file"
-        };
-        return (
-            StatusCode::CONFLICT,
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": error })),
         )
-            .into_response();
+            .into_response(),
     }
-
-    if let Err(error) = tokio::fs::create_dir_all(&target_path).await {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "error": format!("Failed to create workspace directory: {error}")
-            })),
-        )
-            .into_response();
-    }
-
-    Json(WorkspacePathMutationPayload {
-        status: "ok",
-        path: relative_path,
-        kind: "directory",
-    })
-    .into_response()
 }
 
 /// DELETE /api/workspace/path?path=... — delete a file or directory from the live workspace
@@ -1631,70 +1699,30 @@ pub async fn handle_api_workspace_path_delete(
     }
 
     let config = state.config.lock().clone();
-    let (target_path, relative_path) = match resolve_workspace_path(&config, query.path.as_deref())
-    {
-        Ok(value) => value,
-        Err(error) => {
-            return (
+    match delete_workspace_path(&config, query.path.as_deref()).await {
+        Ok(payload) => Json(payload).into_response(),
+        Err(error)
+            if error == "Refusing to delete the workspace root"
+                || error.starts_with("Workspace paths")
+                || error.starts_with("Workspace path may") =>
+        {
+            (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": error })),
             )
-                .into_response();
+                .into_response()
         }
-    };
-
-    if relative_path.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Refusing to delete the workspace root" })),
+        Err(error) if error == "Workspace path not found" => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": error })),
         )
-            .into_response();
-    }
-
-    let metadata = match tokio::fs::symlink_metadata(&target_path).await {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": "Workspace path not found" })),
-            )
-                .into_response();
-        }
-        Err(error) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "error": format!("Failed to inspect workspace path: {error}")
-                })),
-            )
-                .into_response();
-        }
-    };
-
-    let file_type = metadata.file_type();
-    let is_directory = file_type.is_dir();
-    let delete_result = if is_directory {
-        tokio::fs::remove_dir_all(&target_path).await
-    } else {
-        tokio::fs::remove_file(&target_path).await
-    };
-
-    if let Err(error) = delete_result {
-        return (
+            .into_response(),
+        Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "error": format!("Failed to delete workspace path: {error}")
-            })),
+            Json(serde_json::json!({ "error": error })),
         )
-            .into_response();
+            .into_response(),
     }
-
-    Json(WorkspacePathMutationPayload {
-        status: "ok",
-        path: relative_path,
-        kind: workspace_entry_kind(is_directory),
-    })
-    .into_response()
 }
 
 /// PUT /api/config — update config from TOML body
@@ -1746,7 +1774,9 @@ pub async fn handle_api_config_put(
         Err(error) => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": format!("Config cannot be applied live: {error}")})),
+                Json(
+                    serde_json::json!({"error": format!("Config cannot be applied live: {error}")}),
+                ),
             )
                 .into_response();
         }

@@ -89,6 +89,49 @@ fn normalize_ollama_model_action(raw: &str) -> Option<&'static str> {
     }
 }
 
+fn looks_like_probable_workspace_path(candidate: &str) -> bool {
+    let trimmed = candidate.trim();
+    if trimmed.is_empty() || trimmed.lines().count() != 1 {
+        return false;
+    }
+
+    if trimmed.starts_with("./")
+        || trimmed.starts_with("../")
+        || trimmed.starts_with('/')
+        || trimmed.starts_with("~/")
+        || trimmed.contains('/')
+    {
+        return true;
+    }
+
+    let token = trimmed
+        .trim_matches('`')
+        .trim_matches('"')
+        .trim_matches('\'')
+        .trim();
+    if token.is_empty() || token.contains(char::is_whitespace) || token.starts_with('-') {
+        return false;
+    }
+
+    let lower = token.to_ascii_lowercase();
+    if lower.ends_with(".md")
+        || lower.ends_with(".txt")
+        || lower.ends_with(".py")
+        || lower.ends_with(".rs")
+        || lower.ends_with(".json")
+        || lower.ends_with(".toml")
+        || lower.ends_with(".yaml")
+        || lower.ends_with(".yml")
+        || lower.ends_with(".sh")
+    {
+        return true;
+    }
+
+    token
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+}
+
 fn parse_ollama_model_hint(raw: &str) -> Option<(String, Option<String>)> {
     let normalized = normalize_string_argument(raw)?;
     let trimmed = normalized.trim();
@@ -96,18 +139,58 @@ fn parse_ollama_model_hint(raw: &str) -> Option<(String, Option<String>)> {
         return None;
     }
 
+    let has_ollama_prefix = trimmed.starts_with("ollama ") || trimmed.starts_with("Ollama ");
     let without_ollama = trimmed
         .strip_prefix("ollama ")
         .or_else(|| trimmed.strip_prefix("Ollama "))
         .unwrap_or(trimmed)
         .trim();
-    let (raw_action, remainder) = without_ollama.split_once(char::is_whitespace).map_or(
-        (without_ollama, ""),
-        |(action, rest)| (action, rest.trim()),
-    );
+    let (raw_action, remainder) = without_ollama
+        .split_once(char::is_whitespace)
+        .map_or((without_ollama, ""), |(action, rest)| (action, rest.trim()));
     let action = normalize_ollama_model_action(raw_action)?.to_string();
     let name = normalize_string_argument(remainder);
+
+    if !has_ollama_prefix {
+        if matches!(action.as_str(), "delete") {
+            return None;
+        }
+
+        if matches!(action.as_str(), "pull" | "show")
+            && name
+                .as_deref()
+                .is_some_and(looks_like_probable_workspace_path)
+        {
+            return None;
+        }
+    }
+
     Some((action, name))
+}
+
+fn parse_explicit_file_write_hint(raw: &str) -> Option<(String, String)> {
+    static EXPLICIT_FILE_WRITE_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r#"(?is)^(?:write_?file|create_?file|save_?file|write file|create file|save file)\s+(?:called\s+|named\s+)?(?:`([^`]+)`|'([^']+)'|"([^"]+)"|([^\s]+))(?:\s+(?:to|with|containing)\s+(.+))?$"#,
+        )
+        .unwrap()
+    });
+
+    let captures = EXPLICIT_FILE_WRITE_RE.captures(raw.trim())?;
+    let path = captures
+        .get(1)
+        .or_else(|| captures.get(2))
+        .or_else(|| captures.get(3))
+        .or_else(|| captures.get(4))
+        .map(|m| normalize_known_workspace_file_path(m.as_str()))
+        .filter(|value| !value.trim().is_empty())?;
+    let content = captures
+        .get(5)
+        .map(|m| m.as_str().trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| raw.trim().to_string());
+
+    Some((path, content))
 }
 
 fn normalize_known_workspace_file_path(raw: &str) -> String {
@@ -198,6 +281,7 @@ fn normalize_file_write_arguments(
 ) -> serde_json::Value {
     match arguments {
         serde_json::Value::Object(mut map) => {
+            let parsed_hint = raw_string_hint.and_then(parse_explicit_file_write_hint);
             if map
                 .get("path")
                 .and_then(|v| v.as_str())
@@ -211,6 +295,8 @@ fn normalize_file_write_arguments(
                         "path".to_string(),
                         serde_json::Value::String(normalize_known_workspace_file_path(&path)),
                     );
+                } else if let Some((path, _)) = parsed_hint.as_ref() {
+                    map.insert("path".to_string(), serde_json::Value::String(path.clone()));
                 }
             } else if let Some(path) = map
                 .get("path")
@@ -233,6 +319,11 @@ fn normalize_file_write_arguments(
                     extract_alias_string(&map, &["contents", "text", "body", "value"])
                 {
                     map.insert("content".to_string(), serde_json::Value::String(content));
+                } else if let Some((_, content)) = parsed_hint.as_ref() {
+                    map.insert(
+                        "content".to_string(),
+                        serde_json::Value::String(content.clone()),
+                    );
                 } else if let Some(raw) = raw_string_hint.and_then(normalize_string_argument) {
                     map.insert("content".to_string(), serde_json::Value::String(raw));
                 }
@@ -240,9 +331,21 @@ fn normalize_file_write_arguments(
 
             serde_json::Value::Object(map)
         }
+        serde_json::Value::String(raw) => parse_explicit_file_write_hint(&raw)
+            .map(|(path, content)| serde_json::json!({ "path": path, "content": content }))
+            .or_else(|| {
+                normalize_string_argument(&raw)
+                    .map(|content| serde_json::json!({ "content": content }))
+            })
+            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new())),
         _ => raw_string_hint
-            .and_then(normalize_string_argument)
-            .map(|content| serde_json::json!({ "content": content }))
+            .and_then(parse_explicit_file_write_hint)
+            .map(|(path, content)| serde_json::json!({ "path": path, "content": content }))
+            .or_else(|| {
+                raw_string_hint
+                    .and_then(normalize_string_argument)
+                    .map(|content| serde_json::json!({ "content": content }))
+            })
             .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new())),
     }
 }
@@ -4536,6 +4639,29 @@ mod tests {
         assert_eq!(
             normalize_tool_arguments("ollama_model", json!("ollama ps"), None),
             json!({ "action": "running" })
+        );
+    }
+
+    #[test]
+    fn normalize_ollama_model_arguments_rejects_bare_delete_file_hint() {
+        assert_eq!(
+            normalize_tool_arguments("ollama_model", json!({ "hint": "delete add.py" }), None),
+            json!({ "hint": "delete add.py" })
+        );
+    }
+
+    #[test]
+    fn normalize_file_write_arguments_recovers_path_and_content_from_explicit_hint() {
+        assert_eq!(
+            normalize_tool_arguments(
+                "file_write",
+                json!({}),
+                Some("write_file add.py to add two numbers")
+            ),
+            json!({
+                "path": "add.py",
+                "content": "add two numbers"
+            })
         );
     }
 }

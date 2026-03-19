@@ -14,7 +14,7 @@ use anyhow::Result;
 use futures_util::StreamExt;
 use regex::{Regex, RegexSet};
 use rustyline::error::ReadlineError;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Write;
 use std::io::Write as _;
 use std::sync::{Arc, LazyLock};
@@ -771,6 +771,194 @@ fn looks_like_task_plan_followup_question(text: &str, records: &[SuccessfulToolR
     .any(|needle| lowered.contains(needle))
 }
 
+fn is_internal_tool_loop_user_message(content: &str) -> bool {
+    let trimmed = content.trim_start();
+    trimmed.starts_with("[Tool results]")
+        || trimmed.starts_with("Internal correction:")
+        || trimmed.starts_with("Internal continuation:")
+}
+
+fn latest_external_user_request(history: &[ChatMessage]) -> Option<&str> {
+    history
+        .iter()
+        .rev()
+        .find(|message| {
+            message.role == "user" && !is_internal_tool_loop_user_message(&message.content)
+        })
+        .map(|message| message.content.as_str())
+}
+
+fn actionable_request_step_count(text: &str) -> usize {
+    static ACTION_STEP_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?i)\b(write_?file|create_?file|save_?file|write|create|save|read|show|open|run|execute|print|delete|remove|rm|mkdir|make|list|pull)\b",
+        )
+        .unwrap()
+    });
+
+    let normalized = text
+        .replace(" and then ", "\n")
+        .replace(" then ", "\n")
+        .replace(" after that ", "\n")
+        .replace(" after ", "\n")
+        .replace(',', "\n")
+        .replace(';', "\n");
+
+    let clause_count = normalized
+        .lines()
+        .filter(|clause| ACTION_STEP_REGEX.is_match(clause))
+        .count();
+    if clause_count > 0 {
+        clause_count
+    } else {
+        ACTION_STEP_REGEX.find_iter(text).count()
+    }
+}
+
+fn is_planning_only_request(text: &str) -> bool {
+    let lowered = text.to_ascii_lowercase();
+    lowered.contains("only create the plan")
+        || lowered.contains("only make a plan")
+        || lowered.contains("plan only")
+        || lowered.contains("before any tool actions")
+        || lowered.contains("what is next")
+        || lowered.contains("next task")
+        || lowered.contains("implementation plan before any tool actions")
+}
+
+fn should_auto_plan_current_request(history: &[ChatMessage]) -> bool {
+    let Some(request) = latest_external_user_request(history) else {
+        return false;
+    };
+
+    !is_planning_only_request(request) && actionable_request_step_count(request) >= 2
+}
+
+fn task_plan_call_is_create(arguments: &serde_json::Value) -> bool {
+    arguments
+        .get("action")
+        .and_then(|value| value.as_str())
+        .is_some_and(|action| action == "create")
+        || arguments
+            .get("tasks")
+            .and_then(|value| value.as_array())
+            .is_some_and(|tasks| !tasks.is_empty())
+}
+
+fn should_require_task_plan_before_execution(
+    history: &[ChatMessage],
+    tool_calls: &[ParsedToolCall],
+    records: &[SuccessfulToolRecord],
+) -> bool {
+    if !should_auto_plan_current_request(history) {
+        return false;
+    }
+
+    if records
+        .iter()
+        .any(|record| record.name == "task_plan" && task_plan_call_is_create(&record.arguments))
+    {
+        return false;
+    }
+
+    let has_non_plan_call = tool_calls.iter().any(|call| call.name != "task_plan");
+    let has_task_plan_create_call = tool_calls
+        .iter()
+        .any(|call| call.name == "task_plan" && task_plan_call_is_create(&call.arguments));
+
+    has_non_plan_call && !has_task_plan_create_call
+}
+
+fn build_auto_plan_retry_prompt() -> String {
+    "Internal correction: this request contains multiple actionable steps. First emit a real `task_plan` create call with concise task titles derived from the user's request, then continue executing the plan with real tool calls. Do not ask the user what to do next unless a tool returns a blocking error.".to_string()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TaskPlanProgress {
+    total: usize,
+    completed: usize,
+}
+
+fn task_plan_progress_snapshot(records: &[SuccessfulToolRecord]) -> Option<TaskPlanProgress> {
+    let mut statuses: BTreeMap<usize, String> = BTreeMap::new();
+
+    for record in records {
+        if record.name != "task_plan" {
+            continue;
+        }
+
+        let action = record
+            .arguments
+            .get("action")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+
+        match action {
+            "create" => {
+                statuses.clear();
+                if let Some(tasks) = record
+                    .arguments
+                    .get("tasks")
+                    .and_then(|value| value.as_array())
+                {
+                    for (idx, task) in tasks.iter().enumerate() {
+                        let status = task
+                            .get("status")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("pending");
+                        statuses.insert(idx + 1, status.to_string());
+                    }
+                }
+            }
+            "update" => {
+                let Some(id) = record
+                    .arguments
+                    .get("id")
+                    .and_then(|value| value.as_u64())
+                    .map(|value| value as usize)
+                else {
+                    continue;
+                };
+                let Some(status) = record
+                    .arguments
+                    .get("status")
+                    .and_then(|value| value.as_str())
+                else {
+                    continue;
+                };
+                if let Some(existing) = statuses.get_mut(&id) {
+                    *existing = status.to_string();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if statuses.is_empty() {
+        None
+    } else {
+        Some(TaskPlanProgress {
+            total: statuses.len(),
+            completed: statuses
+                .values()
+                .filter(|status| status.as_str() == "completed")
+                .count(),
+        })
+    }
+}
+
+fn build_task_plan_execution_followup_prompt(records: &[SuccessfulToolRecord]) -> Option<String> {
+    let progress = task_plan_progress_snapshot(records)?;
+    if progress.completed >= progress.total {
+        return None;
+    }
+
+    Some(format!(
+        "Internal continuation: a task plan is active ({}/{} completed). If the last action finished a planned step, emit a `task_plan` update for that step, then continue with the next incomplete step using real tools. Do not ask the user what to do next unless blocked.",
+        progress.completed, progress.total
+    ))
+}
+
 fn looks_like_failed_tool_followthrough(text: &str, records: &[FailedToolRecord]) -> bool {
     let Some(record) = records.last() else {
         return false;
@@ -912,7 +1100,10 @@ fn synthesize_python_execution_answer(records: &[SuccessfulToolRecord]) -> Optio
     None
 }
 
-fn should_short_circuit_after_tool_execution(records: &[SuccessfulToolRecord]) -> bool {
+fn should_short_circuit_after_tool_execution(
+    history: &[ChatMessage],
+    records: &[SuccessfulToolRecord],
+) -> bool {
     // Short-circuit immediately after a successful task_plan create so local models
     // cannot embellish the plan in prose before execution has started.
     let has_task_plan_create = records.iter().any(|record| {
@@ -934,7 +1125,7 @@ fn should_short_circuit_after_tool_execution(records: &[SuccessfulToolRecord]) -
             .find(|r| r.name != "task_plan")
             .map(|r| r.name.as_str());
         let last_is_plan = records.last().is_some_and(|r| r.name == "task_plan");
-        if last_is_plan || last_non_plan.is_none() {
+        if (last_is_plan || last_non_plan.is_none()) && !should_auto_plan_current_request(history) {
             return true;
         }
     }
@@ -1464,6 +1655,7 @@ pub(crate) async fn run_tool_call_loop(
     let mut duplicate_tool_call_retry_used = false;
     let mut tool_result_grounding_retry_used = false;
     let mut missing_tool_call_retry_prompt: Option<String> = None;
+    let mut post_tool_execution_prompt: Option<String> = None;
     let mut successful_tool_execution_seen = false;
     // Rolling window of previous no-tool-call response texts for detecting repeated intent.
     let mut prior_no_tool_response_texts: Vec<String> = Vec::new();
@@ -1497,6 +1689,9 @@ pub(crate) async fn run_tool_call_loop(
 
         if let Some(retry_prompt) = missing_tool_call_retry_prompt.take() {
             history.push(ChatMessage::user(retry_prompt));
+        }
+        if let Some(continuation_prompt) = post_tool_execution_prompt.take() {
+            history.push(ChatMessage::user(continuation_prompt));
         }
 
         let image_marker_count = multimodal::count_image_markers(history);
@@ -1849,6 +2044,29 @@ pub(crate) async fn run_tool_call_loop(
                     ))
                     .await;
             }
+        }
+
+        if should_require_task_plan_before_execution(
+            history,
+            &tool_calls,
+            &recent_successful_tool_records,
+        ) {
+            retry_count += 1;
+            missing_tool_call_retry_prompt = Some(build_auto_plan_retry_prompt());
+            runtime_trace::record_event(
+                "auto_plan_retry_required",
+                Some(channel_name),
+                Some(provider_name),
+                Some(model),
+                Some(&turn_id),
+                Some(false),
+                Some("multi-step request must create task_plan before execution"),
+                serde_json::json!({
+                    "iteration": iteration + 1,
+                    "tool_calls": tool_calls.iter().map(|call| call.name.clone()).collect::<Vec<_>>(),
+                }),
+            );
+            continue;
         }
 
         if tool_calls.is_empty() {
@@ -2558,6 +2776,13 @@ pub(crate) async fn run_tool_call_loop(
         }
 
         let iteration_had_failed_tools = !current_failed_tool_records.is_empty();
+        let iteration_executed_non_plan_tool =
+            current_successful_tool_records.iter().any(|record| {
+                !matches!(
+                    record.name.as_str(),
+                    "task_plan" | "memory_store" | "memory_recall"
+                )
+            });
 
         if !current_successful_tool_records.is_empty() {
             recent_successful_tool_records.extend(current_successful_tool_records);
@@ -2619,7 +2844,7 @@ pub(crate) async fn run_tool_call_loop(
         }
 
         if !iteration_had_failed_tools
-            && should_short_circuit_after_tool_execution(&recent_successful_tool_records)
+            && should_short_circuit_after_tool_execution(history, &recent_successful_tool_records)
         {
             if let Some(final_text) =
                 synthesize_grounded_final_answer(&recent_successful_tool_records)
@@ -2648,6 +2873,13 @@ pub(crate) async fn run_tool_call_loop(
                 .await;
             }
         }
+
+        post_tool_execution_prompt =
+            if !iteration_had_failed_tools && iteration_executed_non_plan_tool {
+                build_task_plan_execution_followup_prompt(&recent_successful_tool_records)
+            } else {
+                None
+            };
 
         let duplicate_only_followthrough = successful_tool_execution_seen
             && !duplicate_tool_call_retry_used
@@ -2849,6 +3081,16 @@ pub(crate) fn build_runtime_tool_availability_notice(tools_registry: &[Box<dyn T
          Do not claim tools are unavailable when they are listed here.\n\
          If the user asked for an action, keep using these tools until the action is complete or the runtime returns a blocking error.\n"
     )
+}
+
+pub(crate) fn build_auto_plan_execute_instructions() -> String {
+    "\n## Auto Plan & Execute\n\n\
+     If the current user request contains multiple actionable steps, create a short `task_plan` first and then continue executing the plan in the same turn.\n\
+     - Use `task_plan` create before other tools for real multi-step work.\n\
+     - After the plan exists, keep executing with real tools instead of stopping at the plan summary.\n\
+     - Update the plan as steps finish, then continue to the next incomplete step.\n\
+     - Ask the user what to do next only when a tool returns a blocking error or a critical detail is missing.\n"
+        .to_string()
 }
 
 // ── CLI Entrypoint ───────────────────────────────────────────────────────
@@ -3120,6 +3362,7 @@ pub async fn run(
     }
     system_prompt.push_str(&build_shell_policy_instructions(&config.autonomy));
     system_prompt.push_str(&build_runtime_tool_availability_notice(&tools_registry));
+    system_prompt.push_str(&build_auto_plan_execute_instructions());
 
     // ── Approval manager (supervised mode) ───────────────────────
     let approval_manager = if interactive {
@@ -3528,6 +3771,7 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
     }
     system_prompt.push_str(&build_shell_policy_instructions(&config.autonomy));
     system_prompt.push_str(&build_runtime_tool_availability_notice(&tools_registry));
+    system_prompt.push_str(&build_auto_plan_execute_instructions());
 
     let mem_context = build_context(mem.as_ref(), message, config.memory.min_relevance_score).await;
     let rag_limit = if config.agent.compact_context { 2 } else { 5 };
@@ -5908,6 +6152,63 @@ mod tests {
         .expect("planning-only text should be returned without forced tool-call rejection");
 
         assert!(result.contains("implementation plan"));
+    }
+
+    #[tokio::test]
+    async fn run_tool_call_loop_requires_task_plan_before_multi_step_execution_and_continues() {
+        let provider = ScriptedProvider::from_text_responses(vec![
+            r#"<tool_call>{"name":"count_tool","arguments":{"value":"premature"}}</tool_call>"#,
+            r#"<tool_call>{"name":"task_plan","arguments":{"action":"create","tasks":[{"title":"Write a file"},{"title":"Run it"},{"title":"Delete it"}]}}</tool_call>"#,
+            r#"<tool_call>{"name":"count_tool","arguments":{"value":"executed"}}</tool_call>"#,
+            "All steps completed.",
+        ]);
+
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tools_registry: Vec<Box<dyn Tool>> = vec![
+            Box::new(CountingTool::new("count_tool", Arc::clone(&invocations))),
+            Box::new(crate::tools::task_plan::TaskPlanTool::new(Arc::new(
+                SecurityPolicy::default(),
+            ))),
+        ];
+
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("write a file, run it, print the result, then delete it"),
+        ];
+        let observer = NoopObserver;
+
+        let result = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None,
+            "cli",
+            &crate::config::MultimodalConfig::default(),
+            8,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .await
+        .expect("multi-step request should recover through task_plan and continue executing");
+
+        assert_eq!(result, "All steps completed.");
+        assert_eq!(invocations.load(Ordering::SeqCst), 1);
+        assert!(
+            history.iter().any(|message| {
+                message.role == "user"
+                    && message.content.starts_with(
+                        "Internal correction: this request contains multiple actionable steps.",
+                    )
+            }),
+            "loop should inject an auto-plan retry before executing non-plan tools"
+        );
     }
 
     #[tokio::test]
