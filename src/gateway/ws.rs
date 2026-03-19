@@ -13,7 +13,7 @@ use super::{AppState, GatewayRuntimeSnapshot};
 use crate::agent::loop_::{run_tool_call_loop, DRAFT_CLEAR_SENTINEL, DRAFT_PROGRESS_SENTINEL};
 use crate::approval::ApprovalManager;
 use crate::memory::MemoryCategory;
-use crate::providers::{ChatMessage, ChatRequest};
+use crate::providers::ChatMessage;
 use axum::{
     extract::{
         ws::{Message, WebSocket},
@@ -23,13 +23,14 @@ use axum::{
     response::IntoResponse,
 };
 use parking_lot::Mutex;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::LazyLock,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use uuid::Uuid;
 
@@ -136,7 +137,7 @@ fn current_unix_timestamp_secs() -> u64 {
 }
 
 fn normalize_ws_history_for_storage(history: &[ChatMessage]) -> Vec<ChatMessage> {
-    let mut normalized: Vec<ChatMessage> = history
+    let filtered: Vec<ChatMessage> = history
         .iter()
         .filter(|message| message.role != "system")
         .filter_map(|message| {
@@ -147,6 +148,36 @@ fn normalize_ws_history_for_storage(history: &[ChatMessage]) -> Vec<ChatMessage>
             }
         })
         .collect();
+
+    let mut normalized = Vec::with_capacity(filtered.len());
+    let mut pending_tool_trace = Vec::new();
+
+    for message in filtered {
+        let is_raw_tool_trace = message.role == "tool"
+            || (message.role == "assistant" && is_assistant_tool_call_payload(&message.content));
+
+        if is_raw_tool_trace {
+            pending_tool_trace.push(message);
+            continue;
+        }
+
+        if message.role == "assistant" {
+            // When a turn already has a natural-language assistant reply, keep that
+            // summary and drop the preceding raw tool-call/tool-result protocol trace.
+            pending_tool_trace.clear();
+            normalized.push(message);
+            continue;
+        }
+
+        if !pending_tool_trace.is_empty() {
+            normalized.append(&mut pending_tool_trace);
+        }
+        normalized.push(message);
+    }
+
+    if !pending_tool_trace.is_empty() {
+        normalized.append(&mut pending_tool_trace);
+    }
 
     if normalized.len() > WS_PERSISTED_MAX_MESSAGES {
         let keep_from = normalized.len() - WS_PERSISTED_MAX_MESSAGES;
@@ -443,8 +474,8 @@ fn build_ws_resume_context(history: &[ChatMessage]) -> Option<String> {
             Some(crate::util::truncate_with_ellipsis(trimmed, 500))
         }
     });
-    let latest_tool_output =
-        extract_latest_tool_output(history).map(|value| crate::util::truncate_with_ellipsis(&value, 700));
+    let latest_tool_output = extract_latest_tool_output(history)
+        .map(|value| crate::util::truncate_with_ellipsis(&value, 700));
     let latest_assistant = extract_latest_assistant_reply(history)
         .map(|value| crate::util::truncate_with_ellipsis(&value, 500));
     let latest_completed_command = latest_user
@@ -464,13 +495,19 @@ fn build_ws_resume_context(history: &[ChatMessage]) -> Option<String> {
             "Previous completed command before this turn: `{command}`. It already ran in this saved chat, so treat it as past state rather than a new instruction."
         ));
     } else if let Some(latest_user) = latest_user {
-        sections.push(format!("Latest user request before this turn: {latest_user}"));
+        sections.push(format!(
+            "Latest user request before this turn: {latest_user}"
+        ));
     }
     if let Some(latest_tool_output) = latest_tool_output {
-        sections.push(format!("Latest tool output before this turn: {latest_tool_output}"));
+        sections.push(format!(
+            "Latest tool output before this turn: {latest_tool_output}"
+        ));
     }
     if let Some(latest_assistant) = latest_assistant {
-        sections.push(format!("Latest assistant reply before this turn: {latest_assistant}"));
+        sections.push(format!(
+            "Latest assistant reply before this turn: {latest_assistant}"
+        ));
     }
 
     sections.push(
@@ -569,70 +606,43 @@ fn describe_direct_shell_result(command: &str, raw_output: &str, success: bool) 
     format!("{base} {detail}")
 }
 
-async fn summarize_direct_shell_command(
-    runtime: &GatewayRuntimeSnapshot,
-    command: &str,
+fn summarize_direct_shell_command(command: &str, raw_output: &str, success: bool) -> String {
+    describe_direct_shell_result(command, raw_output, success)
+}
+
+fn summarize_direct_file_read(path: &str, raw_output: &str, success: bool) -> String {
+    if success {
+        if raw_output.trim().is_empty() {
+            format!("Read `{path}` successfully. The file had no visible output.")
+        } else {
+            format!("Read `{path}` successfully. Raw file contents are shown above.")
+        }
+    } else {
+        format!("Failed to read `{path}`. Raw tool output is shown above.")
+    }
+}
+
+fn summarize_direct_ollama_model(
+    action: &str,
+    name: Option<&str>,
     raw_output: &str,
     success: bool,
 ) -> String {
-    let fallback = describe_direct_shell_result(command, raw_output, success);
-    let output_for_prompt = if raw_output.trim().is_empty() {
-        "(no output)"
-    } else {
-        raw_output.trim()
+    let subject = match name {
+        Some(name) => format!("`{action} {name}`"),
+        None => format!("`{action}`"),
     };
-    let truncated_output = crate::util::truncate_with_ellipsis(output_for_prompt, 4_000);
-    let status = if success { "success" } else { "failure" };
-    let messages = vec![
-        ChatMessage::system(
-            "You summarize completed local shell commands for a chat UI. The command has already run. No tools are available in this step. Briefly explain what happened based only on the command and its raw output. If the command failed, say so plainly. Keep the reply concise.",
-        ),
-        ChatMessage::user(format!(
-            "Command: {command}\nStatus: {status}\nRaw output:\n{truncated_output}\n\nExplain the result in 1 to 4 sentences."
-        )),
-    ];
 
-    match tokio::time::timeout(
-        Duration::from_secs(12),
-        runtime.provider.chat(
-            ChatRequest {
-                messages: &messages,
-                tools: None,
-            },
-            &runtime.model,
-            runtime.temperature,
-        ),
-    )
-    .await
-    {
-        Ok(Ok(response)) => {
-            let text = sanitize_ws_response(
-                response.text_or_empty(),
-                runtime.tools_registry_exec.as_ref(),
-            );
-            if text.trim().is_empty() {
-                fallback
-            } else {
-                text
-            }
+    if success {
+        if raw_output.trim().is_empty() {
+            format!("Ollama command {subject} completed successfully.")
+        } else {
+            format!(
+                "Ollama command {subject} completed successfully. Raw tool output is shown above."
+            )
         }
-        Ok(Err(error)) => {
-            tracing::warn!(
-                command = %command,
-                model = %runtime.model,
-                error = %error,
-                "direct shell summary fallback triggered"
-            );
-            fallback
-        }
-        Err(_) => {
-            tracing::warn!(
-                command = %command,
-                model = %runtime.model,
-                "direct shell summary timed out"
-            );
-            fallback
-        }
+    } else {
+        format!("Ollama command {subject} failed. Raw tool output is shown above.")
     }
 }
 
@@ -693,6 +703,8 @@ fn extract_direct_shell_command(message: &str) -> Option<String> {
     }
 
     for prefix in [
+        "run ",
+        "execute ",
         "run this exact command:",
         "run this exact command",
         "execute this exact command:",
@@ -707,6 +719,466 @@ fn extract_direct_shell_command(message: &str) -> Option<String> {
         {
             if looks_like_direct_shell_command(rest) {
                 return Some(rest.to_string());
+            }
+        }
+    }
+
+    None
+}
+
+fn shell_quote_single(token: &str) -> String {
+    format!("'{}'", token.replace('\'', "'\"'\"'"))
+}
+
+fn normalize_direct_directory_target(raw: &str) -> Option<String> {
+    let trimmed = raw
+        .trim()
+        .trim_end_matches(['?', '.', ':'])
+        .trim_matches('`')
+        .trim_matches('"')
+        .trim_matches('\'')
+        .trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let without_article = trimmed.strip_prefix("the ").unwrap_or(trimmed).trim();
+    let trimmed = without_article
+        .strip_suffix(" directory")
+        .or_else(|| without_article.strip_suffix(" folder"))
+        .unwrap_or(without_article)
+        .trim();
+
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if matches!(
+        trimmed.to_ascii_lowercase().as_str(),
+        "workspace" | "current workspace"
+    ) {
+        Some(".".to_string())
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn extract_direct_directory_listing_command(message: &str) -> Option<String> {
+    static DIRECTORY_LIST_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?i)^(?:ls|list|show|what)\s+(?:all\s+)?(?:files|contents?)?(?:\s+are)?\s*(?:in|of)?\s+(.+)$",
+        )
+        .unwrap()
+    });
+
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lowered = trimmed.to_ascii_lowercase();
+    if matches!(
+        lowered.as_str(),
+        "what files are in the workspace"
+            | "what files are in workspace"
+            | "list workspace files"
+            | "show workspace files"
+    ) {
+        return Some("ls -la".to_string());
+    }
+
+    let captures = DIRECTORY_LIST_RE.captures(trimmed)?;
+    let path = normalize_direct_directory_target(captures.get(1)?.as_str())?;
+    if path == "." {
+        Some("ls -la".to_string())
+    } else {
+        Some(format!("ls -la {}", shell_quote_single(&path)))
+    }
+}
+
+fn looks_like_direct_file_path(candidate: &str) -> bool {
+    let trimmed = candidate.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    trimmed.starts_with("./")
+        || trimmed.starts_with("../")
+        || trimmed.starts_with('/')
+        || trimmed.starts_with("~/")
+        || trimmed.contains('/')
+        || trimmed
+            .rsplit_once('.')
+            .is_some_and(|(stem, ext)| !stem.is_empty() && !ext.is_empty())
+}
+
+fn extract_direct_file_read_path(message: &str) -> Option<String> {
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lowered = trimmed.to_ascii_lowercase();
+    for prefix in ["read ", "show ", "open "] {
+        if !lowered.starts_with(prefix) {
+            continue;
+        }
+
+        let mut remainder = trimmed[prefix.len()..].trim();
+        for suffix in [
+            " and show its contents",
+            " and show the contents",
+            " and show contents",
+            " and print its contents",
+            " and print the contents",
+            " and print contents",
+            " and show it",
+            " and print it",
+            " and review it",
+            " contents",
+            " content",
+        ] {
+            if remainder.to_ascii_lowercase().ends_with(suffix) {
+                let new_len = remainder.len().saturating_sub(suffix.len());
+                remainder = remainder[..new_len].trim();
+                break;
+            }
+        }
+
+        let path = remainder
+            .trim_end_matches(['?', '.', ':'])
+            .trim_matches('`')
+            .trim_matches('"')
+            .trim_matches('\'')
+            .trim();
+
+        if looks_like_direct_file_path(path) {
+            return Some(path.to_string());
+        }
+    }
+
+    None
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DirectOllamaModelRequest {
+    action: String,
+    name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DirectFileWriteRequest {
+    path: String,
+    instruction: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DirectExecutionIntent {
+    FileRead(String),
+    WorkspaceDelete(String),
+    WorkspaceCreateDirectory(String),
+    OllamaModel(DirectOllamaModelRequest),
+    Shell(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DirectForcedToolIntent {
+    FileWrite(DirectFileWriteRequest),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DirectIntent {
+    ExecuteNow(DirectExecutionIntent),
+    ForceTool(DirectForcedToolIntent),
+}
+
+fn normalize_direct_ollama_model_action(raw: &str) -> Option<&'static str> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "list" | "ls" => Some("list"),
+        "running" | "ps" => Some("running"),
+        "pull" => Some("pull"),
+        "show" => Some("show"),
+        "delete" | "remove" | "rm" => Some("delete"),
+        _ => None,
+    }
+}
+
+fn looks_like_direct_ollama_model_name(candidate: &str) -> bool {
+    let trimmed = candidate.trim();
+    !trimmed.is_empty()
+        && trimmed.lines().count() == 1
+        && trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | ':' | '-' | '_' | '/'))
+        && trimmed.chars().any(|ch| ch.is_ascii_alphabetic())
+}
+
+fn looks_like_probable_workspace_path(candidate: &str) -> bool {
+    let trimmed = candidate.trim();
+    if trimmed.is_empty() || trimmed.lines().count() != 1 {
+        return false;
+    }
+
+    if trimmed.starts_with("./")
+        || trimmed.starts_with("../")
+        || trimmed.starts_with('/')
+        || trimmed.starts_with("~/")
+        || trimmed.contains('/')
+    {
+        return true;
+    }
+
+    let token = trimmed
+        .trim_matches('`')
+        .trim_matches('"')
+        .trim_matches('\'')
+        .trim();
+    if token.is_empty() || token.contains(char::is_whitespace) {
+        return false;
+    }
+
+    if token.starts_with('-') {
+        return false;
+    }
+
+    let lower = token.to_ascii_lowercase();
+    if lower.ends_with(".md")
+        || lower.ends_with(".txt")
+        || lower.ends_with(".py")
+        || lower.ends_with(".rs")
+        || lower.ends_with(".json")
+        || lower.ends_with(".toml")
+        || lower.ends_with(".yaml")
+        || lower.ends_with(".yml")
+        || lower.ends_with(".sh")
+    {
+        return true;
+    }
+
+    token
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+}
+
+fn parse_direct_ollama_model_request(raw: &str) -> Option<DirectOllamaModelRequest> {
+    let trimmed = raw.trim().trim_matches('`');
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let has_ollama_prefix = trimmed.starts_with("ollama ") || trimmed.starts_with("Ollama ");
+    let without_ollama = trimmed
+        .strip_prefix("ollama ")
+        .or_else(|| trimmed.strip_prefix("Ollama "))
+        .unwrap_or(trimmed)
+        .trim();
+    let (raw_action, remainder) = without_ollama
+        .split_once(char::is_whitespace)
+        .map_or((without_ollama, ""), |(action, rest)| (action, rest.trim()));
+    let action = normalize_direct_ollama_model_action(raw_action)?;
+
+    if !has_ollama_prefix
+        && (!matches!(action, "pull" | "show")
+            || !looks_like_direct_ollama_model_name(remainder)
+            || looks_like_probable_workspace_path(remainder))
+    {
+        return None;
+    }
+
+    let name = if remainder.is_empty() {
+        None
+    } else if looks_like_direct_ollama_model_name(remainder) {
+        Some(remainder.to_string())
+    } else {
+        return None;
+    };
+
+    Some(DirectOllamaModelRequest {
+        action: action.to_string(),
+        name,
+    })
+}
+
+fn normalize_direct_workspace_target(raw: &str) -> Option<String> {
+    let trimmed = raw
+        .trim()
+        .trim_end_matches(['?', '.', ':'])
+        .trim_matches('`')
+        .trim_matches('"')
+        .trim_matches('\'')
+        .trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let without_article = trimmed.strip_prefix("the ").unwrap_or(trimmed).trim();
+    let without_kind = without_article
+        .strip_prefix("file ")
+        .or_else(|| without_article.strip_prefix("folder "))
+        .or_else(|| without_article.strip_prefix("directory "))
+        .unwrap_or(without_article)
+        .trim();
+    if without_kind.is_empty() || without_kind.contains('\n') {
+        return None;
+    }
+
+    Some(without_kind.to_string())
+}
+
+fn extract_direct_workspace_delete_path(message: &str) -> Option<String> {
+    let trimmed = message.trim();
+    let lowered = trimmed.to_ascii_lowercase();
+    for prefix in ["rm ", "delete ", "remove "] {
+        if lowered.starts_with(prefix) {
+            let path = normalize_direct_workspace_target(&trimmed[prefix.len()..])?;
+            if looks_like_probable_workspace_path(&path) {
+                return Some(path);
+            }
+        }
+    }
+
+    None
+}
+
+fn extract_direct_workspace_directory_create_path(message: &str) -> Option<String> {
+    let trimmed = message.trim();
+    let lowered = trimmed.to_ascii_lowercase();
+
+    if lowered.starts_with("mkdir ") {
+        let path = normalize_direct_workspace_target(&trimmed["mkdir ".len()..])?;
+        if looks_like_probable_workspace_path(&path) {
+            return Some(path);
+        }
+    }
+
+    for prefix in [
+        "create folder ",
+        "create directory ",
+        "make folder ",
+        "make directory ",
+    ] {
+        if lowered.starts_with(prefix) {
+            let path = normalize_direct_workspace_target(&trimmed[prefix.len()..])?;
+            if looks_like_probable_workspace_path(&path) {
+                return Some(path);
+            }
+        }
+    }
+
+    None
+}
+
+fn extract_direct_file_write_request(message: &str) -> Option<DirectFileWriteRequest> {
+    static DIRECT_FILE_WRITE_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r#"(?is)^(?:write_?file|create_?file|save_?file|write file|create file|save file)\s+(?:called\s+|named\s+)?(?:`([^`]+)`|'([^']+)'|"([^"]+)"|([^\s]+))(?:\s+(?:to|with|containing)\s+(.+))?$"#,
+        )
+        .unwrap()
+    });
+
+    let captures = DIRECT_FILE_WRITE_RE.captures(message.trim())?;
+    let path = captures
+        .get(1)
+        .or_else(|| captures.get(2))
+        .or_else(|| captures.get(3))
+        .or_else(|| captures.get(4))
+        .map(|m| m.as_str().trim().to_string())
+        .filter(|value| !value.is_empty())?;
+    let instruction = captures
+        .get(5)
+        .map(|m| m.as_str().trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| message.trim().to_string());
+
+    Some(DirectFileWriteRequest { path, instruction })
+}
+
+fn classify_direct_intent(message: &str) -> Option<DirectIntent> {
+    if let Some(path) = extract_direct_file_read_path(message) {
+        return Some(DirectIntent::ExecuteNow(DirectExecutionIntent::FileRead(
+            path,
+        )));
+    }
+
+    if let Some(request) = extract_direct_file_write_request(message) {
+        return Some(DirectIntent::ForceTool(DirectForcedToolIntent::FileWrite(
+            request,
+        )));
+    }
+
+    if let Some(path) = extract_direct_workspace_delete_path(message) {
+        return Some(DirectIntent::ExecuteNow(
+            DirectExecutionIntent::WorkspaceDelete(path),
+        ));
+    }
+
+    if let Some(path) = extract_direct_workspace_directory_create_path(message) {
+        return Some(DirectIntent::ExecuteNow(
+            DirectExecutionIntent::WorkspaceCreateDirectory(path),
+        ));
+    }
+
+    if let Some(request) = extract_direct_ollama_model_request(message) {
+        return Some(DirectIntent::ExecuteNow(
+            DirectExecutionIntent::OllamaModel(request),
+        ));
+    }
+
+    if let Some(command) = extract_direct_directory_listing_command(message)
+        .or_else(|| extract_direct_shell_command(message))
+    {
+        return Some(DirectIntent::ExecuteNow(DirectExecutionIntent::Shell(
+            command,
+        )));
+    }
+
+    None
+}
+
+fn build_forced_file_write_prompt(base: &str, request: &DirectFileWriteRequest) -> String {
+    let mut prompt = base.to_string();
+    prompt.push_str(
+        "\n## Forced File Write Intent\n\n\
+         The current user message is an explicit file-creation request.\n\
+         You must create the requested file with a real `file_write` tool call.\n\
+         Allowed tools for this turn are `file_write` and `task_plan` only.\n\
+         Use `task_plan` only if the request is clearly multi-step; otherwise call `file_write` immediately.\n\
+         Do not answer with prose until a real `file_write` tool call succeeds or the runtime returns a blocking error.\n",
+    );
+    prompt.push_str(&format!(
+        "- Required target path: `{}`\n- Content goal: {}\n",
+        request.path, request.instruction
+    ));
+    prompt
+}
+
+fn extract_direct_ollama_model_request(message: &str) -> Option<DirectOllamaModelRequest> {
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Some(parsed) = parse_direct_ollama_model_request(trimmed) {
+        return Some(parsed);
+    }
+
+    for prefix in [
+        "run ",
+        "execute ",
+        "run this exact command:",
+        "run this exact command",
+        "execute this exact command:",
+        "execute this exact command",
+        "run this command:",
+        "execute this command:",
+    ] {
+        if let Some(rest) = trimmed
+            .to_ascii_lowercase()
+            .strip_prefix(prefix)
+            .map(|_| trimmed[prefix.len()..].trim())
+        {
+            if let Some(parsed) = parse_direct_ollama_model_request(rest) {
+                return Some(parsed);
             }
         }
     }
@@ -903,8 +1375,333 @@ async fn execute_direct_shell_command(
         .to_string(),
     ));
 
-    let final_response =
-        summarize_direct_shell_command(runtime, command, &raw_output, tool_result.success).await;
+    let final_response = summarize_direct_shell_command(command, &raw_output, tool_result.success);
+    history.push(ChatMessage::assistant(&final_response));
+    Ok(final_response)
+}
+
+fn push_direct_tool_history(
+    history: &mut Vec<ChatMessage>,
+    tool_name: &str,
+    arguments: serde_json::Value,
+    raw_output: &str,
+) {
+    let tool_call_id = format!("ws_{}_{}", tool_name, Uuid::new_v4());
+    let assistant_tool_call = json!({
+        "content": serde_json::Value::Null,
+        "tool_calls": [{
+            "id": tool_call_id,
+            "name": tool_name,
+            "arguments": serde_json::to_string(&arguments).unwrap_or_else(|_| "{}".to_string()),
+        }],
+    });
+    history.push(ChatMessage::assistant(assistant_tool_call.to_string()));
+    history.push(ChatMessage::tool(
+        json!({
+            "tool_call_id": tool_call_id,
+            "tool_name": tool_name,
+            "content": if raw_output.trim().is_empty() {
+                "(no output)".to_string()
+            } else {
+                raw_output.to_string()
+            },
+        })
+        .to_string(),
+    ));
+}
+
+async fn execute_direct_workspace_delete(
+    socket: &mut WebSocket,
+    session_id: &str,
+    config: &crate::config::Config,
+    history: &mut Vec<ChatMessage>,
+    path: &str,
+) -> anyhow::Result<String> {
+    emit_ws_delta_event(
+        socket,
+        session_id,
+        WsDeltaEvent::ToolCall {
+            name: "workspace_delete".to_string(),
+            hint: Some(path.to_string()),
+        },
+    )
+    .await;
+
+    let started_at = Instant::now();
+    let result = super::api::delete_workspace_path(config, Some(path)).await;
+    let (success, raw_output) = match result {
+        Ok(payload) => (
+            true,
+            format!("Deleted workspace {} `{}`.", payload.kind, payload.path),
+        ),
+        Err(error) => (false, error),
+    };
+
+    emit_ws_delta_event(
+        socket,
+        session_id,
+        WsDeltaEvent::ToolResult {
+            name: "workspace_delete".to_string(),
+            success,
+            duration_secs: Some(started_at.elapsed().as_secs()),
+            output: raw_output.clone(),
+        },
+    )
+    .await;
+
+    push_direct_tool_history(
+        history,
+        "workspace_delete",
+        json!({ "path": path }),
+        &raw_output,
+    );
+
+    let final_response = if success {
+        format!("Deleted `{path}` from the workspace.")
+    } else {
+        format!("Failed to delete `{path}` from the workspace. Raw tool output is shown above.")
+    };
+    history.push(ChatMessage::assistant(&final_response));
+    Ok(final_response)
+}
+
+async fn execute_direct_workspace_directory_create(
+    socket: &mut WebSocket,
+    session_id: &str,
+    config: &crate::config::Config,
+    history: &mut Vec<ChatMessage>,
+    path: &str,
+) -> anyhow::Result<String> {
+    emit_ws_delta_event(
+        socket,
+        session_id,
+        WsDeltaEvent::ToolCall {
+            name: "workspace_mkdir".to_string(),
+            hint: Some(path.to_string()),
+        },
+    )
+    .await;
+
+    let started_at = Instant::now();
+    let result = super::api::create_workspace_directory(config, Some(path)).await;
+    let (success, raw_output) = match result {
+        Ok(payload) => (
+            true,
+            format!("Created workspace directory `{}`.", payload.path),
+        ),
+        Err(error) => (false, error),
+    };
+
+    emit_ws_delta_event(
+        socket,
+        session_id,
+        WsDeltaEvent::ToolResult {
+            name: "workspace_mkdir".to_string(),
+            success,
+            duration_secs: Some(started_at.elapsed().as_secs()),
+            output: raw_output.clone(),
+        },
+    )
+    .await;
+
+    push_direct_tool_history(
+        history,
+        "workspace_mkdir",
+        json!({ "path": path }),
+        &raw_output,
+    );
+
+    let final_response = if success {
+        format!("Created workspace directory `{path}`.")
+    } else {
+        format!("Failed to create workspace directory `{path}`. Raw tool output is shown above.")
+    };
+    history.push(ChatMessage::assistant(&final_response));
+    Ok(final_response)
+}
+
+async fn execute_direct_file_read(
+    socket: &mut WebSocket,
+    session_id: &str,
+    runtime: &GatewayRuntimeSnapshot,
+    history: &mut Vec<ChatMessage>,
+    path: &str,
+) -> anyhow::Result<String> {
+    let Some(file_read_tool) = runtime
+        .tools_registry_exec
+        .iter()
+        .find(|tool| tool.name() == "file_read")
+    else {
+        anyhow::bail!("file_read tool is not available in this runtime");
+    };
+
+    emit_ws_delta_event(
+        socket,
+        session_id,
+        WsDeltaEvent::ToolCall {
+            name: "file_read".to_string(),
+            hint: Some(path.to_string()),
+        },
+    )
+    .await;
+
+    let started_at = Instant::now();
+    let tool_result = file_read_tool
+        .execute(json!({ "path": path }))
+        .await
+        .map_err(|error| anyhow::anyhow!("file_read execution failed: {error}"))?;
+
+    let raw_output = if tool_result.output.trim().is_empty() {
+        tool_result.error.clone().unwrap_or_default()
+    } else {
+        tool_result.output.clone()
+    };
+
+    emit_ws_delta_event(
+        socket,
+        session_id,
+        WsDeltaEvent::ToolResult {
+            name: "file_read".to_string(),
+            success: tool_result.success,
+            duration_secs: Some(started_at.elapsed().as_secs()),
+            output: if raw_output.trim().is_empty() {
+                "(no output)".to_string()
+            } else {
+                raw_output.clone()
+            },
+        },
+    )
+    .await;
+
+    let tool_call_id = format!("ws_file_read_{}", Uuid::new_v4());
+    let assistant_tool_call = json!({
+        "content": serde_json::Value::Null,
+        "tool_calls": [{
+            "id": tool_call_id,
+            "name": "file_read",
+            "arguments": serde_json::to_string(&json!({ "path": path }))
+                .unwrap_or_else(|_| "{}".to_string()),
+        }],
+    });
+    history.push(ChatMessage::assistant(assistant_tool_call.to_string()));
+    history.push(ChatMessage::tool(
+        json!({
+            "tool_call_id": tool_call_id,
+            "tool_name": "file_read",
+            "content": if raw_output.trim().is_empty() {
+                "(no output)".to_string()
+            } else {
+                raw_output.clone()
+            },
+        })
+        .to_string(),
+    ));
+
+    let final_response = summarize_direct_file_read(path, &raw_output, tool_result.success);
+    history.push(ChatMessage::assistant(&final_response));
+    Ok(final_response)
+}
+
+async fn execute_direct_ollama_model(
+    socket: &mut WebSocket,
+    session_id: &str,
+    runtime: &GatewayRuntimeSnapshot,
+    history: &mut Vec<ChatMessage>,
+    request: &DirectOllamaModelRequest,
+) -> anyhow::Result<String> {
+    let Some(ollama_tool) = runtime
+        .tools_registry_exec
+        .iter()
+        .find(|tool| tool.name() == "ollama_model")
+    else {
+        anyhow::bail!("ollama_model tool is not available in this runtime");
+    };
+
+    let hint = match request.name.as_deref() {
+        Some(name) => format!("{} {}", request.action, name),
+        None => request.action.clone(),
+    };
+    emit_ws_delta_event(
+        socket,
+        session_id,
+        WsDeltaEvent::ToolCall {
+            name: "ollama_model".to_string(),
+            hint: Some(hint),
+        },
+    )
+    .await;
+
+    let started_at = Instant::now();
+    let mut arguments = serde_json::Map::new();
+    arguments.insert(
+        "action".to_string(),
+        serde_json::Value::String(request.action.clone()),
+    );
+    if let Some(name) = request.name.as_deref() {
+        arguments.insert(
+            "name".to_string(),
+            serde_json::Value::String(name.to_string()),
+        );
+    }
+    let arguments_value = serde_json::Value::Object(arguments);
+
+    let tool_result = ollama_tool
+        .execute(arguments_value.clone())
+        .await
+        .map_err(|error| anyhow::anyhow!("ollama_model execution failed: {error}"))?;
+
+    let raw_output = if tool_result.output.trim().is_empty() {
+        tool_result.error.clone().unwrap_or_default()
+    } else {
+        tool_result.output.clone()
+    };
+
+    emit_ws_delta_event(
+        socket,
+        session_id,
+        WsDeltaEvent::ToolResult {
+            name: "ollama_model".to_string(),
+            success: tool_result.success,
+            duration_secs: Some(started_at.elapsed().as_secs()),
+            output: if raw_output.trim().is_empty() {
+                "(no output)".to_string()
+            } else {
+                raw_output.clone()
+            },
+        },
+    )
+    .await;
+
+    let tool_call_id = format!("ws_ollama_model_{}", Uuid::new_v4());
+    let assistant_tool_call = json!({
+        "content": serde_json::Value::Null,
+        "tool_calls": [{
+            "id": tool_call_id,
+            "name": "ollama_model",
+            "arguments": serde_json::to_string(&arguments_value)
+                .unwrap_or_else(|_| "{}".to_string()),
+        }],
+    });
+    history.push(ChatMessage::assistant(assistant_tool_call.to_string()));
+    history.push(ChatMessage::tool(
+        json!({
+            "tool_call_id": tool_call_id,
+            "tool_name": "ollama_model",
+            "content": if raw_output.trim().is_empty() {
+                "(no output)".to_string()
+            } else {
+                raw_output.clone()
+            },
+        })
+        .to_string(),
+    ));
+
+    let final_response = summarize_direct_ollama_model(
+        &request.action,
+        request.name.as_deref(),
+        &raw_output,
+        tool_result.success,
+    );
     history.push(ChatMessage::assistant(&final_response));
     Ok(final_response)
 }
@@ -987,6 +1784,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                     runtime.tools_registry_exec.as_ref(),
                 ),
             );
+            system_prompt.push_str(&crate::agent::loop_::build_auto_plan_execute_instructions());
 
             (
                 provider_label,
@@ -1033,22 +1831,26 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             continue;
         }
 
+        let direct_intent = classify_direct_intent(&content);
         let temporary = parsed["temporary"].as_bool().unwrap_or(false);
         let history_seed = parse_seed_history(parsed.get("history_seed"));
         let mut history =
             load_ws_chat_history(&session_id, temporary, &history_seed, &ws_chat_store_path).await;
+        let effective_system_prompt = match direct_intent.as_ref() {
+            Some(DirectIntent::ForceTool(DirectForcedToolIntent::FileWrite(request))) => {
+                build_forced_file_write_prompt(&system_prompt, request)
+            }
+            _ => system_prompt.clone(),
+        };
 
         if let Some(first) = history.first_mut() {
             if first.role == "system" {
-                *first = ChatMessage::system(&system_prompt);
+                *first = ChatMessage::system(&effective_system_prompt);
             } else {
-                history.insert(0, ChatMessage::system(&system_prompt));
+                history.insert(0, ChatMessage::system(&effective_system_prompt));
             }
         } else {
-            history.push(ChatMessage::system(&system_prompt));
-        }
-        if let Some(resume_context) = build_ws_resume_context(&history[1..]) {
-            history.insert(1, ChatMessage::system(resume_context));
+            history.push(ChatMessage::system(&effective_system_prompt));
         }
 
         let history_before_turn = history.clone();
@@ -1075,15 +1877,55 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             "model": runtime.model,
         }));
 
-        if let Some(command) = extract_direct_shell_command(&content) {
-            let result = execute_direct_shell_command(
-                &mut socket,
-                &session_id,
-                &runtime,
-                &mut history,
-                &command,
-            )
-            .await;
+        if let Some(DirectIntent::ExecuteNow(intent)) = direct_intent.as_ref() {
+            let result = match intent {
+                DirectExecutionIntent::FileRead(path) => {
+                    execute_direct_file_read(&mut socket, &session_id, &runtime, &mut history, path)
+                        .await
+                }
+                DirectExecutionIntent::WorkspaceDelete(path) => {
+                    let config = state.config.lock().clone();
+                    execute_direct_workspace_delete(
+                        &mut socket,
+                        &session_id,
+                        &config,
+                        &mut history,
+                        path,
+                    )
+                    .await
+                }
+                DirectExecutionIntent::WorkspaceCreateDirectory(path) => {
+                    let config = state.config.lock().clone();
+                    execute_direct_workspace_directory_create(
+                        &mut socket,
+                        &session_id,
+                        &config,
+                        &mut history,
+                        path,
+                    )
+                    .await
+                }
+                DirectExecutionIntent::OllamaModel(request) => {
+                    execute_direct_ollama_model(
+                        &mut socket,
+                        &session_id,
+                        &runtime,
+                        &mut history,
+                        request,
+                    )
+                    .await
+                }
+                DirectExecutionIntent::Shell(command) => {
+                    execute_direct_shell_command(
+                        &mut socket,
+                        &session_id,
+                        &runtime,
+                        &mut history,
+                        command,
+                    )
+                    .await
+                }
+            };
 
             match result {
                 Ok(response) => {
@@ -1129,6 +1971,16 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             continue;
         }
 
+        let excluded_tools: Vec<String> = match direct_intent {
+            Some(DirectIntent::ForceTool(DirectForcedToolIntent::FileWrite(_))) => runtime
+                .tools_registry_exec
+                .iter()
+                .map(|tool| tool.name().to_string())
+                .filter(|name| !matches!(name.as_str(), "file_write" | "task_plan"))
+                .collect(),
+            _ => Vec::new(),
+        };
+
         let result =
             crate::agent::loop_::with_tool_loop_settings(parallel_tools, native_tools, async {
                 let (delta_tx, mut delta_rx) = tokio::sync::mpsc::channel::<String>(128);
@@ -1148,7 +2000,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                     None,
                     Some(delta_tx),
                     None,
-                    &[],
+                    &excluded_tools,
                 ));
 
                 loop {
@@ -1485,7 +2337,9 @@ Reminder set successfully."#;
         assert!(resume.contains("Previous completed command before this turn: `lsusb`"));
         assert!(resume.contains("Latest tool output before this turn: Bus 001 Device 001"));
         assert!(resume.contains("Do not claim the conversation has no prior context"));
-        assert!(resume.contains("Do not re-run tools solely because they appear in this saved context"));
+        assert!(
+            resume.contains("Do not re-run tools solely because they appear in this saved context")
+        );
     }
 
     #[test]
@@ -1525,6 +2379,33 @@ Reminder set successfully."#;
     }
 
     #[test]
+    fn normalize_ws_history_for_storage_collapses_completed_tool_trace_to_summary() {
+        let history = vec![
+            ChatMessage::user("run lsusb"),
+            ChatMessage::assistant(
+                r#"{"content":null,"tool_calls":[{"id":"call_1","name":"shell","arguments":"{\"command\":\"lsusb\"}"}]}"#,
+            ),
+            ChatMessage::tool(
+                r#"{"tool_call_id":"call_1","tool_name":"shell","content":"Bus 001 Device 001"}"#,
+            ),
+            ChatMessage::assistant("Command completed successfully."),
+            ChatMessage::user("write a python file to add two numbers"),
+        ];
+
+        let normalized = normalize_ws_history_for_storage(&history);
+        assert_eq!(normalized.len(), 3);
+        assert_eq!(normalized[0].role, "user");
+        assert_eq!(normalized[0].content, "run lsusb");
+        assert_eq!(normalized[1].role, "assistant");
+        assert_eq!(normalized[1].content, "Command completed successfully.");
+        assert_eq!(normalized[2].role, "user");
+        assert_eq!(
+            normalized[2].content,
+            "write a python file to add two numbers"
+        );
+    }
+
+    #[test]
     fn select_resume_history_prefers_seed_when_lengths_match() {
         let seed = vec![ChatMessage::user("latest seed prompt")];
         let persisted = vec![ChatMessage::user("older persisted prompt")];
@@ -1553,11 +2434,12 @@ Reminder set successfully."#;
 
         let persisted = read_persisted_ws_chat_sessions(&store_path).await;
         let session = persisted.sessions.get("session-a").unwrap();
-        assert_eq!(session.history.len(), 4);
+        assert_eq!(session.history.len(), 2);
         assert!(session
             .history
             .iter()
             .all(|message| message.role != "system"));
+        assert_eq!(session.history[0].content, "write and run add.py");
         assert_eq!(session.history.last().unwrap().content, "2 + 2 = 4");
 
         delete_persisted_ws_chat_session(&store_path, "session-a").await;
@@ -1606,6 +2488,14 @@ Reminder set successfully."#;
             extract_direct_shell_command("Run this exact command: `lsblk`"),
             Some("lsblk".to_string())
         );
+        assert_eq!(
+            extract_direct_shell_command("run lsusb"),
+            Some("lsusb".to_string())
+        );
+        assert_eq!(
+            extract_direct_shell_command("execute lspci"),
+            Some("lspci".to_string())
+        );
     }
 
     #[test]
@@ -1614,6 +2504,128 @@ Reminder set successfully."#;
         assert_eq!(
             extract_direct_shell_command("Please explain what curl does."),
             None
+        );
+    }
+
+    #[test]
+    fn extract_direct_directory_listing_command_recovers_workspace_and_paths() {
+        assert_eq!(
+            extract_direct_directory_listing_command("what files are in the workspace"),
+            Some("ls -la".to_string())
+        );
+        assert_eq!(
+            extract_direct_directory_listing_command("ls files in rust_kernel/src"),
+            Some("ls -la 'rust_kernel/src'".to_string())
+        );
+        assert_eq!(
+            extract_direct_directory_listing_command("ls all files in the rust_kernel directory"),
+            Some("ls -la 'rust_kernel'".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_direct_file_read_path_recovers_explicit_file_requests() {
+        assert_eq!(
+            extract_direct_file_read_path("read rust_kernel/src/boot/boot.S and show its contents"),
+            Some("rust_kernel/src/boot/boot.S".to_string())
+        );
+        assert_eq!(
+            extract_direct_file_read_path("show `AGENTS.md`"),
+            Some("AGENTS.md".to_string())
+        );
+        assert_eq!(
+            extract_direct_file_read_path("read all files in rust_kernel directory"),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_direct_ollama_model_request_recovers_explicit_commands() {
+        assert_eq!(
+            extract_direct_ollama_model_request("ollama pull nemotron-3-super"),
+            Some(DirectOllamaModelRequest {
+                action: "pull".to_string(),
+                name: Some("nemotron-3-super".to_string()),
+            })
+        );
+        assert_eq!(
+            extract_direct_ollama_model_request("run ollama ps"),
+            Some(DirectOllamaModelRequest {
+                action: "running".to_string(),
+                name: None,
+            })
+        );
+        assert_eq!(
+            extract_direct_ollama_model_request("pull qwen2.5-coder:14b"),
+            Some(DirectOllamaModelRequest {
+                action: "pull".to_string(),
+                name: Some("qwen2.5-coder:14b".to_string()),
+            })
+        );
+        assert_eq!(
+            extract_direct_ollama_model_request("ollama rm gemma3:1b"),
+            Some(DirectOllamaModelRequest {
+                action: "delete".to_string(),
+                name: Some("gemma3:1b".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn extract_direct_ollama_model_request_rejects_normal_chat() {
+        assert_eq!(
+            extract_direct_ollama_model_request("can you pull the latest changes?"),
+            None
+        );
+        assert_eq!(
+            extract_direct_ollama_model_request("tell me about ollama pull"),
+            None
+        );
+        assert_eq!(extract_direct_ollama_model_request("delete add.py"), None);
+        assert_eq!(extract_direct_ollama_model_request("rm add.py"), None);
+    }
+
+    #[test]
+    fn classify_direct_intent_routes_workspace_mutations_and_file_write() {
+        assert_eq!(
+            classify_direct_intent("rm add.py"),
+            Some(DirectIntent::ExecuteNow(
+                DirectExecutionIntent::WorkspaceDelete("add.py".to_string())
+            ))
+        );
+        assert_eq!(
+            classify_direct_intent("create folder demo/subdir"),
+            Some(DirectIntent::ExecuteNow(
+                DirectExecutionIntent::WorkspaceCreateDirectory("demo/subdir".to_string())
+            ))
+        );
+        assert_eq!(
+            classify_direct_intent("write_file add.py to add two numbers"),
+            Some(DirectIntent::ForceTool(DirectForcedToolIntent::FileWrite(
+                DirectFileWriteRequest {
+                    path: "add.py".to_string(),
+                    instruction: "add two numbers".to_string(),
+                }
+            )))
+        );
+    }
+
+    #[test]
+    fn classify_direct_intent_preserves_shell_and_ollama_exact_paths() {
+        assert_eq!(
+            classify_direct_intent("run this exact command: `python -V`"),
+            Some(DirectIntent::ExecuteNow(DirectExecutionIntent::Shell(
+                "python -V".to_string()
+            )))
+        );
+        assert_eq!(
+            classify_direct_intent("ollama delete gemma3:1b"),
+            Some(DirectIntent::ExecuteNow(
+                DirectExecutionIntent::OllamaModel(DirectOllamaModelRequest {
+                    action: "delete".to_string(),
+                    name: Some("gemma3:1b".to_string()),
+                })
+            ))
         );
     }
 }

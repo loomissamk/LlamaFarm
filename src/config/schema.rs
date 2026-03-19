@@ -3035,6 +3035,10 @@ pub struct ModelRouteConfig {
     pub provider: String,
     /// Model to use with that provider
     pub model: String,
+    /// Optional API URL override for this route's provider.
+    /// Useful when multiple local runtimes of the same provider type run on different endpoints.
+    #[serde(default)]
+    pub api_url: Option<String>,
     /// Optional max_tokens override for this route.
     /// When set, provider requests cap output tokens to this value.
     #[serde(default)]
@@ -6257,6 +6261,17 @@ impl Config {
             if route.model.trim().is_empty() {
                 anyhow::bail!("model_routes[{i}].model must not be empty");
             }
+            if let Some(api_url) = route.api_url.as_deref().map(str::trim) {
+                if api_url.is_empty() {
+                    anyhow::bail!("model_routes[{i}].api_url must not be empty when set");
+                }
+
+                let parsed = reqwest::Url::parse(api_url)
+                    .with_context(|| format!("model_routes[{i}].api_url is not a valid URL"))?;
+                if !matches!(parsed.scheme(), "http" | "https") {
+                    anyhow::bail!("model_routes[{i}].api_url must use http/https");
+                }
+            }
             if route.max_tokens == Some(0) {
                 anyhow::bail!("model_routes[{i}].max_tokens must be greater than 0");
             }
@@ -6341,15 +6356,11 @@ impl Config {
                 .as_deref()
                 .is_some_and(|model| model.trim().ends_with(":cloud"))
         {
-            if is_local_ollama_endpoint(self.api_url.as_deref()) {
+            if !is_local_ollama_endpoint(self.api_url.as_deref())
+                && !has_ollama_cloud_credential(self.api_key.as_deref())
+            {
                 anyhow::bail!(
-                    "default_model uses ':cloud' with provider 'ollama', but api_url is local or unset. Set api_url to a remote Ollama endpoint (for example https://ollama.com)."
-                );
-            }
-
-            if !has_ollama_cloud_credential(self.api_key.as_deref()) {
-                anyhow::bail!(
-                    "default_model uses ':cloud' with provider 'ollama', but no API key is configured. Set api_key or OLLAMA_API_KEY."
+                    "default_model uses ':cloud' with provider 'ollama' and a remote api_url, but no API key is configured. Set api_key or OLLAMA_API_KEY."
                 );
             }
         }
@@ -9267,6 +9278,7 @@ provider_api = "not-a-real-mode"
             hint: "reasoning".to_string(),
             provider: "openrouter".to_string(),
             model: "anthropic/claude-sonnet-4.6".to_string(),
+            api_url: None,
             max_tokens: Some(0),
             api_key: None,
         }];
@@ -9277,6 +9289,43 @@ provider_api = "not-a-real-mode"
         assert!(err
             .to_string()
             .contains("model_routes[0].max_tokens must be greater than 0"));
+    }
+
+    #[test]
+    async fn model_route_api_url_must_be_valid_http_url() {
+        let mut config = Config::default();
+        config.model_routes = vec![ModelRouteConfig {
+            hint: "local".to_string(),
+            provider: "llamacpp".to_string(),
+            model: "ggml-org/gpt-oss-20b-GGUF".to_string(),
+            api_url: Some("ftp://127.0.0.1:8080/v1".to_string()),
+            max_tokens: None,
+            api_key: None,
+        }];
+
+        let err = config
+            .validate()
+            .expect_err("model route api_url with non-http scheme should be rejected");
+        assert!(err
+            .to_string()
+            .contains("model_routes[0].api_url must use http/https"));
+    }
+
+    #[test]
+    async fn model_route_api_url_accepts_http_endpoint() {
+        let mut config = Config::default();
+        config.model_routes = vec![ModelRouteConfig {
+            hint: "local".to_string(),
+            provider: "llamacpp".to_string(),
+            model: "ggml-org/gpt-oss-20b-GGUF".to_string(),
+            api_url: Some("http://127.0.0.1:8080/v1".to_string()),
+            max_tokens: None,
+            api_key: None,
+        }];
+
+        config
+            .validate()
+            .expect("valid model route api_url should pass validation");
     }
 
     #[test]
@@ -9377,20 +9426,18 @@ provider_api = "not-a-real-mode"
     }
 
     #[test]
-    async fn validate_ollama_cloud_model_requires_remote_api_url() {
+    async fn validate_ollama_cloud_model_accepts_local_endpoint_without_api_key() {
         let _env_guard = env_override_lock().await;
         let config = Config {
             default_provider: Some("ollama".to_string()),
             default_model: Some("glm-5:cloud".to_string()),
             api_url: None,
-            api_key: Some("ollama-key".to_string()),
+            api_key: None,
             ..Config::default()
         };
 
-        let error = config.validate().expect_err("expected validation to fail");
-        assert!(error.to_string().contains(
-            "default_model uses ':cloud' with provider 'ollama', but api_url is local or unset"
-        ));
+        let result = config.validate();
+        assert!(result.is_ok(), "expected validation to pass: {result:?}");
     }
 
     #[test]
@@ -9409,6 +9456,23 @@ provider_api = "not-a-real-mode"
         std::env::remove_var("OLLAMA_API_KEY");
 
         assert!(result.is_ok(), "expected validation to pass: {result:?}");
+    }
+
+    #[test]
+    async fn validate_ollama_cloud_model_rejects_remote_endpoint_without_key() {
+        let _env_guard = env_override_lock().await;
+        let config = Config {
+            default_provider: Some("ollama".to_string()),
+            default_model: Some("glm-5:cloud".to_string()),
+            api_url: Some("https://ollama.com/api".to_string()),
+            api_key: None,
+            ..Config::default()
+        };
+
+        let error = config.validate().expect_err("expected validation to fail");
+        assert!(error.to_string().contains(
+            "default_model uses ':cloud' with provider 'ollama' and a remote api_url, but no API key is configured"
+        ));
     }
 
     #[test]

@@ -216,6 +216,7 @@ impl ModelRoutingConfigTool {
             "hint": route.hint,
             "provider": route.provider,
             "model": route.model,
+            "api_url": route.api_url,
             "api_key_configured": route
                 .api_key
                 .as_ref()
@@ -430,6 +431,7 @@ impl ModelRoutingConfigTool {
         let hint = Self::parse_non_empty_string(args, "hint")?;
         let provider = Self::parse_non_empty_string(args, "provider")?;
         let model = Self::parse_non_empty_string(args, "model")?;
+        let api_url_update = Self::parse_optional_string_update(args, "api_url")?;
         let api_key_update = Self::parse_optional_string_update(args, "api_key")?;
 
         let keywords_update = if let Some(raw) = args.get("keywords") {
@@ -466,6 +468,7 @@ impl ModelRoutingConfigTool {
             hint: hint.clone(),
             provider: provider.clone(),
             model: model.clone(),
+            api_url: None,
             max_tokens: None,
             api_key: None,
         });
@@ -473,6 +476,12 @@ impl ModelRoutingConfigTool {
         next_route.hint = hint.clone();
         next_route.provider = provider;
         next_route.model = model;
+
+        match api_url_update {
+            MaybeSet::Set(api_url) => next_route.api_url = Some(api_url),
+            MaybeSet::Null => next_route.api_url = None,
+            MaybeSet::Unset => {}
+        }
 
         match api_key_update {
             MaybeSet::Set(api_key) => next_route.api_key = Some(api_key),
@@ -784,6 +793,10 @@ impl Tool for ModelRoutingConfigTool {
                     "type": ["string", "null"],
                     "description": "Optional API key override for scenario route or delegate agent"
                 },
+                "api_url": {
+                    "type": ["string", "null"],
+                    "description": "Optional API URL override for scenario routes"
+                },
                 "keywords": {
                     "description": "Classification keywords for upsert_scenario (string or string array)",
                     "oneOf": [
@@ -993,6 +1006,34 @@ mod tests {
             item["hint"] == json!("coding")
                 && item["provider"] == json!("openai")
                 && item["model"] == json!("gpt-5.3-codex")
+        }));
+    }
+
+    #[tokio::test]
+    async fn upsert_scenario_records_api_url() {
+        let tmp = TempDir::new().unwrap();
+        let tool = ModelRoutingConfigTool::new(test_config(&tmp).await, test_security());
+
+        let result = tool
+            .execute(json!({
+                "action": "upsert_scenario",
+                "hint": "local",
+                "provider": "llamacpp",
+                "model": "ggml-org/gpt-oss-20b-GGUF",
+                "api_url": "http://127.0.0.1:8081/v1"
+            }))
+            .await
+            .unwrap();
+
+        assert!(result.success, "{:?}", result.error);
+
+        let get_result = tool.execute(json!({"action": "get"})).await.unwrap();
+        let output: Value = serde_json::from_str(&get_result.output).unwrap();
+        let scenarios = output["scenarios"].as_array().unwrap();
+        assert!(scenarios.iter().any(|item| {
+            item["hint"] == json!("local")
+                && item["provider"] == json!("llamacpp")
+                && item["api_url"] == json!("http://127.0.0.1:8081/v1")
         }));
     }
 

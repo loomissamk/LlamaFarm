@@ -128,7 +128,7 @@ What this bundled stack does:
 2. starts `LlamaFarm` on `http://127.0.0.1:42617`
 3. starts internal Ollama on `127.0.0.1:11434`
 4. starts internal Chromium WebDriver on `127.0.0.1:9515`
-5. auto-pulls `qwen3.5:9b` and `devstral-small-2:latest`
+5. auto-pulls `qwen3.5:9b`, `devstral-small-2:latest`, and `devstral-2:123b-cloud`
 
 Useful follow-ups:
 

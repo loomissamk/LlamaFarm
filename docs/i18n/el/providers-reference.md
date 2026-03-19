@@ -53,7 +53,7 @@ llamafarm providers
 ### Ollama
 
 - **Vision**: Υποστηρίζεται μέσω της σύνταξης `[IMAGE:<source>]` στα μηνύματα.
-- **Cloud Routing**: Χρησιμοποιήστε το επίθεμα `:cloud` (π.χ. `llama3:cloud`) για απομακρυσμένα instances. Το `api_url` πρέπει να οριστεί ρητά.
+- **Cloud Routing**: Χρησιμοποιήστε το επίθεμα `:cloud` (π.χ. `llama3:cloud`) για Ollama cloud models. Τα τοπικά endpoints υποστηρίζονται όταν το runtime έχει ήδη κάνει `ollama signin`. Για απευθείας απομακρυσμένα endpoints, ορίστε `api_url` και `api_key` ή `OLLAMA_API_KEY`.
 - **Reasoning**: Η συμπεριφορά συλλογιστικής ελέγχεται μέσω της ρύθμισης `reasoning_enabled` στο αρχείο `config.toml`.
 
 ### AWS Bedrock

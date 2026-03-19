@@ -4,7 +4,10 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BASE_COMPOSE="$ROOT_DIR/docker-compose.bundle.yml"
 GPU_MODE="${LLAMAFARM_GPU_MODE:-auto}"
+DEFAULT_PULL_MODELS="qwen3.5:9b,devstral-small-2:latest"
 TMP_OVERRIDE=""
+RUNTIME_UID="${LLAMAFARM_RUNTIME_UID:-$(id -u)}"
+RUNTIME_GID="${LLAMAFARM_RUNTIME_GID:-$(id -g)}"
 
 cleanup() {
   if [ -n "$TMP_OVERRIDE" ] && [ -f "$TMP_OVERRIDE" ]; then
@@ -25,6 +28,10 @@ have_render_device() {
 
 have_kfd_device() {
   [ -e /dev/kfd ]
+}
+
+have_accel_device() {
+  compgen -G '/dev/accel/*' >/dev/null
 }
 
 docker_nvidia_works() {
@@ -79,8 +86,14 @@ resolve_backend() {
 
 collect_group_ids() {
   local ids=()
+  local gid
   local candidate
-  for candidate in /dev/dri/renderD* /dev/dri/card* /dev/kfd; do
+
+  for gid in $(id -G 2>/dev/null); do
+    ids+=("$gid")
+  done
+
+  for candidate in /dev/dri/renderD* /dev/dri/card* /dev/kfd /dev/accel/*; do
     [ -e "$candidate" ] || continue
     ids+=("$(stat -c '%g' "$candidate")")
   done
@@ -96,7 +109,8 @@ write_override() {
   local backend="$1"
   local expose_dri="$2"
   local expose_kfd="$3"
-  shift 3
+  local expose_accel="$4"
+  shift 4
   local groups=("$@")
 
   TMP_OVERRIDE="$(mktemp "${TMPDIR:-/tmp}/llamafarm-bundle.XXXXXX.yml")"
@@ -112,13 +126,16 @@ write_override() {
       echo "      args:"
       echo "        OLLAMA_BASE_IMAGE: ollama/ollama:rocm"
     fi
-    if [ "$expose_dri" = "1" ] || [ "$expose_kfd" = "1" ]; then
+    if [ "$expose_dri" = "1" ] || [ "$expose_kfd" = "1" ] || [ "$expose_accel" = "1" ]; then
       echo "    devices:"
       if [ "$expose_dri" = "1" ]; then
         echo "      - /dev/dri:/dev/dri"
       fi
       if [ "$expose_kfd" = "1" ]; then
         echo "      - /dev/kfd:/dev/kfd"
+      fi
+      if [ "$expose_accel" = "1" ]; then
+        echo "      - /dev/accel:/dev/accel"
       fi
     fi
     if [ "${#groups[@]}" -gt 0 ]; then
@@ -146,6 +163,7 @@ write_override() {
 BACKEND="$(resolve_backend)"
 EXPOSE_DRI=0
 EXPOSE_KFD=0
+EXPOSE_ACCEL=0
 
 if have_render_device; then
   EXPOSE_DRI=1
@@ -155,15 +173,28 @@ if have_kfd_device; then
   EXPOSE_KFD=1
 fi
 
+if have_accel_device; then
+  EXPOSE_ACCEL=1
+fi
+
 mapfile -t GROUP_IDS < <(collect_group_ids)
-write_override "$BACKEND" "$EXPOSE_DRI" "$EXPOSE_KFD" "${GROUP_IDS[@]}"
+write_override "$BACKEND" "$EXPOSE_DRI" "$EXPOSE_KFD" "$EXPOSE_ACCEL" "${GROUP_IDS[@]}"
+
+export OLLAMA_PULL_MODELS="${OLLAMA_PULL_MODELS-$DEFAULT_PULL_MODELS}"
+export LLAMAFARM_RUNTIME_UID="$RUNTIME_UID"
+export LLAMAFARM_RUNTIME_GID="$RUNTIME_GID"
 
 echo "LlamaFarm bundle GPU backend: $BACKEND"
+echo "LlamaFarm bundle Ollama preload models: $OLLAMA_PULL_MODELS"
+echo "LlamaFarm bundle runtime user: ${LLAMAFARM_RUNTIME_UID}:${LLAMAFARM_RUNTIME_GID}"
 if [ "$EXPOSE_DRI" = "1" ]; then
   echo "Exposing /dev/dri to the container"
 fi
 if [ "$EXPOSE_KFD" = "1" ]; then
   echo "Exposing /dev/kfd to the container"
+fi
+if [ "$EXPOSE_ACCEL" = "1" ]; then
+  echo "Exposing /dev/accel to the container"
 fi
 
 cd "$ROOT_DIR"

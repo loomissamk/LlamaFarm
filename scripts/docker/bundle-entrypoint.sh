@@ -32,6 +32,73 @@ ensure_runtime_layout() {
   if [ ! -f "$WORKSPACE_DIR/SOUL.md" ] && [ -f "$DEFAULT_SOUL" ]; then
     cp "$DEFAULT_SOUL" "$WORKSPACE_DIR/SOUL.md"
   fi
+
+  ensure_bundle_config_defaults
+}
+
+ensure_bundle_config_defaults() {
+  local config_path="$CONFIG_DIR/config.toml"
+  [ -f "$config_path" ] || return 0
+
+  python3 - "$config_path" <<'PY'
+from pathlib import Path
+import sys
+
+config_path = Path(sys.argv[1])
+text = config_path.read_text()
+required_commands = ["rm"]
+marker = "allowed_commands = ["
+start = text.find(marker)
+if start == -1:
+    sys.exit(0)
+
+end = text.find("\n]", start)
+if end == -1:
+    sys.exit(0)
+
+changed = False
+for command in required_commands:
+    token = f"\"{command}\""
+    if token in text:
+        continue
+    text = text[:end] + f'  "{command}",\n' + text[end:]
+    end += len(f'  "{command}",\n')
+    changed = True
+
+if changed:
+    config_path.write_text(text)
+PY
+}
+
+repair_config_for_available_models() {
+  local config_path="$CONFIG_DIR/config.toml"
+  [ -f "$config_path" ] || return 0
+
+  local replacement_model=""
+  if ! model_present "qwen2.5-coder:14b"; then
+    if model_present "devstral-small-2:latest"; then
+      replacement_model="devstral-small-2:latest"
+    elif model_present "qwen3.5:9b"; then
+      replacement_model="qwen3.5:9b"
+    fi
+  fi
+
+  [ -n "$replacement_model" ] || return 0
+
+  python3 - "$config_path" "$replacement_model" <<'PY'
+from pathlib import Path
+import sys
+
+config_path = Path(sys.argv[1])
+replacement = sys.argv[2]
+missing = "qwen2.5-coder:14b"
+text = config_path.read_text()
+
+if missing not in text:
+    sys.exit(0)
+
+config_path.write_text(text.replace(missing, replacement))
+PY
 }
 
 wait_for_http() {
@@ -56,7 +123,12 @@ model_present() {
 
 ensure_models() {
   local raw_models
-  raw_models="${OLLAMA_PULL_MODELS:-$DEFAULT_PULL_MODELS}"
+  local failed=0
+  raw_models="${OLLAMA_PULL_MODELS-$DEFAULT_PULL_MODELS}"
+  if [ -z "${raw_models//[[:space:],]/}" ]; then
+    echo "OLLAMA_PULL_MODELS is empty; skipping model pulls"
+    return 0
+  fi
   IFS=',' read -r -a requested_models <<<"$raw_models"
 
   for raw_model in "${requested_models[@]}"; do
@@ -70,8 +142,13 @@ ensure_models() {
     fi
 
     echo "pulling ollama model: $model"
-    ollama pull "$model"
+    if ! ollama pull "$model"; then
+      echo "failed to pull ollama model: $model" >&2
+      failed=1
+    fi
   done
+
+  return "$failed"
 }
 
 pull_models_background() {
@@ -130,9 +207,26 @@ monitor_children() {
 }
 
 if [ "$(id -u)" = "0" ]; then
+  target_uid="${LLAMAFARM_RUNTIME_UID:-65534}"
+  target_gid="${LLAMAFARM_RUNTIME_GID:-65534}"
+
+  case "$target_uid" in
+    ''|*[!0-9]*)
+      echo "LLAMAFARM_RUNTIME_UID must be numeric, got: $target_uid" >&2
+      exit 1
+      ;;
+  esac
+
+  case "$target_gid" in
+    ''|*[!0-9]*)
+      echo "LLAMAFARM_RUNTIME_GID must be numeric, got: $target_gid" >&2
+      exit 1
+      ;;
+  esac
+
   ensure_runtime_layout
-  chown -R 65534:65534 "$DATA_DIR"
-  drop_args=(--reuid=65534 --regid=65534)
+  chown -R "$target_uid:$target_gid" "$DATA_DIR"
+  drop_args=(--reuid="$target_uid" --regid="$target_gid")
   if [ -n "${LLAMAFARM_SUPP_GROUPS:-}" ]; then
     drop_args+=(--groups "${LLAMAFARM_SUPP_GROUPS}")
   else
@@ -144,6 +238,7 @@ fi
 ensure_runtime_layout
 start_ollama
 wait_for_http "ollama" "$OLLAMA_HTTP_URL/api/tags"
+repair_config_for_available_models
 start_chromedriver
 wait_for_http "chromedriver" "$CHROMEDRIVER_STATUS_URL"
 pull_models_background

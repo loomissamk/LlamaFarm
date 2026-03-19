@@ -66,6 +66,7 @@ pub mod peripherals;
 pub mod providers;
 pub mod rag;
 pub mod runtime;
+pub mod runtime_logs;
 pub(crate) mod security;
 pub(crate) mod service;
 pub(crate) mod skills;

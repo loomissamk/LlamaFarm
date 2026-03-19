@@ -220,6 +220,56 @@ impl TaskPlanTool {
             error: None,
         }
     }
+
+    fn infer_action(args: &serde_json::Value) -> &'static str {
+        if args
+            .get("tasks")
+            .and_then(|v| v.as_array())
+            .is_some_and(|tasks| !tasks.is_empty())
+            || args
+                .get("steps")
+                .and_then(|v| v.as_array())
+                .is_some_and(|steps| !steps.is_empty())
+        {
+            "create"
+        } else if args.get("title").and_then(|v| v.as_str()).is_some() {
+            "add"
+        } else if args.get("id").and_then(|v| v.as_u64()).is_some()
+            && args.get("status").and_then(|v| v.as_str()).is_some()
+        {
+            "update"
+        } else {
+            "list"
+        }
+    }
+
+    fn normalize_create_tasks(args: &serde_json::Value) -> serde_json::Value {
+        if let Some(tasks) = args.get("tasks") {
+            return tasks.clone();
+        }
+
+        let Some(steps) = args.get("steps").and_then(|v| v.as_array()) else {
+            return json!([]);
+        };
+
+        let tasks = steps
+            .iter()
+            .filter_map(|step| {
+                let step_obj = step.as_object()?;
+                let title = step_obj
+                    .get("title")
+                    .or_else(|| step_obj.get("description"))
+                    .or_else(|| step_obj.get("name"))
+                    .or_else(|| step_obj.get("command"))
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|title| !title.is_empty())?;
+                Some(json!({ "title": title }))
+            })
+            .collect::<Vec<_>>();
+
+        serde_json::Value::Array(tasks)
+    }
 }
 
 #[async_trait]
@@ -279,14 +329,16 @@ impl Tool for TaskPlanTool {
         let action = args
             .get("action")
             .and_then(|v| v.as_str())
-            .unwrap_or_default();
+            .map(str::trim)
+            .filter(|action| !action.is_empty())
+            .unwrap_or_else(|| Self::infer_action(&args));
 
         match action {
             "create" => {
                 if let Err(r) = self.enforce_mutation() {
                     return Ok(r);
                 }
-                let tasks_val = args.get("tasks").cloned().unwrap_or(json!([]));
+                let tasks_val = Self::normalize_create_tasks(&args);
                 Ok(self.handle_create(&tasks_val))
             }
             "add" => {
@@ -394,6 +446,30 @@ mod tests {
         assert!(r.output.contains("[1] [pending] step one"));
         assert!(r.output.contains("[2] [pending] step two"));
         assert!(r.output.contains("[3] [completed] step three"));
+    }
+
+    #[tokio::test]
+    async fn create_infers_action_and_normalizes_steps_alias() {
+        let tool = default_tool();
+
+        let r = tool
+            .execute(json!({
+                "steps": [
+                    { "description": "write a file" },
+                    { "description": "read the file" },
+                    { "description": "delete the file" }
+                ]
+            }))
+            .await
+            .unwrap();
+        assert!(r.success);
+        assert!(r.output.contains("3 task(s)"));
+
+        let r = tool.execute(json!({ "action": "list" })).await.unwrap();
+        assert!(r.success);
+        assert!(r.output.contains("[1] [pending] write a file"));
+        assert!(r.output.contains("[2] [pending] read the file"));
+        assert!(r.output.contains("[3] [pending] delete the file"));
     }
 
     #[tokio::test]

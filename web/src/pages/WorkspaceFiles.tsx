@@ -1,89 +1,200 @@
-import { useEffect, useState } from 'react';
-import { BookText, RefreshCw, Save } from 'lucide-react';
-import type { WorkspaceFileResponse } from '@/types/api';
-import { getWorkspaceFile, putWorkspaceFile } from '@/lib/api';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ChevronRight,
+  Download,
+  FileText,
+  Folder,
+  FolderDown,
+  FolderPlus,
+  FolderOpen,
+  RefreshCw,
+  Trash2,
+  Upload,
+} from 'lucide-react';
+import type { WorkspaceBrowserEntry, WorkspaceBrowserResponse } from '@/types/api';
+import {
+  createWorkspaceDirectory,
+  deleteWorkspacePath,
+  downloadWorkspacePath,
+  getWorkspaceBrowser,
+  uploadWorkspaceBlob,
+} from '@/lib/api';
 
-type WorkspaceFileName = 'AGENTS.md' | 'SOUL.md';
+function formatBytes(sizeBytes?: number): string {
+  if (sizeBytes === undefined) return 'Directory';
+  if (sizeBytes < 1024) return `${sizeBytes} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let value = sizeBytes / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unitIndex]}`;
+}
 
-const WORKSPACE_FILES: WorkspaceFileName[] = ['AGENTS.md', 'SOUL.md'];
+function formatTimestamp(value?: string): string {
+  if (!value) return 'Unknown';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+}
+
+function joinWorkspacePath(basePath: string, fileName: string): string {
+  return basePath ? `${basePath}/${fileName}` : fileName;
+}
 
 export default function WorkspaceFiles() {
-  const [activeFile, setActiveFile] = useState<WorkspaceFileName>('AGENTS.md');
-  const [files, setFiles] = useState<Record<WorkspaceFileName, WorkspaceFileResponse>>({
-    'AGENTS.md': { name: 'AGENTS.md', content: '', exists: false },
-    'SOUL.md': { name: 'SOUL.md', content: '', exists: false },
-  });
-  const [drafts, setDrafts] = useState<Record<WorkspaceFileName, string>>({
-    'AGENTS.md': '',
-    'SOUL.md': '',
-  });
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
 
-  const loadAll = async (showLoading = true) => {
+  const [browser, setBrowser] = useState<WorkspaceBrowserResponse | null>(null);
+  const [loadingBrowser, setLoadingBrowser] = useState(true);
+  const [refreshingBrowser, setRefreshingBrowser] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [downloadingPath, setDownloadingPath] = useState<string | null>(null);
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [deletingPath, setDeletingPath] = useState<string | null>(null);
+  const [browserError, setBrowserError] = useState<string | null>(null);
+  const [browserSuccess, setBrowserSuccess] = useState<string | null>(null);
+
+  const loadBrowser = async (path = '', showLoading = true) => {
     if (showLoading) {
-      setLoading(true);
+      setLoadingBrowser(true);
     } else {
-      setRefreshing(true);
+      setRefreshingBrowser(true);
     }
-    setError(null);
+    setBrowserError(null);
     try {
-      const results = await Promise.all(WORKSPACE_FILES.map((name) => getWorkspaceFile(name)));
-      const nextFiles = {
-        'AGENTS.md': results.find((file) => file.name === 'AGENTS.md') ?? {
-          name: 'AGENTS.md',
-          content: '',
-          exists: false,
-        },
-        'SOUL.md': results.find((file) => file.name === 'SOUL.md') ?? {
-          name: 'SOUL.md',
-          content: '',
-          exists: false,
-        },
-      };
-      setFiles(nextFiles);
-      setDrafts({
-        'AGENTS.md': nextFiles['AGENTS.md'].content,
-        'SOUL.md': nextFiles['SOUL.md'].content,
-      });
+      const nextBrowser = await getWorkspaceBrowser(path);
+      setBrowser(nextBrowser);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to load workspace files');
+      setBrowserError(err instanceof Error ? err.message : 'Failed to load workspace browser');
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      setLoadingBrowser(false);
+      setRefreshingBrowser(false);
     }
   };
 
   useEffect(() => {
-    void loadAll();
+    void loadBrowser();
   }, []);
 
   useEffect(() => {
-    if (!success) return;
-    const timer = window.setTimeout(() => setSuccess(null), 3000);
+    if (!browserSuccess) return;
+    const timer = window.setTimeout(() => {
+      setBrowserSuccess(null);
+    }, 3000);
     return () => window.clearTimeout(timer);
-  }, [success]);
+  }, [browserSuccess]);
 
-  const handleSave = async () => {
-    setSaving(true);
-    setError(null);
-    setSuccess(null);
+  const handleDownload = async (path: string) => {
+    setDownloadingPath(path);
+    setBrowserError(null);
     try {
-      const saved = await putWorkspaceFile(activeFile, drafts[activeFile]);
-      setFiles((prev) => ({ ...prev, [activeFile]: saved }));
-      setDrafts((prev) => ({ ...prev, [activeFile]: saved.content }));
-      setSuccess(`${activeFile} saved to the live workspace.`);
+      await downloadWorkspacePath(path);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : `Failed to save ${activeFile}`);
+      setBrowserError(err instanceof Error ? err.message : 'Failed to download workspace path');
     } finally {
-      setSaving(false);
+      setDownloadingPath(null);
     }
   };
 
-  if (loading) {
+  const handleUploadFiles = async (selected: FileList | null) => {
+    if (!selected || selected.length === 0 || !browser) return;
+
+    setUploading(true);
+    setBrowserError(null);
+    setBrowserSuccess(null);
+
+    try {
+      for (const file of Array.from(selected)) {
+        const targetPath = joinWorkspacePath(browser.current_path, file.name);
+        await uploadWorkspaceBlob(targetPath, file);
+      }
+      await loadBrowser(browser.current_path, false);
+      setBrowserSuccess(
+        `${selected.length} file${selected.length === 1 ? '' : 's'} uploaded to ${
+          browser.current_path || '.'
+        }.`,
+      );
+    } catch (err: unknown) {
+      setBrowserError(err instanceof Error ? err.message : 'Failed to upload workspace files');
+    } finally {
+      setUploading(false);
+      if (uploadInputRef.current) {
+        uploadInputRef.current.value = '';
+      }
+    }
+  };
+
+  const handleDelete = async (entry: WorkspaceBrowserEntry) => {
+    const isDirectory = entry.kind === 'directory';
+    const confirmed = window.confirm(
+      `Delete ${isDirectory ? 'folder' : 'file'} "${entry.path}"${isDirectory ? ' and all of its contents' : ''}?`,
+    );
+    if (!confirmed || !browser) {
+      return;
+    }
+
+    setDeletingPath(entry.path);
+    setBrowserError(null);
+    setBrowserSuccess(null);
+    try {
+      await deleteWorkspacePath(entry.path);
+      await loadBrowser(browser.current_path, false);
+      setBrowserSuccess(`${entry.path} deleted from the live workspace.`);
+    } catch (err: unknown) {
+      setBrowserError(err instanceof Error ? err.message : 'Failed to delete workspace path');
+    } finally {
+      setDeletingPath(null);
+    }
+  };
+
+  const handleCreateFolder = async () => {
+    if (!browser) {
+      return;
+    }
+
+    const requested = window.prompt(
+      'Folder name or relative path inside the current folder',
+      '',
+    );
+    const trimmed = requested?.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    const targetPath = joinWorkspacePath(browser.current_path, trimmed);
+    setCreatingFolder(true);
+    setBrowserError(null);
+    setBrowserSuccess(null);
+    try {
+      await createWorkspaceDirectory(targetPath);
+      await loadBrowser(browser.current_path, false);
+      setBrowserSuccess(`${targetPath} created in the live workspace.`);
+    } catch (err: unknown) {
+      setBrowserError(err instanceof Error ? err.message : 'Failed to create workspace folder');
+    } finally {
+      setCreatingFolder(false);
+    }
+  };
+
+  const breadcrumbs = useMemo(() => {
+    if (!browser || !browser.current_path) {
+      return [{ label: '.', path: '' }];
+    }
+
+    const parts = browser.current_path.split('/').filter(Boolean);
+    const crumbs = [{ label: '.', path: '' }];
+    let running = '';
+    for (const part of parts) {
+      running = running ? `${running}/${part}` : part;
+      crumbs.push({ label: part, path: running });
+    }
+    return crumbs;
+  }, [browser]);
+
+  if (loadingBrowser) {
     return (
       <div className="flex h-64 items-center justify-center">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
@@ -91,99 +202,221 @@ export default function WorkspaceFiles() {
     );
   }
 
-  const currentFile = files[activeFile];
-  const currentDraft = drafts[activeFile];
-  const isDirty = currentDraft !== currentFile.content;
-
   return (
     <div className="space-y-6 p-6">
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <BookText className="h-5 w-5 text-blue-400" />
+            <FolderOpen className="h-5 w-5 text-blue-400" />
             <h2 className="text-base font-semibold text-white">Workspace Files</h2>
           </div>
-          <p className="mt-2 max-w-2xl text-sm text-gray-400">
-            Edit the live workspace copies of <code>AGENTS.md</code> and <code>SOUL.md</code>.
-            New agent turns pick up these files directly from the running workspace after save.
+          <p className="mt-2 max-w-3xl text-sm text-gray-400">
+            Browse the live workspace, upload files into it, and download files or folders back
+            out. This makes it possible to grab directories like <code>rust_kernel</code> directly
+            from the dashboard without finding the Docker volume path first. Prompt files now live
+            on their own page so this browser stays focused on file management.
           </p>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => void loadAll(false)}
-            disabled={refreshing || saving}
-            className="inline-flex items-center gap-2 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-300 transition-colors hover:bg-gray-800 hover:text-white disabled:opacity-50"
-          >
-            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
-            Refresh
-          </button>
-          <button
-            onClick={() => void handleSave()}
-            disabled={saving || !isDirty}
-            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
-          >
-            <Save className="h-4 w-4" />
-            {saving ? 'Saving...' : 'Save'}
-          </button>
         </div>
       </div>
 
-      {success && (
-        <div className="rounded-lg border border-green-700 bg-green-900/30 p-3 text-sm text-green-300">
-          {success}
-        </div>
-      )}
-
-      {error && (
-        <div className="rounded-lg border border-red-700 bg-red-900/30 p-3 text-sm text-red-300">
-          {error}
-        </div>
-      )}
-
       <div className="rounded-xl border border-gray-800 bg-gray-900">
-        <div className="flex flex-wrap items-center gap-2 border-b border-gray-800 px-4 py-3">
-          {WORKSPACE_FILES.map((fileName) => {
-            const file = files[fileName];
-            const dirty = drafts[fileName] !== file.content;
-            return (
-              <button
-                key={fileName}
-                onClick={() => setActiveFile(fileName)}
-                className={[
-                  'rounded-lg px-3 py-2 text-sm transition-colors',
-                  activeFile === fileName
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-950 text-gray-300 hover:bg-gray-800 hover:text-white',
-                ].join(' ')}
-              >
-                {fileName}
-                {dirty ? ' *' : ''}
-              </button>
-            );
-          })}
-          <div className="ml-auto text-xs text-gray-500">
-            {currentFile.exists ? 'Live file exists' : 'Missing file; save will create it'}
+        <div className="flex flex-col gap-4 border-b border-gray-800 px-4 py-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-white">Workspace Browser</h3>
+            <p className="mt-1 text-xs text-gray-500">
+              Workspace root: <code>{browser?.root_path || '.'}</code>
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-gray-400">
+              {breadcrumbs.map((crumb, index) => (
+                <div key={crumb.path} className="flex items-center gap-2">
+                  {index > 0 && <ChevronRight className="h-3.5 w-3.5 text-gray-600" />}
+                  <button
+                    onClick={() => void loadBrowser(crumb.path, false)}
+                    className="rounded px-2 py-1 transition-colors hover:bg-gray-800 hover:text-white"
+                  >
+                    {crumb.label}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              ref={uploadInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(event) => void handleUploadFiles(event.currentTarget.files)}
+            />
+            <button
+              onClick={() => void loadBrowser(browser?.current_path || '', false)}
+              disabled={refreshingBrowser || uploading || deletingPath !== null}
+              className="inline-flex items-center gap-2 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-300 transition-colors hover:bg-gray-800 hover:text-white disabled:opacity-50"
+            >
+              <RefreshCw className={`h-4 w-4 ${refreshingBrowser ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+            <button
+              onClick={() => uploadInputRef.current?.click()}
+              disabled={uploading || creatingFolder || deletingPath !== null}
+              className="inline-flex items-center gap-2 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-300 transition-colors hover:bg-gray-800 hover:text-white disabled:opacity-50"
+            >
+              <Upload className="h-4 w-4" />
+              {uploading ? 'Uploading...' : 'Upload Files'}
+            </button>
+            <button
+              onClick={() => void handleCreateFolder()}
+              disabled={uploading || creatingFolder || deletingPath !== null}
+              className="inline-flex items-center gap-2 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-300 transition-colors hover:bg-gray-800 hover:text-white disabled:opacity-50"
+            >
+              <FolderPlus className="h-4 w-4" />
+              {creatingFolder ? 'Creating...' : 'New Folder'}
+            </button>
+            <button
+              onClick={() => void handleDownload(browser?.current_path || '')}
+              disabled={
+                uploading ||
+                creatingFolder ||
+                deletingPath !== null ||
+                downloadingPath === (browser?.current_path || '')
+              }
+              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
+            >
+              <FolderDown className="h-4 w-4" />
+              {downloadingPath === (browser?.current_path || '')
+                ? 'Preparing...'
+                : 'Download Current Folder'}
+            </button>
           </div>
         </div>
 
-        <div className="flex items-center justify-between border-b border-gray-800 px-4 py-2 text-xs text-gray-500">
-          <span>{activeFile}</span>
-          <span>{currentDraft.split('\n').length} lines</span>
-        </div>
+        {browserSuccess && (
+          <div className="border-b border-green-800 bg-green-900/20 px-4 py-3 text-sm text-green-300">
+            {browserSuccess}
+          </div>
+        )}
 
-        <textarea
-          value={currentDraft}
-          onChange={(event) =>
-            setDrafts((prev) => ({
-              ...prev,
-              [activeFile]: event.target.value,
-            }))
-          }
-          spellCheck={false}
-          className="min-h-[520px] w-full resize-y bg-gray-950 p-4 font-mono text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-inset"
-          style={{ tabSize: 4 }}
-        />
+        {browserError && (
+          <div className="border-b border-red-800 bg-red-900/20 px-4 py-3 text-sm text-red-300">
+            {browserError}
+          </div>
+        )}
+
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-gray-800 text-sm">
+            <thead className="bg-gray-950/60 text-left text-xs uppercase tracking-wide text-gray-500">
+              <tr>
+                <th className="px-4 py-3">Name</th>
+                <th className="px-4 py-3">Path</th>
+                <th className="px-4 py-3">Size</th>
+                <th className="px-4 py-3">Modified</th>
+                <th className="px-4 py-3 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-800">
+              {browser?.parent_path !== undefined && (
+                <tr className="bg-gray-950/20">
+                  <td className="px-4 py-3">
+                    <button
+                      onClick={() => void loadBrowser(browser.parent_path || '', false)}
+                      className="inline-flex items-center gap-2 text-gray-300 transition-colors hover:text-white"
+                    >
+                      <Folder className="h-4 w-4 text-yellow-400" />
+                      ..
+                    </button>
+                  </td>
+                  <td className="px-4 py-3 text-gray-500">{browser.parent_path || '.'}</td>
+                  <td className="px-4 py-3 text-gray-500">Directory</td>
+                  <td className="px-4 py-3 text-gray-500">-</td>
+                  <td className="px-4 py-3 text-right">
+                    <button
+                      onClick={() => void handleDownload(browser.parent_path || '')}
+                      disabled={downloadingPath === (browser.parent_path || '')}
+                      className="inline-flex items-center gap-2 rounded-lg border border-gray-700 px-3 py-1.5 text-xs text-gray-300 transition-colors hover:bg-gray-800 hover:text-white disabled:opacity-50"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      Download
+                    </button>
+                  </td>
+                </tr>
+              )}
+
+              {browser?.entries.map((entry: WorkspaceBrowserEntry) => {
+                const isDirectory = entry.kind === 'directory';
+                return (
+                  <tr key={entry.path}>
+                    <td className="px-4 py-3">
+                      {isDirectory ? (
+                        <button
+                          onClick={() => void loadBrowser(entry.path, false)}
+                          className="inline-flex items-center gap-2 text-left text-gray-200 transition-colors hover:text-white"
+                        >
+                          <Folder className="h-4 w-4 text-yellow-400" />
+                          {entry.name}
+                        </button>
+                      ) : (
+                        <div className="inline-flex items-center gap-2 text-gray-200">
+                          <FileText className="h-4 w-4 text-blue-400" />
+                          {entry.name}
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 font-mono text-xs text-gray-500">{entry.path}</td>
+                    <td className="px-4 py-3 text-gray-400">{formatBytes(entry.size_bytes)}</td>
+                    <td className="px-4 py-3 text-gray-400">
+                      {formatTimestamp(entry.modified_at)}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex justify-end gap-2">
+                        {isDirectory && (
+                          <button
+                          onClick={() => void loadBrowser(entry.path, false)}
+                          className="inline-flex items-center gap-2 rounded-lg border border-gray-700 px-3 py-1.5 text-xs text-gray-300 transition-colors hover:bg-gray-800 hover:text-white"
+                        >
+                          Open
+                        </button>
+                      )}
+                      <button
+                        onClick={() => void handleDownload(entry.path)}
+                        disabled={
+                          downloadingPath === entry.path ||
+                          creatingFolder ||
+                          deletingPath === entry.path
+                        }
+                        className="inline-flex items-center gap-2 rounded-lg border border-gray-700 px-3 py-1.5 text-xs text-gray-300 transition-colors hover:bg-gray-800 hover:text-white disabled:opacity-50"
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                        {downloadingPath === entry.path ? 'Preparing...' : 'Download'}
+                      </button>
+                      <button
+                        onClick={() => void handleDelete(entry)}
+                        disabled={
+                          downloadingPath === entry.path ||
+                          creatingFolder ||
+                          deletingPath !== null
+                        }
+                        className="inline-flex items-center gap-2 rounded-lg border border-red-900/60 px-3 py-1.5 text-xs text-red-300 transition-colors hover:bg-red-950/40 hover:text-red-200 disabled:opacity-50"
+                      >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          {deletingPath === entry.path ? 'Deleting...' : 'Delete'}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+
+              {browser && browser.entries.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="px-4 py-10 text-center text-sm text-gray-500">
+                    This folder is empty.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

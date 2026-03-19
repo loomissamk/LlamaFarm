@@ -575,6 +575,7 @@ Use route hints so integrations can keep stable names while model IDs evolve.
 | `hint` | _required_ | Task hint name (e.g. `"reasoning"`, `"fast"`, `"code"`, `"summarize"`) |
 | `provider` | _required_ | Provider to route to (must match a known provider name) |
 | `model` | _required_ | Model to use with that provider |
+| `api_url` | unset | Optional per-route API URL override; useful for separate local runtimes of the same provider type |
 | `max_tokens` | unset | Optional per-route output token cap forwarded to provider APIs |
 | `api_key` | unset | Optional API key override for this route's provider |
 
@@ -598,12 +599,23 @@ provider = "openrouter"
 model = "provider/model-id"
 max_tokens = 8192
 
+[[model_routes]]
+hint = "local-intel"
+provider = "llamacpp"
+model = "ggml-org/gpt-oss-20b-GGUF"
+api_url = "http://127.0.0.1:8081/v1"
+
 [[embedding_routes]]
 hint = "semantic"
 provider = "openai"
 model = "text-embedding-3-small"
 dimensions = 1536
 ```
+
+Notes:
+
+- `model_routes[].api_url` overrides the top-level `api_url` for that route only.
+- This is the supported way to point different route hints at separate local inference endpoints.
 
 Upgrade strategy:
 

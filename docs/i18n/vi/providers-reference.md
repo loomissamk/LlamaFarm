@@ -68,6 +68,15 @@ Với chuỗi provider dự phòng (`reliability.fallback_providers`), mỗi pro
 - Sau khi chuẩn hóa multimodal, LlamaFarm gửi payload hình ảnh qua trường `messages[].images` gốc của Ollama.
 - Nếu chọn provider không hỗ trợ vision, LlamaFarm trả về lỗi rõ ràng thay vì âm thầm bỏ qua hình ảnh.
 
+### Ghi chú về Ollama Cloud Routing
+
+- Dùng hậu tố `:cloud` cho các Ollama cloud model.
+- Endpoint Ollama cục bộ cũng được hỗ trợ nếu runtime đã đăng nhập bằng `ollama signin`.
+- Có thể dùng endpoint từ xa qua `api_url` (ví dụ `https://ollama.com`).
+- LlamaFarm tự chuẩn hóa `api_url` nếu có hậu tố `/api`.
+- Với endpoint Ollama từ xa, cần cấu hình `api_key` hoặc `OLLAMA_API_KEY`.
+- Việc dò model cục bộ mặc định vẫn loại bỏ các mục `:cloud` để tránh tự động chọn cloud-only model trong local mode.
+
 ### Ghi chú về Bedrock
 
 - Provider ID: `bedrock` (alias: `aws-bedrock`)

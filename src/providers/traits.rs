@@ -473,6 +473,9 @@ pub fn build_tool_instructions_text(tools: &[ToolSpec]) -> String {
     instructions.push_str(
         "Emit real tool calls, not prose, examples, or pseudo-code. If the runtime says your last tool format was invalid, immediately emit another real <tool_call> in the exact format above.\n\n",
     );
+    instructions.push_str(
+        "Do not wrap tool calls in ```json fences or return bare JSON without <tool_call> tags.\n\n",
+    );
     instructions.push_str("Tool selection guardrails:\n");
     instructions.push_str(
         "- Use `shell` for immediate local command execution (for example: lsusb, lsblk, lspci, pwd, git status, rg, cat).\n",
@@ -487,6 +490,9 @@ pub fn build_tool_instructions_text(tools: &[ToolSpec]) -> String {
     instructions.push_str("After tool execution, results appear in <tool_result> tags. ");
     instructions.push_str(
         "Continue using tools with the results until the task is actually complete, then give the final answer.\n\n",
+    );
+    instructions.push_str(
+        "Ground the final answer in the actual tool results. Do not reinterpret file contents as tool names or availability errors. For `file_read`, answer from the returned contents. For `file_write`, do not invent contents that were not in the write arguments or a verified read-back.\n\n",
     );
     instructions.push_str("### Available Tools\n\n");
 

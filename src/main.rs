@@ -78,6 +78,7 @@ mod onboard;
 mod peripherals;
 mod providers;
 mod runtime;
+mod runtime_logs;
 mod security;
 mod service;
 mod skillforge;
@@ -829,14 +830,17 @@ async fn main() -> Result<()> {
     }
 
     // Initialize logging - respects RUST_LOG env var, defaults to INFO
+    let runtime_log_store = runtime_logs::global_runtime_log_store();
     let subscriber = fmt::Subscriber::builder()
         .with_timer(tracing_subscriber::fmt::time::ChronoLocal::rfc_3339())
+        .with_writer(runtime_logs::RuntimeLogMakeWriter::new(runtime_log_store))
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .finish();
 
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
+    tracing::info!("Runtime logging initialized");
 
     // Onboard runs quick setup by default, or the interactive wizard with --interactive.
     // The onboard wizard uses reqwest::blocking internally, which creates its own

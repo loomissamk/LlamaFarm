@@ -126,10 +126,11 @@ default_model = "qwen2.5-coder:7b"
 
 ### Ollama Cloud Routing Notes
 
-- Use `:cloud` model suffix only with a remote Ollama endpoint.
-- Remote endpoint should be set in `api_url` (example: `https://ollama.com`).
+- Use the `:cloud` model suffix for Ollama cloud models.
+- Local Ollama endpoints are supported when the local runtime has already authenticated with `ollama signin`.
+- Remote endpoint can also be set in `api_url` (example: `https://ollama.com`).
 - LlamaFarm normalizes a trailing `/api` in `api_url` automatically.
-- If `default_model` ends with `:cloud` while `api_url` is local or unset, config validation fails early with an actionable error.
+- For direct remote Ollama endpoints, LlamaFarm requires `api_key` or `OLLAMA_API_KEY`.
 - Local Ollama model discovery intentionally excludes `:cloud` entries to avoid selecting cloud-only models in local mode.
 
 ### Hunyuan Notes

@@ -1087,8 +1087,9 @@ fn xml_dispatcher_handles_unclosed_tool_call() {
 
     let dispatcher = XmlToolDispatcher;
     let (text, calls) = dispatcher.parse_response(&response);
-    // Should not panic — just treat as text
-    assert!(calls.is_empty());
+    // Unclosed wrapper tags with valid JSON should still recover the tool call.
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "shell");
     assert!(text.contains("Before"));
 }
 
