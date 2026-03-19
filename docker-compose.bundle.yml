@@ -34,7 +34,7 @@ services:
       - LLAMAFARM_GATEWAY_PORT=${LLAMAFARM_GATEWAY_PORT:-42617}
       - LLAMAFARM_RUNTIME_UID=${LLAMAFARM_RUNTIME_UID:-65534}
       - LLAMAFARM_RUNTIME_GID=${LLAMAFARM_RUNTIME_GID:-65534}
-      - OLLAMA_PULL_MODELS=${OLLAMA_PULL_MODELS:-qwen3.5:9b,devstral-small-2:latest,devstral-2:123b-cloud}
+      - OLLAMA_PULL_MODELS=${OLLAMA_PULL_MODELS-qwen3.5:9b,devstral-small-2:latest}
 
     volumes:
       - llamafarm-bundle-data:/llamafarm-data

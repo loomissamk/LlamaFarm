@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BASE_COMPOSE="$ROOT_DIR/docker-compose.bundle.yml"
 GPU_MODE="${LLAMAFARM_GPU_MODE:-auto}"
-DEFAULT_PULL_MODELS="qwen3.5:9b,devstral-small-2:latest,devstral-2:123b-cloud"
+DEFAULT_PULL_MODELS="qwen3.5:9b,devstral-small-2:latest"
 TMP_OVERRIDE=""
 RUNTIME_UID="${LLAMAFARM_RUNTIME_UID:-$(id -u)}"
 RUNTIME_GID="${LLAMAFARM_RUNTIME_GID:-$(id -g)}"
@@ -180,7 +180,7 @@ fi
 mapfile -t GROUP_IDS < <(collect_group_ids)
 write_override "$BACKEND" "$EXPOSE_DRI" "$EXPOSE_KFD" "$EXPOSE_ACCEL" "${GROUP_IDS[@]}"
 
-export OLLAMA_PULL_MODELS="${OLLAMA_PULL_MODELS:-$DEFAULT_PULL_MODELS}"
+export OLLAMA_PULL_MODELS="${OLLAMA_PULL_MODELS-$DEFAULT_PULL_MODELS}"
 export LLAMAFARM_RUNTIME_UID="$RUNTIME_UID"
 export LLAMAFARM_RUNTIME_GID="$RUNTIME_GID"
 

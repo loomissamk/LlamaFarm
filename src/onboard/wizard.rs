@@ -1080,18 +1080,17 @@ fn curated_models_for_provider(provider_name: &str) -> Vec<(String, String)> {
                 "Qwen 3.5 9B (recommended local default)".to_string(),
             ),
             (
-                "devstral-2:123b-cloud".to_string(),
-                "Devstral 2 123B Cloud (best quality if signed in)".to_string(),
-            ),
-            (
-                "qwen2.5-coder:14b".to_string(),
-                "Qwen 2.5 Coder 14B (recommended local coding model)".to_string(),
-            ),
-            (
                 "devstral-small-2:latest".to_string(),
                 "Devstral Small 2 (agentic local alternative)".to_string(),
             ),
-            ("llama3.2".to_string(), "Llama 3.2 (fallback local)".to_string()),
+            (
+                "llama3.2".to_string(),
+                "Llama 3.2 (fallback local)".to_string(),
+            ),
+            (
+                "devstral-2:123b-cloud".to_string(),
+                "Devstral 2 123B Cloud (optional if signed in)".to_string(),
+            ),
         ],
         "llamacpp" => vec![
             (

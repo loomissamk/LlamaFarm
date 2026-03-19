@@ -176,6 +176,16 @@ export interface SSEEvent {
   [key: string]: any;
 }
 
+export interface RuntimeLogEntry {
+  id: number;
+  timestamp: string;
+  line: string;
+}
+
+export interface RuntimeLogsResponse {
+  entries: RuntimeLogEntry[];
+}
+
 export interface WsMessage {
   type: 'message' | 'chunk' | 'tool_call' | 'tool_result' | 'done' | 'error';
   session_id?: string;

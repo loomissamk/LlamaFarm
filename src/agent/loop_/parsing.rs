@@ -2903,6 +2903,61 @@ fn parse_plain_shell_command_tool_call(response: &str) -> Option<(String, Vec<Pa
     ))
 }
 
+fn parse_prose_file_write_tool_call(response: &str) -> Option<(String, Vec<ParsedToolCall>)> {
+    static PROSE_FILE_WRITE_CODE_BLOCK_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?si)```(?:[\w.+-]+)?\s*\n(.*?)```|'''(?:[\w.+-]+)?\s*\n(.*?)'''").unwrap()
+    });
+    static PROSE_FILE_WRITE_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r#"(?i)(?:i['’]?ll|i will|let me)\s+(?:write|save|create)(?:[^`'\n]{0,160})?(?:file(?:\s+(?:called|named))?|called|named|as)\s*[`'"]([^`'"\n]+?\.[A-Za-z0-9._/\-]+)[`'"]"#,
+        )
+        .unwrap()
+    });
+
+    let lowered = response.to_ascii_lowercase();
+    let has_file_write_intent = lowered.contains("i'll write")
+        || lowered.contains("i will write")
+        || lowered.contains("i'll save")
+        || lowered.contains("i will save")
+        || lowered.contains("i'll create")
+        || lowered.contains("i will create")
+        || lowered.contains("let me write")
+        || lowered.contains("let me save")
+        || lowered.contains("let me create");
+    if !has_file_write_intent {
+        return None;
+    }
+
+    let code_block = PROSE_FILE_WRITE_CODE_BLOCK_RE.captures(response)?;
+    let content = code_block
+        .get(1)
+        .or_else(|| code_block.get(2))
+        .map(|m| m.as_str().trim_end())
+        .filter(|value| !value.trim().is_empty())?;
+    let path = PROSE_FILE_WRITE_PATH_RE
+        .captures(response)
+        .and_then(|caps| caps.get(1))
+        .map(|m| normalize_known_workspace_file_path(m.as_str()))
+        .filter(|value| !value.trim().is_empty())?;
+
+    let text = PROSE_FILE_WRITE_CODE_BLOCK_RE
+        .replace(response, "")
+        .trim()
+        .to_string();
+
+    Some((
+        text,
+        vec![ParsedToolCall {
+            name: "file_write".to_string(),
+            arguments: serde_json::json!({
+                "path": path,
+                "content": content,
+            }),
+            tool_call_id: None,
+        }],
+    ))
+}
+
 fn append_follow_on_tool_calls(mut text: String, calls: &mut Vec<ParsedToolCall>) -> String {
     loop {
         let mut extracted = false;
@@ -3791,6 +3846,12 @@ pub(crate) fn parse_tool_calls(response: &str) -> (String, Vec<ParsedToolCall>) 
     if let Some((block_text, block_calls)) = parse_explicit_tool_block_tool_calls(response) {
         if !block_calls.is_empty() {
             return (block_text, block_calls);
+        }
+    }
+
+    if let Some((prose_file_text, prose_file_calls)) = parse_prose_file_write_tool_call(response) {
+        if !prose_file_calls.is_empty() {
+            return (prose_file_text, prose_file_calls);
         }
     }
 

@@ -80,11 +80,47 @@ impl crate::observability::Observer for BroadcastObserver {
         // Broadcast to SSE subscribers
         let json = match event {
             crate::observability::ObserverEvent::LlmRequest {
-                provider, model, ..
+                provider,
+                model,
+                messages_count,
             } => serde_json::json!({
                 "type": "llm_request",
                 "provider": provider,
                 "model": model,
+                "messages_count": messages_count,
+                "message": format!("provider={provider} model={model} messages_count={messages_count}"),
+                "log_line": format!("llm.request provider={provider} model={model} messages_count={messages_count}"),
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+            }),
+            crate::observability::ObserverEvent::LlmResponse {
+                provider,
+                model,
+                duration,
+                success,
+                error_message,
+                input_tokens,
+                output_tokens,
+            } => serde_json::json!({
+                "type": "llm_response",
+                "provider": provider,
+                "model": model,
+                "duration_ms": duration.as_millis(),
+                "success": success,
+                "error": error_message,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "message": format!(
+                    "provider={provider} model={model} duration_ms={} success={} error={}",
+                    duration.as_millis(),
+                    success,
+                    error_message.as_deref().unwrap_or("none")
+                ),
+                "log_line": format!(
+                    "llm.response provider={provider} model={model} duration_ms={} success={} error={}",
+                    duration.as_millis(),
+                    success,
+                    error_message.as_deref().unwrap_or("none")
+                ),
                 "timestamp": chrono::Utc::now().to_rfc3339(),
             }),
             crate::observability::ObserverEvent::ToolCall {
@@ -96,11 +132,15 @@ impl crate::observability::Observer for BroadcastObserver {
                 "tool": tool,
                 "duration_ms": duration.as_millis(),
                 "success": success,
+                "message": format!("tool={tool} duration_ms={} success={success}", duration.as_millis()),
+                "log_line": format!("tool.call tool={tool} duration_ms={} success={success}", duration.as_millis()),
                 "timestamp": chrono::Utc::now().to_rfc3339(),
             }),
             crate::observability::ObserverEvent::ToolCallStart { tool } => serde_json::json!({
                 "type": "tool_call_start",
                 "tool": tool,
+                "message": format!("tool={tool}"),
+                "log_line": format!("tool.start tool={tool}"),
                 "timestamp": chrono::Utc::now().to_rfc3339(),
             }),
             crate::observability::ObserverEvent::Error { component, message } => {
@@ -108,6 +148,7 @@ impl crate::observability::Observer for BroadcastObserver {
                     "type": "error",
                     "component": component,
                     "message": message,
+                    "log_line": format!("error component={component} message={message}"),
                     "timestamp": chrono::Utc::now().to_rfc3339(),
                 })
             }
@@ -116,7 +157,9 @@ impl crate::observability::Observer for BroadcastObserver {
                     "type": "agent_start",
                     "provider": provider,
                     "model": model,
-                    "timestamp": chrono::Utc::now().to_rfc3339(),
+                    "message": format!("provider={provider} model={model}"),
+                    "log_line": format!("agent.start provider={provider} model={model}"),
+                "timestamp": chrono::Utc::now().to_rfc3339(),
                 })
             }
             crate::observability::ObserverEvent::AgentEnd {
@@ -132,6 +175,24 @@ impl crate::observability::Observer for BroadcastObserver {
                 "duration_ms": duration.as_millis(),
                 "tokens_used": tokens_used,
                 "cost_usd": cost_usd,
+                "message": format!(
+                    "provider={provider} model={model} duration_ms={} tokens_used={} cost_usd={}",
+                    duration.as_millis(),
+                    tokens_used.map(|v| v.to_string()).unwrap_or_else(|| "none".to_string()),
+                    cost_usd.map(|v| v.to_string()).unwrap_or_else(|| "none".to_string())
+                ),
+                "log_line": format!(
+                    "agent.end provider={provider} model={model} duration_ms={} tokens_used={} cost_usd={}",
+                    duration.as_millis(),
+                    tokens_used.map(|v| v.to_string()).unwrap_or_else(|| "none".to_string()),
+                    cost_usd.map(|v| v.to_string()).unwrap_or_else(|| "none".to_string())
+                ),
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+            }),
+            crate::observability::ObserverEvent::TurnComplete => serde_json::json!({
+                "type": "turn_complete",
+                "message": "turn.complete",
+                "log_line": "turn.complete",
                 "timestamp": chrono::Utc::now().to_rfc3339(),
             }),
             _ => return, // Skip events we don't broadcast

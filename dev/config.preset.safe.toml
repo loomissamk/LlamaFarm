@@ -237,17 +237,17 @@ max_steps_per_cycle = 4
 [[model_routes]]
 hint = "planner"
 provider = "ollama"
-model = "qwen2.5-coder:14b"
+model = "devstral-small-2:latest"
 
 [[model_routes]]
 hint = "coder"
 provider = "ollama"
-model = "qwen2.5-coder:14b"
+model = "devstral-small-2:latest"
 
 [[model_routes]]
 hint = "verifier"
 provider = "ollama"
-model = "qwen2.5-coder:14b"
+model = "devstral-small-2:latest"
 
 [[model_routes]]
 hint = "operator"
@@ -256,7 +256,7 @@ model = "qwen3.5:9b"
 
 [agents.planner]
 provider = "ollama"
-model = "qwen2.5-coder:14b"
+model = "devstral-small-2:latest"
 temperature = 0.1
 max_depth = 2
 agentic = true
@@ -276,7 +276,7 @@ max_iterations = 12
 
 [agents.coder]
 provider = "ollama"
-model = "qwen2.5-coder:14b"
+model = "devstral-small-2:latest"
 temperature = 0.1
 max_depth = 2
 agentic = true
@@ -296,7 +296,7 @@ max_iterations = 14
 
 [agents.verifier]
 provider = "ollama"
-model = "qwen2.5-coder:14b"
+model = "devstral-small-2:latest"
 temperature = 0.0
 max_depth = 2
 agentic = true

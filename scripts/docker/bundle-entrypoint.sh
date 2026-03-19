@@ -9,7 +9,7 @@ DEFAULT_AGENTS="/usr/share/llamafarm/workspace.preset.god.AGENTS.md"
 DEFAULT_SOUL="/usr/share/llamafarm/workspace.preset.god.SOUL.md"
 OLLAMA_HTTP_URL="http://127.0.0.1:11434"
 CHROMEDRIVER_STATUS_URL="http://127.0.0.1:${CHROMEDRIVER_PORT:-9515}/status"
-DEFAULT_PULL_MODELS="qwen3.5:9b,devstral-small-2:latest,devstral-2:123b-cloud"
+DEFAULT_PULL_MODELS="qwen3.5:9b,devstral-small-2:latest"
 
 OLLAMA_PID=""
 CHROMEDRIVER_PID=""
@@ -70,6 +70,37 @@ if changed:
 PY
 }
 
+repair_config_for_available_models() {
+  local config_path="$CONFIG_DIR/config.toml"
+  [ -f "$config_path" ] || return 0
+
+  local replacement_model=""
+  if ! model_present "qwen2.5-coder:14b"; then
+    if model_present "devstral-small-2:latest"; then
+      replacement_model="devstral-small-2:latest"
+    elif model_present "qwen3.5:9b"; then
+      replacement_model="qwen3.5:9b"
+    fi
+  fi
+
+  [ -n "$replacement_model" ] || return 0
+
+  python3 - "$config_path" "$replacement_model" <<'PY'
+from pathlib import Path
+import sys
+
+config_path = Path(sys.argv[1])
+replacement = sys.argv[2]
+missing = "qwen2.5-coder:14b"
+text = config_path.read_text()
+
+if missing not in text:
+    sys.exit(0)
+
+config_path.write_text(text.replace(missing, replacement))
+PY
+}
+
 wait_for_http() {
   local name="$1"
   local url="$2"
@@ -93,7 +124,11 @@ model_present() {
 ensure_models() {
   local raw_models
   local failed=0
-  raw_models="${OLLAMA_PULL_MODELS:-$DEFAULT_PULL_MODELS}"
+  raw_models="${OLLAMA_PULL_MODELS-$DEFAULT_PULL_MODELS}"
+  if [ -z "${raw_models//[[:space:],]/}" ]; then
+    echo "OLLAMA_PULL_MODELS is empty; skipping model pulls"
+    return 0
+  fi
   IFS=',' read -r -a requested_models <<<"$raw_models"
 
   for raw_model in "${requested_models[@]}"; do
@@ -203,6 +238,7 @@ fi
 ensure_runtime_layout
 start_ollama
 wait_for_http "ollama" "$OLLAMA_HTTP_URL/api/tags"
+repair_config_for_available_models
 start_chromedriver
 wait_for_http "chromedriver" "$CHROMEDRIVER_STATUS_URL"
 pull_models_background

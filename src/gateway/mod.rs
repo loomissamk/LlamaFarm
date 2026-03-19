@@ -8,6 +8,7 @@
 //! - Header sanitization (handled by axum/hyper)
 
 pub mod api;
+pub mod logs;
 mod openai_compat;
 pub mod sse;
 pub mod static_files;
@@ -666,6 +667,7 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         }
     }
 
+    tracing::info!(address = %display_addr, "Gateway listening");
     println!("🦀 LlamaFarm Gateway listening on http://{display_addr}");
     if let Some(ref url) = tunnel_url {
         println!("  🌐 Public URL: {url}");
@@ -829,6 +831,8 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .route("/api/cost", get(api::handle_api_cost))
         .route("/api/cli-tools", get(api::handle_api_cli_tools))
         .route("/api/health", get(api::handle_api_health))
+        .route("/api/logs", get(logs::handle_api_logs))
+        .route("/api/logs/stream", get(logs::handle_log_stream))
         .route("/api/node-control", post(handle_node_control))
         // ── SSE event stream ──
         .route("/api/events", get(sse::handle_sse_events))

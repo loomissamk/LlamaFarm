@@ -6324,6 +6324,27 @@ shell({"hint":"lsblk"})"#;
     }
 
     #[test]
+    fn parse_tool_calls_recovers_prose_file_write_with_code_block() {
+        let response = r#"I'll create a Python file that adds two numbers. Here's the code:
+
+```python
+def add_numbers(a, b):
+    return a + b
+```
+
+I'll write this to a file called `add_numbers.py`:"#;
+        let (text, calls) = parse_tool_calls(response);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "file_write");
+        assert_eq!(calls[0].arguments["path"], "add_numbers.py");
+        assert_eq!(
+            calls[0].arguments["content"],
+            "def add_numbers(a, b):\n    return a + b"
+        );
+        assert!(text.contains("I'll create a Python file"));
+    }
+
+    #[test]
     fn parse_tool_calls_recovers_tool_name_plus_json_block() {
         let response = "shell\n{\"hint\":\"lsblk\"}";
         let (text, calls) = parse_tool_calls(response);
