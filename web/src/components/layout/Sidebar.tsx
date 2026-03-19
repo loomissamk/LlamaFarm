@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import {
   BookText,
+  FolderOpen,
   LayoutDashboard,
   MessageSquare,
   Wrench,
@@ -20,7 +21,8 @@ const navItems = [
   { to: '/cron', icon: Clock, labelKey: 'nav.cron' },
   { to: '/integrations', icon: Puzzle, labelKey: 'nav.integrations' },
   { to: '/memory', icon: Brain, labelKey: 'nav.memory' },
-  { to: '/workspace', icon: BookText, labelKey: 'nav.workspace' },
+  { to: '/workspace', icon: FolderOpen, labelKey: 'nav.workspace' },
+  { to: '/workspace/prompts', icon: BookText, labelKey: 'nav.prompts' },
   { to: '/config', icon: Settings, labelKey: 'nav.config' },
   { to: '/logs', icon: Activity, labelKey: 'nav.logs' },
   { to: '/doctor', icon: Stethoscope, labelKey: 'nav.doctor' },
@@ -42,7 +44,7 @@ export default function Sidebar() {
           <NavLink
             key={to}
             to={to}
-            end={to === '/'}
+            end
             className={({ isActive }) =>
               [
                 'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',

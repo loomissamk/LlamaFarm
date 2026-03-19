@@ -779,6 +779,10 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
             openai_compat::CHAT_COMPLETIONS_MAX_BODY_SIZE,
         ));
 
+    let workspace_blob_routes = Router::new()
+        .route("/api/workspace/blob", put(api::handle_api_workspace_blob_put))
+        .layer(RequestBodyLimitLayer::new(52_428_800));
+
     // Build router with middleware
     let app = Router::new()
         // ── Existing routes ──
@@ -802,6 +806,10 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .route("/api/config", get(api::handle_api_config_get))
         .route("/api/config/presets", get(api::handle_api_config_presets))
         .route("/api/tools", get(api::handle_api_tools))
+        .route("/api/workspace/browser", get(api::handle_api_workspace_browser))
+        .route("/api/workspace/download", get(api::handle_api_workspace_download))
+        .route("/api/workspace/directory", put(api::handle_api_workspace_directory_put))
+        .route("/api/workspace/path", delete(api::handle_api_workspace_path_delete))
         .route(
             "/api/workspace-files/{name}",
             get(api::handle_api_workspace_file_get).put(api::handle_api_workspace_file_put),
@@ -842,6 +850,7 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .route("/_app/{*path}", get(static_files::handle_static))
         // ── Config PUT with larger body limit ──
         .merge(config_put_router)
+        .merge(workspace_blob_routes)
         .with_state(state)
         .layer(RequestBodyLimitLayer::new(MAX_BODY_SIZE))
         .layer(TimeoutLayer::with_status_code(

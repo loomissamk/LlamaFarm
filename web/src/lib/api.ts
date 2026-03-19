@@ -10,7 +10,11 @@ import type {
   CostSummary,
   CliTool,
   HealthSnapshot,
+  WorkspaceBlobWriteResponse,
+  WorkspaceBrowserResponse,
   WorkspaceFileResponse,
+  WorkspacePathCreateResponse,
+  WorkspacePathDeleteResponse,
 } from '../types/api';
 import { clearToken, getToken, setToken } from './auth';
 
@@ -165,6 +169,112 @@ export function putWorkspaceFile(
     {
       method: 'PUT',
       body: JSON.stringify({ content }),
+    },
+  );
+}
+
+export function getWorkspaceBrowser(path = ''): Promise<WorkspaceBrowserResponse> {
+  const query = path ? `?path=${encodeURIComponent(path)}` : '';
+  return apiFetch<WorkspaceBrowserResponse>(`/api/workspace/browser${query}`);
+}
+
+export function uploadWorkspaceBlob(
+  path: string,
+  blob: Blob,
+): Promise<WorkspaceBlobWriteResponse> {
+  const token = getToken();
+  const headers = new Headers();
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  headers.set('Content-Type', blob.type || 'application/octet-stream');
+
+  return fetch(`/api/workspace/blob?path=${encodeURIComponent(path)}`, {
+    method: 'PUT',
+    headers,
+    body: blob,
+  }).then(async (response) => {
+    if (response.status === 401) {
+      clearToken();
+      window.dispatchEvent(new Event('llamafarm-unauthorized'));
+      throw new UnauthorizedError();
+    }
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`API ${response.status}: ${text || response.statusText}`);
+    }
+    return response.json() as Promise<WorkspaceBlobWriteResponse>;
+  });
+}
+
+function parseDownloadFilename(contentDisposition: string | null, fallback: string): string {
+  if (!contentDisposition) {
+    return fallback;
+  }
+
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1]);
+  }
+
+  const plainMatch = contentDisposition.match(/filename=\"?([^\";]+)\"?/i);
+  if (plainMatch?.[1]) {
+    return plainMatch[1];
+  }
+
+  return fallback;
+}
+
+export async function downloadWorkspacePath(path: string): Promise<void> {
+  const token = getToken();
+  const headers = new Headers();
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
+  const query = path ? `?path=${encodeURIComponent(path)}` : '';
+  const response = await fetch(`/api/workspace/download${query}`, { headers });
+
+  if (response.status === 401) {
+    clearToken();
+    window.dispatchEvent(new Event('llamafarm-unauthorized'));
+    throw new UnauthorizedError();
+  }
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`API ${response.status}: ${text || response.statusText}`);
+  }
+
+  const blob = await response.blob();
+  const fallback = path.split('/').filter(Boolean).pop() || 'workspace-download';
+  const filename = parseDownloadFilename(
+    response.headers.get('content-disposition'),
+    fallback,
+  );
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export function deleteWorkspacePath(path: string): Promise<WorkspacePathDeleteResponse> {
+  return apiFetch<WorkspacePathDeleteResponse>(
+    `/api/workspace/path?path=${encodeURIComponent(path)}`,
+    {
+      method: 'DELETE',
+    },
+  );
+}
+
+export function createWorkspaceDirectory(path: string): Promise<WorkspacePathCreateResponse> {
+  return apiFetch<WorkspacePathCreateResponse>(
+    `/api/workspace/directory?path=${encodeURIComponent(path)}`,
+    {
+      method: 'PUT',
     },
   );
 }

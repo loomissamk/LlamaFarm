@@ -4,14 +4,18 @@
 
 use super::{build_gateway_runtime_snapshot, AppState};
 use axum::{
+    body::{Body, Bytes},
     extract::{Path, Query, State},
-    http::{header, HeaderMap, StatusCode},
-    response::{IntoResponse, Json},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
+    response::{IntoResponse, Json, Response},
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, path::Path as FsPath};
+use std::{
+    collections::BTreeMap,
+    path::{Component, Path as FsPath, PathBuf},
+};
 
 const MASKED_SECRET: &str = "***MASKED***";
 const WORKSPACE_EDITOR_FILES: &[&str] = &["AGENTS.md", "SOUL.md"];
@@ -236,6 +240,11 @@ pub struct WorkspaceFileUpdateBody {
     pub content: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct WorkspacePathQuery {
+    pub path: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct ConfigPresetEntry {
     id: &'static str,
@@ -263,6 +272,40 @@ struct WorkspaceFilePayload {
     name: String,
     content: String,
     exists: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct WorkspaceBrowserEntry {
+    name: String,
+    path: String,
+    kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    size_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    modified_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct WorkspaceBrowserPayload {
+    root_path: String,
+    current_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_path: Option<String>,
+    entries: Vec<WorkspaceBrowserEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct WorkspaceBlobWritePayload {
+    status: &'static str,
+    path: String,
+    size_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct WorkspacePathMutationPayload {
+    status: &'static str,
+    path: String,
+    kind: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -410,6 +453,103 @@ fn workspace_editor_path(
     let normalized = normalize_workspace_editor_name(name)
         .ok_or_else(|| format!("Unsupported workspace file: {name}"))?;
     Ok(config.workspace_dir.join(normalized))
+}
+
+fn normalize_workspace_relative_path(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == "." {
+        return Ok(String::new());
+    }
+
+    let candidate = PathBuf::from(trimmed);
+    if candidate.is_absolute() {
+        return Err("Workspace paths must be relative to the workspace root".to_string());
+    }
+
+    let mut normalized = PathBuf::new();
+    for component in candidate.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => normalized.push(part),
+            Component::ParentDir => {
+                return Err("Workspace paths may not contain '..'".to_string());
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err("Workspace paths must be relative to the workspace root".to_string());
+            }
+        }
+    }
+
+    Ok(normalized
+        .to_string_lossy()
+        .replace('\\', "/")
+        .trim_matches('/')
+        .to_string())
+}
+
+fn resolve_workspace_path(
+    config: &crate::config::Config,
+    raw: Option<&str>,
+) -> Result<(PathBuf, String), String> {
+    let relative = normalize_workspace_relative_path(raw.unwrap_or_default())?;
+    let path = if relative.is_empty() {
+        config.workspace_dir.clone()
+    } else {
+        config.workspace_dir.join(&relative)
+    };
+    Ok((path, relative))
+}
+
+fn workspace_parent_path(relative: &str) -> Option<String> {
+    if relative.is_empty() {
+        return None;
+    }
+
+    let parent = FsPath::new(relative).parent()?;
+    let parent = parent.to_string_lossy().replace('\\', "/");
+    if parent.is_empty() || parent == "." {
+        Some(String::new())
+    } else {
+        Some(parent)
+    }
+}
+
+fn workspace_entry_kind(is_dir: bool) -> &'static str {
+    if is_dir { "directory" } else { "file" }
+}
+
+fn workspace_download_name(relative: &str, is_dir: bool) -> String {
+    let base = if relative.is_empty() {
+        "workspace".to_string()
+    } else {
+        FsPath::new(relative)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("workspace")
+            .to_string()
+    };
+    let sanitized: String = base
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if is_dir {
+        format!("{sanitized}.tar.gz")
+    } else {
+        sanitized
+    }
+}
+
+fn download_content_disposition(filename: &str) -> String {
+    format!(
+        "attachment; filename=\"{}\"",
+        filename.replace('"', "_").replace('\r', "_").replace('\n', "_")
+    )
 }
 
 async fn fetch_ollama_model_names(
@@ -1071,6 +1211,489 @@ pub async fn handle_api_workspace_file_put(
             exists: true,
         }
     }))
+    .into_response()
+}
+
+/// GET /api/workspace/browser — browse the live workspace directory tree
+pub async fn handle_api_workspace_browser(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WorkspacePathQuery>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let config = state.config.lock().clone();
+    let (dir_path, current_path) = match resolve_workspace_path(&config, query.path.as_deref()) {
+        Ok(value) => value,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": error })),
+            )
+                .into_response();
+        }
+    };
+
+    let metadata = match tokio::fs::metadata(&dir_path).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Workspace path not found" })),
+            )
+                .into_response();
+        }
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("Failed to inspect workspace path: {error}")
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    if !metadata.is_dir() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Workspace browser path must be a directory" })),
+        )
+            .into_response();
+    }
+
+    let mut read_dir = match tokio::fs::read_dir(&dir_path).await {
+        Ok(read_dir) => read_dir,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("Failed to read workspace directory: {error}")
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let mut entries = Vec::new();
+    loop {
+        let next = match read_dir.next_entry().await {
+            Ok(next) => next,
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": format!("Failed to enumerate workspace directory: {error}")
+                    })),
+                )
+                    .into_response();
+            }
+        };
+        let Some(entry) = next else {
+            break;
+        };
+
+        let name = entry.file_name().to_string_lossy().to_string();
+        let entry_path = if current_path.is_empty() {
+            name.clone()
+        } else {
+            format!("{current_path}/{name}")
+        };
+
+        let metadata = match entry.metadata().await {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": format!("Failed to inspect workspace entry: {error}")
+                    })),
+                )
+                    .into_response();
+            }
+        };
+
+        let is_dir = metadata.is_dir();
+        let modified_at = metadata
+            .modified()
+            .ok()
+            .map(|timestamp| DateTime::<Utc>::from(timestamp).to_rfc3339());
+
+        entries.push(WorkspaceBrowserEntry {
+            name,
+            path: entry_path,
+            kind: workspace_entry_kind(is_dir),
+            size_bytes: (!is_dir).then_some(metadata.len()),
+            modified_at,
+        });
+    }
+
+    entries.sort_by(|left, right| {
+        let left_dir = left.kind == "directory";
+        let right_dir = right.kind == "directory";
+        right_dir
+            .cmp(&left_dir)
+            .then_with(|| left.name.to_ascii_lowercase().cmp(&right.name.to_ascii_lowercase()))
+    });
+
+    Json(WorkspaceBrowserPayload {
+        root_path: config.workspace_dir.display().to_string(),
+        current_path: current_path.clone(),
+        parent_path: workspace_parent_path(&current_path),
+        entries,
+    })
+    .into_response()
+}
+
+/// PUT /api/workspace/blob?path=... — upload raw file bytes into the live workspace
+pub async fn handle_api_workspace_blob_put(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WorkspacePathQuery>,
+    body: Bytes,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let config = state.config.lock().clone();
+    let (file_path, relative_path) = match resolve_workspace_path(&config, query.path.as_deref()) {
+        Ok(value) => value,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": error })),
+            )
+                .into_response();
+        }
+    };
+
+    if relative_path.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Upload path must include a file name" })),
+        )
+            .into_response();
+    }
+
+    if let Ok(metadata) = tokio::fs::metadata(&file_path).await {
+        if metadata.is_dir() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "Upload target points to a directory" })),
+            )
+                .into_response();
+        }
+    }
+
+    let Some(parent) = file_path.parent() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Upload target has no parent directory" })),
+        )
+            .into_response();
+    };
+
+    if let Err(error) = tokio::fs::create_dir_all(parent).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Failed to prepare workspace directory: {error}")
+            })),
+        )
+            .into_response();
+    }
+
+    if let Err(error) = tokio::fs::write(&file_path, &body).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Failed to write workspace file: {error}")
+            })),
+        )
+            .into_response();
+    }
+
+    Json(WorkspaceBlobWritePayload {
+        status: "ok",
+        path: relative_path,
+        size_bytes: body.len() as u64,
+    })
+    .into_response()
+}
+
+/// GET /api/workspace/download?path=... — download a file or directory from the live workspace
+pub async fn handle_api_workspace_download(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WorkspacePathQuery>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let config = state.config.lock().clone();
+    let (target_path, relative_path) = match resolve_workspace_path(&config, query.path.as_deref())
+    {
+        Ok(value) => value,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": error })),
+            )
+                .into_response();
+        }
+    };
+
+    let metadata = match tokio::fs::metadata(&target_path).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Workspace path not found" })),
+            )
+                .into_response();
+        }
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("Failed to inspect workspace path: {error}")
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let is_dir = metadata.is_dir();
+    let download_name = workspace_download_name(&relative_path, is_dir);
+    let content_disposition = match HeaderValue::from_str(&download_content_disposition(&download_name))
+    {
+        Ok(value) => value,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("Failed to build download headers: {error}")
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let (content_type, body_bytes) = if is_dir {
+        let archive_target = if relative_path.is_empty() {
+            ".".to_string()
+        } else {
+            relative_path.clone()
+        };
+        let output = match tokio::process::Command::new("tar")
+            .arg("-czf")
+            .arg("-")
+            .arg("-C")
+            .arg(&config.workspace_dir)
+            .arg(&archive_target)
+            .output()
+            .await
+        {
+            Ok(output) => output,
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": format!("Failed to create directory archive: {error}")
+                    })),
+                )
+                    .into_response();
+            }
+        };
+
+        if !output.status.success() {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!(
+                        "Directory archive command failed: {}",
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    )
+                })),
+            )
+                .into_response();
+        }
+
+        ("application/gzip".to_string(), output.stdout)
+    } else {
+        let bytes = match tokio::fs::read(&target_path).await {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": format!("Failed to read workspace file: {error}")
+                    })),
+                )
+                    .into_response();
+            }
+        };
+
+        let mime = mime_guess::from_path(&target_path)
+            .first_or_octet_stream()
+            .essence_str()
+            .to_string();
+        (mime, bytes)
+    };
+
+    let mut response = Response::new(Body::from(body_bytes));
+    *response.status_mut() = StatusCode::OK;
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(&content_type)
+            .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+    );
+    response
+        .headers_mut()
+        .insert(header::CONTENT_DISPOSITION, content_disposition);
+    response.into_response()
+}
+
+/// PUT /api/workspace/directory?path=... — create a directory in the live workspace
+pub async fn handle_api_workspace_directory_put(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WorkspacePathQuery>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let config = state.config.lock().clone();
+    let (target_path, relative_path) = match resolve_workspace_path(&config, query.path.as_deref())
+    {
+        Ok(value) => value,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": error })),
+            )
+                .into_response();
+        }
+    };
+
+    if relative_path.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Directory path must include a folder name" })),
+        )
+            .into_response();
+    }
+
+    if let Ok(metadata) = tokio::fs::metadata(&target_path).await {
+        let error = if metadata.is_dir() {
+            "Workspace directory already exists"
+        } else {
+            "Workspace path already exists as a file"
+        };
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": error })),
+        )
+            .into_response();
+    }
+
+    if let Err(error) = tokio::fs::create_dir_all(&target_path).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Failed to create workspace directory: {error}")
+            })),
+        )
+            .into_response();
+    }
+
+    Json(WorkspacePathMutationPayload {
+        status: "ok",
+        path: relative_path,
+        kind: "directory",
+    })
+    .into_response()
+}
+
+/// DELETE /api/workspace/path?path=... — delete a file or directory from the live workspace
+pub async fn handle_api_workspace_path_delete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WorkspacePathQuery>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let config = state.config.lock().clone();
+    let (target_path, relative_path) = match resolve_workspace_path(&config, query.path.as_deref())
+    {
+        Ok(value) => value,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": error })),
+            )
+                .into_response();
+        }
+    };
+
+    if relative_path.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Refusing to delete the workspace root" })),
+        )
+            .into_response();
+    }
+
+    let metadata = match tokio::fs::symlink_metadata(&target_path).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Workspace path not found" })),
+            )
+                .into_response();
+        }
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("Failed to inspect workspace path: {error}")
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let file_type = metadata.file_type();
+    let is_directory = file_type.is_dir();
+    let delete_result = if is_directory {
+        tokio::fs::remove_dir_all(&target_path).await
+    } else {
+        tokio::fs::remove_file(&target_path).await
+    };
+
+    if let Err(error) = delete_result {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Failed to delete workspace path: {error}")
+            })),
+        )
+            .into_response();
+    }
+
+    Json(WorkspacePathMutationPayload {
+        status: "ok",
+        path: relative_path,
+        kind: workspace_entry_kind(is_directory),
+    })
     .into_response()
 }
 

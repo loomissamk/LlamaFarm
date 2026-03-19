@@ -151,6 +151,39 @@ export interface WorkspaceFileResponse {
   exists: boolean;
 }
 
+export interface WorkspaceBrowserEntry {
+  name: string;
+  path: string;
+  kind: 'file' | 'directory';
+  size_bytes?: number;
+  modified_at?: string;
+}
+
+export interface WorkspaceBrowserResponse {
+  root_path: string;
+  current_path: string;
+  parent_path?: string;
+  entries: WorkspaceBrowserEntry[];
+}
+
+export interface WorkspaceBlobWriteResponse {
+  status: 'ok';
+  path: string;
+  size_bytes: number;
+}
+
+export interface WorkspacePathDeleteResponse {
+  status: 'ok';
+  path: string;
+  kind: 'file' | 'directory';
+}
+
+export interface WorkspacePathCreateResponse {
+  status: 'ok';
+  path: string;
+  kind: 'directory';
+}
+
 export interface ConfigPresetWorkspaceFile {
   name: string;
   content: string;
