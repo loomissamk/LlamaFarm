@@ -574,19 +574,19 @@ fn normalize_task_plan_arguments(
     arguments: serde_json::Value,
     raw_string_hint: Option<&str>,
 ) -> serde_json::Value {
-    fn steps_to_tasks(steps: &[serde_json::Value]) -> Option<Vec<serde_json::Value>> {
+    fn normalize_task_items(items: &[serde_json::Value]) -> Option<Vec<serde_json::Value>> {
         let mut tasks = Vec::new();
 
-        for step in steps {
-            let Some(step_obj) = step.as_object() else {
+        for item in items {
+            let Some(item_obj) = item.as_object() else {
                 continue;
             };
 
-            let title = step_obj
+            let title = item_obj
                 .get("title")
-                .or_else(|| step_obj.get("description"))
-                .or_else(|| step_obj.get("name"))
-                .or_else(|| step_obj.get("command"))
+                .or_else(|| item_obj.get("description"))
+                .or_else(|| item_obj.get("name"))
+                .or_else(|| item_obj.get("command"))
                 .and_then(serde_json::Value::as_str)
                 .and_then(normalize_string_argument);
 
@@ -630,15 +630,13 @@ fn normalize_task_plan_arguments(
 
     match arguments {
         serde_json::Value::Object(mut map) => {
-            if map
-                .get("tasks")
-                .and_then(serde_json::Value::as_array)
-                .is_none()
-            {
-                if let Some(steps) = map.get("steps").and_then(serde_json::Value::as_array) {
-                    if let Some(tasks) = steps_to_tasks(steps) {
-                        map.insert("tasks".to_string(), serde_json::Value::Array(tasks));
-                    }
+            if let Some(tasks) = map.get("tasks").and_then(serde_json::Value::as_array) {
+                if let Some(normalized) = normalize_task_items(tasks) {
+                    map.insert("tasks".to_string(), serde_json::Value::Array(normalized));
+                }
+            } else if let Some(steps) = map.get("steps").and_then(serde_json::Value::as_array) {
+                if let Some(tasks) = normalize_task_items(steps) {
+                    map.insert("tasks".to_string(), serde_json::Value::Array(tasks));
                 }
             }
 
@@ -1272,6 +1270,11 @@ fn is_supported_tool_name(tool_name: &str) -> bool {
 static XML_OPEN_TAG_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"<([a-zA-Z_][a-zA-Z0-9_-]*)>").unwrap());
 
+/// Match XML-ish opening tags that may include attributes:
+/// `<file_write path="...">` or `<file_write path="..."/>`.
+static XMLISH_OPEN_TAG_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?is)<([a-zA-Z_][a-zA-Z0-9_-]*)\b").unwrap());
+
 /// MiniMax XML invoke format:
 /// `<invoke name="shell"><parameter name="command">pwd</parameter></invoke>`
 static MINIMAX_INVOKE_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -1404,7 +1407,7 @@ fn parse_direct_xml_tool_tag_calls(response: &str) -> Option<(String, Vec<Parsed
     let mut search_start = 0usize;
     let mut last_consumed = 0usize;
 
-    while let Some(open_cap) = XML_OPEN_TAG_RE.captures(&response[search_start..]) {
+    while let Some(open_cap) = XMLISH_OPEN_TAG_RE.captures(&response[search_start..]) {
         let Some(full_open) = open_cap.get(0) else {
             break;
         };
@@ -1413,19 +1416,22 @@ fn parse_direct_xml_tool_tag_calls(response: &str) -> Option<(String, Vec<Parsed
         };
 
         let full_open_start = search_start + full_open.start();
-        let open_end = search_start + full_open.end();
         let tag_name = tag_match.as_str();
+        let attr_start = search_start + tag_match.end();
 
         if is_xml_meta_tag(tag_name) || !is_supported_tool_name(tag_name) {
-            search_start = open_end;
+            search_start = attr_start;
             continue;
         }
 
-        let closing_tag = format!("</{tag_name}>");
-        let Some(close_rel) = response[open_end..].find(&closing_tag) else {
-            search_start = open_end;
+        let Some((boundary_start, boundary_kind)) =
+            find_xmlish_tag_boundary(response, attr_start, tag_name)
+        else {
+            search_start = attr_start;
             continue;
         };
+
+        let closing_tag = format!("</{tag_name}>");
 
         if full_open_start > last_consumed {
             let before = response[last_consumed..full_open_start].trim();
@@ -1434,15 +1440,64 @@ fn parse_direct_xml_tool_tag_calls(response: &str) -> Option<(String, Vec<Parsed
             }
         }
 
-        let inner = &response[open_end..open_end + close_rel];
         let canonical_name = map_tool_name_alias(tag_name).to_string();
+        let attr_args = parse_attribute_pairs(&response[attr_start..boundary_start]);
+
+        let arguments = match boundary_kind {
+            XmlishTagBoundary::SelfClosing => normalize_tool_arguments(
+                &canonical_name,
+                serde_json::Value::Object(attr_args),
+                None,
+            ),
+            XmlishTagBoundary::CrossClose => normalize_tool_arguments(
+                &canonical_name,
+                serde_json::Value::Object(attr_args),
+                None,
+            ),
+            XmlishTagBoundary::OpenTagClosed => {
+                let inner_start = boundary_start + 1;
+                let Some(close_rel) = response[inner_start..].find(&closing_tag) else {
+                    search_start = inner_start;
+                    continue;
+                };
+                let inner = &response[inner_start..inner_start + close_rel];
+                if attr_args.is_empty() {
+                    parse_xml_tool_arguments(&canonical_name, inner)
+                } else {
+                    match parse_xml_tool_arguments(&canonical_name, inner) {
+                        serde_json::Value::Object(mut merged) => {
+                            for (key, value) in attr_args {
+                                merged.entry(key).or_insert(value);
+                            }
+                            normalize_tool_arguments(
+                                &canonical_name,
+                                serde_json::Value::Object(merged),
+                                None,
+                            )
+                        }
+                        other => other,
+                    }
+                }
+            }
+        };
+
         calls.push(ParsedToolCall {
-            name: canonical_name.clone(),
-            arguments: parse_xml_tool_arguments(&canonical_name, inner),
+            name: canonical_name,
+            arguments,
             tool_call_id: None,
         });
 
-        last_consumed = open_end + close_rel + closing_tag.len();
+        last_consumed = match boundary_kind {
+            XmlishTagBoundary::SelfClosing => boundary_start + 2,
+            XmlishTagBoundary::CrossClose => boundary_start + closing_tag.len(),
+            XmlishTagBoundary::OpenTagClosed => {
+                let inner_start = boundary_start + 1;
+                let close_rel = response[inner_start..]
+                    .find(&closing_tag)
+                    .expect("open tag case should only continue after a matching close tag");
+                inner_start + close_rel + closing_tag.len()
+            }
+        };
         search_start = last_consumed;
     }
 
@@ -3428,6 +3483,63 @@ fn parse_meta_wrapped_json_tool_calls(response: &str) -> Option<(String, Vec<Par
     Some((text_parts.join("\n"), calls))
 }
 
+fn trim_trailing_meta_close_tags(mut text: &str) -> &str {
+    loop {
+        let trimmed = text.trim_end();
+        let updated = trimmed
+            .strip_suffix("</think>")
+            .or_else(|| trimmed.strip_suffix("</thinking>"))
+            .or_else(|| trimmed.strip_suffix("</analysis>"))
+            .or_else(|| trimmed.strip_suffix("</reasoning>"))
+            .or_else(|| trimmed.strip_suffix("</reflection>"))
+            .or_else(|| trimmed.strip_suffix("</thought>"));
+
+        match updated {
+            Some(next) => text = next,
+            None => return trimmed,
+        }
+    }
+}
+
+fn parse_trailing_standalone_json_tool_calls(
+    response: &str,
+) -> Option<(String, Vec<ParsedToolCall>)> {
+    static JSON_LINE_START_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?m)^[ \t]*[\{\[]").unwrap());
+
+    let candidate_starts: Vec<usize> = JSON_LINE_START_RE
+        .find_iter(response)
+        .map(|m| m.start())
+        .collect();
+
+    for line_start in candidate_starts.into_iter().rev() {
+        let suffix_with_ws = &response[line_start..];
+        let suffix = suffix_with_ws.trim_start();
+        if suffix.is_empty() {
+            continue;
+        }
+
+        let leading_ws = suffix_with_ws.len().saturating_sub(suffix.len());
+        let json_start = line_start + leading_ws;
+        let Some((value, consumed_end)) = extract_first_json_value_with_end(suffix) else {
+            continue;
+        };
+        if !suffix[consumed_end..].trim().is_empty() {
+            continue;
+        }
+
+        let calls = parse_tool_calls_from_json_value(&value);
+        if calls.is_empty() {
+            continue;
+        }
+
+        let before = trim_trailing_meta_close_tags(&response[..json_start]).trim();
+        return Some((before.to_string(), calls));
+    }
+
+    None
+}
+
 fn parse_markdown_named_tool_calls(response: &str) -> Option<(String, Vec<ParsedToolCall>)> {
     static TOOL_LINE_RE: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"(?i)^\s*\*\*(?P<tool>[a-z0-9_-]+)\*\*(?::\s*.*)?$").unwrap());
@@ -4013,6 +4125,14 @@ pub(crate) fn parse_tool_calls(response: &str) -> (String, Vec<ParsedToolCall>) 
         }
     }
 
+    if let Some((trailing_json_text, trailing_json_calls)) =
+        parse_trailing_standalone_json_tool_calls(response)
+    {
+        if !trailing_json_calls.is_empty() {
+            return (trailing_json_text, trailing_json_calls);
+        }
+    }
+
     if let Some((function_text, function_calls)) = parse_function_style_tool_calls(response) {
         if !function_calls.is_empty() {
             let mut calls = function_calls;
@@ -4519,6 +4639,24 @@ pub(super) fn detect_tool_call_parse_issue(
     response: &str,
     parsed_calls: &[ParsedToolCall],
 ) -> Option<String> {
+    fn looks_like_unparsed_standalone_json_tool_payload(response: &str) -> bool {
+        static JSON_LINE_START_RE: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"(?m)^[ \t]*[\{\[]").unwrap());
+
+        let candidate_starts: Vec<usize> = JSON_LINE_START_RE
+            .find_iter(response)
+            .map(|m| m.start())
+            .collect();
+
+        candidate_starts.into_iter().rev().any(|line_start| {
+            let suffix = response[line_start..].trim_start();
+            suffix.contains("\"tool_name\"")
+                || suffix.contains("\"function_name\"")
+                || suffix.contains("\"tool\"")
+                || suffix.contains("\"task_plan\"")
+        })
+    }
+
     if !parsed_calls.is_empty() {
         return None;
     }
@@ -4569,6 +4707,7 @@ pub(super) fn detect_tool_call_parse_issue(
         || trimmed.contains("```tool ") // Generic ```tool <name> pattern
         || trimmed.contains("\"tool_calls\"")
         || trimmed.contains("\"tool\"")
+        || looks_like_unparsed_standalone_json_tool_payload(trimmed)
         || trimmed.contains("TOOL_CALL")
         || trimmed.contains("<FunctionCall>")
         || trimmed.contains("<file_write>")

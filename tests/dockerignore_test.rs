@@ -13,9 +13,13 @@ const MUST_EXCLUDE: &[&str] = &[
     ".git",
     ".githooks",
     "target",
+    "rust_kernel",
     "docs",
     "examples",
     "tests",
+    "site",
+    "web/node_modules",
+    "web/dist",
     "*.md",
     "*.png",
     "*.db",
@@ -184,6 +188,18 @@ async fn dockerignore_excludes_target_directory() {
         is_excluded(&patterns, "target/release/llamafarm"),
         "target/release must be excluded"
     );
+    assert!(
+        is_excluded(&patterns, "rust_kernel/src/main.rs"),
+        "rust_kernel must be excluded"
+    );
+    assert!(
+        is_excluded(&patterns, "web/node_modules/react/index.js"),
+        "web/node_modules must be excluded"
+    );
+    assert!(
+        is_excluded(&patterns, "web/dist/index.html"),
+        "web/dist must be excluded"
+    );
 }
 
 #[tokio::test]
@@ -320,6 +336,9 @@ async fn dockerignore_pattern_matching_edge_cases() {
         ".git".to_string(),
         ".githooks".to_string(),
         "target".to_string(),
+        "rust_kernel".to_string(),
+        "web/node_modules".to_string(),
+        "web/dist".to_string(),
         "*.md".to_string(),
         "*.db".to_string(),
         ".tmp_*".to_string(),
@@ -332,6 +351,9 @@ async fn dockerignore_pattern_matching_edge_cases() {
     assert!(is_excluded(&patterns, ".githooks"));
     assert!(is_excluded(&patterns, "target"));
     assert!(is_excluded(&patterns, "target/debug/build"));
+    assert!(is_excluded(&patterns, "rust_kernel/src/main.rs"));
+    assert!(is_excluded(&patterns, "web/node_modules/react/index.js"));
+    assert!(is_excluded(&patterns, "web/dist/index.html"));
     assert!(is_excluded(&patterns, "README.md"));
     assert!(is_excluded(&patterns, "brain.db"));
     assert!(is_excluded(&patterns, ".tmp_todo_probe"));

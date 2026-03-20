@@ -39,6 +39,10 @@ export function useWebSocket(
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
   const [messages, setMessages] = useState<WsMessage[]>([]);
 
+  // TPS tracking — all mutable state in refs so counting never causes re-renders.
+  const streamStartRef = useRef<number | null>(null);
+  const charCountRef = useRef(0);
+
   // Stable reference to the client across renders
   const getClient = useCallback((): WebSocketClient => {
     if (!clientRef.current) {
@@ -61,6 +65,32 @@ export function useWebSocket(
 
     client.onMessage = (msg: WsMessage) => {
       setMessages((prev) => [...prev, msg]);
+
+      if (msg.type === 'chunk' && msg.content) {
+        if (streamStartRef.current === null) {
+          streamStartRef.current = performance.now();
+          charCountRef.current = 0;
+        }
+        charCountRef.current += msg.content.length;
+        const elapsed = (performance.now() - streamStartRef.current) / 1000;
+        if (elapsed > 0.2) {
+          // ~4 chars per token — close enough for a live indicator
+          const tps = Math.round(charCountRef.current / 4 / elapsed);
+          globalThis.dispatchEvent(new CustomEvent('lf:tps', { detail: { tps, streaming: true } }));
+        }
+      } else if (msg.type === 'done') {
+        if (streamStartRef.current !== null) {
+          const elapsed = (performance.now() - streamStartRef.current) / 1000;
+          const tps = elapsed > 0 ? Math.round(charCountRef.current / 4 / elapsed) : 0;
+          globalThis.dispatchEvent(new CustomEvent('lf:tps', { detail: { tps, streaming: false } }));
+        }
+        streamStartRef.current = null;
+        charCountRef.current = 0;
+      } else if (msg.type === 'message') {
+        // User message sent — reset so next response starts fresh
+        streamStartRef.current = null;
+        charCountRef.current = 0;
+      }
     };
 
     client.onError = () => {

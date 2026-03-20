@@ -1868,7 +1868,17 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                 .await;
         }
 
-        history.push(ChatMessage::user(&content));
+        // Only push the user message if the last history entry isn't already this exact
+        // message — the client may include it in history_seed, which would produce a
+        // duplicate if we push unconditionally.
+        let already_present = history
+            .iter()
+            .rev()
+            .find(|m| m.role != "system")
+            .is_some_and(|m| m.role == "user" && m.content == content);
+        if !already_present {
+            history.push(ChatMessage::user(&content));
+        }
 
         // Broadcast agent_start event
         let _ = state.event_tx.send(serde_json::json!({

@@ -5,11 +5,17 @@
 
 # Rust build artifacts (can be multiple GB)
 target
+rust_kernel
 
 # Documentation and examples (not needed for runtime)
 docs
 examples
 tests
+site
+
+# Frontend install/build outputs (the image rebuilds these internally)
+web/node_modules
+web/dist
 
 # Markdown files (README, CHANGELOG, etc.)
 *.md

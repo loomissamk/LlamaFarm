@@ -1,5 +1,6 @@
 [workspace]
 members = [".", "crates/robot-kit"]
+exclude = ["rust_kernel"]
 resolver = "2"
 
 [package]
