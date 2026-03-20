@@ -407,12 +407,17 @@ export default function AgentChat() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => loadSidebarCollapsed());
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [tps, setTps] = useState(0);
+  const [streaming, setStreaming] = useState(false);
 
   const wsRef = useRef<WebSocketClient | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const pendingContentRef = useRef<Record<string, string>>({});
   const pendingToolCallsRef = useRef<Record<string, PendingToolCallSeed[]>>({});
+  const responseStartRef = useRef<number | null>(null);
+  const streamStartRef = useRef<number | null>(null);
+  const charCountRef = useRef(0);
   const activeSessionIdRef = useRef(activeSessionId);
 
   const activeSession = useMemo(
@@ -439,10 +444,15 @@ export default function AgentChat() {
 
     ws.onClose = () => {
       setConnected(false);
+      responseStartRef.current = null;
+      streamStartRef.current = null;
+      charCountRef.current = 0;
+      setStreaming(false);
     };
 
     ws.onError = () => {
       setError('Connection error. Attempting to reconnect...');
+      setStreaming(false);
     };
 
     ws.onMessage = (msg: WsMessage) => {
@@ -496,13 +506,25 @@ export default function AgentChat() {
       };
 
       switch (msg.type) {
-        case 'chunk':
+        case 'chunk': {
           setTypingSessionIds((prev) =>
             prev.includes(sessionId) ? prev : [...prev, sessionId],
           );
           pendingContentRef.current[sessionId] =
             (pendingContentRef.current[sessionId] ?? '') + (msg.content ?? '');
+          setStreaming(true);
+          // TPS tracking
+          if (streamStartRef.current === null) {
+            streamStartRef.current = performance.now();
+            charCountRef.current = 0;
+          }
+          charCountRef.current += (msg.content ?? '').length;
+          const elapsed = (performance.now() - streamStartRef.current) / 1000;
+          if (elapsed > 0.2) {
+            setTps(Math.max(1, Math.round(charCountRef.current / 4 / elapsed)));
+          }
           break;
+        }
 
         case 'message':
         case 'done': {
@@ -512,11 +534,21 @@ export default function AgentChat() {
             pendingContentRef.current[sessionId] ??
             ''
           ).trim();
+          const measuredChars = Math.max(charCountRef.current, content.length);
+          const startedAt = streamStartRef.current ?? responseStartRef.current;
+          if (startedAt !== null && measuredChars > 0) {
+            const elapsed = Math.max((performance.now() - startedAt) / 1000, 0.05);
+            setTps(Math.max(1, Math.round(measuredChars / 4 / elapsed)));
+          }
           appendMessage('agent', 'message', content || EMPTY_DONE_FALLBACK, new Date(), {
             seedRole: 'assistant',
             seedContent: content || EMPTY_DONE_FALLBACK,
           });
           clearTypingForSession();
+          responseStartRef.current = null;
+          streamStartRef.current = null;
+          charCountRef.current = 0;
+          setStreaming(false);
           break;
         }
 
@@ -571,6 +603,10 @@ export default function AgentChat() {
             seedContent: `[Error] ${msg.message ?? 'Unknown error'}`,
           });
           clearTypingForSession();
+          responseStartRef.current = null;
+          streamStartRef.current = null;
+          charCountRef.current = 0;
+          setStreaming(false);
           break;
       }
     };
@@ -675,6 +711,11 @@ export default function AgentChat() {
         temporary: activeSession.temporary,
         historySeed: buildHistorySeed(updatedSession.messages),
       });
+      responseStartRef.current = performance.now();
+      streamStartRef.current = null;
+      charCountRef.current = 0;
+      setTps(0);
+      setStreaming(false);
       setTypingSessionIds((prev) =>
         prev.includes(activeSession.id) ? prev : [...prev, activeSession.id],
       );
@@ -820,8 +861,16 @@ export default function AgentChat() {
                 </p>
               </div>
             </div>
-            <div className="rounded-full border border-gray-800 px-3 py-1 text-xs text-gray-400">
-              {activeMessages.length} messages
+            <div className="flex items-center gap-2">
+              <span
+                className={`font-mono text-xs tabular-nums ${streaming ? 'text-green-400' : 'text-gray-500'}`}
+                title="Approximate tokens per second (current generation)"
+              >
+                {tps} t/s
+              </span>
+              <div className="rounded-full border border-gray-800 px-3 py-1 text-xs text-gray-400">
+                {activeMessages.length} messages
+              </div>
             </div>
           </div>
         </div>
