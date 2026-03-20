@@ -1352,15 +1352,19 @@ fn should_short_circuit_after_tool_execution(
 fn synthesize_grounded_final_answer(records: &[SuccessfulToolRecord]) -> Option<String> {
     let last_task_plan = records
         .iter()
+        .enumerate()
         .rev()
-        .find(|record| record.name == "task_plan");
-    if let Some(record) = last_task_plan {
+        .find(|(_, record)| record.name == "task_plan");
+    if let Some((idx, record)) = last_task_plan {
+        let has_later_execution = records[idx + 1..]
+            .iter()
+            .any(|later| later.name != "task_plan");
         let action = record
             .arguments
             .get("action")
             .and_then(|value| value.as_str())
             .unwrap_or_default();
-        if action == "create" {
+        if action == "create" && !has_later_execution {
             if let Some(tasks) = record
                 .arguments
                 .get("tasks")
@@ -1382,7 +1386,7 @@ fn synthesize_grounded_final_answer(records: &[SuccessfulToolRecord]) -> Option<
             }
         }
 
-        if action == "list" && !record.output.trim().is_empty() {
+        if action == "list" && !has_later_execution && !record.output.trim().is_empty() {
             return Some(record.output.trim().to_string());
         }
     }
@@ -8366,6 +8370,53 @@ Tail"#;
         assert!(answer.contains("```text\n4\n```"));
         assert!(answer.contains("```python\nprint(2 + 2)\n```"));
         assert!(answer.contains("deleted after execution"));
+    }
+
+    #[test]
+    fn synthesize_grounded_final_answer_prefers_python_result_after_task_plan_execution() {
+        let records = vec![
+            SuccessfulToolRecord {
+                name: "task_plan".into(),
+                arguments: serde_json::json!({
+                    "action": "create",
+                    "tasks": [
+                        {"title": "Write Python file"},
+                        {"title": "Run the Python script"},
+                        {"title": "Delete the file"},
+                    ]
+                }),
+                output: "Task plan created.".into(),
+            },
+            SuccessfulToolRecord {
+                name: "file_write".into(),
+                arguments: serde_json::json!({
+                    "path": "/llamafarm-data/workspace/add_two.py",
+                    "content": "print(2 + 2)"
+                }),
+                output: "Written 12 bytes to /llamafarm-data/workspace/add_two.py".into(),
+            },
+            SuccessfulToolRecord {
+                name: "shell".into(),
+                arguments: serde_json::json!({
+                    "command": "python3 /llamafarm-data/workspace/add_two.py"
+                }),
+                output: "4".into(),
+            },
+            SuccessfulToolRecord {
+                name: "shell".into(),
+                arguments: serde_json::json!({
+                    "command": "rm /llamafarm-data/workspace/add_two.py"
+                }),
+                output: "deleted successfully".into(),
+            },
+        ];
+
+        let answer = synthesize_grounded_final_answer(&records)
+            .expect("python execution should outrank a prior task plan summary");
+
+        assert!(answer.contains("created and executed successfully"));
+        assert!(answer.contains("```text\n4\n```"));
+        assert!(!answer.starts_with("Task plan created with"));
     }
 
     #[test]

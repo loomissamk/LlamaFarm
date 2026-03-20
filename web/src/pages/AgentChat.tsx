@@ -22,8 +22,15 @@ interface ChatMessage {
   kind: ChatMessageKind;
   content: string;
   timestamp: Date;
+  stats?: ChatMessageStats;
   seedRole?: SeedChatMessage['role'];
   seedContent?: string;
+}
+
+interface ChatMessageStats {
+  completionSeconds: number;
+  estimatedOutputTokens: number;
+  estimatedTokensPerSecond: number;
 }
 
 interface ChatSession {
@@ -41,6 +48,7 @@ interface PersistedChatMessage {
   kind: ChatMessageKind;
   content: string;
   timestamp: string;
+  stats?: ChatMessageStats;
   seedRole?: SeedChatMessage['role'];
   seedContent?: string;
 }
@@ -62,6 +70,11 @@ interface InitialChatState {
 interface PendingToolCallSeed {
   id: string;
   name: string;
+}
+
+interface AppendMessageOptions {
+  stats?: ChatMessageStats;
+  seed?: Pick<ChatMessage, 'seedRole' | 'seedContent'>;
 }
 
 let fallbackMessageIdCounter = 0;
@@ -119,6 +132,44 @@ function buildSessionPreview(session: ChatSession): string {
   }
 
   return truncateLabel(lastMessage.content.replace(/\s+/g, ' '), 72);
+}
+
+function estimateOutputTokens(text: string): number {
+  const normalized = text.trim();
+  if (!normalized) {
+    return 0;
+  }
+
+  return Math.max(1, Math.round(normalized.length / 4));
+}
+
+function formatCompletionSeconds(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return '0.0s';
+  }
+
+  if (seconds < 60) {
+    return `${seconds.toFixed(1)}s`;
+  }
+
+  const wholeSeconds = Math.round(seconds);
+  const minutes = Math.floor(wholeSeconds / 60);
+  const remainderSeconds = wholeSeconds % 60;
+  return `${minutes}m ${remainderSeconds}s`;
+}
+
+function formatAssistantMessageMeta(message: ChatMessage): string {
+  const timestamp = message.timestamp.toLocaleTimeString();
+  if (message.role !== 'agent' || message.kind !== 'message' || !message.stats) {
+    return timestamp;
+  }
+
+  return [
+    timestamp,
+    formatCompletionSeconds(message.stats.completionSeconds),
+    `~${message.stats.estimatedOutputTokens} tok`,
+    `~${message.stats.estimatedTokensPerSecond.toFixed(1)} t/s`,
+  ].join(' · ');
 }
 
 function createChatSession(temporary: boolean): ChatSession {
@@ -204,6 +255,23 @@ function loadPersistedSessions(): ChatSession[] {
               kind: message.kind,
               content: message.content,
               timestamp,
+              stats:
+                message.stats &&
+                typeof message.stats.completionSeconds === 'number' &&
+                Number.isFinite(message.stats.completionSeconds) &&
+                message.stats.completionSeconds > 0 &&
+                typeof message.stats.estimatedOutputTokens === 'number' &&
+                Number.isFinite(message.stats.estimatedOutputTokens) &&
+                message.stats.estimatedOutputTokens >= 0 &&
+                typeof message.stats.estimatedTokensPerSecond === 'number' &&
+                Number.isFinite(message.stats.estimatedTokensPerSecond) &&
+                message.stats.estimatedTokensPerSecond > 0
+                  ? {
+                      completionSeconds: message.stats.completionSeconds,
+                      estimatedOutputTokens: message.stats.estimatedOutputTokens,
+                      estimatedTokensPerSecond: message.stats.estimatedTokensPerSecond,
+                    }
+                  : undefined,
               seedRole:
                 message.seedRole === 'user' ||
                 message.seedRole === 'assistant' ||
@@ -259,6 +327,7 @@ function persistSessions(sessions: ChatSession[]): void {
           kind: message.kind,
           content: message.content,
           timestamp: message.timestamp.toISOString(),
+          stats: message.stats,
           seedRole: message.seedRole,
           seedContent: message.seedContent,
         })),
@@ -466,7 +535,7 @@ export default function AgentChat() {
         kind: ChatMessageKind,
         content: string,
         timestamp = new Date(),
-        seed?: Pick<ChatMessage, 'seedRole' | 'seedContent'>,
+        options?: AppendMessageOptions,
       ) => {
         setSessions((prev) => {
           const existing = prev.find((session) => session.id === sessionId);
@@ -486,8 +555,9 @@ export default function AgentChat() {
                 kind,
                 content,
                 timestamp,
-                seedRole: seed?.seedRole,
-                seedContent: seed?.seedContent,
+                stats: options?.stats,
+                seedRole: options?.seed?.seedRole,
+                seedContent: options?.seed?.seedContent,
               },
             ],
             updatedAt: timestamp,
@@ -534,16 +604,37 @@ export default function AgentChat() {
             pendingContentRef.current[sessionId] ??
             ''
           ).trim();
-          const measuredChars = Math.max(charCountRef.current, content.length);
-          const startedAt = streamStartRef.current ?? responseStartRef.current;
-          if (startedAt !== null && measuredChars > 0) {
-            const elapsed = Math.max((performance.now() - startedAt) / 1000, 0.05);
-            setTps(Math.max(1, Math.round(measuredChars / 4 / elapsed)));
+          const outputTokens = estimateOutputTokens(content);
+          const startedAt = responseStartRef.current ?? streamStartRef.current;
+          const completionSeconds =
+            startedAt !== null ? Math.max((performance.now() - startedAt) / 1000, 0.05) : 0;
+          const estimatedTokensPerSecond =
+            completionSeconds > 0 && outputTokens > 0 ? outputTokens / completionSeconds : 0;
+          if (estimatedTokensPerSecond > 0) {
+            setTps(Math.max(1, Math.round(estimatedTokensPerSecond)));
           }
-          appendMessage('agent', 'message', content || EMPTY_DONE_FALLBACK, new Date(), {
-            seedRole: 'assistant',
-            seedContent: content || EMPTY_DONE_FALLBACK,
-          });
+          appendMessage(
+            'agent',
+            'message',
+            content || EMPTY_DONE_FALLBACK,
+            new Date(),
+            {
+              stats:
+                completionSeconds > 0 &&
+                outputTokens > 0 &&
+                estimatedTokensPerSecond > 0
+                  ? {
+                      completionSeconds,
+                      estimatedOutputTokens: outputTokens,
+                      estimatedTokensPerSecond,
+                    }
+                  : undefined,
+              seed: {
+                seedRole: 'assistant',
+                seedContent: content || EMPTY_DONE_FALLBACK,
+              },
+            },
+          );
           clearTypingForSession();
           responseStartRef.current = null;
           streamStartRef.current = null;
@@ -564,8 +655,10 @@ export default function AgentChat() {
             `[Tool Call] ${toolName}(${JSON.stringify(msg.args ?? {})})`,
             new Date(),
             {
-              seedRole: 'assistant',
-              seedContent: buildAssistantToolCallSeed(toolCallId, toolName, msg.args),
+              seed: {
+                seedRole: 'assistant',
+                seedContent: buildAssistantToolCallSeed(toolCallId, toolName, msg.args),
+              },
             },
           );
           break;
@@ -586,22 +679,38 @@ export default function AgentChat() {
           }
 
           const output = extractToolResultOutput(msg);
-          appendMessage('agent', 'tool_result', formatToolResultMessage(msg), new Date(), {
-            seedRole: 'tool',
-            seedContent: buildToolResultSeed(
-              pendingCall?.id ?? `ws_tool_${makeMessageId()}`,
-              toolName,
-              output,
-            ),
-          });
+          appendMessage(
+            'agent',
+            'tool_result',
+            formatToolResultMessage(msg),
+            new Date(),
+            {
+              seed: {
+                seedRole: 'tool',
+                seedContent: buildToolResultSeed(
+                  pendingCall?.id ?? `ws_tool_${makeMessageId()}`,
+                  toolName,
+                  output,
+                ),
+              },
+            },
+          );
           break;
         }
 
         case 'error':
-          appendMessage('agent', 'error', `[Error] ${msg.message ?? 'Unknown error'}`, new Date(), {
-            seedRole: 'assistant',
-            seedContent: `[Error] ${msg.message ?? 'Unknown error'}`,
-          });
+          appendMessage(
+            'agent',
+            'error',
+            `[Error] ${msg.message ?? 'Unknown error'}`,
+            new Date(),
+            {
+              seed: {
+                seedRole: 'assistant',
+                seedContent: `[Error] ${msg.message ?? 'Unknown error'}`,
+              },
+            },
+          );
           clearTypingForSession();
           responseStartRef.current = null;
           streamStartRef.current = null;
@@ -715,7 +824,7 @@ export default function AgentChat() {
       streamStartRef.current = null;
       charCountRef.current = 0;
       setTps(0);
-      setStreaming(false);
+      setStreaming(true);
       setTypingSessionIds((prev) =>
         prev.includes(activeSession.id) ? prev : [...prev, activeSession.id],
       );
@@ -862,12 +971,14 @@ export default function AgentChat() {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <span
-                className={`font-mono text-xs tabular-nums ${streaming ? 'text-green-400' : 'text-gray-500'}`}
-                title="Approximate tokens per second (current generation)"
-              >
-                {tps} t/s
-              </span>
+              {streaming && tps > 0 && (
+                <span
+                  className="font-mono text-xs tabular-nums text-green-400"
+                  title="Estimated tokens per second while the current reply is streaming"
+                >
+                  ~{tps} t/s live
+                </span>
+              )}
               <div className="rounded-full border border-gray-800 px-3 py-1 text-xs text-gray-400">
                 {activeMessages.length} messages
               </div>
@@ -925,7 +1036,7 @@ export default function AgentChat() {
                         message.role === 'user' ? 'text-blue-200' : 'text-gray-500'
                       }`}
                     >
-                      {message.timestamp.toLocaleTimeString()}
+                      {formatAssistantMessageMeta(message)}
                     </p>
                   </div>
                 </div>
