@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BASE_COMPOSE="$ROOT_DIR/docker-compose.bundle.yml"
 GPU_MODE="${LLAMAFARM_GPU_MODE:-auto}"
-DEFAULT_PULL_MODELS="qwen3.5:9b,devstral-small-2:latest"
+DEFAULT_PULL_MODELS="qwen3.5:9b,devstral-small-2:latest,gemma4:e2b,gemma4:e4b"
 TMP_OVERRIDE=""
 RUNTIME_UID="${LLAMAFARM_RUNTIME_UID:-$(id -u)}"
 RUNTIME_GID="${LLAMAFARM_RUNTIME_GID:-$(id -g)}"
@@ -204,6 +204,16 @@ if [ "$EXPOSE_ACCEL" = "1" ]; then
 fi
 
 cd "$ROOT_DIR"
+
+# Always pull the latest Ollama base image so the bundle gets the newest Ollama
+# binary on rebuild (required for new model architectures like gemma4).
+OLLAMA_PULL_IMAGE="ollama/ollama:latest"
+if [ "$BACKEND" = "rocm" ]; then
+  OLLAMA_PULL_IMAGE="ollama/ollama:rocm"
+fi
+echo "Pulling Ollama base image: $OLLAMA_PULL_IMAGE"
+docker pull "$OLLAMA_PULL_IMAGE"
+
 if [ "$#" -eq 0 ]; then
   set -- up -d --build
 fi
