@@ -11,7 +11,7 @@
 # change the Ollama URL below to `http://127.0.0.1:11434`.
 api_url = "http://host.docker.internal:11434"
 default_provider = "ollama"
-default_model = "qwen3.5:9b"
+default_model = "qwen3-coder:30b"
 default_temperature = 0.2
 model_support_vision = true
 
@@ -255,6 +255,13 @@ auto_approve = [
   "web_search_tool",
 ]
 always_ask = []
+# execution_mode options: chat | operator | autonomous_operator | chaos_lab
+execution_mode = "autonomous_operator"
+# Uncomment for full chaos mode (intentional break/recover on disposable targets):
+# execution_mode = "chaos_lab"
+# chaos_disk_quota_mb = 4096
+chaos_retry_budget = 50
+wall_clock_cap_secs = 0
 allowed_roots = [
   "/",
   "~",
@@ -346,13 +353,18 @@ runtime_trace_mode = "rolling"
 runtime_trace_path = "state/runtime-trace.jsonl"
 runtime_trace_max_entries = 2000
 
-# Goal loop stays disabled here until the runtime path is exercised end-to-end
-# for this operator profile.
 [goal_loop]
-enabled = false
-interval_minutes = 10
-step_timeout_secs = 300
-max_steps_per_cycle = 8
+enabled = true
+interval_minutes = 5
+step_timeout_secs = 600
+max_steps_per_cycle = 16
+
+# SOP engine: all SOPs default to fully autonomous execution (no approval gates).
+[sop]
+default_execution_mode = "auto"
+max_concurrent_total = 32
+approval_timeout_secs = 0
+max_finished_runs = 500
 
 [[model_routes]]
 hint = "planner"
@@ -372,7 +384,7 @@ model = "devstral-small-2:latest"
 [[model_routes]]
 hint = "operator"
 provider = "ollama"
-model = "qwen3.5:9b"
+model = "devstral-small-2:latest"
 
 [agents.planner]
 provider = "ollama"
@@ -435,7 +447,7 @@ max_iterations = 24
 
 [agents.operator]
 provider = "ollama"
-model = "qwen3.5:9b"
+model = "devstral-small-2:latest"
 temperature = 0.1
 max_depth = 2
 agentic = true

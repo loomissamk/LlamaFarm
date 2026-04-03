@@ -4,7 +4,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BASE_COMPOSE="$ROOT_DIR/docker-compose.bundle.yml"
 GPU_MODE="${LLAMAFARM_GPU_MODE:-auto}"
-DEFAULT_PULL_MODELS="qwen3.5:9b,devstral-small-2:latest,gemma4:e2b,gemma4:e4b"
+DEFAULT_PULL_MODELS="devstral-small-2:latest,qwen3-coder:30b,gpt-oss:20b,devstral-2:123b-cloud,gemma4:e2b"
+OLLAMA_IMAGE_DEFAULT="ollama/ollama:latest"
+OLLAMA_IMAGE_ROCM="ollama/ollama:rocm"
 TMP_OVERRIDE=""
 RUNTIME_UID="${LLAMAFARM_RUNTIME_UID:-$(id -u)}"
 RUNTIME_GID="${LLAMAFARM_RUNTIME_GID:-$(id -g)}"
@@ -130,7 +132,7 @@ write_override() {
     if [ "$backend" = "rocm" ]; then
       echo "    build:"
       echo "      args:"
-      echo "        OLLAMA_BASE_IMAGE: ollama/ollama:rocm"
+      echo "        OLLAMA_BASE_IMAGE: $OLLAMA_IMAGE_ROCM"
     fi
     if [ "$expose_dri" = "1" ] || [ "$expose_kfd" = "1" ] || [ "$expose_accel" = "1" ]; then
       echo "    devices:"
@@ -205,17 +207,21 @@ fi
 
 cd "$ROOT_DIR"
 
-# Always pull the latest Ollama base image so the bundle gets the newest Ollama
-# binary on rebuild (required for new model architectures like gemma4).
-OLLAMA_PULL_IMAGE="ollama/ollama:latest"
-if [ "$BACKEND" = "rocm" ]; then
-  OLLAMA_PULL_IMAGE="ollama/ollama:rocm"
-fi
-echo "Pulling Ollama base image: $OLLAMA_PULL_IMAGE"
-docker pull "$OLLAMA_PULL_IMAGE"
-
 if [ "$#" -eq 0 ]; then
   set -- up -d --build
+fi
+
+# Pull the Ollama base image before rebuilding so the container gets the newest
+# Ollama binary (required for new model architectures like gemma4).
+WILL_BUILD=0
+for arg in "$@"; do
+  [ "$arg" = "--build" ] && WILL_BUILD=1 && break
+done
+if [ "$WILL_BUILD" = "1" ]; then
+  OLLAMA_PULL_IMAGE="$OLLAMA_IMAGE_DEFAULT"
+  [ "$BACKEND" = "rocm" ] && OLLAMA_PULL_IMAGE="$OLLAMA_IMAGE_ROCM"
+  echo "Pulling Ollama base image: $OLLAMA_PULL_IMAGE"
+  docker pull "$OLLAMA_PULL_IMAGE"
 fi
 
 exec docker compose -f "$BASE_COMPOSE" -f "$TMP_OVERRIDE" "$@"

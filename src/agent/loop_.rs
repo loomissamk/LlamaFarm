@@ -508,6 +508,23 @@ fn build_assistant_history_with_tool_calls(text: &str, tool_calls: &[ToolCall]) 
     parts.join("\n")
 }
 
+/// Returns true for models that are too small for reliable native function-calling
+/// (≤2B actual parameters, detected from common Ollama tag suffixes like `:1b`, `:2b`).
+/// These models use the prompt-based `<tool_call>` path instead, which gives more
+/// explicit formatting guidance and avoids native API confusion.
+///
+/// Note: `:e2b` / `:e4b` tags (Google Gemma edge variants) are NOT tiny — they are
+/// ~5B and ~8B actual parameters respectively and should use native tools normally.
+fn is_small_model_for_native_tools(model: &str) -> bool {
+    // Strip optional `:cloud` suffix before checking the tag.
+    let base = model.strip_suffix(":cloud").unwrap_or(model);
+    let tag = base.rsplit_once(':').map_or("", |(_, t)| t).to_ascii_lowercase();
+    // Only match bare :1b / :2b or quantized variants like :1b-q4_0 — not :e2b / :e4b.
+    matches!(tag.as_str(), "1b" | "2b")
+        || tag.starts_with("1b-")
+        || tag.starts_with("2b-")
+}
+
 fn looks_like_unverified_action_completion_without_tool_call(text: &str) -> bool {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -1835,7 +1852,7 @@ pub(crate) async fn run_tool_call_loop(
         .try_with(|enabled| *enabled)
         .ok()
         .flatten()
-        .unwrap_or_else(|| provider.supports_native_tools())
+        .unwrap_or_else(|| provider.supports_native_tools() && !is_small_model_for_native_tools(model))
         && !tool_specs.is_empty();
     let turn_id = Uuid::new_v4().to_string();
     let mut seen_tool_signatures: HashSet<(String, String)> = HashSet::new();

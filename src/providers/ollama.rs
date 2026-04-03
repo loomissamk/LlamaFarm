@@ -525,6 +525,205 @@ impl OllamaProvider {
     fn parse_content_tool_calls(&self, content: &str) -> Vec<ToolCall> {
         self.parse_content_tool_response(content).1
     }
+
+    // ── Embeddings ───────────────────────────────────────────────
+
+    /// Generate embeddings for `text` using the given Ollama model.
+    ///
+    /// Calls `POST /api/embeddings`. Returns a flat `Vec<f32>` embedding vector.
+    pub async fn embed(&self, model: &str, text: &str) -> anyhow::Result<Vec<f32>> {
+        #[derive(serde::Serialize)]
+        struct EmbedRequest<'a> {
+            model: &'a str,
+            prompt: &'a str,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct EmbedResponse {
+            embedding: Vec<f32>,
+        }
+
+        let url = format!("{}/api/embeddings", self.base_url);
+        let client = self.http_client();
+        let body = EmbedRequest { model, prompt: text };
+
+        let resp = client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<EmbedResponse>()
+            .await?;
+
+        Ok(resp.embedding)
+    }
+
+    // ── Model management ─────────────────────────────────────────
+
+    /// Pull a model from the Ollama registry (`POST /api/pull`).
+    ///
+    /// Streams progress lines until the pull is complete. Returns the final
+    /// status string (typically `"success"`).
+    pub async fn pull_model(&self, model: &str) -> anyhow::Result<String> {
+        #[derive(serde::Serialize)]
+        struct PullRequest<'a> {
+            name: &'a str,
+            stream: bool,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct PullStatus {
+            status: String,
+        }
+
+        let url = format!("{}/api/pull", self.base_url);
+        let client = self.http_client();
+        let body = PullRequest { name: model, stream: true };
+
+        let mut response = client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?;
+
+        let mut last_status = String::from("unknown");
+        while let Some(chunk) = response.chunk().await? {
+            let text = String::from_utf8_lossy(&chunk);
+            for line in text.lines() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                if let Ok(status) = serde_json::from_str::<PullStatus>(line) {
+                    last_status = status.status;
+                }
+            }
+        }
+
+        Ok(last_status)
+    }
+
+    /// Show metadata for an installed model (`POST /api/show`).
+    ///
+    /// Returns a `ModelInfo` containing context length, family, parameter size,
+    /// quantization level, and supported capabilities.
+    pub async fn show_model(&self, model: &str) -> anyhow::Result<OllamaModelInfo> {
+        #[derive(serde::Serialize)]
+        struct ShowRequest<'a> {
+            name: &'a str,
+        }
+
+        let url = format!("{}/api/show", self.base_url);
+        let client = self.http_client();
+        let body = ShowRequest { name: model };
+
+        let info = client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<OllamaModelInfo>()
+            .await?;
+
+        Ok(info)
+    }
+
+    /// List all locally installed models (`GET /api/tags`).
+    ///
+    /// Returns a `Vec<OllamaModelEntry>` with name, size, and details.
+    pub async fn list_models(&self) -> anyhow::Result<Vec<OllamaModelEntry>> {
+        #[derive(serde::Deserialize)]
+        struct TagsResponse {
+            models: Vec<OllamaModelEntry>,
+        }
+
+        let url = format!("{}/api/tags", self.base_url);
+        let client = self.http_client();
+
+        let resp = client
+            .get(&url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<TagsResponse>()
+            .await?;
+
+        Ok(resp.models)
+    }
+}
+
+// ── Public Ollama model metadata types ───────────────────────────────────────
+
+/// Metadata returned by `POST /api/show` for an installed Ollama model.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct OllamaModelInfo {
+    /// Model file template (optional).
+    #[serde(default)]
+    pub template: Option<String>,
+    /// Model parameters metadata.
+    #[serde(default)]
+    pub details: OllamaModelDetails,
+    /// Model info from modelfile (parameter size, context length, etc).
+    #[serde(default)]
+    pub model_info: std::collections::HashMap<String, serde_json::Value>,
+}
+
+impl OllamaModelInfo {
+    /// Extract the context window size from model_info, falling back to 4096.
+    pub fn context_length(&self) -> u64 {
+        // Common keys across model families
+        for key in &[
+            "llama.context_length",
+            "qwen2.context_length",
+            "mistral.context_length",
+            "phi3.context_length",
+            "gemma.context_length",
+            "gemma3.context_length",
+            "gemma4.context_length",
+            "context_length",
+        ] {
+            if let Some(v) = self.model_info.get(*key) {
+                if let Some(n) = v.as_u64() {
+                    return n;
+                }
+            }
+        }
+        4096
+    }
+
+    /// Whether this model supports native vision inputs.
+    pub fn supports_vision(&self) -> bool {
+        self.details
+            .families
+            .iter()
+            .any(|f| f.contains("clip") || f.contains("vision") || f.contains("llava"))
+    }
+}
+
+/// Details block returned by Ollama model listing and show endpoints.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct OllamaModelDetails {
+    #[serde(default)]
+    pub parameter_size: String,
+    #[serde(default)]
+    pub quantization_level: String,
+    #[serde(default)]
+    pub family: String,
+    #[serde(default)]
+    pub families: Vec<String>,
+}
+
+/// A single model entry from `GET /api/tags`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct OllamaModelEntry {
+    pub name: String,
+    #[serde(default)]
+    pub size: u64,
+    #[serde(default)]
+    pub details: OllamaModelDetails,
 }
 
 #[async_trait]

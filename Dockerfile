@@ -76,7 +76,7 @@ workspace_dir = "/llamafarm-data/workspace"
 config_path = "/llamafarm-data/.llamafarm/config.toml"
 api_url = "http://host.docker.internal:11434"
 default_provider = "ollama"
-default_model = "qwen3.5:9b"
+default_model = "qwen3-coder:30b"
 default_temperature = 0.7
 
 [gateway]
