@@ -691,6 +691,35 @@ pub(super) fn normalize_shell_arguments(
     arguments: serde_json::Value,
     raw_string_hint: Option<&str>,
 ) -> serde_json::Value {
+    fn command_from_shell_alias(value: &str) -> Option<String> {
+        if let Some(command) = normalize_shell_command_from_raw(value) {
+            return Some(command);
+        }
+
+        let parsed = serde_json::from_str::<serde_json::Value>(value.trim()).ok()?;
+        match parsed {
+            serde_json::Value::String(raw) => normalize_shell_command_from_raw(&raw),
+            serde_json::Value::Object(map) => [
+                "command",
+                "cmd",
+                "script",
+                "shell_command",
+                "command_line",
+                "bash",
+                "sh",
+                "input",
+                "hint",
+            ]
+            .iter()
+            .find_map(|key| {
+                map.get(*key)
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(normalize_shell_command_from_raw)
+            }),
+            _ => None,
+        }
+    }
+
     match arguments {
         serde_json::Value::Object(mut map) => {
             if let Some(command) = map
@@ -703,6 +732,7 @@ pub(super) fn normalize_shell_arguments(
             }
 
             for alias in [
+                "hint",
                 "cmd",
                 "script",
                 "shell_command",
@@ -712,7 +742,7 @@ pub(super) fn normalize_shell_arguments(
                 "input",
             ] {
                 if let Some(value) = map.get(alias).and_then(|v| v.as_str()) {
-                    if let Some(command) = normalize_shell_command_from_raw(value) {
+                    if let Some(command) = command_from_shell_alias(value) {
                         map.insert("command".to_string(), serde_json::Value::String(command));
                         return serde_json::Value::Object(map);
                     }
@@ -4920,6 +4950,32 @@ mod tests {
             json!({
                 "path": "add.py",
                 "content": "add two numbers"
+            })
+        );
+    }
+
+    #[test]
+    fn normalize_shell_arguments_recovers_command_from_hint_alias() {
+        assert_eq!(
+            normalize_tool_arguments("shell", json!({ "hint": "lsusb" }), None),
+            json!({
+                "hint": "lsusb",
+                "command": "lsusb"
+            })
+        );
+    }
+
+    #[test]
+    fn normalize_shell_arguments_recovers_command_from_json_encoded_hint() {
+        assert_eq!(
+            normalize_tool_arguments(
+                "shell",
+                json!({ "hint": r#"{"command":"lsusb","working_directory":"/root"}"# }),
+                None
+            ),
+            json!({
+                "hint": r#"{"command":"lsusb","working_directory":"/root"}"#,
+                "command": "lsusb"
             })
         );
     }

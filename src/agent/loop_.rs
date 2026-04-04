@@ -1369,6 +1369,12 @@ fn looks_like_failed_tool_followthrough(text: &str, records: &[FailedToolRecord]
         .iter()
         .any(|needle| lowered.contains(needle)),
         "shell" => [
+            "i need a command to execute",
+            "need a command to execute",
+            "i need a command",
+            "need a command",
+            "please provide a command",
+            "provide a command to execute",
             "would you like me to create it first",
             "would you like me to write it first",
             "please provide the correct path",
@@ -6737,6 +6743,19 @@ mod tests {
             }),
             "loop should inject shell-specific repair guidance after placeholder-path failures"
         );
+    }
+
+    #[test]
+    fn failed_shell_followthrough_detects_missing_command_prompt() {
+        let records = vec![FailedToolRecord {
+            name: "shell".to_string(),
+            output: "Error executing shell: Missing 'command' parameter".to_string(),
+        }];
+
+        assert!(looks_like_failed_tool_followthrough(
+            "I need a command to execute.",
+            &records
+        ));
     }
 
     #[tokio::test]
