@@ -25,6 +25,7 @@ use std::time::Duration;
 use tokio::io::AsyncReadExt;
 
 use crate::security::SecurityPolicy;
+use crate::security::{NoopSandbox, Sandbox};
 use super::traits::{Tool, ToolResult};
 
 /// Maximum output bytes per stream.
@@ -37,17 +38,31 @@ pub struct DockerTool {
     security: Arc<SecurityPolicy>,
     /// `"docker"` or `"podman"`.
     runtime: String,
+    sandbox: Arc<dyn Sandbox>,
 }
 
 impl DockerTool {
     pub fn new(security: Arc<SecurityPolicy>) -> Self {
-        Self::new_with_runtime(security, "docker")
+        Self::new_with_runtime_and_sandbox(security, "docker", Arc::new(NoopSandbox))
+    }
+
+    pub fn new_with_sandbox(security: Arc<SecurityPolicy>, sandbox: Arc<dyn Sandbox>) -> Self {
+        Self::new_with_runtime_and_sandbox(security, "docker", sandbox)
     }
 
     pub fn new_with_runtime(security: Arc<SecurityPolicy>, runtime: &str) -> Self {
+        Self::new_with_runtime_and_sandbox(security, runtime, Arc::new(NoopSandbox))
+    }
+
+    pub fn new_with_runtime_and_sandbox(
+        security: Arc<SecurityPolicy>,
+        runtime: &str,
+        sandbox: Arc<dyn Sandbox>,
+    ) -> Self {
         Self {
             security,
             runtime: runtime.to_string(),
+            sandbox,
         }
     }
 }
@@ -309,7 +324,7 @@ impl DockerTool {
                 // Use podman-compose
                 let mut cmd = tokio::process::Command::new("podman-compose");
                 cmd.args(&sub_args[1..]);
-                return Self::collect_output(cmd, timeout_secs).await;
+                return Self::collect_output(cmd, timeout_secs, self.sandbox.as_ref()).await;
             }
             full_args[0] = "podman".to_string();
         }
@@ -318,16 +333,24 @@ impl DockerTool {
         let program = full_args.remove(0);
         let mut cmd = tokio::process::Command::new(program);
         cmd.args(&full_args);
-        Self::collect_output(cmd, timeout_secs).await
+        Self::collect_output(cmd, timeout_secs, self.sandbox.as_ref()).await
     }
 
     async fn collect_output(
         mut cmd: tokio::process::Command,
         timeout_secs: u64,
+        sandbox: &dyn Sandbox,
     ) -> anyhow::Result<ToolResult> {
         use std::process::Stdio;
 
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+        if let Err(e) = sandbox.wrap_command(cmd.as_std_mut()) {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!("Failed to apply {} sandbox: {e}", sandbox.name())),
+            });
+        }
 
         let mut child = match cmd.spawn() {
             Ok(c) => c,

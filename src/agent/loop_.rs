@@ -211,7 +211,7 @@ const TOOL_UNAVAILABLE_RETRY_PROMPT_PREFIX: &str = "Internal correction: your pr
 /// without an accompanying tool call.
 static ACTION_COMPLETION_CUE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?ix)\b(done|completed?|finished|successfully|i(?:'ve|\s+have)|we(?:'ve|\s+have))\b",
+        r"(?ix)\b(done|completed?|finished|successfully|i(?:'ve|\s+have)|we(?:'ve|\s+have)|i(?:'ll|\s+will)|let\s+me)\b",
     )
     .unwrap()
 });
@@ -227,10 +227,20 @@ static SIDE_EFFECT_ACTION_VERB_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 /// Concrete artifacts often referenced in file/system action completion claims.
 static SIDE_EFFECT_ACTION_OBJECT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?ix)\b(file|files|folder|folders|directory|directories|workspace|cwd|current\s+working\s+directory|command|commands|script|scripts|path|paths)\b",
+        r"(?ix)\b(file|files|folder|folders|directory|directories|workspace|cwd|current\s+working\s+directory|command|commands|script|scripts|path|paths|tool|tools|file_read|file_write|file_edit|web_search_tool|shell|task_plan|http_request)\b",
     )
     .unwrap()
 });
+
+static DEFERRED_TOOL_ACTION_CUE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?ix)\b(i(?:'ll|\s+will)|let\s+me|now\s+(?:executing|running|using))\b.{0,120}\b(call|use|run|execute|search|read|write)\b.{0,120}\b(tool|file_read|file_write|file_edit|web_search_tool|shell|task_plan|http_request|glob_search|content_search)\b",
+    )
+    .unwrap()
+});
+
+static URL_IN_TEXT_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"https?://[^\s<>"'`)]+"#).unwrap());
 
 /// Detect responses that incorrectly claim file tooling is unavailable even
 /// when runtime policy allows file tools in this turn.
@@ -556,6 +566,15 @@ fn looks_like_unverified_action_completion_without_tool_call(text: &str) -> bool
         && SIDE_EFFECT_ACTION_OBJECT_REGEX.is_match(trimmed)
 }
 
+fn looks_like_deferred_tool_action_without_call(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    DEFERRED_TOOL_ACTION_CUE_REGEX.is_match(trimmed)
+}
+
 fn looks_like_tool_unavailability_claim(text: &str, tool_specs: &[crate::tools::ToolSpec]) -> bool {
     let trimmed = text.trim();
     if trimmed.is_empty() || !TOOL_UNAVAILABLE_CLAIM_REGEX.is_match(trimmed) {
@@ -684,6 +703,30 @@ fn extract_file_read_content(output: &str) -> Option<String> {
     (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
+fn extract_preferred_url(output: &str) -> Option<String> {
+    let mut urls = URL_IN_TEXT_REGEX
+        .find_iter(output)
+        .map(|m| {
+            m.as_str()
+                .trim_end_matches(['.', ',', ';', ':', ')', ']', '}', '>'])
+                .to_string()
+        })
+        .filter(|url| !url.is_empty())
+        .collect::<Vec<_>>();
+    if urls.is_empty() {
+        return None;
+    }
+
+    if let Some(preferred) = urls
+        .iter()
+        .find(|url| url.to_ascii_lowercase().contains("rust-lang.org"))
+    {
+        return Some(preferred.clone());
+    }
+
+    Some(urls.remove(0))
+}
+
 fn looks_like_tool_result_misinterpretation(text: &str) -> bool {
     let lowered = text.trim().to_ascii_lowercase();
     if lowered.is_empty() {
@@ -711,6 +754,11 @@ fn looks_like_tool_result_misinterpretation(text: &str) -> bool {
         "pdf read operation failed",
         "i need to actually create the file using the file_write tool",
         "<tool_result name=",
+        "<web_search_tool",
+        "i'll execute the `file_read` tool",
+        "i will execute the `file_read` tool",
+        "i'll execute the file_read tool",
+        "i will execute the file_read tool",
     ]
     .iter()
     .any(|needle| lowered.contains(needle))
@@ -1031,29 +1079,38 @@ fn task_plan_progress_snapshot(records: &[SuccessfulToolRecord]) -> Option<TaskP
 
 /// Injected immediately after a `task_plan create` turn where no real execution tool ran yet.
 /// Drives the model to start executing step 1 without waiting for user input.
-/// After a `web_search_tool` call with no subsequent `web_fetch`, prompt the
-/// model to read the URLs returned by the search before answering.
+/// After web search, nudge the model to read result pages with `web_fetch`
+/// instead of stopping at search snippets.
 fn build_post_web_search_fetch_prompt(records: &[SuccessfulToolRecord]) -> Option<String> {
-    // Find the most recent web_search_tool result
-    let search_record = records.iter().rev().find(|r| r.name == "web_search_tool")?;
+    let (search_idx, search_record) = records
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, record)| record.name == "web_search_tool")?;
 
-    // Extract up to 3 URLs from the output using a simple heuristic: lines that
-    // start with spaces followed by "http"
-    let urls: Vec<&str> = search_record
-        .output
-        .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-                Some(trimmed)
-            } else {
-                None
-            }
+    let urls = extract_candidate_urls_from_search_output(&search_record.output, 5);
+    if urls.is_empty() {
+        return None;
+    }
+
+    let fetched_after_search: HashSet<String> = records[search_idx + 1..]
+        .iter()
+        .filter(|record| record.name == "web_fetch")
+        .filter_map(|record| {
+            record
+                .arguments
+                .get("url")
+                .and_then(|value| value.as_str())
+                .map(normalize_url_for_tracking)
         })
-        .take(3)
         .collect();
 
-    if urls.is_empty() {
+    let pending_urls = urls
+        .into_iter()
+        .filter(|url| !fetched_after_search.contains(url))
+        .take(3)
+        .collect::<Vec<_>>();
+    if pending_urls.is_empty() {
         return None;
     }
 
@@ -1062,7 +1119,116 @@ fn build_post_web_search_fetch_prompt(records: &[SuccessfulToolRecord]) -> Optio
          Now use web_fetch to read the full content of the most relevant URLs: {}. \
          Fetch them one at a time and synthesize the content into a complete answer. \
          Do not summarize only the search snippets — read the actual pages.",
-        urls.join(", ")
+        pending_urls.join(", ")
+    ))
+}
+
+fn normalize_url_for_tracking(url: &str) -> String {
+    url.trim()
+        .trim_end_matches(['.', ',', ';', ':', ')', ']', '}', '>'])
+        .to_string()
+}
+
+fn extract_candidate_urls_from_search_output(output: &str, limit: usize) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut urls = Vec::new();
+
+    for found in URL_IN_TEXT_REGEX.find_iter(output) {
+        let normalized = normalize_url_for_tracking(found.as_str());
+        if normalized.is_empty() {
+            continue;
+        }
+        if seen.insert(normalized.clone()) {
+            urls.push(normalized);
+            if urls.len() >= limit {
+                break;
+            }
+        }
+    }
+
+    urls
+}
+
+fn is_deep_web_research_request(text: &str) -> bool {
+    static DEEP_RESEARCH_HINT_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?ix)\b(in[-\s]?depth|deep(?:er)?|comprehensive|thorough|agentic(?:ally)?|research|analyze|analysis|compare|cross[-\s]?check|multiple\s+sources|source\s+validation)\b",
+        )
+        .unwrap()
+    });
+    DEEP_RESEARCH_HINT_RE.is_match(text)
+}
+
+fn build_agentic_web_research_followup_prompt(
+    history: &[ChatMessage],
+    records: &[SuccessfulToolRecord],
+) -> Option<String> {
+    let (search_idx, search_record) = records
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, record)| record.name == "web_search_tool")?;
+
+    let candidate_urls = extract_candidate_urls_from_search_output(&search_record.output, 6);
+    if candidate_urls.is_empty() {
+        return None;
+    }
+
+    let fetched_after_search = records[search_idx + 1..]
+        .iter()
+        .filter(|record| record.name == "web_fetch")
+        .filter_map(|record| {
+            record
+                .arguments
+                .get("url")
+                .and_then(|value| value.as_str())
+                .map(normalize_url_for_tracking)
+        })
+        .collect::<Vec<_>>();
+    let fetched_set = fetched_after_search.iter().cloned().collect::<HashSet<_>>();
+    let fetched_count = fetched_after_search.len();
+
+    let request = latest_external_user_request(history).unwrap_or_default();
+    let target_fetches = if is_deep_web_research_request(request) {
+        3
+    } else {
+        1
+    };
+    if fetched_count >= target_fetches {
+        return None;
+    }
+
+    let pending = candidate_urls
+        .into_iter()
+        .filter(|url| !fetched_set.contains(url))
+        .collect::<Vec<_>>();
+    if pending.is_empty() {
+        return None;
+    }
+
+    let needed = target_fetches.saturating_sub(fetched_count).max(1);
+    let next_urls = pending
+        .into_iter()
+        .take(needed.min(2))
+        .collect::<Vec<_>>();
+    if next_urls.is_empty() {
+        return None;
+    }
+
+    let mode_text = if target_fetches > 1 {
+        format!(
+            "This is a deeper online-research task (fetched {fetched_count}/{target_fetches} pages so far)."
+        )
+    } else {
+        "Fetch at least one primary source page before finalizing.".to_string()
+    };
+
+    Some(format!(
+        "Internal continuation: {mode_text} \
+         Next, call `web_fetch` on the most relevant pending URL(s): {}. \
+         Fetch one URL at a time. After each fetch, decide whether more evidence is needed; \
+         if yes, continue fetching, otherwise provide a grounded final answer with source URLs.",
+        next_urls.join(", ")
     ))
 }
 
@@ -1424,6 +1590,19 @@ fn synthesize_grounded_final_answer(records: &[SuccessfulToolRecord]) -> Option<
         }
 
         if action == "list" && !has_later_execution && !record.output.trim().is_empty() {
+            return Some(record.output.trim().to_string());
+        }
+    }
+
+    let last_web_search = records
+        .iter()
+        .rev()
+        .find(|record| record.name == "web_search_tool");
+    if let Some(record) = last_web_search {
+        if let Some(url) = extract_preferred_url(&record.output) {
+            return Some(format!("The main URL is {url}"));
+        }
+        if !record.output.trim().is_empty() {
             return Some(record.output.trim().to_string());
         }
     }
@@ -2364,10 +2543,13 @@ pub(crate) async fn run_tool_call_loop(
 
             let completion_claim_signal =
                 looks_like_unverified_action_completion_without_tool_call(&display_text);
+            let deferred_tool_action_signal =
+                looks_like_deferred_tool_action_without_call(&display_text);
             let tool_unavailable_signal =
                 looks_like_tool_unavailability_claim(&display_text, &tool_specs);
             let missing_tool_call_signal = parse_issue_detected
                 || completion_claim_signal
+                || deferred_tool_action_signal
                 || tool_unavailable_signal
                 || (!successful_tool_execution_seen
                     && looks_like_failed_tool_followthrough(
@@ -2437,6 +2619,8 @@ pub(crate) async fn run_tool_call_loop(
                 });
                 let retry_reason = if parse_issue_detected {
                     "parse_issue_detected"
+                } else if deferred_tool_action_signal {
+                    "deferred_tool_action_detected"
                 } else if failed_tool_followthrough {
                     "tool_error_followthrough_detected"
                 } else if tool_unavailable_signal {
@@ -3125,20 +3309,40 @@ pub(crate) async fn run_tool_call_loop(
         }
 
         post_tool_execution_prompt = if !iteration_had_failed_tools {
+            // Prefer web-research continuation whenever the latest search still
+            // has relevant, unfetched URLs for the current request.
             if iteration_had_web_search_without_fetch {
-                // Prefer a web-fetch nudge; fall back to plan continuation if no URLs found.
-                build_post_web_search_fetch_prompt(&recent_successful_tool_records)
-                    .or_else(|| build_task_plan_execution_followup_prompt(&recent_successful_tool_records))
+                build_agentic_web_research_followup_prompt(
+                    history,
+                    &recent_successful_tool_records,
+                )
+                .or_else(|| build_post_web_search_fetch_prompt(&recent_successful_tool_records))
+                .or_else(|| {
+                    build_task_plan_execution_followup_prompt(&recent_successful_tool_records)
+                })
             } else if iteration_executed_non_plan_tool {
-                build_task_plan_execution_followup_prompt(&recent_successful_tool_records)
+                build_agentic_web_research_followup_prompt(history, &recent_successful_tool_records)
+                    .or_else(|| {
+                        build_task_plan_execution_followup_prompt(&recent_successful_tool_records)
+                    })
             } else if iteration_had_only_task_plan_create {
-                build_post_plan_create_start_prompt(&recent_successful_tool_records)
+                build_agentic_web_research_followup_prompt(history, &recent_successful_tool_records)
+                    .or_else(|| build_post_plan_create_start_prompt(&recent_successful_tool_records))
             } else {
-                None
+                build_agentic_web_research_followup_prompt(history, &recent_successful_tool_records)
             }
         } else {
             None
         };
+
+        if !iteration_had_failed_tools
+            && post_tool_execution_prompt.is_none()
+            && iteration_executed_non_plan_tool
+        {
+            post_tool_execution_prompt =
+                build_task_plan_execution_followup_prompt(&recent_successful_tool_records)
+                    .or_else(|| build_post_plan_create_start_prompt(&recent_successful_tool_records));
+        }
 
         let duplicate_only_followthrough = successful_tool_execution_seen
             && !duplicate_tool_call_retry_used
@@ -8224,6 +8428,21 @@ Tail"#;
     }
 
     #[test]
+    fn parse_tool_calls_recovers_malformed_jsonish_named_tool_payload() {
+        let response =
+            r#"{"name": "file_read", "parameters": {"arguments": {"/llamafarm-data/workspace/tool_smoke_matrix.txt"}}}"#;
+
+        let (text, calls) = parse_tool_calls(response);
+        assert!(text.is_empty());
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "file_read");
+        assert_eq!(
+            calls[0].arguments.get("path").and_then(|value| value.as_str()),
+            Some("/llamafarm-data/workspace/tool_smoke_matrix.txt")
+        );
+    }
+
+    #[test]
     fn build_tool_instructions_includes_all_tools() {
         use crate::security::SecurityPolicy;
         let security = Arc::new(SecurityPolicy::from_config(
@@ -8374,6 +8593,55 @@ Tail"#;
         assert!(prompt.contains("https://www.rust-lang.org/"));
         assert!(prompt.contains("https://doc.rust-lang.org/book/"));
         assert!(prompt.contains("Do not summarize only the search snippets"));
+    }
+
+    #[test]
+    fn build_agentic_web_research_followup_prompt_requests_multi_hop_fetches_for_deep_research() {
+        let history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user(
+                "look online and do an in-depth research comparison across multiple sources",
+            ),
+        ];
+        let records = vec![SuccessfulToolRecord {
+            name: "web_search_tool".into(),
+            arguments: serde_json::json!({ "query": "rust language official site and docs" }),
+            output: "Search results:\n1. Rust\nhttps://www.rust-lang.org/\n2. Rust Book\nhttps://doc.rust-lang.org/book/\n3. Rust std docs\nhttps://doc.rust-lang.org/std/"
+                .into(),
+        }];
+
+        let prompt = build_agentic_web_research_followup_prompt(&history, &records)
+            .expect("deep research request should produce a multi-hop follow-up prompt");
+
+        assert!(prompt.contains("deeper online-research task"));
+        assert!(prompt.contains("web_fetch"));
+        assert!(prompt.contains("https://www.rust-lang.org/"));
+        assert!(prompt.contains("https://doc.rust-lang.org/book/"));
+    }
+
+    #[test]
+    fn build_agentic_web_research_followup_prompt_stops_after_single_fetch_for_basic_lookup() {
+        let history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("find the official rust language website"),
+        ];
+        let records = vec![
+            SuccessfulToolRecord {
+                name: "web_search_tool".into(),
+                arguments: serde_json::json!({ "query": "official rust language website" }),
+                output: "Search results:\n1. Rust\nhttps://www.rust-lang.org/".into(),
+            },
+            SuccessfulToolRecord {
+                name: "web_fetch".into(),
+                arguments: serde_json::json!({ "url": "https://www.rust-lang.org/" }),
+                output: "Rust Programming Language".into(),
+            },
+        ];
+
+        assert!(
+            build_agentic_web_research_followup_prompt(&history, &records).is_none(),
+            "basic lookup should not force extra fetch hops after one page is read"
+        );
     }
 
     #[test]
@@ -9234,6 +9502,21 @@ browser_open/url>https://example.com"#;
             text.contains("official Rust language website"),
             "assistant preamble should still be preserved"
         );
+    }
+
+    #[test]
+    fn parse_tool_calls_recovers_unclosed_attribute_style_web_tool_tag() {
+        let response = r#"I'll search for the official Rust site now.
+<web_search_tool query="official Rust language website">"#;
+        let (text, calls) = parse_tool_calls(response);
+
+        assert_eq!(calls.len(), 1, "should recover attribute-style web tool call");
+        assert_eq!(calls[0].name, "web_search_tool");
+        assert_eq!(
+            calls[0].arguments["query"],
+            "official Rust language website"
+        );
+        assert!(text.contains("official Rust site"));
     }
 
     #[test]

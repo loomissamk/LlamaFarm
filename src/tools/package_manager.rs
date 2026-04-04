@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 
-use crate::security::SecurityPolicy;
+use crate::security::{NoopSandbox, Sandbox, SecurityPolicy};
 use super::traits::{Tool, ToolResult};
 
 /// Maximum output bytes per stream.
@@ -34,11 +34,16 @@ const MUTATING_OPS: &[&str] = &["install", "remove", "upgrade", "hold"];
 
 pub struct PackageManagerTool {
     security: Arc<SecurityPolicy>,
+    sandbox: Arc<dyn Sandbox>,
 }
 
 impl PackageManagerTool {
     pub fn new(security: Arc<SecurityPolicy>) -> Self {
-        Self { security }
+        Self::new_with_sandbox(security, Arc::new(NoopSandbox))
+    }
+
+    pub fn new_with_sandbox(security: Arc<SecurityPolicy>, sandbox: Arc<dyn Sandbox>) -> Self {
+        Self { security, sandbox }
     }
 }
 
@@ -140,7 +145,7 @@ impl Tool for PackageManagerTool {
             });
         }
 
-        run_command(&argv[0], &argv[1..], timeout_secs).await
+        run_command(&argv[0], &argv[1..], timeout_secs, self.sandbox.as_ref()).await
     }
 }
 
@@ -295,12 +300,20 @@ async fn run_command(
     program: &str,
     argv: &[String],
     timeout_secs: u64,
+    sandbox: &dyn Sandbox,
 ) -> anyhow::Result<ToolResult> {
     let mut cmd = tokio::process::Command::new(program);
     cmd.args(argv)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("DEBIAN_FRONTEND", "noninteractive");
+    if let Err(e) = sandbox.wrap_command(cmd.as_std_mut()) {
+        return Ok(ToolResult {
+            success: false,
+            output: String::new(),
+            error: Some(format!("Failed to apply {} sandbox: {e}", sandbox.name())),
+        });
+    }
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,

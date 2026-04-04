@@ -5,6 +5,8 @@
 
 #[cfg(all(feature = "sandbox-landlock", target_os = "linux"))]
 use landlock::{AccessFs, PathBeneath, PathFd, Ruleset, RulesetAttr, RulesetCreatedAttr};
+#[cfg(all(feature = "sandbox-landlock", target_os = "linux"))]
+use std::os::unix::process::CommandExt;
 
 use crate::security::traits::Sandbox;
 use std::path::Path;
@@ -47,8 +49,8 @@ impl LandlockSandbox {
         Self::new()
     }
 
-    /// Apply Landlock restrictions to the current process
-    fn apply_restrictions(&self) -> std::io::Result<()> {
+    /// Apply Landlock restrictions for the current child process.
+    fn apply_restrictions_for_workspace(workspace_dir: Option<&Path>) -> std::io::Result<()> {
         let mut ruleset = Ruleset::default()
             .handle_access(
                 AccessFs::ReadFile
@@ -67,7 +69,7 @@ impl LandlockSandbox {
             .map_err(|e| std::io::Error::other(e.to_string()))?;
 
         // Allow workspace directory (read/write)
-        if let Some(ref workspace) = self.workspace_dir {
+        if let Some(workspace) = workspace_dir {
             if workspace.exists() {
                 let workspace_fd =
                     PathFd::new(workspace).map_err(|e| std::io::Error::other(e.to_string()))?;
@@ -80,34 +82,21 @@ impl LandlockSandbox {
             }
         }
 
-        // Allow /tmp for general operations
-        let tmp_fd =
-            PathFd::new(Path::new("/tmp")).map_err(|e| std::io::Error::other(e.to_string()))?;
-        ruleset = ruleset
-            .add_rule(PathBeneath::new(
-                tmp_fd,
-                AccessFs::ReadFile | AccessFs::WriteFile,
-            ))
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-
-        // Allow /usr and /bin for executing commands
-        let usr_fd =
-            PathFd::new(Path::new("/usr")).map_err(|e| std::io::Error::other(e.to_string()))?;
-        ruleset = ruleset
-            .add_rule(PathBeneath::new(
-                usr_fd,
-                AccessFs::ReadFile | AccessFs::ReadDir,
-            ))
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-
-        let bin_fd =
-            PathFd::new(Path::new("/bin")).map_err(|e| std::io::Error::other(e.to_string()))?;
-        ruleset = ruleset
-            .add_rule(PathBeneath::new(
-                bin_fd,
-                AccessFs::ReadFile | AccessFs::ReadDir,
-            ))
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        // Explicit allow-list for command execution dependencies.
+        for path in ["/tmp", "/usr", "/bin", "/lib", "/lib64", "/etc", "/dev"] {
+            if !Path::new(path).exists() {
+                continue;
+            }
+            let fd = PathFd::new(Path::new(path)).map_err(|e| std::io::Error::other(e.to_string()))?;
+            let access = if path == "/tmp" {
+                AccessFs::ReadFile | AccessFs::WriteFile | AccessFs::ReadDir
+            } else {
+                AccessFs::ReadFile | AccessFs::ReadDir
+            };
+            ruleset = ruleset
+                .add_rule(PathBeneath::new(fd, access))
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
+        }
 
         // Apply the ruleset
         match ruleset.restrict_self() {
@@ -125,18 +114,14 @@ impl LandlockSandbox {
 
 #[cfg(all(feature = "sandbox-landlock", target_os = "linux"))]
 impl Sandbox for LandlockSandbox {
-    fn wrap_command(&self, _cmd: &mut std::process::Command) -> std::io::Result<()> {
-        // `restrict_self()` affects the current process and all descendants.
-        // Applying it here would permanently tighten the parent agent runtime
-        // on every command invocation and eventually degrade execution.
-        //
-        // Until we can apply restrictions in the child pre-exec path, fail
-        // closed instead of mutating the long-lived parent process.
-        let _ = &self.workspace_dir;
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "Landlock per-command wrapping is not yet supported safely; use firejail, bubblewrap, or docker backend",
-        ))
+    fn wrap_command(&self, cmd: &mut std::process::Command) -> std::io::Result<()> {
+        let workspace_dir = self.workspace_dir.clone();
+        unsafe {
+            cmd.pre_exec(move || {
+                LandlockSandbox::apply_restrictions_for_workspace(workspace_dir.as_deref())
+            });
+        }
+        Ok(())
     }
 
     fn is_available(&self) -> bool {

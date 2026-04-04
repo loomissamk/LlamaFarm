@@ -1,6 +1,6 @@
 use super::traits::{Tool, ToolResult};
 use crate::runtime::RuntimeAdapter;
-use crate::security::SecurityPolicy;
+use crate::security::{NoopSandbox, Sandbox, SecurityPolicy};
 use crate::security::SyscallAnomalyDetector;
 use async_trait::async_trait;
 use serde_json::json;
@@ -25,11 +25,25 @@ pub struct ShellTool {
     security: Arc<SecurityPolicy>,
     runtime: Arc<dyn RuntimeAdapter>,
     syscall_detector: Option<Arc<SyscallAnomalyDetector>>,
+    sandbox: Arc<dyn Sandbox>,
 }
 
 impl ShellTool {
     pub fn new(security: Arc<SecurityPolicy>, runtime: Arc<dyn RuntimeAdapter>) -> Self {
-        Self::new_with_syscall_detector(security, runtime, None)
+        Self::new_with_syscall_detector_and_sandbox(
+            security,
+            runtime,
+            None,
+            Arc::new(NoopSandbox),
+        )
+    }
+
+    pub fn new_with_sandbox(
+        security: Arc<SecurityPolicy>,
+        runtime: Arc<dyn RuntimeAdapter>,
+        sandbox: Arc<dyn Sandbox>,
+    ) -> Self {
+        Self::new_with_syscall_detector_and_sandbox(security, runtime, None, sandbox)
     }
 
     pub fn new_with_syscall_detector(
@@ -37,10 +51,25 @@ impl ShellTool {
         runtime: Arc<dyn RuntimeAdapter>,
         syscall_detector: Option<Arc<SyscallAnomalyDetector>>,
     ) -> Self {
+        Self::new_with_syscall_detector_and_sandbox(
+            security,
+            runtime,
+            syscall_detector,
+            Arc::new(NoopSandbox),
+        )
+    }
+
+    pub fn new_with_syscall_detector_and_sandbox(
+        security: Arc<SecurityPolicy>,
+        runtime: Arc<dyn RuntimeAdapter>,
+        syscall_detector: Option<Arc<SyscallAnomalyDetector>>,
+        sandbox: Arc<dyn Sandbox>,
+    ) -> Self {
         Self {
             security,
             runtime,
             syscall_detector,
+            sandbox,
         }
     }
 }
@@ -461,6 +490,16 @@ impl Tool for ShellTool {
             .unwrap_or(true)
         {
             cmd.env("SHELL", fallback_shell_env_value());
+        }
+        if let Err(e) = self.sandbox.wrap_command(cmd.as_std_mut()) {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!(
+                    "Failed to apply {} sandbox: {e}",
+                    self.sandbox.name()
+                )),
+            });
         }
 
         let result =

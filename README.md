@@ -1,11 +1,28 @@
 # LlamaFarm
 
-Local Ollama agent runtime with a web UI, bundled tools, and a one-container
-local stack option.
+LlamaFarm is an Ollama-first, local-first autonomous operator runtime for disposable lab environments.
 
-## Quick Start
+## What It Is
 
-Clone the repo and launch the bundled local stack:
+- Ollama-only model runtime (no cloud fallback required for core operation)
+- Agentic tool-use loop (plan, execute, verify, retry)
+- Hybrid local retrieval (repo/docs/logs) with citations
+- Multi-model routing + bakeoff scoring for task-specific model selection
+- `chaos_lab` execution mode for destructive sandbox experimentation
+- Full run tracing (prompts, tool calls, retries, outputs, completion state)
+
+## Disposable Target Contract
+
+LlamaFarm is designed for:
+
+- throwaway VMs
+- disposable containers
+- isolated lab hosts
+- reimageable test hardware
+
+Do not run high-autonomy/destructive workflows on shared or production systems.
+
+## Quick Start (Bundle)
 
 ```bash
 git clone https://github.com/llamafarm-labs/llamafarm.git
@@ -13,48 +30,33 @@ cd llamafarm
 ./scripts/docker/up-bundle.sh
 ```
 
-Then open:
+Open `http://127.0.0.1:42617`.
 
-```text
-http://127.0.0.1:42617
-```
+The bundle includes:
 
-What the bundled stack includes:
+1. LlamaFarm gateway/web UI
+2. Local Ollama runtime in-container
+3. Local Chromium + chromedriver
+4. Prepull support for default model set
 
-1. LlamaFarm web UI and gateway
-2. Internal Ollama runtime
-3. Internal Chromium + chromedriver
-4. Automatic model pulls for `qwen3.5:9b` and `devstral-small-2:latest`
-
-## Gaming / NVIDIA Quick Start
-
-If the machine has an NVIDIA GPU and you want to force the CUDA path:
+## NVIDIA Quick Start
 
 ```bash
-git clone https://github.com/llamafarm-labs/llamafarm.git
-cd llamafarm
 ./scripts/docker/up-bundle-nvidia.sh
 ```
 
-## Backend Selection
-
-The bundled launcher auto-detects the best backend in this order:
-
-1. NVIDIA / CUDA
-2. AMD ROCm
-3. Vulkan (`/dev/dri`)
-4. CPU
-
-You can force a backend manually:
+## Agentic Online Research Example
 
 ```bash
-LLAMAFARM_GPU_MODE=nvidia ./scripts/docker/up-bundle.sh
-LLAMAFARM_GPU_MODE=rocm ./scripts/docker/up-bundle.sh
-LLAMAFARM_GPU_MODE=vulkan ./scripts/docker/up-bundle.sh
-LLAMAFARM_GPU_MODE=cpu ./scripts/docker/up-bundle.sh
+llamafarm agent --provider ollama --model qwen3.5:9b \
+  --autonomy-level full \
+  --message "Look online and do an in-depth comparison of Rust web frameworks."
 ```
 
-## Useful Commands
+For research-style prompts, the loop can chain:
+`web_search_tool -> web_fetch -> additional fetches -> grounded synthesis`.
+
+## Useful Ops
 
 ```bash
 docker logs -f LlamaFarm
@@ -62,8 +64,9 @@ docker exec LlamaFarm ollama list
 docker exec LlamaFarm sh -lc 'tail -n 80 /tmp/ollama.log'
 ```
 
-## More Docs
+## Docs
 
+- [Architecture](docs/ARCHITECTURE.md)
 - [One-Click Bootstrap](docs/one-click-bootstrap.md)
 - [Getting Started](docs/getting-started/README.md)
 - [Docs Hub](docs/README.md)

@@ -127,7 +127,7 @@ pub use web_search_tool::WebSearchTool;
 use crate::config::{Config, DelegateAgentConfig};
 use crate::memory::Memory;
 use crate::runtime::{NativeRuntime, RuntimeAdapter};
-use crate::security::SecurityPolicy;
+use crate::security::{NoopSandbox, Sandbox, SecurityPolicy};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -178,10 +178,15 @@ pub fn default_tools_with_runtime(
 ) -> Vec<Box<dyn Tool>> {
     let has_shell_access = runtime.has_shell_access();
     let has_filesystem_access = runtime.has_filesystem_access();
+    let command_sandbox: Arc<dyn Sandbox> = Arc::new(NoopSandbox);
     let mut tools: Vec<Box<dyn Tool>> = Vec::new();
 
     if has_shell_access {
-        tools.push(Box::new(ShellTool::new(security.clone(), runtime.clone())));
+        tools.push(Box::new(ShellTool::new_with_sandbox(
+            security.clone(),
+            runtime.clone(),
+            command_sandbox.clone(),
+        )));
     }
     if has_filesystem_access {
         tools.push(Box::new(FileReadTool::new(security.clone())));
@@ -260,6 +265,7 @@ pub fn all_tools_with_runtime(
         &llamafarm_dir,
         root_config.security.audit.clone(),
     ));
+    let command_sandbox = crate::security::create_sandbox(&root_config.security);
 
     let mut tool_arcs: Vec<Arc<dyn Tool>> = vec![
         Arc::new(CronAddTool::new(config.clone(), security.clone())),
@@ -289,23 +295,34 @@ pub fn all_tools_with_runtime(
     ];
 
     if has_shell_access {
-        tool_arcs.push(Arc::new(ShellTool::new_with_syscall_detector(
+        tool_arcs.push(Arc::new(ShellTool::new_with_syscall_detector_and_sandbox(
             security.clone(),
             runtime.clone(),
             Some(syscall_detector.clone()),
+            command_sandbox.clone(),
         )));
-        tool_arcs.push(Arc::new(ProcessTool::new_with_syscall_detector(
+        tool_arcs.push(Arc::new(ProcessTool::new_with_syscall_detector_and_sandbox(
             security.clone(),
             runtime.clone(),
             Some(syscall_detector),
+            command_sandbox.clone(),
         )));
         tool_arcs.push(Arc::new(GitOperationsTool::new(
             security.clone(),
             workspace_dir.to_path_buf(),
         )));
-        tool_arcs.push(Arc::new(docker::DockerTool::new(security.clone())));
-        tool_arcs.push(Arc::new(PackageManagerTool::new(security.clone())));
-        tool_arcs.push(Arc::new(ServiceControlTool::new(security.clone())));
+        tool_arcs.push(Arc::new(docker::DockerTool::new_with_sandbox(
+            security.clone(),
+            command_sandbox.clone(),
+        )));
+        tool_arcs.push(Arc::new(PackageManagerTool::new_with_sandbox(
+            security.clone(),
+            command_sandbox.clone(),
+        )));
+        tool_arcs.push(Arc::new(ServiceControlTool::new_with_sandbox(
+            security.clone(),
+            command_sandbox.clone(),
+        )));
     }
 
     if has_filesystem_access {

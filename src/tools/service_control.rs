@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 
-use crate::security::SecurityPolicy;
+use crate::security::{NoopSandbox, Sandbox, SecurityPolicy};
 use super::traits::{Tool, ToolResult};
 
 const MAX_OUTPUT: usize = 524_288; // 512 KB
@@ -30,11 +30,16 @@ const READONLY_OPS: &[&str] = &["status", "logs", "is-active", "is-enabled", "is
 
 pub struct ServiceControlTool {
     security: Arc<SecurityPolicy>,
+    sandbox: Arc<dyn Sandbox>,
 }
 
 impl ServiceControlTool {
     pub fn new(security: Arc<SecurityPolicy>) -> Self {
-        Self { security }
+        Self::new_with_sandbox(security, Arc::new(NoopSandbox))
+    }
+
+    pub fn new_with_sandbox(security: Arc<SecurityPolicy>, sandbox: Arc<dyn Sandbox>) -> Self {
+        Self { security, sandbox }
     }
 }
 
@@ -133,7 +138,7 @@ impl Tool for ServiceControlTool {
                 lines.to_string(),
                 "--no-pager".to_string(),
             ];
-            return run_argv(&argv, timeout_secs).await;
+            return run_argv(&argv, timeout_secs, self.sandbox.as_ref()).await;
         }
 
         // Special case: list-units
@@ -144,7 +149,7 @@ impl Tool for ServiceControlTool {
                 "--no-pager".to_string(),
                 "--no-legend".to_string(),
             ];
-            return run_argv(&argv, timeout_secs).await;
+            return run_argv(&argv, timeout_secs, self.sandbox.as_ref()).await;
         }
 
         // daemon-reload doesn't need a unit name
@@ -153,7 +158,7 @@ impl Tool for ServiceControlTool {
                 "systemctl".to_string(),
                 "daemon-reload".to_string(),
             ];
-            return run_argv(&argv, timeout_secs).await;
+            return run_argv(&argv, timeout_secs, self.sandbox.as_ref()).await;
         }
 
         // All other operations require a unit name.
@@ -188,13 +193,17 @@ impl Tool for ServiceControlTool {
             v
         };
 
-        run_argv(&argv, timeout_secs).await
+        run_argv(&argv, timeout_secs, self.sandbox.as_ref()).await
     }
 }
 
 // ── Execution ──────────────────────────────────────────────────────
 
-async fn run_argv(argv: &[String], timeout_secs: u64) -> anyhow::Result<ToolResult> {
+async fn run_argv(
+    argv: &[String],
+    timeout_secs: u64,
+    sandbox: &dyn Sandbox,
+) -> anyhow::Result<ToolResult> {
     let program = &argv[0];
     let rest = &argv[1..];
 
@@ -202,6 +211,13 @@ async fn run_argv(argv: &[String], timeout_secs: u64) -> anyhow::Result<ToolResu
     cmd.args(rest)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Err(e) = sandbox.wrap_command(cmd.as_std_mut()) {
+        return Ok(ToolResult {
+            success: false,
+            output: String::new(),
+            error: Some(format!("Failed to apply {} sandbox: {e}", sandbox.name())),
+        });
+    }
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,

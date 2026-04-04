@@ -2,7 +2,7 @@ use super::shell::{build_shell_execution_plan, collect_allowed_shell_env_vars};
 use super::traits::{Tool, ToolResult};
 use crate::runtime::RuntimeAdapter;
 use crate::security::policy::ToolOperation;
-use crate::security::SecurityPolicy;
+use crate::security::{NoopSandbox, Sandbox, SecurityPolicy};
 use crate::security::SyscallAnomalyDetector;
 use async_trait::async_trait;
 use serde_json::json;
@@ -44,13 +44,27 @@ pub struct ProcessTool {
     security: Arc<SecurityPolicy>,
     runtime: Arc<dyn RuntimeAdapter>,
     syscall_detector: Option<Arc<SyscallAnomalyDetector>>,
+    sandbox: Arc<dyn Sandbox>,
     processes: Arc<RwLock<HashMap<usize, ProcessEntry>>>,
     next_id: Mutex<usize>,
 }
 
 impl ProcessTool {
     pub fn new(security: Arc<SecurityPolicy>, runtime: Arc<dyn RuntimeAdapter>) -> Self {
-        Self::new_with_syscall_detector(security, runtime, None)
+        Self::new_with_syscall_detector_and_sandbox(
+            security,
+            runtime,
+            None,
+            Arc::new(NoopSandbox),
+        )
+    }
+
+    pub fn new_with_sandbox(
+        security: Arc<SecurityPolicy>,
+        runtime: Arc<dyn RuntimeAdapter>,
+        sandbox: Arc<dyn Sandbox>,
+    ) -> Self {
+        Self::new_with_syscall_detector_and_sandbox(security, runtime, None, sandbox)
     }
 
     pub fn new_with_syscall_detector(
@@ -58,10 +72,25 @@ impl ProcessTool {
         runtime: Arc<dyn RuntimeAdapter>,
         syscall_detector: Option<Arc<SyscallAnomalyDetector>>,
     ) -> Self {
+        Self::new_with_syscall_detector_and_sandbox(
+            security,
+            runtime,
+            syscall_detector,
+            Arc::new(NoopSandbox),
+        )
+    }
+
+    pub fn new_with_syscall_detector_and_sandbox(
+        security: Arc<SecurityPolicy>,
+        runtime: Arc<dyn RuntimeAdapter>,
+        syscall_detector: Option<Arc<SyscallAnomalyDetector>>,
+        sandbox: Arc<dyn Sandbox>,
+    ) -> Self {
         Self {
             security,
             runtime,
             syscall_detector,
+            sandbox,
             processes: Arc::new(RwLock::new(HashMap::new())),
             next_id: Mutex::new(0),
         }
@@ -188,6 +217,16 @@ impl ProcessTool {
             if let Ok(val) = std::env::var(&var) {
                 cmd.env(&var, val);
             }
+        }
+        if let Err(e) = self.sandbox.wrap_command(cmd.as_std_mut()) {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!(
+                    "Failed to apply {} sandbox: {e}",
+                    self.sandbox.name()
+                )),
+            });
         }
 
         let mut child = match cmd.spawn() {

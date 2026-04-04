@@ -578,32 +578,16 @@ fn direct_shell_fallback_response(raw_output: &str, success: bool) -> String {
 
 fn describe_direct_shell_result(command: &str, raw_output: &str, success: bool) -> String {
     let base = direct_shell_fallback_response(raw_output, success);
-    let command_name = command
-        .split_whitespace()
-        .next()
-        .unwrap_or("command")
-        .trim()
-        .to_ascii_lowercase();
-    let detail = match command_name.as_str() {
-        "curl" => {
-            "This fetched data from the target endpoint. The raw HTTP or payload response is shown above."
-        }
-        "lsusb" => {
-            "This lists USB devices currently visible to the system, including bus/device IDs and vendor or product labels."
-        }
-        "lsblk" => "This lists block devices and partitions currently visible to the kernel.",
-        "lspci" => "This lists PCI devices detected on the system.",
-        "docker" | "docker-compose" => {
-            "This ran a Docker command against the local container runtime."
-        }
-        "git" => "This ran a Git command. The repository result is shown in the raw output above.",
-        _ if raw_output.trim().is_empty() => {
-            "The command finished without producing any stdout or stderr output."
-        }
-        _ => "The raw command output is shown above.",
-    };
+    if !success {
+        return format!(
+            "{base} The command returned a non-zero exit status. Inspect stderr in the raw output above."
+        );
+    }
+    if raw_output.trim().is_empty() {
+        return format!("{base} The command finished without producing visible output.");
+    }
 
-    format!("{base} {detail}")
+    format!("{base} Executed: `{command}`")
 }
 
 fn summarize_direct_shell_command(command: &str, raw_output: &str, success: bool) -> String {
@@ -696,9 +680,19 @@ fn looks_like_direct_shell_command(candidate: &str) -> bool {
         .any(|prefix| lowered == *prefix || lowered.starts_with(prefix))
 }
 
+fn has_explanatory_suffix(command: &str) -> bool {
+    static EXPLANATION_SUFFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?i)\b(?:and|then)\s+(?:explain|describe|summari[sz]e|interpret|analy[sz]e)\b",
+        )
+        .unwrap()
+    });
+    EXPLANATION_SUFFIX_RE.is_match(command)
+}
+
 fn extract_direct_shell_command(message: &str) -> Option<String> {
     let trimmed = message.trim();
-    if looks_like_direct_shell_command(trimmed) {
+    if looks_like_direct_shell_command(trimmed) && !has_explanatory_suffix(trimmed) {
         return Some(trimmed.to_string());
     }
 
@@ -717,7 +711,7 @@ fn extract_direct_shell_command(message: &str) -> Option<String> {
             .strip_prefix(prefix)
             .map(|_| trimmed[prefix.len()..].trim().trim_matches('`'))
         {
-            if looks_like_direct_shell_command(rest) {
+            if looks_like_direct_shell_command(rest) && !has_explanatory_suffix(rest) {
                 return Some(rest.to_string());
             }
         }
@@ -2509,12 +2503,46 @@ Reminder set successfully."#;
     }
 
     #[test]
+    fn extract_direct_shell_command_rejects_command_plus_explanation_suffix() {
+        assert_eq!(
+            extract_direct_shell_command("run lsusb and explain all the results"),
+            None
+        );
+        assert_eq!(
+            extract_direct_shell_command("lsblk then summarize"),
+            None
+        );
+    }
+
+    #[test]
     fn extract_direct_shell_command_rejects_normal_chat_text() {
         assert_eq!(extract_direct_shell_command("How are you today?"), None);
         assert_eq!(
             extract_direct_shell_command("Please explain what curl does."),
             None
         );
+    }
+
+    #[test]
+    fn describe_direct_shell_result_failure_is_not_misleading() {
+        let summary = describe_direct_shell_result(
+            "lsusb and explain all the results",
+            "Usage: lsusb [options]...",
+            false,
+        );
+        assert!(summary.contains("Command failed"));
+        assert!(summary.contains("non-zero exit status"));
+    }
+
+    #[test]
+    fn describe_direct_shell_result_is_generic_and_non_hardcoded() {
+        let output = "Bus 001 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub\n\
+Bus 003 Device 003: ID 04f2:b809 Chicony Electronics Co., Ltd HP True Vision FHD Camera\n\
+Bus 003 Device 004: ID 8087:0033 Intel Corp.";
+        let summary = describe_direct_shell_result("lsusb", output, true);
+        assert!(summary.contains("Command completed successfully"));
+        assert!(summary.contains("Executed: `lsusb`"));
+        assert!(!summary.contains("This lists USB devices"));
     }
 
     #[test]
@@ -2636,6 +2664,10 @@ Reminder set successfully."#;
                     name: Some("gemma3:1b".to_string()),
                 })
             ))
+        );
+        assert_eq!(
+            classify_direct_intent("run lsusb and explain all the results"),
+            None
         );
     }
 }
