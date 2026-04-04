@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import {
+  Network,
   BookText,
   FolderOpen,
   LayoutDashboard,
@@ -17,6 +18,7 @@ import { t } from '@/lib/i18n';
 const navItems = [
   { to: '/', icon: LayoutDashboard, labelKey: 'nav.dashboard' },
   { to: '/agent', icon: MessageSquare, labelKey: 'nav.agent' },
+  { to: '/federation', icon: Network, labelKey: 'nav.federation' },
   { to: '/tools', icon: Wrench, labelKey: 'nav.tools' },
   { to: '/cron', icon: Clock, labelKey: 'nav.cron' },
   { to: '/integrations', icon: Puzzle, labelKey: 'nav.integrations' },

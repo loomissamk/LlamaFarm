@@ -1206,7 +1206,7 @@ fn default_federation_peer_timeout_seconds() -> u64 {
 impl Default for FederationConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             node_name: default_federation_node_name(),
             api_port: None,
             discovery_mode: FederationDiscoveryMode::default(),

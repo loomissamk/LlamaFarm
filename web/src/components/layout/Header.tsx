@@ -4,6 +4,7 @@ import { t } from '@/lib/i18n';
 const routeTitles: Record<string, string> = {
   '/': 'nav.dashboard',
   '/agent': 'nav.agent',
+  '/federation': 'nav.federation',
   '/tools': 'nav.tools',
   '/cron': 'nav.cron',
   '/integrations': 'nav.integrations',

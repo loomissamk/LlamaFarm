@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import Layout from './components/layout/Layout';
 import Dashboard from './pages/Dashboard';
 import AgentChat from './pages/AgentChat';
+import FederationPage from './pages/Federation';
 import Tools from './pages/Tools';
 import Cron from './pages/Cron';
 import Integrations from './pages/Integrations';
@@ -18,6 +19,7 @@ export default function App() {
       <Route element={<Layout />}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/agent" element={<AgentChat />} />
+        <Route path="/federation" element={<FederationPage />} />
         <Route path="/tools" element={<Tools />} />
         <Route path="/cron" element={<Cron />} />
         <Route path="/integrations" element={<Integrations />} />

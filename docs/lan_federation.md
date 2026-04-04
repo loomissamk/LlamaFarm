@@ -6,16 +6,14 @@ This is intentionally lightweight:
 - no pairing workflow between nodes
 - no trust prompts or approval codes
 - no second subagent framework
-- current single-node behavior stays local when federation is disabled
+- current single-node behavior still stays local when no peers are present
 
 ## Behavior
 
-- `LLAMAFARM_FEDERATION_ENABLED=false`
-  Current local-only behavior stays unchanged.
 - `LLAMAFARM_FEDERATION_ENABLED=true` with no peers discovered
   The node still works normally and runs chats locally.
 - `LLAMAFARM_FEDERATION_ENABLED=true` with peers discovered
-  The chat UI shows LAN peers, their status, model/tool summaries, and role assignment controls.
+  The federation page shows LAN peers, their status, model/tool summaries, and role assignment controls.
 
 Remote workers execute their own local model and their own local tools. The master node only receives streamed task events and the final result.
 
@@ -38,12 +36,12 @@ LLAMAFARM_ALLOW_REMOTE_SUBAGENTS=true
 Notes:
 - `LLAMAFARM_DISCOVERY_MODE=mdns` enables DNS-SD advertisement and discovery on the LAN.
 - `LLAMAFARM_DISCOVERY_MODE=manual` disables mDNS browsing and uses `LLAMAFARM_MANUAL_PEERS`.
-- `LLAMAFARM_DEFAULT_ROLE` sets the initial role shown in the federation panel.
+- `LLAMAFARM_DEFAULT_ROLE` sets the initial role shown in the federation page.
 - `LLAMAFARM_ALLOW_REMOTE_SUBAGENTS=false` keeps peer discovery visible but refuses remote task execution on that node.
 
 ## UI
 
-The existing chat page adds a small federation section:
+The web UI now exposes federation in its own sidebar page:
 - discovered peers
 - online or offline status
 - node name
@@ -53,6 +51,13 @@ The existing chat page adds a small federation section:
 - assigned role: `master`, `worker`, `both`, `disabled`
 - per-chat worker selection
 - streamed remote task status/output cards
+
+The chat page keeps only a compact federation status strip at the top with:
+- federation enabled or disabled
+- online peer count
+- selected worker count for the active chat
+- recent remote task count
+- a link to the federation page
 
 Selecting zero workers keeps the chat local.
 
@@ -101,7 +106,7 @@ export LLAMAFARM_DEFAULT_ROLE=worker
 export LLAMAFARM_ALLOW_REMOTE_SUBAGENTS=true
 ```
 
-Start LlamaFarm on both nodes. Open the web UI on node A. Node B should appear automatically in the federation panel.
+Start LlamaFarm on both nodes. Open the web UI on node A. Node B should appear automatically on the Federation page.
 
 ### Manual peer fallback
 
@@ -126,7 +131,7 @@ export LLAMAFARM_MANUAL_PEERS=http://192.168.1.10:42617
 ## Docker Notes
 
 For cross-machine federation with Docker Compose:
-- bind the gateway to the LAN, for example `HOST_BIND_IP=0.0.0.0`
+- the compose files now default to `HOST_BIND_IP=0.0.0.0`
 - keep `LLAMAFARM_GATEWAY_PORT` and `LLAMAFARM_API_PORT` aligned
 - if mDNS does not traverse your container/network setup, use `LLAMAFARM_DISCOVERY_MODE=manual`
 
@@ -162,6 +167,8 @@ Main areas touched for this feature:
 - `src/tools/subagent_spawn.rs`
   Remote background subagent execution through the existing subagent flow.
 - `web/src/pages/AgentChat.tsx`
-  Minimal federation panel and remote task cards.
+  Compact federation status strip for the active chat.
+- `web/src/pages/Federation.tsx`
+  Dedicated federation page for node hierarchy, routing, and remote task history.
 - `docker-compose.yml`, `docker-compose.bundle.yml`, `.env.example`
   Minimal operator config for LAN federation.
