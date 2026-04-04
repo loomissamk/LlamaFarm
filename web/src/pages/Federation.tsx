@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Activity,
@@ -6,12 +6,14 @@ import {
   CheckCircle2,
   Cpu,
   Network,
+  Plus,
   RefreshCw,
   Server,
+  TriangleAlert,
   Wrench,
   XCircle,
 } from 'lucide-react';
-import { getFederationPeers, updateFederationPeerRole } from '@/lib/api';
+import { addFederationManualPeer, getFederationPeers, updateFederationPeerRole } from '@/lib/api';
 import {
   loadFederationPeerSelections,
   loadFederationTasksBySession,
@@ -72,10 +74,19 @@ function peerStatusClasses(peer: FederationPeerSummary): string {
     : 'border border-gray-700 bg-gray-800 text-gray-400';
 }
 
+function isLocalhostBind(host: string): boolean {
+  const h = host.trim().toLowerCase();
+  return h === '127.0.0.1' || h === 'localhost' || h === '::1' || h === '';
+}
+
 export default function FederationPage() {
   const [federation, setFederation] = useState<FederationPeersResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [manualPeerInput, setManualPeerInput] = useState('');
+  const [addingPeer, setAddingPeer] = useState(false);
+  const [addPeerError, setAddPeerError] = useState<string | null>(null);
+  const manualPeerRef = useRef<HTMLInputElement>(null);
   const [selectedPeerIdsBySession, setSelectedPeerIdsBySession] = useState<
     Record<string, string[]>
   >(() => loadFederationPeerSelections());
@@ -436,6 +447,82 @@ export default function FederationPage() {
                 </code>
                 {' '}
                 and restart if you want LAN discovery and remote delegation on this node.
+              </div>
+            )}
+
+            {enabled && !loading && federation?.local_node && isLocalhostBind(federation.local_node.gateway_host) && (
+              <div className="mt-4 rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-200">
+                <div className="flex items-start gap-2">
+                  <TriangleAlert className="mt-0.5 h-4 w-4 flex-shrink-0 text-yellow-400" />
+                  <div className="space-y-1.5">
+                    <p className="font-semibold">Gateway bound to localhost — LAN peers cannot connect</p>
+                    <p className="text-xs text-yellow-300/80">
+                      mDNS will discover peers but they will fail to reach this node at{' '}
+                      <code className="rounded bg-gray-950 px-1 text-yellow-100">127.0.0.1:{federation.local_node.api_port}</code>.
+                      Add this to your <code className="rounded bg-gray-950 px-1 text-yellow-100">config.toml</code> on{' '}
+                      <strong>both</strong> machines and restart:
+                    </p>
+                    <pre className="mt-1 rounded-lg border border-gray-700 bg-gray-950 p-2 text-xs text-emerald-300 select-all">
+{`[gateway]
+host = "0.0.0.0"
+allow_public_bind = true`}
+                    </pre>
+                    <p className="text-xs text-yellow-300/60">
+                      Or add each node as a manual peer below to bypass mDNS entirely.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {enabled && (
+              <div className="mt-4">
+                <p className="mb-2 text-[11px] uppercase tracking-wide text-gray-500">Add peer manually</p>
+                <form
+                  className="flex gap-2"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const endpoint = manualPeerInput.trim();
+                    if (!endpoint) return;
+                    setAddingPeer(true);
+                    setAddPeerError(null);
+                    void addFederationManualPeer(endpoint)
+                      .then(() => {
+                        setManualPeerInput('');
+                        manualPeerRef.current?.focus();
+                        return getFederationPeers();
+                      })
+                      .then((response) => {
+                        setFederation(response);
+                      })
+                      .catch(() => {
+                        setAddPeerError('Failed to add peer — check the address and try again.');
+                      })
+                      .finally(() => {
+                        setAddingPeer(false);
+                      });
+                  }}
+                >
+                  <input
+                    ref={manualPeerRef}
+                    type="text"
+                    value={manualPeerInput}
+                    onChange={(e) => setManualPeerInput(e.target.value)}
+                    placeholder="192.168.1.154:42617 or http://host:port"
+                    className="min-w-0 flex-1 rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white placeholder-gray-600 focus:border-cyan-500 focus:outline-none"
+                  />
+                  <button
+                    type="submit"
+                    disabled={addingPeer || !manualPeerInput.trim()}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-sm font-medium text-cyan-200 transition-colors hover:border-cyan-400 hover:text-white disabled:opacity-50"
+                  >
+                    <Plus className="h-4 w-4" />
+                    {addingPeer ? 'Adding…' : 'Add'}
+                  </button>
+                </form>
+                {addPeerError && (
+                  <p className="mt-1.5 text-xs text-red-400">{addPeerError}</p>
+                )}
               </div>
             )}
           </div>

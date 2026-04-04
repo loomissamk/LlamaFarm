@@ -154,6 +154,13 @@ export function updateFederationPeerRole(
   );
 }
 
+export function addFederationManualPeer(endpoint: string): Promise<{ status: string; base_url: string }> {
+  return apiFetch('/api/federation/peers', {
+    method: 'POST',
+    body: JSON.stringify({ endpoint }),
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------

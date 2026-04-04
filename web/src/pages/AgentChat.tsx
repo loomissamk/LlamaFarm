@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
 import {
   AlertCircle,
   Bot,
@@ -1169,12 +1168,12 @@ export default function AgentChat() {
       </aside>
 
       <section className="flex min-h-0 flex-col">
-        <div className="border-b border-gray-800 bg-gray-950 px-4 py-3">
+        <div className="border-b border-gray-800 bg-gray-950 px-4 py-2">
           <div className="flex items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-3">
+            <div className="flex min-w-0 items-center gap-2">
               <button
                 onClick={() => setSidebarCollapsed((prev) => !prev)}
-                className="inline-flex h-10 items-center gap-2 rounded-lg border border-gray-700 px-3 text-sm text-gray-300 transition-colors hover:bg-gray-900 hover:text-white"
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-gray-700 px-2.5 text-sm text-gray-300 transition-colors hover:bg-gray-900 hover:text-white"
                 title={sidebarCollapsed ? 'Show chat history' : 'Hide chat history'}
               >
                 {sidebarCollapsed ? (
@@ -1182,21 +1181,14 @@ export default function AgentChat() {
                 ) : (
                   <PanelLeftClose className="h-4 w-4" />
                 )}
-                <span className="hidden sm:inline">
+                <span className="hidden sm:inline text-xs">
                   {sidebarCollapsed ? 'Show history' : 'Hide history'}
                 </span>
               </button>
 
-              <div className="min-w-0">
-                <h2 className="truncate text-lg font-semibold text-white">
-                  {activeSession?.title ?? 'Agent Chat'}
-                </h2>
-                <p className="mt-1 text-xs text-gray-500">
-                  {activeSession?.temporary
-                    ? 'Temporary chat with isolated backend session context.'
-                    : 'Saved local chat with reusable backend session context.'}
-                </p>
-              </div>
+              <h2 className="truncate text-sm font-semibold text-white">
+                {activeSession?.title ?? 'Agent Chat'}
+              </h2>
             </div>
             <div className="flex items-center gap-2">
               {streaming && tps > 0 && (
@@ -1221,31 +1213,22 @@ export default function AgentChat() {
           </div>
         )}
 
-        <div className="border-b border-gray-800 bg-gray-950/70 px-4 py-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-white">
-              <Network className="h-4 w-4 flex-shrink-0 text-cyan-400" />
-              <span>Federation</span>
-              <span
-                className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${
-                  federationEnabled
-                    ? 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
-                    : 'border border-amber-500/30 bg-amber-500/10 text-amber-300'
-                }`}
-              >
-                {federationEnabled ? 'enabled' : 'disabled'}
-              </span>
-              {federationLoading && (
-                <span className="text-xs font-normal text-gray-500">checking peers...</span>
-              )}
-            </div>
-
-            <Link
-              to="/federation"
-              className="inline-flex items-center gap-2 rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-sm font-medium text-cyan-200 transition-colors hover:border-cyan-400 hover:text-white"
+        <div className="border-b border-gray-800 bg-gray-950/70 px-4 py-2">
+          <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-white">
+            <Network className="h-4 w-4 flex-shrink-0 text-cyan-400" />
+            <span>Federation</span>
+            <span
+              className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+                federationEnabled
+                  ? 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                  : 'border border-amber-500/30 bg-amber-500/10 text-amber-300'
+              }`}
             >
-              Open federation
-            </Link>
+              {federationEnabled ? 'enabled' : 'disabled'}
+            </span>
+            {federationLoading && (
+              <span className="text-xs font-normal text-gray-500">checking peers...</span>
+            )}
           </div>
 
           <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-gray-400">

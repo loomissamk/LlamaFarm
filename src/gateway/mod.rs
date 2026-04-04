@@ -893,7 +893,7 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .route("/api/cost", get(api::handle_api_cost))
         .route("/api/cli-tools", get(api::handle_api_cli_tools))
         .route("/api/health", get(api::handle_api_health))
-        .route("/api/federation/peers", get(api::handle_api_federation_peers))
+        .route("/api/federation/peers", get(api::handle_api_federation_peers).post(api::handle_api_federation_peer_add))
         .route(
             "/api/federation/peers/{peer_id}/role",
             put(api::handle_api_federation_peer_role_put),

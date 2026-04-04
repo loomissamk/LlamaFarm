@@ -104,6 +104,7 @@ impl FederationService {
             allow_remote_subagents: local.allow_remote_subagents,
             discovery_mode: local.discovery_mode,
             service_name: local.service_name.clone(),
+            gateway_host: String::new(),
         }
     }
 

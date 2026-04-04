@@ -123,12 +123,16 @@ fn fallback_local_federation_summary(state: &AppState) -> FederationLocalNodeSum
         allow_remote_subagents: config.federation.allow_remote_subagents,
         discovery_mode: config.federation.discovery_mode,
         service_name: config.federation.service_name,
+        gateway_host: config.gateway.host,
     }
 }
 
 fn build_federation_peers_response(state: &AppState) -> FederationPeersResponse {
+    let gateway_host = state.config.lock().gateway.host.clone();
     if let Some(federation) = &state.federation {
-        federation.peers_response()
+        let mut response = federation.peers_response();
+        response.local_node.gateway_host = gateway_host;
+        response
     } else {
         FederationPeersResponse {
             enabled: false,
@@ -604,6 +608,11 @@ pub struct MemoryClearBody {
 #[derive(Debug, Deserialize)]
 pub struct FederationPeerRoleUpdateBody {
     pub role: FederationRole,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FederationAddManualPeerBody {
+    pub endpoint: String,
 }
 
 #[derive(Deserialize)]
@@ -2302,6 +2311,41 @@ pub async fn handle_api_federation_peer_role_put(
             })),
         )
             .into_response(),
+    }
+}
+
+/// POST /api/federation/peers — add a manual peer by endpoint URL.
+pub async fn handle_api_federation_peer_add(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<FederationAddManualPeerBody>,
+) -> impl IntoResponse {
+    if let Err(error) = require_auth(&state, &headers) {
+        return error.into_response();
+    }
+
+    let Some(federation) = &state.federation else {
+        return federation_disabled_response();
+    };
+
+    match crate::federation::normalize_peer_endpoint(&body.endpoint) {
+        None => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "Invalid endpoint — expected http://host:port or host:port"
+            })),
+        )
+            .into_response(),
+        Some((base_url, host, port)) => {
+            federation
+                .registry()
+                .seed_manual_peer(base_url.clone(), base_url.clone(), host, port);
+            Json(serde_json::json!({
+                "status": "ok",
+                "base_url": base_url,
+            }))
+            .into_response()
+        }
     }
 }
 

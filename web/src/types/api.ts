@@ -236,6 +236,7 @@ export interface FederationLocalNodeSummary {
   allow_remote_subagents: boolean;
   discovery_mode: FederationDiscoveryMode;
   service_name: string;
+  gateway_host: string;
 }
 
 export interface FederationPeerSummary {

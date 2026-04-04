@@ -45,6 +45,9 @@ pub struct FederationLocalNodeSummary {
     pub allow_remote_subagents: bool,
     pub discovery_mode: FederationDiscoveryMode,
     pub service_name: String,
+    /// The host the gateway is bound to (e.g. 127.0.0.1 or 0.0.0.0).
+    #[serde(default)]
+    pub gateway_host: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -534,6 +537,7 @@ mod tests {
                 allow_remote_subagents: true,
                 discovery_mode: FederationDiscoveryMode::Mdns,
                 service_name: "_llamafarm._tcp".to_string(),
+                gateway_host: "127.0.0.1".to_string(),
             },
         );
 
