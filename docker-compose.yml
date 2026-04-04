@@ -23,6 +23,16 @@ services:
       - SHELL=/bin/bash
       # Default gateway port inside container
       - LLAMAFARM_GATEWAY_PORT=${LLAMAFARM_GATEWAY_PORT:-42617}
+      # Optional LAN federation (set HOST_BIND_IP=0.0.0.0 for cross-machine access)
+      - LLAMAFARM_FEDERATION_ENABLED=${LLAMAFARM_FEDERATION_ENABLED:-false}
+      - LLAMAFARM_NODE_NAME=${LLAMAFARM_NODE_NAME:-llamafarm-node}
+      - LLAMAFARM_API_PORT=${LLAMAFARM_API_PORT:-42617}
+      - LLAMAFARM_DISCOVERY_MODE=${LLAMAFARM_DISCOVERY_MODE:-mdns}
+      - LLAMAFARM_SERVICE_NAME=${LLAMAFARM_SERVICE_NAME:-_llamafarm._tcp}
+      - LLAMAFARM_PEER_TIMEOUT_SECONDS=${LLAMAFARM_PEER_TIMEOUT_SECONDS:-30}
+      - LLAMAFARM_MANUAL_PEERS=${LLAMAFARM_MANUAL_PEERS:-}
+      - LLAMAFARM_DEFAULT_ROLE=${LLAMAFARM_DEFAULT_ROLE:-both}
+      - LLAMAFARM_ALLOW_REMOTE_SUBAGENTS=${LLAMAFARM_ALLOW_REMOTE_SUBAGENTS:-true}
 
     volumes:
       # Keep the local operator state on a stable volume so redeploys from
@@ -33,7 +43,7 @@ services:
       - "host.docker.internal:host-gateway"
 
     ports:
-      - "127.0.0.1:${HOST_PORT:-42617}:${LLAMAFARM_GATEWAY_PORT:-42617}"
+      - "${HOST_BIND_IP:-127.0.0.1}:${HOST_PORT:-42617}:${LLAMAFARM_GATEWAY_PORT:-42617}"
 
     deploy:
       resources:

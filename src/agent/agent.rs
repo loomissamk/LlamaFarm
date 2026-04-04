@@ -744,6 +744,7 @@ mod tests {
                     text: Some("done".into()),
                     tool_calls: vec![],
                     usage: None,
+                    metrics: None,
                     reasoning_content: None,
                 });
             }
@@ -781,6 +782,7 @@ mod tests {
                     text: Some("done".into()),
                     tool_calls: vec![],
                     usage: None,
+                    metrics: None,
                     reasoning_content: None,
                 });
             }
@@ -820,6 +822,7 @@ mod tests {
                 text: Some("hello".into()),
                 tool_calls: vec![],
                 usage: None,
+                metrics: None,
                 reasoning_content: None,
             }]),
         });
@@ -860,12 +863,14 @@ mod tests {
                         arguments: "{}".into(),
                     }],
                     usage: None,
+                    metrics: None,
                     reasoning_content: None,
                 },
                 crate::providers::ChatResponse {
                     text: Some("done".into()),
                     tool_calls: vec![],
                     usage: None,
+                    metrics: None,
                     reasoning_content: None,
                 },
             ]),
@@ -907,6 +912,7 @@ mod tests {
                 text: Some("classified".into()),
                 tool_calls: vec![],
                 usage: None,
+                metrics: None,
                 reasoning_content: None,
             }]),
             seen_models: seen_models.clone(),

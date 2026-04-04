@@ -4491,6 +4491,7 @@ mod tests {
                 text: Some("vision-ok".to_string()),
                 tool_calls: Vec::new(),
                 usage: None,
+                metrics: None,
                 reasoning_content: None,
             })
         }
@@ -4509,6 +4510,7 @@ mod tests {
                     text: Some(text.to_string()),
                     tool_calls: Vec::new(),
                     usage: None,
+                    metrics: None,
                     reasoning_content: None,
                 })
                 .collect();
@@ -4570,6 +4572,7 @@ mod tests {
                     text: Some(text.to_string()),
                     tool_calls: Vec::new(),
                     usage: None,
+                    metrics: None,
                     reasoning_content: None,
                 })
                 .collect();
@@ -6272,6 +6275,7 @@ mod tests {
                     ),
                     tool_calls: Vec::new(),
                     usage: None,
+                    metrics: None,
                     reasoning_content: None,
                 }),
                 Err(anyhow::anyhow!("upstream timeout after tool execution")),
@@ -6600,6 +6604,7 @@ mod tests {
                     ),
                     tool_calls: Vec::new(),
                     usage: None,
+                    metrics: None,
                     reasoning_content: None,
                 }),
                 Ok(ChatResponse {
@@ -6611,6 +6616,7 @@ mod tests {
                     ),
                     tool_calls: Vec::new(),
                     usage: None,
+                    metrics: None,
                     reasoning_content: None,
                 }),
                 Err(anyhow::anyhow!("provider should not be called after grounded fast exit")),

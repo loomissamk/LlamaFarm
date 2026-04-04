@@ -204,6 +204,10 @@ pub struct Config {
     #[serde(default)]
     pub gateway: GatewayConfig,
 
+    /// LAN federation discovery and remote subagent settings (`[federation]`).
+    #[serde(default)]
+    pub federation: FederationConfig,
+
     /// Composio managed OAuth tools integration (`[composio]`).
     #[serde(default)]
     pub composio: ComposioConfig,
@@ -1117,6 +1121,102 @@ pub struct GatewayConfig {
     /// Node-control protocol scaffold (`[gateway.node_control]`).
     #[serde(default)]
     pub node_control: NodeControlConfig,
+}
+
+/// Peer discovery mode for LAN federation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum FederationDiscoveryMode {
+    #[default]
+    Mdns,
+    Manual,
+}
+
+/// Operator-assigned role for a LAN federation node.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum FederationRole {
+    Master,
+    Worker,
+    #[default]
+    Both,
+    Disabled,
+}
+
+impl FederationRole {
+    pub const fn allows_master(self) -> bool {
+        matches!(self, Self::Master | Self::Both)
+    }
+
+    pub const fn allows_worker(self) -> bool {
+        matches!(self, Self::Worker | Self::Both)
+    }
+}
+
+/// Gateway-adjacent LAN federation settings under `[federation]`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FederationConfig {
+    /// Enable LAN federation discovery and remote subagent execution.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Friendly node name shown in the federation panel and mDNS records.
+    #[serde(default = "default_federation_node_name")]
+    pub node_name: String,
+    /// Optional API port override used for peer-to-peer federation requests.
+    /// Defaults to `gateway.port` when unset.
+    #[serde(default)]
+    pub api_port: Option<u16>,
+    /// Preferred LAN discovery mode.
+    #[serde(default)]
+    pub discovery_mode: FederationDiscoveryMode,
+    /// DNS-SD service type used for federation discovery.
+    #[serde(default = "default_federation_service_name")]
+    pub service_name: String,
+    /// Staleness timeout for discovered peers.
+    #[serde(default = "default_federation_peer_timeout_seconds")]
+    pub peer_timeout_seconds: u64,
+    /// Manual fallback seed peers, expressed as host:port or full http(s) URLs.
+    #[serde(default)]
+    pub manual_peers: Vec<String>,
+    /// Default operator role assignment for newly discovered peers.
+    #[serde(default)]
+    pub default_role: FederationRole,
+    /// Allow this node to accept and initiate remote subagent tasks.
+    #[serde(default = "default_true")]
+    pub allow_remote_subagents: bool,
+}
+
+fn default_federation_node_name() -> String {
+    hostname::get()
+        .ok()
+        .and_then(|value| value.into_string().ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "llamafarm-node".to_string())
+}
+
+fn default_federation_service_name() -> String {
+    "_llamafarm._tcp".to_string()
+}
+
+fn default_federation_peer_timeout_seconds() -> u64 {
+    30
+}
+
+impl Default for FederationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            node_name: default_federation_node_name(),
+            api_port: None,
+            discovery_mode: FederationDiscoveryMode::default(),
+            service_name: default_federation_service_name(),
+            peer_timeout_seconds: default_federation_peer_timeout_seconds(),
+            manual_peers: Vec::new(),
+            default_role: FederationRole::default(),
+            allow_remote_subagents: true,
+        }
+    }
 }
 
 /// Node-control scaffold settings under `[gateway.node_control]`.
@@ -5037,6 +5137,7 @@ impl Default for Config {
             storage: StorageConfig::default(),
             tunnel: TunnelConfig::default(),
             gateway: GatewayConfig::default(),
+            federation: FederationConfig::default(),
             composio: ComposioConfig::default(),
             secrets: SecretsConfig::default(),
             browser: BrowserConfig::default(),
@@ -6574,6 +6675,27 @@ impl Config {
             anyhow::bail!("coordination.max_seen_message_ids must be greater than 0");
         }
 
+        if self.federation.enabled {
+            if self.federation.node_name.trim().is_empty() {
+                anyhow::bail!("federation.node_name must not be empty when federation is enabled");
+            }
+            if self.federation.service_name.trim().is_empty() {
+                anyhow::bail!(
+                    "federation.service_name must not be empty when federation is enabled"
+                );
+            }
+            if self.federation.peer_timeout_seconds == 0 {
+                anyhow::bail!(
+                    "federation.peer_timeout_seconds must be greater than 0 when federation is enabled"
+                );
+            }
+            if let Some(api_port) = self.federation.api_port {
+                if api_port == 0 {
+                    anyhow::bail!("federation.api_port must be greater than 0 when set");
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -6694,6 +6816,90 @@ impl Config {
         {
             if !host.is_empty() {
                 self.gateway.host = host;
+            }
+        }
+
+        if let Ok(enabled) = std::env::var("LLAMAFARM_FEDERATION_ENABLED") {
+            match enabled.trim().to_ascii_lowercase().as_str() {
+                "1" | "true" | "yes" | "on" => self.federation.enabled = true,
+                "0" | "false" | "no" | "off" => self.federation.enabled = false,
+                _ => tracing::warn!(
+                    "Ignoring invalid LLAMAFARM_FEDERATION_ENABLED (valid: 1|0|true|false|yes|no|on|off)"
+                ),
+            }
+        }
+
+        if let Ok(node_name) = std::env::var("LLAMAFARM_NODE_NAME") {
+            let trimmed = node_name.trim();
+            if !trimmed.is_empty() {
+                self.federation.node_name = trimmed.to_string();
+            }
+        }
+
+        if let Ok(api_port) = std::env::var("LLAMAFARM_API_PORT") {
+            if let Ok(port) = api_port.parse::<u16>() {
+                if port > 0 {
+                    self.federation.api_port = Some(port);
+                }
+            }
+        }
+
+        if let Ok(mode) = std::env::var("LLAMAFARM_DISCOVERY_MODE") {
+            match mode.trim().to_ascii_lowercase().as_str() {
+                "mdns" => self.federation.discovery_mode = FederationDiscoveryMode::Mdns,
+                "manual" => self.federation.discovery_mode = FederationDiscoveryMode::Manual,
+                _ => tracing::warn!(
+                    "Ignoring invalid LLAMAFARM_DISCOVERY_MODE (valid: mdns|manual)"
+                ),
+            }
+        }
+
+        if let Ok(service_name) = std::env::var("LLAMAFARM_SERVICE_NAME") {
+            let trimmed = service_name.trim();
+            if !trimmed.is_empty() {
+                self.federation.service_name = trimmed.to_string();
+            }
+        }
+
+        if let Ok(timeout_secs) = std::env::var("LLAMAFARM_PEER_TIMEOUT_SECONDS") {
+            if let Ok(timeout) = timeout_secs.parse::<u64>() {
+                if timeout > 0 {
+                    self.federation.peer_timeout_seconds = timeout;
+                }
+            }
+        }
+
+        if let Ok(peers) = std::env::var("LLAMAFARM_MANUAL_PEERS") {
+            let parsed = peers
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>();
+            if !parsed.is_empty() {
+                self.federation.manual_peers = parsed;
+            }
+        }
+
+        if let Ok(role) = std::env::var("LLAMAFARM_DEFAULT_ROLE") {
+            match role.trim().to_ascii_lowercase().as_str() {
+                "master" => self.federation.default_role = FederationRole::Master,
+                "worker" => self.federation.default_role = FederationRole::Worker,
+                "both" => self.federation.default_role = FederationRole::Both,
+                "disabled" => self.federation.default_role = FederationRole::Disabled,
+                _ => tracing::warn!(
+                    "Ignoring invalid LLAMAFARM_DEFAULT_ROLE (valid: master|worker|both|disabled)"
+                ),
+            }
+        }
+
+        if let Ok(enabled) = std::env::var("LLAMAFARM_ALLOW_REMOTE_SUBAGENTS") {
+            match enabled.trim().to_ascii_lowercase().as_str() {
+                "1" | "true" | "yes" | "on" => self.federation.allow_remote_subagents = true,
+                "0" | "false" | "no" | "off" => self.federation.allow_remote_subagents = false,
+                _ => tracing::warn!(
+                    "Ignoring invalid LLAMAFARM_ALLOW_REMOTE_SUBAGENTS (valid: 1|0|true|false|yes|no|on|off)"
+                ),
             }
         }
 
@@ -7475,6 +7681,10 @@ default_temperature = 0.7
                 non_cli_natural_language_approval_mode:
                     NonCliNaturalLanguageApprovalMode::RequestConfirm,
                 non_cli_natural_language_approval_mode_by_channel: HashMap::new(),
+                execution_mode: AgentExecutionMode::Chat,
+                chaos_disk_quota_mb: 0,
+                chaos_retry_budget: 20,
+                wall_clock_cap_secs: 0,
             },
             security: SecurityConfig::default(),
             runtime: RuntimeConfig {
@@ -7546,6 +7756,7 @@ default_temperature = 0.7
             web_fetch: WebFetchConfig::default(),
             web_search: WebSearchConfig::default(),
             proxy: ProxyConfig::default(),
+            federation: FederationConfig::default(),
             agent: AgentConfig::default(),
             identity: IdentityConfig::default(),
             cost: CostConfig::default(),
@@ -7942,6 +8153,7 @@ tool_dispatcher = "xml"
             web_fetch: WebFetchConfig::default(),
             web_search: WebSearchConfig::default(),
             proxy: ProxyConfig::default(),
+            federation: FederationConfig::default(),
             agent: AgentConfig::default(),
             identity: IdentityConfig::default(),
             cost: CostConfig::default(),

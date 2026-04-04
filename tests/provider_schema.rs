@@ -154,6 +154,7 @@ fn chat_response_text_only() {
         text: Some("Hello world".into()),
         tool_calls: vec![],
         usage: None,
+        metrics: None,
         reasoning_content: None,
     };
 
@@ -171,6 +172,7 @@ fn chat_response_with_tool_calls() {
             arguments: "{}".into(),
         }],
         usage: None,
+        metrics: None,
         reasoning_content: None,
     };
 
@@ -185,6 +187,7 @@ fn chat_response_text_or_empty_handles_none() {
         text: None,
         tool_calls: vec![],
         usage: None,
+        metrics: None,
         reasoning_content: None,
     };
 
@@ -208,6 +211,7 @@ fn chat_response_multiple_tool_calls() {
             },
         ],
         usage: None,
+        metrics: None,
         reasoning_content: None,
     };
 

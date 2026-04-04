@@ -51,6 +51,7 @@ pub(crate) mod cost;
 pub(crate) mod cron;
 pub(crate) mod daemon;
 pub(crate) mod doctor;
+pub mod federation;
 pub mod gateway;
 pub mod goals;
 pub(crate) mod hardware;

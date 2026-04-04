@@ -21,6 +21,9 @@ use crate::channels::{
 };
 use crate::config::Config;
 use crate::cost::CostTracker;
+use crate::federation::remote_subagent::{
+    FederationRemoteSubagentAdapter, FederationTaskManager,
+};
 use crate::memory::{self, Memory, MemoryCategory};
 use crate::providers::{self, ChatMessage, Provider};
 use crate::runtime;
@@ -319,6 +322,13 @@ fn build_provider_runtime_options(config: &Config) -> providers::ProviderRuntime
 }
 
 pub(crate) fn build_gateway_runtime_snapshot(config: &Config) -> Result<GatewayRuntimeSnapshot> {
+    build_gateway_runtime_snapshot_with_federation(config, None)
+}
+
+pub(crate) fn build_gateway_runtime_snapshot_with_federation(
+    config: &Config,
+    federation: Option<Arc<FederationRemoteSubagentAdapter>>,
+) -> Result<GatewayRuntimeSnapshot> {
     let provider_name = config.default_provider.as_deref().unwrap_or("ollama");
     let provider: Arc<dyn Provider> = Arc::from(providers::create_resilient_provider_with_options(
         provider_name,
@@ -350,21 +360,23 @@ pub(crate) fn build_gateway_runtime_snapshot(config: &Config) -> Result<GatewayR
         (None, None)
     };
 
-    let tools_registry_exec: Arc<Vec<Box<dyn Tool>>> = Arc::new(tools::all_tools_with_runtime(
-        Arc::new(config.clone()),
-        &security,
-        runtime,
-        Arc::clone(&mem),
-        composio_key,
-        composio_entity_id,
-        &config.browser,
-        &config.http_request,
-        &config.web_fetch,
-        &config.workspace_dir,
-        &config.agents,
-        config.api_key.as_deref(),
-        config,
-    ));
+    let tools_registry_exec: Arc<Vec<Box<dyn Tool>>> =
+        Arc::new(tools::all_tools_with_runtime_and_federation(
+            Arc::new(config.clone()),
+            &security,
+            runtime,
+            Arc::clone(&mem),
+            composio_key,
+            composio_entity_id,
+            &config.browser,
+            &config.http_request,
+            &config.web_fetch,
+            &config.workspace_dir,
+            &config.agents,
+            config.api_key.as_deref(),
+            config,
+            federation,
+        ));
     let tools_registry: Arc<Vec<ToolSpec>> =
         Arc::new(tools_registry_exec.iter().map(|tool| tool.spec()).collect());
 
@@ -420,6 +432,10 @@ pub struct AppState {
     pub event_tx: tokio::sync::broadcast::Sender<serde_json::Value>,
     /// Live provider/model/tool snapshot for hot-reload after config edits.
     pub runtime_state: Option<Arc<RwLock<Arc<GatewayRuntimeSnapshot>>>>,
+    /// Optional LAN federation service.
+    pub federation: Option<Arc<crate::federation::FederationService>>,
+    /// Optional remote task manager for node-to-node federation streams.
+    pub federation_tasks: Option<Arc<FederationTaskManager>>,
 }
 
 impl AppState {
@@ -439,10 +455,29 @@ impl AppState {
     }
 
     pub(crate) fn replace_runtime_snapshot(&self, snapshot: GatewayRuntimeSnapshot) {
+        if let Some(federation) = &self.federation {
+            sync_federation_runtime_metadata(federation, &snapshot);
+        }
         if let Some(runtime_state) = &self.runtime_state {
             *runtime_state.write() = Arc::new(snapshot);
         }
     }
+}
+
+fn sync_federation_runtime_metadata(
+    federation: &crate::federation::FederationService,
+    snapshot: &GatewayRuntimeSnapshot,
+) {
+    let tool_names = snapshot
+        .tools_registry
+        .iter()
+        .map(|tool| tool.name.clone())
+        .collect::<Vec<_>>();
+    federation.update_local_runtime(
+        federation.local_node_summary().api_port,
+        &snapshot.model,
+        &tool_names,
+    );
 }
 
 /// Run the HTTP gateway using axum with proper HTTP/1.1 compliance.
@@ -471,7 +506,14 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
     let actual_port = listener.local_addr()?.port();
     let display_addr = format!("{host}:{actual_port}");
 
-    let runtime_snapshot = Arc::new(build_gateway_runtime_snapshot(&config)?);
+    let federation = crate::federation::FederationService::new(&config.federation, actual_port)?;
+    let federation_tasks = federation
+        .as_ref()
+        .map(|_| Arc::new(FederationTaskManager::new()));
+    let runtime_snapshot = Arc::new(build_gateway_runtime_snapshot_with_federation(
+        &config,
+        federation.as_ref().map(|service| service.remote_adapter()),
+    )?);
     let provider = Arc::clone(&runtime_snapshot.provider);
     let model = runtime_snapshot.model.clone();
     let temperature = runtime_snapshot.temperature;
@@ -480,6 +522,11 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
     let tools_registry_exec = Arc::clone(&runtime_snapshot.tools_registry_exec);
     let max_tool_iterations = config.agent.max_tool_iterations;
     let multimodal_config = config.multimodal.clone();
+
+    if let Some(federation) = &federation {
+        sync_federation_runtime_metadata(federation, &runtime_snapshot);
+        federation.start();
+    }
 
     // Cost tracker (optional)
     let cost_tracker = if config.cost.enabled {
@@ -701,6 +748,10 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
     println!("  GET  /v1/models — list available models");
     println!("  GET  /api/*     — REST API (bearer token required)");
     println!("  GET  /ws/chat   — WebSocket agent chat");
+    if federation.is_some() {
+        println!("  GET  /api/federation/peers — LAN federation peer registry");
+        println!("  POST /federation/tasks     — LAN federation worker task ingress");
+    }
     println!("  GET  /health    — health check");
     println!("  GET  /metrics   — Prometheus metrics");
     if let Some(code) = pairing.pairing_code() {
@@ -760,6 +811,8 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         cost_tracker,
         event_tx,
         runtime_state: Some(Arc::new(RwLock::new(runtime_snapshot))),
+        federation,
+        federation_tasks,
     };
     let request_timeout_secs = config.gateway.request_timeout_secs.max(1);
 
@@ -840,9 +893,30 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .route("/api/cost", get(api::handle_api_cost))
         .route("/api/cli-tools", get(api::handle_api_cli_tools))
         .route("/api/health", get(api::handle_api_health))
+        .route("/api/federation/peers", get(api::handle_api_federation_peers))
+        .route(
+            "/api/federation/peers/{peer_id}/role",
+            put(api::handle_api_federation_peer_role_put),
+        )
         .route("/api/logs", get(logs::handle_api_logs))
         .route("/api/logs/stream", get(logs::handle_log_stream))
         .route("/api/node-control", post(handle_node_control))
+        .route("/federation/health", get(api::handle_federation_health))
+        .route(
+            "/federation/capabilities",
+            get(api::handle_federation_capabilities),
+        )
+        .route("/federation/models", get(api::handle_federation_models))
+        .route("/federation/tools", get(api::handle_federation_tools))
+        .route("/federation/tasks", post(api::handle_federation_task_create))
+        .route(
+            "/federation/tasks/{task_id}/stream",
+            get(api::handle_federation_task_stream),
+        )
+        .route(
+            "/federation/tasks/{task_id}/cancel",
+            post(api::handle_federation_task_cancel),
+        )
         // ── SSE event stream ──
         .route("/api/events", get(sse::handle_sse_events))
         // ── WebSocket agent chat ──
@@ -2117,6 +2191,8 @@ mod tests {
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
             runtime_state: None,
+            federation: None,
+            federation_tasks: None,
         };
 
         let response = handle_metrics(State(state), test_connect_info(), HeaderMap::new())
@@ -2174,6 +2250,8 @@ mod tests {
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
             runtime_state: None,
+            federation: None,
+            federation_tasks: None,
         };
 
         let response = handle_metrics(State(state), test_connect_info(), HeaderMap::new())
@@ -2217,6 +2295,8 @@ mod tests {
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
             runtime_state: None,
+            federation: None,
+            federation_tasks: None,
         };
 
         let response = handle_metrics(State(state), test_public_connect_info(), HeaderMap::new())
@@ -2261,6 +2341,8 @@ mod tests {
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
             runtime_state: None,
+            federation: None,
+            federation_tasks: None,
         };
 
         let unauthorized =
@@ -2731,6 +2813,8 @@ Reminder set successfully."#;
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
             runtime_state: None,
+            federation: None,
+            federation_tasks: None,
         };
 
         let mut headers = HeaderMap::new();
@@ -2800,6 +2884,8 @@ Reminder set successfully."#;
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
             runtime_state: None,
+            federation: None,
+            federation_tasks: None,
         };
 
         let unauthorized = handle_agent(
@@ -2850,6 +2936,8 @@ Reminder set successfully."#;
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
             runtime_state: None,
+            federation: None,
+            federation_tasks: None,
         };
 
         let response = handle_webhook(
@@ -2900,6 +2988,8 @@ Reminder set successfully."#;
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
             runtime_state: None,
+            federation: None,
+            federation_tasks: None,
         };
 
         let response = handle_node_control(
@@ -2955,6 +3045,8 @@ Reminder set successfully."#;
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
             runtime_state: None,
+            federation: None,
+            federation_tasks: None,
         };
 
         let response = handle_node_control(
@@ -3015,6 +3107,8 @@ Reminder set successfully."#;
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
             runtime_state: None,
+            federation: None,
+            federation_tasks: None,
         };
 
         let headers = HeaderMap::new();
@@ -3097,6 +3191,8 @@ Reminder set successfully."#;
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
             runtime_state: None,
+            federation: None,
+            federation_tasks: None,
         };
 
         let response = handle_webhook(
@@ -3151,6 +3247,8 @@ Reminder set successfully."#;
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
             runtime_state: None,
+            federation: None,
+            federation_tasks: None,
         };
 
         let mut headers = HeaderMap::new();
@@ -3210,6 +3308,8 @@ Reminder set successfully."#;
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
             runtime_state: None,
+            federation: None,
+            federation_tasks: None,
         };
 
         let mut headers = HeaderMap::new();
@@ -3274,6 +3374,8 @@ Reminder set successfully."#;
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
             runtime_state: None,
+            federation: None,
+            federation_tasks: None,
         };
 
         let response = Box::pin(handle_nextcloud_talk_webhook(
@@ -3334,6 +3436,8 @@ Reminder set successfully."#;
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
             runtime_state: None,
+            federation: None,
+            federation_tasks: None,
         };
 
         let mut headers = HeaderMap::new();
@@ -3391,6 +3495,8 @@ Reminder set successfully."#;
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
             runtime_state: None,
+            federation: None,
+            federation_tasks: None,
         };
 
         let response = Box::pin(handle_qq_webhook(
@@ -3443,6 +3549,8 @@ Reminder set successfully."#;
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
             runtime_state: None,
+            federation: None,
+            federation_tasks: None,
         };
 
         let mut headers = HeaderMap::new();

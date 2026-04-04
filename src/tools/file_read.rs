@@ -772,6 +772,7 @@ mod tests {
                         text: Some("done".into()),
                         tool_calls: vec![],
                         usage: None,
+                        metrics: None,
                         reasoning_content: None,
                     });
                 }
@@ -832,6 +833,7 @@ mod tests {
                     arguments: r#"{"path": "report.pdf"}"#.into(),
                 }],
                 usage: None,
+                metrics: None,
                 reasoning_content: None,
             },
             // Turn 1 continued: provider sees tool result and answers
@@ -839,6 +841,7 @@ mod tests {
                 text: Some("The PDF contains a greeting: Hello PDF".into()),
                 tool_calls: vec![],
                 usage: None,
+                metrics: None,
                 reasoning_content: None,
             },
         ]);
@@ -925,12 +928,14 @@ mod tests {
                     arguments: r#"{"path": "data.bin"}"#.into(),
                 }],
                 usage: None,
+                metrics: None,
                 reasoning_content: None,
             },
             ChatResponse {
                 text: Some("The file appears to be binary data.".into()),
                 tool_calls: vec![],
                 usage: None,
+                metrics: None,
                 reasoning_content: None,
             },
         ]);

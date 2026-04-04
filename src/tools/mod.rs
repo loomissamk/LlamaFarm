@@ -219,7 +219,7 @@ pub fn all_tools(
     fallback_api_key: Option<&str>,
     root_config: &crate::config::Config,
 ) -> Vec<Box<dyn Tool>> {
-    all_tools_with_runtime(
+    all_tools_with_runtime_and_federation(
         config,
         security,
         Arc::new(NativeRuntime::new()),
@@ -233,6 +233,7 @@ pub fn all_tools(
         agents,
         fallback_api_key,
         root_config,
+        None,
     )
 }
 
@@ -252,6 +253,42 @@ pub fn all_tools_with_runtime(
     agents: &HashMap<String, DelegateAgentConfig>,
     fallback_api_key: Option<&str>,
     root_config: &crate::config::Config,
+) -> Vec<Box<dyn Tool>> {
+    all_tools_with_runtime_and_federation(
+        config,
+        security,
+        runtime,
+        memory,
+        composio_key,
+        composio_entity_id,
+        browser_config,
+        http_config,
+        web_fetch_config,
+        workspace_dir,
+        agents,
+        fallback_api_key,
+        root_config,
+        None,
+    )
+}
+
+/// Create full tool registry including optional LAN federation-backed delegation.
+#[allow(clippy::implicit_hasher, clippy::too_many_arguments)]
+pub fn all_tools_with_runtime_and_federation(
+    config: Arc<Config>,
+    security: &Arc<SecurityPolicy>,
+    runtime: Arc<dyn RuntimeAdapter>,
+    memory: Arc<dyn Memory>,
+    composio_key: Option<&str>,
+    composio_entity_id: Option<&str>,
+    browser_config: &crate::config::BrowserConfig,
+    http_config: &crate::config::HttpRequestConfig,
+    web_fetch_config: &crate::config::WebFetchConfig,
+    workspace_dir: &std::path::Path,
+    agents: &HashMap<String, DelegateAgentConfig>,
+    fallback_api_key: Option<&str>,
+    root_config: &crate::config::Config,
+    federation: Option<Arc<crate::federation::remote_subagent::FederationRemoteSubagentAdapter>>,
 ) -> Vec<Box<dyn Tool>> {
     let has_shell_access = runtime.has_shell_access();
     let has_filesystem_access = runtime.has_filesystem_access();
@@ -435,7 +472,7 @@ pub fn all_tools_with_runtime(
     }
 
     // Add delegation and sub-agent orchestration tools when agents are configured
-    if !agents.is_empty() {
+    if !agents.is_empty() || federation.is_some() {
         let delegate_agents: HashMap<String, DelegateAgentConfig> = agents
             .iter()
             .map(|(name, cfg)| (name.clone(), cfg.clone()))
@@ -470,6 +507,9 @@ pub fn all_tools_with_runtime(
         )
         .with_parent_tools(parent_tools.clone())
         .with_multimodal_config(root_config.multimodal.clone());
+        if let Some(federation) = federation.clone() {
+            delegate_tool = delegate_tool.with_federation(federation);
+        }
 
         if root_config.coordination.enabled {
             let coordination_lead_agent = {
@@ -516,7 +556,7 @@ pub fn all_tools_with_runtime(
         }
 
         let subagent_registry = Arc::new(SubAgentRegistry::new());
-        tool_arcs.push(Arc::new(SubAgentSpawnTool::new(
+        let mut subagent_spawn_tool = SubAgentSpawnTool::new(
             delegate_agents,
             delegate_fallback_credential,
             security.clone(),
@@ -524,7 +564,11 @@ pub fn all_tools_with_runtime(
             subagent_registry.clone(),
             parent_tools,
             root_config.multimodal.clone(),
-        )));
+        );
+        if let Some(federation) = federation {
+            subagent_spawn_tool = subagent_spawn_tool.with_federation(federation);
+        }
+        tool_arcs.push(Arc::new(subagent_spawn_tool));
         tool_arcs.push(Arc::new(SubAgentListTool::new(subagent_registry.clone())));
         tool_arcs.push(Arc::new(SubAgentManageTool::new(
             subagent_registry,

@@ -190,6 +190,7 @@ mod tests {
             ),
             tool_calls: vec![],
             usage: None,
+            metrics: None,
             reasoning_content: None,
         };
         let dispatcher = XmlToolDispatcher;
@@ -204,6 +205,7 @@ mod tests {
             text: Some("I'll run it.\nshell(\"lsusb\")".into()),
             tool_calls: vec![],
             usage: None,
+            metrics: None,
             reasoning_content: None,
         };
         let dispatcher = XmlToolDispatcher;
@@ -224,6 +226,7 @@ mod tests {
                 arguments: "{\"path\":\"a.txt\"}".into(),
             }],
             usage: None,
+            metrics: None,
             reasoning_content: None,
         };
         let dispatcher = NativeToolDispatcher;

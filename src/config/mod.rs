@@ -9,6 +9,7 @@ pub use schema::{
     BrowserConfig, BuiltinHooksConfig, ChannelsConfig, ClassificationRule, ComposioConfig, Config,
     CoordinationConfig, CostConfig, CronConfig, DelegateAgentConfig, DiscordConfig,
     DockerRuntimeConfig, EmbeddingRouteConfig, EstopConfig, FeishuConfig, GatewayConfig,
+    FederationConfig, FederationDiscoveryMode, FederationRole,
     GroupReplyConfig, GroupReplyMode, HardwareConfig, HardwareTransport, HeartbeatConfig,
     HooksConfig, HttpRequestConfig, IMessageConfig, IdentityConfig, LarkConfig, MatrixConfig,
     MemoryConfig, ModelRouteConfig, MultimodalConfig, NextcloudTalkConfig,

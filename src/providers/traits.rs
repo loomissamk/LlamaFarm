@@ -584,6 +584,7 @@ mod tests {
             text: None,
             tool_calls: vec![],
             usage: None,
+            metrics: None,
             reasoning_content: None,
         };
         assert!(!empty.has_tool_calls());
@@ -597,6 +598,7 @@ mod tests {
                 arguments: "{}".into(),
             }],
             usage: None,
+            metrics: None,
             reasoning_content: None,
         };
         assert!(with_tools.has_tool_calls());
@@ -619,6 +621,7 @@ mod tests {
                 input_tokens: Some(100),
                 output_tokens: Some(50),
             }),
+            metrics: None,
             reasoning_content: None,
         };
         assert_eq!(resp.usage.as_ref().unwrap().input_tokens, Some(100));

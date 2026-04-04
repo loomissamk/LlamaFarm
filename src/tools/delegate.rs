@@ -2,6 +2,7 @@ use super::traits::{Tool, ToolResult};
 use crate::agent::loop_::run_tool_call_loop;
 use crate::config::DelegateAgentConfig;
 use crate::coordination::{CoordinationEnvelope, CoordinationPayload, InMemoryMessageBus};
+use crate::federation::remote_subagent::FederationRemoteSubagentAdapter;
 use crate::observability::traits::{Observer, ObserverEvent, ObserverMetric};
 use crate::providers::{self, ChatMessage, Provider};
 use crate::security::policy::ToolOperation;
@@ -43,6 +44,7 @@ pub struct DelegateTool {
     coordination_bus: Option<InMemoryMessageBus>,
     /// Logical lead agent identity used in coordination trace events.
     coordination_lead_agent: String,
+    federation: Option<Arc<FederationRemoteSubagentAdapter>>,
 }
 
 impl DelegateTool {
@@ -76,6 +78,7 @@ impl DelegateTool {
             multimodal_config: crate::config::MultimodalConfig::default(),
             coordination_bus,
             coordination_lead_agent: DEFAULT_COORDINATION_LEAD_AGENT.to_string(),
+            federation: None,
         }
     }
 
@@ -115,6 +118,7 @@ impl DelegateTool {
             multimodal_config: crate::config::MultimodalConfig::default(),
             coordination_bus,
             coordination_lead_agent: DEFAULT_COORDINATION_LEAD_AGENT.to_string(),
+            federation: None,
         }
     }
 
@@ -162,6 +166,11 @@ impl DelegateTool {
         self
     }
 
+    pub fn with_federation(mut self, federation: Arc<FederationRemoteSubagentAdapter>) -> Self {
+        self.federation = Some(federation);
+        self
+    }
+
     #[cfg(test)]
     fn coordination_bus_snapshot(&self) -> Option<InMemoryMessageBus> {
         self.coordination_bus.clone()
@@ -181,7 +190,12 @@ impl Tool for DelegateTool {
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
-        let agent_names: Vec<&str> = self.agents.keys().map(|s: &String| s.as_str()).collect();
+        let mut agent_names = self.agents.keys().cloned().collect::<Vec<_>>();
+        if let Some(federation) = &self.federation {
+            agent_names.extend(federation.available_remote_agents());
+        }
+        agent_names.sort();
+        agent_names.dedup();
         json!({
             "type": "object",
             "additionalProperties": false,
@@ -247,27 +261,79 @@ impl Tool for DelegateTool {
             .map(str::trim)
             .unwrap_or("");
 
-        // Look up agent config
-        let agent_config = match self.agents.get(agent_name) {
-            Some(cfg) => cfg,
-            None => {
-                let available: Vec<&str> =
-                    self.agents.keys().map(|s: &String| s.as_str()).collect();
-                return Ok(ToolResult {
-                    success: false,
-                    output: String::new(),
-                    error: Some(format!(
-                        "Unknown agent '{agent_name}'. Available agents: {}",
-                        if available.is_empty() {
-                            "(none configured)".to_string()
-                        } else {
-                            available.join(", ")
-                        }
-                    )),
-                });
-            }
-        };
+        if let Err(error) = self
+            .security
+            .enforce_tool_operation(ToolOperation::Act, "delegate")
+        {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(error),
+            });
+        }
 
+        if let Some(agent_config) = self.agents.get(agent_name) {
+            return self
+                .execute_local_delegate(agent_name, prompt, context, agent_config)
+                .await;
+        }
+
+        if let Some(federation) = &self.federation {
+            if let Some(peer) = federation.resolve_remote_agent(agent_name) {
+                let coordination_trace = self.start_coordination_trace_with_metadata(
+                    agent_name,
+                    prompt,
+                    context,
+                    json!({
+                        "remote": true,
+                        "peer_id": peer.peer_id,
+                        "node_id": peer.node_id,
+                        "base_url": peer.base_url,
+                    }),
+                );
+                let result = federation.execute_delegate(agent_name, prompt, context).await?;
+                let summary = if result.success {
+                    result.output.as_str()
+                } else {
+                    result
+                        .error
+                        .as_deref()
+                        .unwrap_or("delegate remote execution failed")
+                };
+                self.finish_coordination_trace(agent_name, &coordination_trace, result.success, summary);
+                return Ok(result);
+            }
+        }
+
+        let mut available = self.agents.keys().cloned().collect::<Vec<_>>();
+        if let Some(federation) = &self.federation {
+            available.extend(federation.available_remote_agents());
+        }
+        available.sort();
+        available.dedup();
+        Ok(ToolResult {
+            success: false,
+            output: String::new(),
+            error: Some(format!(
+                "Unknown agent '{agent_name}'. Available agents: {}",
+                if available.is_empty() {
+                    "(none configured)".to_string()
+                } else {
+                    available.join(", ")
+                }
+            )),
+        })
+    }
+}
+
+impl DelegateTool {
+    async fn execute_local_delegate(
+        &self,
+        agent_name: &str,
+        prompt: &str,
+        context: &str,
+        agent_config: &DelegateAgentConfig,
+    ) -> anyhow::Result<ToolResult> {
         // Check recursion depth (immutable — set at construction, incremented for sub-agents)
         if self.depth >= agent_config.max_depth {
             return Ok(ToolResult {
@@ -282,19 +348,19 @@ impl Tool for DelegateTool {
             });
         }
 
-        if let Err(error) = self
-            .security
-            .enforce_tool_operation(ToolOperation::Act, "delegate")
-        {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(error),
-            });
-        }
-
-        let coordination_trace =
-            self.start_coordination_trace(agent_name, prompt, context, agent_config);
+        let coordination_trace = self.start_coordination_trace_with_metadata(
+            agent_name,
+            prompt,
+            context,
+            json!({
+                "provider": agent_config.provider,
+                "model": agent_config.model,
+                "agentic": agent_config.agentic,
+                "max_depth": agent_config.max_depth,
+                "max_iterations": agent_config.max_iterations,
+                "context_present": !context.is_empty()
+            }),
+        );
 
         // Create provider for this agent
         let provider_credential_owned = agent_config
@@ -434,9 +500,6 @@ impl Tool for DelegateTool {
             }
         }
     }
-}
-
-impl DelegateTool {
     async fn execute_agentic(
         &self,
         agent_name: &str,
@@ -545,12 +608,12 @@ impl DelegateTool {
         }
     }
 
-    fn start_coordination_trace(
+    fn start_coordination_trace_with_metadata(
         &self,
         agent_name: &str,
         prompt: &str,
         context: &str,
-        agent_config: &DelegateAgentConfig,
+        metadata: serde_json::Value,
     ) -> CoordinationTrace {
         let correlation_id = Uuid::new_v4().to_string();
         let conversation_id = format!("delegate:{correlation_id}");
@@ -572,14 +635,7 @@ impl DelegateTool {
             CoordinationPayload::DelegateTask {
                 task_id: correlation_id.clone(),
                 summary: text_preview(prompt, COORDINATION_PREVIEW_MAX_CHARS),
-                metadata: json!({
-                    "provider": agent_config.provider,
-                    "model": agent_config.model,
-                    "agentic": agent_config.agentic,
-                    "max_depth": agent_config.max_depth,
-                    "max_iterations": agent_config.max_iterations,
-                    "context_present": !context.is_empty()
-                }),
+                metadata,
             },
         );
         request.correlation_id = Some(correlation_id.clone());
@@ -879,6 +935,7 @@ mod tests {
                     text: Some("done".to_string()),
                     tool_calls: Vec::new(),
                     usage: None,
+                    metrics: None,
                     reasoning_content: None,
                 })
             } else {
@@ -890,6 +947,7 @@ mod tests {
                         arguments: "{\"value\":\"ping\"}".to_string(),
                     }],
                     usage: None,
+                    metrics: None,
                     reasoning_content: None,
                 })
             }
@@ -924,6 +982,7 @@ mod tests {
                     arguments: "{\"value\":\"x\"}".to_string(),
                 }],
                 usage: None,
+                metrics: None,
                 reasoning_content: None,
             })
         }
@@ -1470,11 +1529,14 @@ mod tests {
             .get("tester")
             .expect("tester config should exist");
 
-        let trace = tool.start_coordination_trace(
+        let trace = tool.start_coordination_trace_with_metadata(
             "tester",
             "Summarize findings",
             "runbook notes",
-            agent_config,
+            json!({
+                "provider": agent_config.provider.clone(),
+                "model": agent_config.model.clone(),
+            }),
         );
         tool.finish_coordination_trace("tester", &trace, true, "done");
 

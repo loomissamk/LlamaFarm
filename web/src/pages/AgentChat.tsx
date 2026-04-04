@@ -1,17 +1,27 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Activity,
   AlertCircle,
   Bot,
+  Cpu,
   History,
+  Network,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
   Send,
   Trash2,
   User,
+  Wrench,
 } from 'lucide-react';
-import type { WsMessage } from '@/types/api';
+import { getFederationPeers, updateFederationPeerRole } from '@/lib/api';
 import { WebSocketClient, type SeedChatMessage } from '@/lib/ws';
+import type {
+  FederationPeerSummary,
+  FederationPeersResponse,
+  FederationRole,
+  WsMessage,
+} from '@/types/api';
 
 type ChatRole = 'user' | 'agent';
 type ChatMessageKind = 'message' | 'tool_call' | 'tool_result' | 'error';
@@ -75,6 +85,21 @@ interface PendingToolCallSeed {
 interface AppendMessageOptions {
   stats?: ChatMessageStats;
   seed?: Pick<ChatMessage, 'seedRole' | 'seedContent'>;
+}
+
+interface FederationTaskState {
+  taskId: string;
+  peerId: string;
+  peerName: string;
+  delegateAgent: string;
+  status: 'status' | 'streaming' | 'done' | 'error';
+  content: string;
+  message: string;
+  lastToolName?: string;
+  lastToolOutput?: string;
+  lastToolSuccess?: boolean;
+  lastToolDurationSecs?: number;
+  updatedAt: Date;
 }
 
 let fallbackMessageIdCounter = 0;
@@ -463,6 +488,19 @@ function buildHistorySeed(messages: ChatMessage[]): SeedChatMessage[] {
     });
 }
 
+function federationRoleAllowsWorker(role: FederationRole): boolean {
+  return role === 'worker' || role === 'both';
+}
+
+function canUseFederationPeer(peer: FederationPeerSummary): boolean {
+  return (
+    peer.online &&
+    peer.allow_remote_subagents &&
+    federationRoleAllowsWorker(peer.assigned_role) &&
+    federationRoleAllowsWorker(peer.role_support)
+  );
+}
+
 export default function AgentChat() {
   const initialStateRef = useRef<InitialChatState | null>(null);
   if (initialStateRef.current === null) {
@@ -478,6 +516,14 @@ export default function AgentChat() {
   const [error, setError] = useState<string | null>(null);
   const [tps, setTps] = useState(0);
   const [streaming, setStreaming] = useState(false);
+  const [federation, setFederation] = useState<FederationPeersResponse | null>(null);
+  const [federationLoading, setFederationLoading] = useState(true);
+  const [selectedFederationPeerIdsBySession, setSelectedFederationPeerIdsBySession] = useState<
+    Record<string, string[]>
+  >({});
+  const [federationTasksBySession, setFederationTasksBySession] = useState<
+    Record<string, FederationTaskState[]>
+  >({});
 
   const wsRef = useRef<WebSocketClient | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -498,10 +544,68 @@ export default function AgentChat() {
   const activeSessionTyping = activeSession
     ? typingSessionIds.includes(activeSession.id)
     : false;
+  const activeFederationTasks = activeSession
+    ? federationTasksBySession[activeSession.id] ?? []
+    : [];
+  const selectedFederationPeerIds = activeSession
+    ? selectedFederationPeerIdsBySession[activeSession.id] ?? []
+    : [];
+  const availableFederationPeers = federation?.peers ?? [];
 
   useEffect(() => {
     activeSessionIdRef.current = activeSession?.id ?? activeSessionId;
   }, [activeSession, activeSessionId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const refreshFederation = async () => {
+      try {
+        const response = await getFederationPeers();
+        if (!cancelled) {
+          setFederation(response);
+          setFederationLoading(false);
+        }
+      } catch {
+        if (!cancelled) {
+          setFederationLoading(false);
+        }
+      }
+    };
+
+    void refreshFederation();
+    const interval = window.setInterval(() => {
+      void refreshFederation();
+    }, 5000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!federation?.enabled) {
+      return;
+    }
+
+    const validPeerIds = new Set(
+      federation.peers.filter(canUseFederationPeer).map((peer) => peer.peer_id),
+    );
+    setSelectedFederationPeerIdsBySession((prev) => {
+      let changed = false;
+      const next = Object.fromEntries(
+        Object.entries(prev).map(([sessionId, peerIds]) => {
+          const filtered = peerIds.filter((peerId) => validPeerIds.has(peerId));
+          if (filtered.length !== peerIds.length) {
+            changed = true;
+          }
+          return [sessionId, filtered];
+        }),
+      );
+      return changed ? next : prev;
+    });
+  }, [federation]);
 
   useEffect(() => {
     const ws = new WebSocketClient();
@@ -573,6 +677,29 @@ export default function AgentChat() {
       const clearTypingForSession = () => {
         setTypingSessionIds((prev) => prev.filter((id) => id !== sessionId));
         delete pendingContentRef.current[sessionId];
+      };
+
+      const upsertFederationTask = (
+        taskId: string,
+        update: (current: FederationTaskState | undefined) => FederationTaskState,
+      ) => {
+        setFederationTasksBySession((prev) => {
+          const existingTasks = prev[sessionId] ?? [];
+          const taskIndex = existingTasks.findIndex((task) => task.taskId === taskId);
+          const current = taskIndex >= 0 ? existingTasks[taskIndex] : undefined;
+          const nextTask = update(current);
+          const nextTasks =
+            taskIndex >= 0
+              ? existingTasks.map((task, index) => (index === taskIndex ? nextTask : task))
+              : [nextTask, ...existingTasks];
+
+          return {
+            ...prev,
+            [sessionId]: nextTasks
+              .sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime())
+              .slice(0, 8),
+          };
+        });
       };
 
       switch (msg.type) {
@@ -698,6 +825,91 @@ export default function AgentChat() {
           break;
         }
 
+        case 'federation_status':
+        case 'federation_chunk':
+        case 'federation_tool_call':
+        case 'federation_tool_result':
+        case 'federation_done':
+        case 'federation_error': {
+          if (!msg.task_id || !msg.peer_id || !msg.peer_name || !msg.delegate_agent) {
+            break;
+          }
+
+          const now = new Date();
+          upsertFederationTask(msg.task_id, (current) => {
+            const base: FederationTaskState =
+              current ?? {
+                taskId: msg.task_id!,
+                peerId: msg.peer_id!,
+                peerName: msg.peer_name!,
+                delegateAgent: msg.delegate_agent!,
+                status: 'status',
+                content: '',
+                message: '',
+                updatedAt: now,
+              };
+
+            switch (msg.type) {
+              case 'federation_status':
+                return {
+                  ...base,
+                  status: 'status',
+                  message: msg.message ?? `Delegated to ${msg.peer_name}`,
+                  updatedAt: now,
+                };
+              case 'federation_chunk':
+                return {
+                  ...base,
+                  status: 'streaming',
+                  content: `${base.content}${msg.content ?? ''}`,
+                  message: msg.message ?? `Streaming from ${msg.peer_name}`,
+                  updatedAt: now,
+                };
+              case 'federation_tool_call':
+                return {
+                  ...base,
+                  status: base.status === 'done' ? 'done' : 'streaming',
+                  lastToolName: msg.name ?? base.lastToolName,
+                  message: msg.name
+                    ? `${msg.peer_name} running ${msg.name}`
+                    : `Tool call on ${msg.peer_name}`,
+                  updatedAt: now,
+                };
+              case 'federation_tool_result':
+                return {
+                  ...base,
+                  status: base.status === 'done' ? 'done' : 'streaming',
+                  lastToolName: msg.name ?? base.lastToolName,
+                  lastToolOutput: msg.output ?? base.lastToolOutput,
+                  lastToolSuccess: msg.success ?? base.lastToolSuccess,
+                  lastToolDurationSecs: msg.duration_secs ?? base.lastToolDurationSecs,
+                  message: msg.name
+                    ? `${msg.peer_name} finished ${msg.name}`
+                    : `Tool result from ${msg.peer_name}`,
+                  updatedAt: now,
+                };
+              case 'federation_done':
+                return {
+                  ...base,
+                  status: 'done',
+                  content: base.content || msg.message || '',
+                  message: msg.message ?? `Remote task completed on ${msg.peer_name}`,
+                  updatedAt: now,
+                };
+              case 'federation_error':
+                return {
+                  ...base,
+                  status: 'error',
+                  message: msg.message ?? `Remote task failed on ${msg.peer_name}`,
+                  updatedAt: now,
+                };
+              default:
+                return base;
+            }
+          });
+          break;
+        }
+
         case 'error':
           appendMessage(
             'agent',
@@ -774,6 +986,16 @@ export default function AgentChat() {
     delete pendingContentRef.current[sessionId];
     delete pendingToolCallsRef.current[sessionId];
     setTypingSessionIds((prev) => prev.filter((id) => id !== sessionId));
+    setSelectedFederationPeerIdsBySession((prev) => {
+      const next = { ...prev };
+      delete next[sessionId];
+      return next;
+    });
+    setFederationTasksBySession((prev) => {
+      const next = { ...prev };
+      delete next[sessionId];
+      return next;
+    });
 
     setSessions((prev) => {
       const next = prev.filter((session) => session.id !== sessionId);
@@ -785,6 +1007,41 @@ export default function AgentChat() {
 
     if (activeSessionId === sessionId) {
       setActiveSessionId(nextExisting?.id ?? replacementSession?.id ?? activeSessionId);
+    }
+  };
+
+  const handleFederationPeerToggle = (peerId: string, enabled: boolean) => {
+    if (!activeSession) {
+      return;
+    }
+
+    setSelectedFederationPeerIdsBySession((prev) => {
+      const current = prev[activeSession.id] ?? [];
+      const nextPeerIds = enabled
+        ? Array.from(new Set([...current, peerId]))
+        : current.filter((candidate) => candidate !== peerId);
+      return {
+        ...prev,
+        [activeSession.id]: nextPeerIds,
+      };
+    });
+  };
+
+  const handleFederationRoleChange = async (peerId: string, role: FederationRole) => {
+    try {
+      const response = await updateFederationPeerRole(peerId, role);
+      setFederation((prev) =>
+        prev
+          ? {
+              ...prev,
+              peers: prev.peers.map((peer) =>
+                peer.peer_id === peerId ? response.peer : peer,
+              ),
+            }
+          : prev,
+      );
+    } catch {
+      setError('Failed to update federation role.');
     }
   };
 
@@ -819,6 +1076,7 @@ export default function AgentChat() {
         sessionId: activeSession.id,
         temporary: activeSession.temporary,
         historySeed: buildHistorySeed(updatedSession.messages),
+        federationPeerIds: selectedFederationPeerIds,
       });
       responseStartRef.current = performance.now();
       streamStartRef.current = null;
@@ -843,6 +1101,11 @@ export default function AgentChat() {
       handleSend();
     }
   };
+
+  const visibleFederationTasks = [...activeFederationTasks]
+    .sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime())
+    .slice(0, 6);
+  const federationEnabled = federation?.enabled ?? false;
 
   return (
     <div
@@ -993,6 +1256,200 @@ export default function AgentChat() {
           </div>
         )}
 
+        {(federationLoading || federationEnabled || visibleFederationTasks.length > 0) && (
+          <div className="border-b border-gray-800 bg-gray-950/70 px-4 py-4">
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+              <div className="rounded-2xl border border-gray-800 bg-gray-900/80 p-4">
+                <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                  <Network className="h-4 w-4 text-cyan-400" />
+                  LAN Federation
+                </div>
+                <p className="mt-1 text-xs text-gray-500">
+                  {federationEnabled && federation?.local_node
+                    ? `${federation.local_node.display_name} on :${federation.local_node.api_port} · discovery ${federation.local_node.discovery_mode}`
+                    : 'Federation is disabled. Local-only chat behavior remains unchanged.'}
+                </p>
+
+                {federationLoading ? (
+                  <p className="mt-3 text-sm text-gray-400">Discovering LAN peers...</p>
+                ) : federationEnabled && availableFederationPeers.length > 0 ? (
+                  <div className="mt-3 space-y-3">
+                    {availableFederationPeers.map((peer) => {
+                      const selectable = canUseFederationPeer(peer);
+                      const selected = selectedFederationPeerIds.includes(peer.peer_id);
+                      return (
+                        <div
+                          key={peer.peer_id}
+                          className="rounded-xl border border-gray-800 bg-gray-950/70 p-3"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="truncate text-sm font-medium text-white">
+                                  {peer.display_name}
+                                </span>
+                                <span
+                                  className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+                                    peer.online
+                                      ? 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                                      : 'border border-gray-700 bg-gray-800 text-gray-400'
+                                  }`}
+                                >
+                                  {peer.online ? 'Online' : 'Offline'}
+                                </span>
+                                <span className="rounded-full border border-gray-700 bg-gray-800 px-2 py-0.5 text-[10px] uppercase tracking-wide text-gray-400">
+                                  {peer.source}
+                                </span>
+                              </div>
+                              <p className="mt-1 font-mono text-[11px] text-cyan-300">
+                                {peer.delegate_agent}
+                              </p>
+                            </div>
+                            <label className="inline-flex items-center gap-2 text-xs text-gray-300">
+                              <input
+                                type="checkbox"
+                                checked={selected}
+                                disabled={!selectable || !activeSession}
+                                onChange={(event) =>
+                                  handleFederationPeerToggle(
+                                    peer.peer_id,
+                                    event.target.checked,
+                                  )
+                                }
+                                className="rounded border-gray-600 bg-gray-900 text-cyan-500 focus:ring-cyan-500 disabled:opacity-50"
+                              />
+                              Use in chat
+                            </label>
+                          </div>
+
+                          <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_11rem]">
+                            <div className="space-y-2 text-xs text-gray-400">
+                              <div className="flex items-start gap-2">
+                                <Cpu className="mt-0.5 h-3.5 w-3.5 text-cyan-300" />
+                                <span className="break-words">
+                                  {peer.model_summary || 'Model summary unavailable'}
+                                </span>
+                              </div>
+                              <div className="flex items-start gap-2">
+                                <Wrench className="mt-0.5 h-3.5 w-3.5 text-cyan-300" />
+                                <span className="break-words">
+                                  {peer.tool_summary || 'Tool summary unavailable'}
+                                </span>
+                              </div>
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-[11px] uppercase tracking-wide text-gray-500">
+                                Assigned role
+                              </label>
+                              <select
+                                value={peer.assigned_role}
+                                onChange={(event) =>
+                                  void handleFederationRoleChange(
+                                    peer.peer_id,
+                                    event.target.value as FederationRole,
+                                  )
+                                }
+                                className="w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white focus:border-cyan-500 focus:outline-none"
+                              >
+                                <option value="master">master</option>
+                                <option value="worker">worker</option>
+                                <option value="both">both</option>
+                                <option value="disabled">disabled</option>
+                              </select>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-sm text-gray-400">
+                    {federationEnabled
+                      ? 'No LAN peers discovered yet. Local-only behavior continues until workers appear.'
+                      : 'Enable federation in the environment to discover LAN workers.'}
+                  </p>
+                )}
+              </div>
+
+              <div className="rounded-2xl border border-gray-800 bg-gray-900/80 p-4">
+                <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                  <Activity className="h-4 w-4 text-emerald-400" />
+                  Remote Tasks
+                </div>
+                <p className="mt-1 text-xs text-gray-500">
+                  {selectedFederationPeerIds.length > 0
+                    ? `${selectedFederationPeerIds.length} worker${selectedFederationPeerIds.length === 1 ? '' : 's'} selected for this chat.`
+                    : 'Select zero, one, or multiple workers for this chat.'}
+                </p>
+
+                {visibleFederationTasks.length === 0 ? (
+                  <p className="mt-3 text-sm text-gray-400">
+                    Remote task routing and streamed worker output will appear here.
+                  </p>
+                ) : (
+                  <div className="mt-3 space-y-3">
+                    {visibleFederationTasks.map((task) => (
+                      <div
+                        key={task.taskId}
+                        className="rounded-xl border border-gray-800 bg-gray-950/70 p-3"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-medium text-white">{task.peerName}</p>
+                            <p className="font-mono text-[11px] text-cyan-300">
+                              {task.delegateAgent}
+                            </p>
+                          </div>
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+                              task.status === 'error'
+                                ? 'border border-red-500/30 bg-red-500/10 text-red-300'
+                                : task.status === 'done'
+                                  ? 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                                  : 'border border-cyan-500/30 bg-cyan-500/10 text-cyan-300'
+                            }`}
+                          >
+                            {task.status}
+                          </span>
+                        </div>
+                        <p className="mt-2 text-sm text-gray-200">{task.message}</p>
+                        {task.content && (
+                          <pre className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg border border-gray-800 bg-gray-900 p-2 text-xs text-gray-300">
+                            {task.content}
+                          </pre>
+                        )}
+                        {task.lastToolName && (
+                          <div className="mt-2 rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-xs text-gray-400">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-gray-200">{task.lastToolName}</span>
+                              {typeof task.lastToolSuccess === 'boolean' && (
+                                <span>
+                                  {task.lastToolSuccess ? 'success' : 'failed'}
+                                </span>
+                              )}
+                              {typeof task.lastToolDurationSecs === 'number' && (
+                                <span>{task.lastToolDurationSecs}s</span>
+                              )}
+                            </div>
+                            {task.lastToolOutput && (
+                              <p className="mt-1 whitespace-pre-wrap break-words">
+                                {task.lastToolOutput}
+                              </p>
+                            )}
+                          </div>
+                        )}
+                        <p className="mt-2 text-[11px] text-gray-600">
+                          {task.updatedAt.toLocaleTimeString()}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="flex-1 overflow-y-auto p-4">
           {activeMessages.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center text-center text-gray-500">
@@ -1085,6 +1542,13 @@ export default function AgentChat() {
                 disabled={!connected || !activeSession}
                 className="w-full rounded-xl border border-gray-700 bg-gray-800 px-4 py-3 text-sm text-white placeholder-gray-500 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
               />
+              {federationEnabled && (
+                <p className="mt-2 text-xs text-gray-500">
+                  {selectedFederationPeerIds.length > 0
+                    ? `Selected remote workers: ${selectedFederationPeerIds.length}. The agent can delegate to those LAN peers from this chat.`
+                    : 'No remote workers selected for this chat. Delegation stays local unless you choose peers above.'}
+                </p>
+              )}
             </div>
             <button
               onClick={handleSend}

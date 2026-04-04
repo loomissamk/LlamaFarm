@@ -63,6 +63,7 @@ mod cost;
 mod cron;
 mod daemon;
 mod doctor;
+mod federation;
 mod gateway;
 mod goals;
 mod hardware;

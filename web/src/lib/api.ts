@@ -10,6 +10,9 @@ import type {
   CostSummary,
   CliTool,
   HealthSnapshot,
+  FederationPeerRoleUpdateResponse,
+  FederationPeersResponse,
+  FederationRole,
   WorkspaceBlobWriteResponse,
   WorkspaceBrowserResponse,
   WorkspaceFileResponse,
@@ -131,6 +134,23 @@ export function getStatus(): Promise<StatusResponse> {
 export function getHealth(): Promise<HealthSnapshot> {
   return apiFetch<HealthSnapshot | { health: HealthSnapshot }>('/api/health').then((data) =>
     unwrapField(data, 'health'),
+  );
+}
+
+export function getFederationPeers(): Promise<FederationPeersResponse> {
+  return apiFetch<FederationPeersResponse>('/api/federation/peers');
+}
+
+export function updateFederationPeerRole(
+  peerId: string,
+  role: FederationRole,
+): Promise<FederationPeerRoleUpdateResponse> {
+  return apiFetch<FederationPeerRoleUpdateResponse>(
+    `/api/federation/peers/${encodeURIComponent(peerId)}/role`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ role }),
+    },
   );
 }
 

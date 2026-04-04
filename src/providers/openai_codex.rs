@@ -1076,15 +1076,18 @@ data: [DONE]
     #[test]
     fn capabilities_includes_vision() {
         let options = ProviderRuntimeOptions {
+            auth_profile_override: None,
             provider_api_url: None,
             llamafarm_dir: None,
             secrets_encrypt: false,
-            auth_profile_override: None,
             reasoning_enabled: None,
             reasoning_level: None,
             custom_provider_api_mode: None,
             max_tokens_override: None,
             model_support_vision: None,
+            ollama_gpu_layers: None,
+            ollama_main_gpu: None,
+            ollama_num_ctx: None,
         };
         let provider =
             OpenAiCodexProvider::new(&options, None).expect("provider should initialize");
