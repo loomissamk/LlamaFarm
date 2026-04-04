@@ -30,7 +30,10 @@ pub mod cron_runs;
 pub mod cron_update;
 pub mod delegate;
 pub mod delegate_coordination_status;
+pub mod docker;
 pub mod file_edit;
+pub mod package_manager;
+pub mod service_control;
 pub mod file_read;
 pub mod file_write;
 pub mod git_operations;
@@ -99,8 +102,10 @@ pub use memory_store::MemoryStoreTool;
 pub use model_routing_config::ModelRoutingConfigTool;
 pub use ollama_model::OllamaModelTool;
 pub use pdf_read::PdfReadTool;
+pub use package_manager::PackageManagerTool;
 pub use process::ProcessTool;
 pub use proxy_config::ProxyConfigTool;
+pub use service_control::ServiceControlTool;
 pub use pushover::PushoverTool;
 pub use schedule::ScheduleTool;
 #[allow(unused_imports)]
@@ -298,6 +303,9 @@ pub fn all_tools_with_runtime(
             security.clone(),
             workspace_dir.to_path_buf(),
         )));
+        tool_arcs.push(Arc::new(docker::DockerTool::new(security.clone())));
+        tool_arcs.push(Arc::new(PackageManagerTool::new(security.clone())));
+        tool_arcs.push(Arc::new(ServiceControlTool::new(security.clone())));
     }
 
     if has_filesystem_access {
@@ -434,6 +442,7 @@ pub fn all_tools_with_runtime(
                 .map(|mode| mode.as_compatible_mode()),
             max_tokens_override: None,
             model_support_vision: root_config.model_support_vision,
+            ..Default::default()
         };
         let parent_tools = Arc::new(tool_arcs.clone());
         let mut delegate_tool = DelegateTool::new_with_options(

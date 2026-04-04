@@ -41,6 +41,8 @@ use serde::{Deserialize, Serialize};
 
 pub mod agent;
 pub(crate) mod approval;
+pub mod bakeoff;
+pub mod capability;
 pub(crate) mod auth;
 pub mod channels;
 pub mod config;
@@ -70,6 +72,7 @@ pub mod runtime_logs;
 pub(crate) mod security;
 pub(crate) mod service;
 pub(crate) mod skills;
+pub mod sop;
 pub mod test_capabilities;
 pub mod tools;
 pub(crate) mod tunnel;
@@ -294,6 +297,23 @@ Examples:
     Resume {
         /// Task ID
         id: String,
+    },
+}
+
+/// SOP management subcommands
+#[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SopCommands {
+    /// List all installed SOPs
+    List,
+    /// Validate one or all SOPs
+    Validate {
+        /// Optional SOP name to validate (defaults to all)
+        name: Option<String>,
+    },
+    /// Show details about a specific SOP
+    Show {
+        /// SOP name
+        name: String,
     },
 }
 

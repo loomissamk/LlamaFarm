@@ -100,6 +100,7 @@ impl PromptSection for IdentitySection {
             );
         }
         for file in [
+            "AGENT.md",
             "AGENTS.md",
             "SOUL.md",
             "TOOLS.md",

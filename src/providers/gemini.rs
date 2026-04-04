@@ -1271,6 +1271,7 @@ impl Provider for GeminiProvider {
             text: Some(text),
             tool_calls: Vec::new(),
             usage,
+            metrics: None,
             reasoning_content: None,
         })
     }

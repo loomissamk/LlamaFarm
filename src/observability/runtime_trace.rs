@@ -291,6 +291,194 @@ pub fn load_events(
     Ok(events)
 }
 
+// ── Per-run trace ─────────────────────────────────────────────────
+
+/// Writer for a single autonomous run's trace file.
+///
+/// Each run gets its own JSONL file at `<workspace>/state/runs/<run_id>.jsonl`.
+/// Append events with [`RunTracer::record`]; call [`RunTracer::close`] to write
+/// the final summary event.  The file is usable even if `close` is not called
+/// (e.g. on panic or cancellation).
+pub struct RunTracer {
+    run_id: String,
+    path: PathBuf,
+    started_at: String,
+    write_lock: std::sync::Mutex<()>,
+}
+
+impl RunTracer {
+    /// Open (create) a run trace file for `run_id` under `<workspace>/state/runs/`.
+    pub fn open(workspace_dir: &Path, run_id: &str) -> Result<Self> {
+        let dir = workspace_dir.join("state").join("runs");
+        fs::create_dir_all(&dir)?;
+        let path = dir.join(format!("{run_id}.jsonl"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .mode(0o600)
+                .open(&path)?;
+        }
+        #[cfg(not(unix))]
+        {
+            OpenOptions::new().create(true).append(true).open(&path)?;
+        }
+
+        Ok(Self {
+            run_id: run_id.to_string(),
+            path,
+            started_at: Utc::now().to_rfc3339(),
+            write_lock: std::sync::Mutex::new(()),
+        })
+    }
+
+    /// Record an event into this run's trace file.
+    pub fn record(
+        &self,
+        event_type: &str,
+        success: Option<bool>,
+        message: Option<&str>,
+        payload: serde_json::Value,
+    ) {
+        let event = RuntimeTraceEvent {
+            id: Uuid::new_v4().to_string(),
+            timestamp: Utc::now().to_rfc3339(),
+            event_type: event_type.to_string(),
+            channel: None,
+            provider: None,
+            model: None,
+            turn_id: Some(self.run_id.clone()),
+            success,
+            message: message.map(str::to_string),
+            payload,
+        };
+        let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
+        if let Ok(line) = serde_json::to_string(&event) {
+            if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&self.path) {
+                let _ = writeln!(f, "{line}");
+            }
+        }
+    }
+
+    /// Write a final `run_summary` event and return the run ID.
+    pub fn close(
+        &self,
+        success: bool,
+        attempts: u32,
+        elapsed_secs: u64,
+        outcome: &str,
+        final_answer_snippet: &str,
+    ) {
+        self.record(
+            "run_summary",
+            Some(success),
+            Some(outcome),
+            serde_json::json!({
+                "run_id": self.run_id,
+                "started_at": self.started_at,
+                "ended_at": Utc::now().to_rfc3339(),
+                "attempts": attempts,
+                "elapsed_secs": elapsed_secs,
+                "outcome": outcome,
+                "final_answer_snippet": &final_answer_snippet[..final_answer_snippet.len().min(400)],
+            }),
+        );
+    }
+
+    pub fn run_id(&self) -> &str {
+        &self.run_id
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+/// Format a run trace file as human-readable text for `llamafarm trace replay <run-id>`.
+pub fn format_run_trace(path: &Path) -> Result<String> {
+    if !path.exists() {
+        anyhow::bail!("Run trace file not found: {}", path.display());
+    }
+
+    let raw = fs::read_to_string(path)?;
+    let mut out = String::new();
+    let mut event_count = 0usize;
+
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(event) = serde_json::from_str::<RuntimeTraceEvent>(trimmed) else {
+            continue;
+        };
+
+        event_count += 1;
+        let status = match event.success {
+            Some(true) => "✓",
+            Some(false) => "✗",
+            None => "·",
+        };
+        let msg = event.message.as_deref().unwrap_or("");
+        out.push_str(&format!(
+            "[{}] {} {} {}\n",
+            &event.timestamp[..19],
+            status,
+            event.event_type,
+            msg,
+        ));
+
+        // For summary event, print the payload highlights.
+        if event.event_type == "run_summary" {
+            if let Some(obj) = event.payload.as_object() {
+                for key in &["outcome", "attempts", "elapsed_secs", "final_answer_snippet"] {
+                    if let Some(val) = obj.get(*key) {
+                        out.push_str(&format!("    {key}: {val}\n"));
+                    }
+                }
+            }
+        }
+    }
+
+    if event_count == 0 {
+        out.push_str("(empty run trace)");
+    }
+    Ok(out)
+}
+
+/// List all run trace files in `<workspace>/state/runs/`, most-recent first.
+pub fn list_run_traces(workspace_dir: &Path) -> Result<Vec<(String, PathBuf)>> {
+    let dir = workspace_dir.join("state").join("runs");
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut entries: Vec<(std::time::SystemTime, String, PathBuf)> = Vec::new();
+    for entry in fs::read_dir(&dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let run_id = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+        let mtime = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        entries.push((mtime, run_id, path));
+    }
+
+    entries.sort_by(|a, b| b.0.cmp(&a.0));
+    Ok(entries.into_iter().map(|(_, id, p)| (id, p)).collect())
+}
+
 /// Find a runtime trace event by id.
 pub fn find_event_by_id(path: &Path, id: &str) -> Result<Option<RuntimeTraceEvent>> {
     if !path.exists() {

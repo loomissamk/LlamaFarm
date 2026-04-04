@@ -5,7 +5,7 @@ pub mod traits;
 pub use schema::{
     apply_runtime_proxy_to_builder, build_runtime_proxy_client,
     build_runtime_proxy_client_with_timeouts, runtime_proxy_config, set_runtime_proxy_config,
-    AgentConfig, AgentsIpcConfig, AuditConfig, AutonomyConfig, BrowserComputerUseConfig,
+    AgentConfig, AgentExecutionMode, AgentsIpcConfig, AuditConfig, AutonomyConfig, BrowserComputerUseConfig,
     BrowserConfig, BuiltinHooksConfig, ChannelsConfig, ClassificationRule, ComposioConfig, Config,
     CoordinationConfig, CostConfig, CronConfig, DelegateAgentConfig, DiscordConfig,
     DockerRuntimeConfig, EmbeddingRouteConfig, EstopConfig, FeishuConfig, GatewayConfig,
@@ -17,7 +17,8 @@ pub use schema::{
     QdrantConfig, QueryClassificationConfig, ReliabilityConfig, ResearchPhaseConfig,
     ResearchTrigger, ResourceLimitsConfig, RuntimeConfig, SandboxBackend, SandboxConfig,
     SchedulerConfig, SecretsConfig, SecurityConfig, SkillsConfig, SkillsPromptInjectionMode,
-    SlackConfig, StorageConfig, StorageProviderConfig, StorageProviderSection, StreamMode,
+    SlackConfig, SopConfig, SopExecutionMode, StorageConfig, StorageProviderConfig, StorageProviderSection,
+    StreamMode,
     SyscallAnomalyConfig, TelegramConfig, TranscriptionConfig, TunnelConfig,
     WasmCapabilityEscalationMode, WasmModuleHashPolicy, WasmRuntimeConfig, WasmSecurityConfig,
     WebFetchConfig, WebSearchConfig, WebhookConfig, WorkspacesConfig,

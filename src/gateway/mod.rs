@@ -314,6 +314,7 @@ fn build_provider_runtime_options(config: &Config) -> providers::ProviderRuntime
         custom_provider_api_mode: config.provider_api.map(|mode| mode.as_compatible_mode()),
         max_tokens_override: None,
         model_support_vision: config.model_support_vision,
+        ..Default::default()
     }
 }
 

@@ -34,7 +34,21 @@ use execution::{
 };
 #[cfg(test)]
 use history::{apply_compaction_summary, build_compaction_transcript};
-use history::{auto_compact_history, trim_history};
+use history::{auto_compact_history, auto_compact_history_focused, trim_history};
+
+/// Compact conversation history with an optional objective focus.
+///
+/// Intended for use by [`AutonomousLoop`] between retry attempts so that
+/// compacted context stays relevant to the current task.
+pub(crate) async fn compact_history_with_focus(
+    history: &mut Vec<ChatMessage>,
+    provider: &dyn Provider,
+    model: &str,
+    max_history: usize,
+    focus: Option<&str>,
+) -> Result<bool> {
+    auto_compact_history_focused(history, provider, model, max_history, None, focus).await
+}
 #[allow(unused_imports)]
 use parsing::{
     default_param_for_tool, detect_tool_call_parse_issue, extract_json_values, map_tool_name_alias,
@@ -177,6 +191,12 @@ tokio::task_local! {
 
 tokio::task_local! {
     static TOOL_LOOP_NATIVE_TOOLS_ENABLED: Option<bool>;
+}
+
+tokio::task_local! {
+    /// Optional tool-result cache active for the current autonomous run.
+    /// Set via [`AutonomousLoop`] before calling `run_tool_call_loop`.
+    pub(crate) static TOOL_CACHE: Option<Arc<crate::agent::tool_cache::ToolResultCache>>;
 }
 
 const AUTO_CRON_DELIVERY_CHANNELS: &[&str] = &["telegram", "discord", "slack", "mattermost"];
@@ -1987,6 +2007,7 @@ pub(crate) async fn run_tool_call_loop(
                         text: Some(streamed.response_text),
                         tool_calls: Vec::new(),
                         usage: None,
+                        metrics: None,
                         reasoning_content: None,
                     })
                 }
@@ -3450,6 +3471,7 @@ pub async fn run(
         custom_provider_api_mode: config.provider_api.map(|mode| mode.as_compatible_mode()),
         max_tokens_override: None,
         model_support_vision: config.model_support_vision,
+        ..Default::default()
     };
 
     let provider: Box<dyn Provider> = providers::create_routed_provider_with_options(
@@ -3936,6 +3958,7 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
         custom_provider_api_mode: config.provider_api.map(|mode| mode.as_compatible_mode()),
         max_tokens_override: None,
         model_support_vision: config.model_support_vision,
+        ..Default::default()
     };
     let provider: Box<dyn Provider> = providers::create_routed_provider_with_options(
         provider_name,

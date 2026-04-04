@@ -12,6 +12,17 @@ pub struct OllamaProvider {
     base_url: String,
     api_key: Option<String>,
     reasoning_enabled: Option<bool>,
+    /// Number of model layers to load onto GPU(s).
+    /// - `None`  → let the Ollama server decide (uses its own `OLLAMA_NUM_GPU` or auto-detect).
+    /// - `Some(0)` → CPU-only (no GPU).
+    /// - `Some(999)` → fill GPU to capacity, spill remaining layers to CPU (max-GPU mode).
+    gpu_layers: Option<i32>,
+    /// Index of the GPU to use for the largest tensor weight (default 0).
+    main_gpu: Option<u32>,
+    /// Context window override (tokens). `None` uses the model's baked-in default.
+    /// Set to e.g. 32768 or 65536 for long autonomous runs.
+    /// Pair with `OLLAMA_KV_CACHE_TYPE=q8_0` server env to fit large contexts in VRAM.
+    num_ctx: Option<u32>,
 }
 
 // ─── Request Structures ───────────────────────────────────────────────────────
@@ -57,6 +68,18 @@ struct OutgoingFunction {
 #[derive(Debug, Serialize)]
 struct Options {
     temperature: f64,
+    /// GPU layer count: 0 = CPU-only, 999 = fill GPU then spill to CPU.
+    /// Omitted if None so the Ollama server uses its own default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    num_gpu: Option<i32>,
+    /// Which GPU index to use for the largest tensors (0-indexed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    main_gpu: Option<u32>,
+    /// Override the model's default context window size.
+    /// Set higher (e.g. 32768, 65536) to use more context for long autonomous runs.
+    /// Requires sufficient VRAM; pair with `OLLAMA_KV_CACHE_TYPE=q8_0` to stretch VRAM.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    num_ctx: Option<u32>,
 }
 
 // ─── Response Structures ──────────────────────────────────────────────────────
@@ -68,6 +91,18 @@ struct ApiChatResponse {
     prompt_eval_count: Option<u64>,
     #[serde(default)]
     eval_count: Option<u64>,
+    /// Nanoseconds spent loading the model into memory (0 when already loaded).
+    #[serde(default)]
+    load_duration: Option<u64>,
+    /// Nanoseconds spent processing the input prompt (prefill phase).
+    #[serde(default)]
+    prompt_eval_duration: Option<u64>,
+    /// Nanoseconds spent generating output tokens (decode phase).
+    #[serde(default)]
+    eval_duration: Option<u64>,
+    /// Total nanoseconds for the full request.
+    #[serde(default)]
+    total_duration: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -119,15 +154,74 @@ impl OllamaProvider {
         api_key: Option<&str>,
         reasoning_enabled: Option<bool>,
     ) -> Self {
+        Self::new_with_gpu(base_url, api_key, reasoning_enabled, None, None)
+    }
+
+    /// Full constructor.
+    ///
+    /// `gpu_layers`:
+    /// - `None`     → defer to Ollama server / `OLLAMA_NUM_GPU` env var.
+    /// - `Some(0)`  → CPU-only inference.
+    /// - `Some(999)` → fill every available GPU layer slot; layers that don't fit
+    ///   automatically overflow to CPU RAM. This is the recommended setting for
+    ///   "max GPU, fallback CPU" behaviour on a local box.
+    ///
+    /// If `gpu_layers` is `None` *and* the `OLLAMA_GPU_LAYERS` env var is set,
+    /// its value is used so callers don't need to thread it through manually.
+    pub fn new_with_gpu(
+        base_url: Option<&str>,
+        api_key: Option<&str>,
+        reasoning_enabled: Option<bool>,
+        gpu_layers: Option<i32>,
+        main_gpu: Option<u32>,
+    ) -> Self {
+        Self::new_full(base_url, api_key, reasoning_enabled, gpu_layers, main_gpu, None)
+    }
+
+    /// Full constructor with all inference options.
+    ///
+    /// - `gpu_layers`: GPU layer offload count (999 = fill GPU, spill rest to CPU).
+    /// - `main_gpu`: GPU index for largest tensors.
+    /// - `num_ctx`: Context window override. Pair with `OLLAMA_KV_CACHE_TYPE=q8_0`
+    ///   to fit larger contexts in the same VRAM (turboquant-style KV compression).
+    pub fn new_full(
+        base_url: Option<&str>,
+        api_key: Option<&str>,
+        reasoning_enabled: Option<bool>,
+        gpu_layers: Option<i32>,
+        main_gpu: Option<u32>,
+        num_ctx: Option<u32>,
+    ) -> Self {
         let api_key = api_key.and_then(|value| {
             let trimmed = value.trim();
             (!trimmed.is_empty()).then(|| trimmed.to_string())
+        });
+
+        // If caller didn't specify, check environment variables.
+        // Ollama itself also reads OLLAMA_NUM_GPU but we mirror it here so the
+        // per-request options field is populated even when the server default
+        // differs from what the user configured in LlamaFarm.
+        let gpu_layers = gpu_layers.or_else(|| {
+            std::env::var("OLLAMA_GPU_LAYERS")
+                .or_else(|_| std::env::var("OLLAMA_NUM_GPU"))
+                .ok()
+                .and_then(|v| v.trim().parse::<i32>().ok())
+        });
+
+        // Resolve num_ctx: caller value → OLLAMA_NUM_CTX env var → None.
+        let num_ctx = num_ctx.or_else(|| {
+            std::env::var("OLLAMA_NUM_CTX")
+                .ok()
+                .and_then(|v| v.trim().parse::<u32>().ok())
         });
 
         Self {
             base_url: Self::normalize_base_url(base_url.unwrap_or("http://localhost:11434")),
             api_key,
             reasoning_enabled,
+            gpu_layers,
+            main_gpu,
+            num_ctx,
         }
     }
 
@@ -211,7 +305,12 @@ impl OllamaProvider {
             model: model.to_string(),
             messages,
             stream: false,
-            options: Options { temperature },
+            options: Options {
+                temperature,
+                num_gpu: self.gpu_layers,
+                main_gpu: self.main_gpu,
+                num_ctx: self.num_ctx,
+            },
             think: self.reasoning_enabled,
             tools: tools.map(|t| t.to_vec()),
         }
@@ -865,6 +964,48 @@ impl Provider for OllamaProvider {
             None
         };
 
+        // Compute accurate inference metrics from Ollama's nanosecond timing fields.
+        // generation_tps (decode TPS) is the meaningful throughput number — it excludes
+        // model load and prefill time, showing only the sustained generation rate.
+        let metrics = {
+            let generation_tps = response.eval_count.zip(response.eval_duration).and_then(
+                |(tokens, ns)| {
+                    if ns > 0 {
+                        Some(tokens as f64 / (ns as f64 / 1_000_000_000.0))
+                    } else {
+                        None
+                    }
+                },
+            );
+            let prefill_tps = response
+                .prompt_eval_count
+                .zip(response.prompt_eval_duration)
+                .and_then(|(tokens, ns)| {
+                    if ns > 0 {
+                        Some(tokens as f64 / (ns as f64 / 1_000_000_000.0))
+                    } else {
+                        None
+                    }
+                });
+            let ttft_ms = response.prompt_eval_duration.map(|prompt_ns| {
+                let load_ns = response.load_duration.unwrap_or(0);
+                (load_ns + prompt_ns) as f64 / 1_000_000.0
+            });
+            let total_ms = response
+                .total_duration
+                .map(|ns| ns as f64 / 1_000_000.0);
+            if generation_tps.is_some() || ttft_ms.is_some() {
+                Some(crate::providers::traits::InferenceMetrics {
+                    ttft_ms,
+                    generation_tps,
+                    prefill_tps,
+                    total_ms,
+                })
+            } else {
+                None
+            }
+        };
+
         // Native tool calls returned by the model.
         if !response.message.tool_calls.is_empty() {
             let tool_calls: Vec<ToolCall> = response
@@ -889,6 +1030,7 @@ impl Provider for OllamaProvider {
                 text,
                 tool_calls,
                 usage,
+                metrics,
                 reasoning_content: None,
             });
         }
@@ -906,6 +1048,7 @@ impl Provider for OllamaProvider {
                 text: prompt_text,
                 tool_calls: prompt_tool_calls,
                 usage,
+                metrics,
                 reasoning_content: response.message.thinking.clone(),
             });
         }
@@ -924,6 +1067,7 @@ impl Provider for OllamaProvider {
             text: Some(text),
             tool_calls: vec![],
             usage,
+            metrics,
             reasoning_content: response.message.thinking.clone(),
         })
     }
@@ -971,6 +1115,7 @@ impl Provider for OllamaProvider {
             text: Some(text),
             tool_calls: vec![],
             usage: None,
+            metrics: None,
             reasoning_content: None,
         })
     }

@@ -46,7 +46,7 @@ shellexpand = "3.1"
 schemars = "1.2"
 
 # Logging - minimal
-tracing = { version = "0.1", default-features = false }
+tracing = { version = "0.1", default-features = false, features = ["attributes"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "ansi", "env-filter", "chrono"] }
 
 # Observability - Prometheus metrics

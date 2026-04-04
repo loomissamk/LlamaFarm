@@ -180,6 +180,10 @@ pub struct Config {
     #[serde(default)]
     pub goal_loop: GoalLoopConfig,
 
+    /// SOP engine configuration: execution mode, concurrency, approval timeouts (`[sop]`).
+    #[serde(default)]
+    pub sop: SopConfig,
+
     /// Channel configurations: Telegram, Discord, Slack, etc. (`[channels_config]`).
     #[serde(default)]
     pub channels_config: ChannelsConfig,
@@ -300,6 +304,42 @@ pub struct ProviderConfig {
     /// (e.g. OpenAI Codex `/responses` reasoning effort).
     #[serde(default)]
     pub reasoning_level: Option<String>,
+
+    /// Ollama: number of model layers to load onto GPU(s).
+    ///
+    /// | Value  | Behaviour                                                   |
+    /// |--------|-------------------------------------------------------------|
+    /// | absent | Defer to Ollama server default / `OLLAMA_NUM_GPU` env var   |
+    /// | `0`    | CPU-only — no GPU offload                                   |
+    /// | `999`  | Fill GPU to capacity; remaining layers spill to CPU RAM     |
+    ///
+    /// Set to `999` to get "max GPU, overflow to CPU" on a local GPU box.
+    /// The env var `OLLAMA_GPU_LAYERS` (or `OLLAMA_NUM_GPU`) is also read as a
+    /// fallback when this field is absent, so you can also just export it in
+    /// your shell.
+    #[serde(default)]
+    pub ollama_gpu_layers: Option<i32>,
+
+    /// Ollama: GPU index to use for the largest weight tensors (0-indexed).
+    /// Only relevant when multiple GPUs are present. Default: 0.
+    #[serde(default)]
+    pub ollama_main_gpu: Option<u32>,
+
+    /// Ollama: context window size override (tokens).
+    ///
+    /// Increases the context window beyond the model's default, enabling longer
+    /// autonomous runs without context truncation. Setting this higher than the
+    /// model default requires more VRAM for the KV cache.
+    ///
+    /// **Recommended**: pair with `OLLAMA_KV_CACHE_TYPE=q8_0` in Ollama's
+    /// service environment. q8_0 halves KV cache VRAM usage, allowing context
+    /// windows 2x larger in the same VRAM — the same effect as turboquant's
+    /// KV cache compression but using Ollama's built-in capability.
+    ///
+    /// Example: set to `32768` or `65536` for long agentic task runs.
+    /// The env var `OLLAMA_NUM_CTX` is also read as a fallback.
+    #[serde(default)]
+    pub ollama_num_ctx: Option<u32>,
 }
 
 /// Multi-workspace registry configuration (`[workspaces]`).
@@ -2424,6 +2464,72 @@ pub struct AutonomyConfig {
     #[serde(default)]
     pub non_cli_natural_language_approval_mode_by_channel:
         HashMap<String, NonCliNaturalLanguageApprovalMode>,
+
+    /// Agent execution mode. Controls how the agent behaves during a run.
+    ///
+    /// - `chat` (default): interactive assistant with supervised approvals
+    /// - `operator`: machine operator, `level = full`, no per-step confirmation
+    /// - `autonomous_operator`: full autonomy, long multi-step tasks, goal loop enabled
+    /// - `chaos_lab`: intentional break/recover experimentation on disposable targets
+    #[serde(default)]
+    pub execution_mode: AgentExecutionMode,
+
+    /// chaos_lab: maximum disk fill quota in MB (0 = no stress filling). Default: `0`.
+    #[serde(default)]
+    pub chaos_disk_quota_mb: u64,
+
+    /// chaos_lab: maximum retry budget for break-recover loops. Default: `20`.
+    #[serde(default = "default_chaos_retry_budget")]
+    pub chaos_retry_budget: u32,
+
+    /// chaos_lab / autonomous_operator: wall-clock cap in seconds (0 = no cap). Default: `0`.
+    #[serde(default)]
+    pub wall_clock_cap_secs: u64,
+}
+
+// ── AgentExecutionMode ───────────────────────────────────────────
+
+/// Controls the overall agent execution behaviour for a run.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentExecutionMode {
+    /// Interactive assistant with supervised approvals (default).
+    #[default]
+    Chat,
+    /// Machine operator: `autonomy.level = full`, no per-step confirmation.
+    Operator,
+    /// Full autonomy with goal loop enabled. Long multi-step tasks run unattended.
+    AutonomousOperator,
+    /// Intentional break/recover experimentation on disposable targets.
+    /// Unlocks disk stress, config mutation, service restart, and recovery loops.
+    ChaosLab,
+}
+
+impl AgentExecutionMode {
+    /// Whether this mode allows destructive experiments (disk fill, config mutation, etc.).
+    pub fn is_chaos(&self) -> bool {
+        matches!(self, Self::ChaosLab)
+    }
+
+    /// Whether this mode runs fully autonomously (no approval prompts).
+    pub fn is_autonomous(&self) -> bool {
+        matches!(self, Self::Operator | Self::AutonomousOperator | Self::ChaosLab)
+    }
+}
+
+impl std::fmt::Display for AgentExecutionMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Chat => write!(f, "chat"),
+            Self::Operator => write!(f, "operator"),
+            Self::AutonomousOperator => write!(f, "autonomous_operator"),
+            Self::ChaosLab => write!(f, "chaos_lab"),
+        }
+    }
+}
+
+fn default_chaos_retry_budget() -> u32 {
+    20
 }
 
 fn default_auto_approve() -> Vec<String> {
@@ -2525,6 +2631,10 @@ impl Default for AutonomyConfig {
             non_cli_approval_approvers: Vec::new(),
             non_cli_natural_language_approval_mode: NonCliNaturalLanguageApprovalMode::default(),
             non_cli_natural_language_approval_mode_by_channel: HashMap::new(),
+            execution_mode: AgentExecutionMode::Chat,
+            chaos_disk_quota_mb: 0,
+            chaos_retry_budget: default_chaos_retry_budget(),
+            wall_clock_cap_secs: 0,
         }
     }
 }
@@ -3176,6 +3286,84 @@ impl Default for GoalLoopConfig {
             max_steps_per_cycle: 3,
             channel: None,
             target: None,
+        }
+    }
+}
+
+// ── SopExecutionMode ─────────────────────────────────────────────
+
+/// How much autonomy the agent has when executing an SOP.
+///
+/// Defined here (in config) so both the lib and binary crates can reference it
+/// without a cross-module `crate::sop` path.  `sop::types` re-exports this.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SopExecutionMode {
+    /// Execute all steps without human approval.
+    Auto,
+    /// Request approval before starting, then execute all steps (default).
+    #[default]
+    Supervised,
+    /// Request approval before each step.
+    StepByStep,
+    /// Critical/High → Auto, Normal/Low → Supervised.
+    PriorityBased,
+}
+
+impl std::fmt::Display for SopExecutionMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Auto => write!(f, "auto"),
+            Self::Supervised => write!(f, "supervised"),
+            Self::StepByStep => write!(f, "step_by_step"),
+            Self::PriorityBased => write!(f, "priority_based"),
+        }
+    }
+}
+
+// ── SOP Config ──────────────────────────────────────────────────
+
+/// SOP (Standard Operating Procedure) engine configuration (`[sop]` section).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SopConfig {
+    /// Optional path to the SOPs directory. Defaults to `<workspace>/sops`.
+    #[serde(default)]
+    pub sops_dir: Option<String>,
+    /// Default execution mode applied to SOPs that don't specify their own.
+    /// - `auto`: execute all steps without human approval (use for god/autonomous mode)
+    /// - `supervised`: request approval before starting, then execute all steps (default)
+    /// - `step_by_step`: request approval before each step
+    /// - `priority_based`: Critical/High → Auto, Normal/Low → Supervised
+    #[serde(default)]
+    pub default_execution_mode: SopExecutionMode,
+    /// Maximum total concurrent SOP runs across all SOPs. `0` means unlimited. Default: `16`.
+    #[serde(default = "default_sop_max_concurrent_total")]
+    pub max_concurrent_total: usize,
+    /// Seconds before a WaitingApproval run times out for Critical/High-priority SOPs.
+    /// `0` disables the timeout check entirely. Default: `0`.
+    #[serde(default)]
+    pub approval_timeout_secs: u64,
+    /// Maximum finished runs to retain in memory for status queries. `0` means unlimited. Default: `200`.
+    #[serde(default = "default_sop_max_finished_runs")]
+    pub max_finished_runs: usize,
+}
+
+fn default_sop_max_concurrent_total() -> usize {
+    16
+}
+
+fn default_sop_max_finished_runs() -> usize {
+    200
+}
+
+impl Default for SopConfig {
+    fn default() -> Self {
+        Self {
+            sops_dir: None,
+            default_execution_mode: SopExecutionMode::default(),
+            max_concurrent_total: default_sop_max_concurrent_total(),
+            approval_timeout_secs: 0,
+            max_finished_runs: default_sop_max_finished_runs(),
         }
     }
 }
@@ -4843,6 +5031,7 @@ impl Default for Config {
             heartbeat: HeartbeatConfig::default(),
             cron: CronConfig::default(),
             goal_loop: GoalLoopConfig::default(),
+            sop: SopConfig::default(),
             channels_config: ChannelsConfig::default(),
             memory: MemoryConfig::default(),
             storage: StorageConfig::default(),
@@ -7310,6 +7499,7 @@ default_temperature = 0.7
             },
             cron: CronConfig::default(),
             goal_loop: GoalLoopConfig::default(),
+            sop: SopConfig::default(),
             channels_config: ChannelsConfig {
                 cli: true,
                 bridge: None,
@@ -7738,6 +7928,7 @@ tool_dispatcher = "xml"
             heartbeat: HeartbeatConfig::default(),
             cron: CronConfig::default(),
             goal_loop: GoalLoopConfig::default(),
+            sop: SopConfig::default(),
             channels_config: ChannelsConfig::default(),
             memory: MemoryConfig::default(),
             storage: StorageConfig::default(),

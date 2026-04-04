@@ -1,10 +1,18 @@
-//! RAG pipeline for hardware datasheet retrieval.
+//! RAG pipelines.
 //!
-//! Supports:
-//! - Markdown and text datasheets (always)
-//! - PDF ingestion (with `rag-pdf` feature)
-//! - Pin/alias tables (e.g. `red_led: 13`) for explicit lookup
-//! - Keyword retrieval (default) or semantic search via embeddings (optional)
+//! - [`HardwareRag`]: hardware datasheet retrieval (pin aliases, datasheets)
+//! - [`doc_rag::DocRag`]: general-purpose document RAG (ingest → chunk → embed → hybrid retrieve → cite)
+
+pub mod doc_rag;
+pub use doc_rag::DocRag;
+
+// Hardware datasheet retrieval.
+//
+// Supports:
+// - Markdown and text datasheets (always)
+// - PDF ingestion (with `rag-pdf` feature)
+// - Pin/alias tables (e.g. `red_led: 13`) for explicit lookup
+// - Keyword retrieval (default) or semantic search via embeddings (optional)
 
 use crate::memory::chunker;
 use std::collections::HashMap;

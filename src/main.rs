@@ -38,6 +38,7 @@ use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use dialoguer::{Input, Password};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
+use std::path::PathBuf;
 use tracing::{info, warn};
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -296,6 +297,22 @@ Examples:
     Doctor {
         #[command(subcommand)]
         doctor_command: Option<DoctorCommands>,
+    },
+
+    /// Inspect per-run autonomous traces
+    #[command(long_about = "\
+Inspect per-run autonomous traces.
+
+Lists and replays JSONL traces written by the autonomous loop at
+`<workspace>/state/runs/<run-id>.jsonl`.
+
+Examples:
+  llamafarm trace list
+  llamafarm trace replay 3f2c...
+  llamafarm trace replay --latest")]
+    Trace {
+        #[command(subcommand)]
+        trace_command: TraceCommands,
     },
 
     /// Show system status (full details)
@@ -773,6 +790,20 @@ enum DoctorCommands {
 }
 
 #[derive(Subcommand, Debug)]
+enum TraceCommands {
+    /// List known autonomous run traces (newest first)
+    List,
+    /// Replay a run trace as a readable timeline
+    Replay {
+        /// Run ID to replay
+        run_id: Option<String>,
+        /// Replay the most recent run trace
+        #[arg(long)]
+        latest: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 enum MemoryCommands {
     /// List memory entries with optional filters
     List {
@@ -1190,6 +1221,8 @@ async fn main() -> Result<()> {
             None => doctor::run(&config),
         },
 
+        Commands::Trace { trace_command } => handle_trace_command(trace_command, &config),
+
         Commands::Channel { channel_command } => match channel_command {
             ChannelCommands::Start => channels::start_channels(config).await,
             ChannelCommands::Doctor => channels::doctor_channels(config).await,
@@ -1448,6 +1481,66 @@ fn build_resume_selector(
         return Ok(security::ResumeSelector::Tools(tools));
     }
     Ok(security::ResumeSelector::KillAll)
+}
+
+fn handle_trace_command(trace_command: TraceCommands, config: &Config) -> Result<()> {
+    match trace_command {
+        TraceCommands::List => {
+            let traces = observability::runtime_trace::list_run_traces(&config.workspace_dir)?;
+            if traces.is_empty() {
+                println!(
+                    "No autonomous run traces found at {}",
+                    config.workspace_dir.join("state/runs").display()
+                );
+                return Ok(());
+            }
+            println!("Autonomous run traces (newest first):");
+            for (run_id, path) in traces {
+                println!("  {run_id:36} {}", path.display());
+            }
+            Ok(())
+        }
+        TraceCommands::Replay { run_id, latest } => {
+            let path = resolve_run_trace_path(config, run_id.as_deref(), latest)?;
+            let rendered = observability::runtime_trace::format_run_trace(&path)?;
+            println!("{rendered}");
+            Ok(())
+        }
+    }
+}
+
+fn resolve_run_trace_path(config: &Config, run_id: Option<&str>, latest: bool) -> Result<PathBuf> {
+    if run_id.is_some() && latest {
+        bail!("Use either <run_id> or --latest, not both");
+    }
+
+    if latest {
+        let traces = observability::runtime_trace::list_run_traces(&config.workspace_dir)?;
+        let Some((_, path)) = traces.into_iter().next() else {
+            bail!(
+                "No autonomous run traces found at {}",
+                config.workspace_dir.join("state/runs").display()
+            );
+        };
+        return Ok(path);
+    }
+
+    let Some(run_id) = run_id else {
+        bail!("Specify <run_id> or use --latest");
+    };
+    let path = config
+        .workspace_dir
+        .join("state")
+        .join("runs")
+        .join(format!("{run_id}.jsonl"));
+    if !path.exists() {
+        bail!(
+            "Run trace not found for id '{}': {}",
+            run_id,
+            path.display()
+        );
+    }
+    Ok(path)
 }
 
 fn print_estop_status(state: &security::EstopState) {
@@ -2314,6 +2407,37 @@ mod tests {
                 ..
             } => assert_eq!(domains, vec!["*.chase.com".to_string()]),
             other => panic!("expected estop resume command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn trace_cli_parses_list() {
+        let cli = Cli::try_parse_from(["llamafarm", "trace", "list"])
+            .expect("trace list should parse");
+
+        match cli.command {
+            Commands::Trace {
+                trace_command: TraceCommands::List,
+            } => {}
+            other => panic!("expected trace list command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn trace_cli_parses_replay_latest() {
+        let cli = Cli::try_parse_from(["llamafarm", "trace", "replay", "--latest"])
+            .expect("trace replay --latest should parse");
+
+        match cli.command {
+            Commands::Trace {
+                trace_command:
+                    TraceCommands::Replay {
+                        run_id, latest: true, ..
+                    },
+            } => {
+                assert!(run_id.is_none());
+            }
+            other => panic!("expected trace replay command, got {other:?}"),
         }
     }
 
