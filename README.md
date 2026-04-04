@@ -45,6 +45,12 @@ The bundle includes:
 ./scripts/docker/up-bundle-nvidia.sh
 ```
 
+Exact rebundle command:
+
+```bash
+docker compose -f docker-compose.bundle.yml -f docker-compose.bundle.nvidia.yml up -d --build
+```
+
 ## Agentic Online Research Example
 
 ```bash
