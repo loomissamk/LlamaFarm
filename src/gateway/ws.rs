@@ -1854,7 +1854,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                 system_prompt.push_str(&crate::agent::loop_::build_auto_plan_execute_instructions());
 
                 if let Some(federation) = &state.federation {
-                    let remote_agents = federation.remote_adapter().available_remote_agents();
+                    let remote_agents = federation.remote_adapter().available_remote_agents_info();
                     if !remote_agents.is_empty() {
                         system_prompt.push_str(
                             &crate::agent::loop_::build_federation_delegation_instructions(

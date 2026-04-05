@@ -154,6 +154,20 @@ export function updateFederationPeerRole(
   );
 }
 
+export function updateFederationPeerHints(
+  peerId: string,
+  specialization: string,
+  priority: number,
+): Promise<{ status: string; peer: FederationPeerSummary }> {
+  return apiFetch<{ status: string; peer: FederationPeerSummary }>(
+    `/api/federation/peers/${encodeURIComponent(peerId)}/hints`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ specialization, priority }),
+    },
+  );
+}
+
 export function addFederationManualPeer(endpoint: string): Promise<{ status: string; base_url: string }> {
   return apiFetch('/api/federation/peers', {
     method: 'POST',

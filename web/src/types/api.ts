@@ -259,6 +259,8 @@ export interface FederationPeerSummary {
   installed_models: string[];
   tools: FederationToolCapability[];
   last_seen?: string | null;
+  specialization: string;
+  priority: number;
 }
 
 export interface FederationPeersResponse {

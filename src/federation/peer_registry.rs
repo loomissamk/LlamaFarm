@@ -6,6 +6,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Lightweight info about a ready remote agent, used to build system prompt guidance.
+#[derive(Debug, Clone)]
+pub struct RemoteAgentInfo {
+    pub agent_name: String,
+    pub specialization: String,
+    pub priority: i32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum FederationPeerSource {
@@ -71,6 +79,8 @@ pub struct FederationPeerSummary {
     pub installed_models: Vec<String>,
     pub tools: Vec<FederationToolCapability>,
     pub last_seen: Option<String>,
+    pub specialization: String,
+    pub priority: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,6 +150,10 @@ struct FederationPeerRecord {
     installed_models: Vec<String>,
     tools: Vec<FederationToolCapability>,
     last_seen: Option<DateTime<Utc>>,
+    /// Free-text hint injected into the system prompt so the LLM knows what to send here.
+    specialization: String,
+    /// Higher priority peers are listed first in the system prompt (default 0).
+    priority: i32,
 }
 
 #[derive(Clone)]
@@ -181,6 +195,8 @@ impl FederationPeerRegistry {
             installed_models: Vec::new(),
             tools: Vec::new(),
             last_seen: None,
+            specialization: String::new(),
+            priority: 0,
         });
     }
 
@@ -238,6 +254,8 @@ impl FederationPeerRegistry {
                 installed_models: Vec::new(),
                 tools: Vec::new(),
                 last_seen: Some(now),
+                specialization: String::new(),
+                priority: 0,
             },
         );
     }
@@ -309,6 +327,8 @@ impl FederationPeerRegistry {
                 installed_models: capabilities.installed_models,
                 tools: capabilities.tools,
                 last_seen: Some(now),
+                specialization: String::new(),
+                priority: 0,
             },
         );
     }
@@ -359,6 +379,19 @@ impl FederationPeerRegistry {
         Some(record_to_summary(record))
     }
 
+    pub fn set_peer_hints(
+        &self,
+        peer_id: &str,
+        specialization: String,
+        priority: i32,
+    ) -> Option<FederationPeerSummary> {
+        let mut peers = self.peers.write();
+        let record = peers.get_mut(peer_id)?;
+        record.specialization = specialization;
+        record.priority = priority;
+        Some(record_to_summary(record))
+    }
+
     pub fn selected_worker_peers(&self, peer_ids: &[String]) -> Vec<FederationPeerTarget> {
         let wanted = peer_ids.iter().map(String::as_str).collect::<Vec<_>>();
         self.peers
@@ -388,6 +421,27 @@ impl FederationPeerRegistry {
             .into_iter()
             .map(|peer| peer.delegate_agent)
             .collect()
+    }
+
+    /// Returns agent infos sorted by priority descending (higher priority listed first).
+    pub fn available_remote_agent_infos(&self, peer_ids: &[String]) -> Vec<RemoteAgentInfo> {
+        let wanted = peer_ids.iter().map(String::as_str).collect::<Vec<_>>();
+        let peers = self.peers.read();
+        let mut infos: Vec<RemoteAgentInfo> = peers
+            .values()
+            .filter(|peer| wanted.iter().any(|candidate| *candidate == peer.peer_id))
+            .filter(|peer| peer.online)
+            .filter(|peer| peer.assigned_role.allows_worker())
+            .filter(|peer| peer.role_support.allows_worker())
+            .filter(|peer| peer.allow_remote_subagents)
+            .map(|peer| RemoteAgentInfo {
+                agent_name: peer.delegate_agent.clone(),
+                specialization: peer.specialization.clone(),
+                priority: peer.priority,
+            })
+            .collect();
+        infos.sort_by(|a, b| b.priority.cmp(&a.priority).then_with(|| a.agent_name.cmp(&b.agent_name)));
+        infos
     }
 
     pub fn find_peer_by_agent_name(
@@ -448,6 +502,8 @@ fn record_to_summary(record: &FederationPeerRecord) -> FederationPeerSummary {
         installed_models: record.installed_models.clone(),
         tools: record.tools.clone(),
         last_seen: record.last_seen.map(|value| value.to_rfc3339()),
+        specialization: record.specialization.clone(),
+        priority: record.priority,
     }
 }
 

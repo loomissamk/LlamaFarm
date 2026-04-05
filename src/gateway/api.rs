@@ -606,6 +606,13 @@ pub struct FederationPeerRoleUpdateBody {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct FederationPeerHintsBody {
+    pub specialization: String,
+    #[serde(default)]
+    pub priority: i32,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct FederationAddManualPeerBody {
     pub endpoint: String,
 }
@@ -2294,6 +2301,37 @@ pub async fn handle_api_federation_peer_role_put(
     };
 
     match federation.set_assigned_role(&peer_id, body.role) {
+        Some(peer) => Json(serde_json::json!({
+            "status": "ok",
+            "peer": peer,
+        }))
+        .into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!("Unknown federation peer '{peer_id}'")
+            })),
+        )
+            .into_response(),
+    }
+}
+
+/// PUT /api/federation/peers/:peer_id/hints — set specialization and priority for a peer.
+pub async fn handle_api_federation_peer_hints_put(
+    State(state): State<AppState>,
+    Path(peer_id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<FederationPeerHintsBody>,
+) -> impl IntoResponse {
+    if let Err(error) = require_auth(&state, &headers) {
+        return error.into_response();
+    }
+
+    let Some(federation) = &state.federation else {
+        return federation_disabled_response();
+    };
+
+    match federation.set_peer_hints(&peer_id, body.specialization, body.priority) {
         Some(peer) => Json(serde_json::json!({
             "status": "ok",
             "peer": peer,

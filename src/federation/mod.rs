@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 struct FederationLocalNodeState {
@@ -37,13 +38,18 @@ pub struct FederationService {
 }
 
 impl FederationService {
-    pub fn new(config: &FederationConfig, gateway_port: u16) -> anyhow::Result<Option<Arc<Self>>> {
+    pub fn new(
+        config: &FederationConfig,
+        gateway_port: u16,
+        config_dir: Option<&std::path::Path>,
+    ) -> anyhow::Result<Option<Arc<Self>>> {
         if !config.enabled {
             return Ok(None);
         }
 
         let api_port = config.api_port.unwrap_or(gateway_port);
-        let node_id = build_node_id(&config.node_name, api_port);
+        let machine_uuid = load_or_create_machine_uuid(config_dir);
+        let node_id = build_node_id(&config.node_name, api_port, &machine_uuid);
         let registry = Arc::new(FederationPeerRegistry::new(
             Duration::from_secs(config.peer_timeout_seconds.max(1)),
             config.default_role,
@@ -119,6 +125,15 @@ impl FederationService {
         role: FederationRole,
     ) -> Option<peer_registry::FederationPeerSummary> {
         self.registry.set_assigned_role(peer_id, role)
+    }
+
+    pub fn set_peer_hints(
+        &self,
+        peer_id: &str,
+        specialization: String,
+        priority: i32,
+    ) -> Option<peer_registry::FederationPeerSummary> {
+        self.registry.set_peer_hints(peer_id, specialization, priority)
     }
 
     pub fn update_local_runtime(&self, gateway_port: u16, default_model: &str, tool_names: &[String]) {
@@ -244,8 +259,24 @@ pub fn delegate_agent_name(display_name: &str, peer_id: &str) -> String {
     format!("peer_{sanitized}_{suffix}")
 }
 
-fn build_node_id(node_name: &str, api_port: u16) -> String {
-    format!("{}-{}", sanitize_token(node_name), api_port)
+fn build_node_id(node_name: &str, api_port: u16, machine_uuid: &str) -> String {
+    format!("{}-{}-{}", sanitize_token(node_name), api_port, &machine_uuid[..8])
+}
+
+fn load_or_create_machine_uuid(config_dir: Option<&std::path::Path>) -> String {
+    let Some(dir) = config_dir else {
+        return Uuid::new_v4().to_string();
+    };
+    let path = dir.join("federation_node_id");
+    if let Ok(contents) = std::fs::read_to_string(&path) {
+        let trimmed = contents.trim().to_string();
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+    }
+    let id = Uuid::new_v4().to_string();
+    let _ = std::fs::write(&path, &id);
+    id
 }
 
 fn sanitize_token(raw: &str) -> String {

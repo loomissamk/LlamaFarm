@@ -13,7 +13,7 @@ import {
   Wrench,
   XCircle,
 } from 'lucide-react';
-import { addFederationManualPeer, getFederationPeers, updateFederationPeerRole } from '@/lib/api';
+import { addFederationManualPeer, getFederationPeers, updateFederationPeerHints, updateFederationPeerRole } from '@/lib/api';
 import {
   loadFederationPeerSelections,
   loadFederationTasksBySession,
@@ -246,6 +246,33 @@ export default function FederationPage() {
     }
   };
 
+  const handleSpecializationEdit = (peerId: string, value: string) => {
+    setFederation((prev) =>
+      prev
+        ? { ...prev, peers: prev.peers.map((p) => (p.peer_id === peerId ? { ...p, specialization: value } : p)) }
+        : prev,
+    );
+  };
+
+  const handleHintsChange = async (peerId: string, specialization: string, priority: number) => {
+    try {
+      const response = await updateFederationPeerHints(peerId, specialization, priority);
+      setFederation((prev) =>
+        prev
+          ? {
+              ...prev,
+              peers: prev.peers.map((peer) =>
+                peer.peer_id === peerId ? response.peer : peer,
+              ),
+            }
+          : prev,
+      );
+      setError(null);
+    } catch {
+      setError('Failed to update peer hints.');
+    }
+  };
+
   const renderPeerList = (
     title: string,
     description: string,
@@ -322,23 +349,63 @@ export default function FederationPage() {
                     </div>
                   </div>
 
-                  <div>
-                    <label className="mb-1 block text-[11px] uppercase tracking-wide text-gray-500">
-                      Assigned role
-                    </label>
-                    <select
-                      value={peer.assigned_role}
-                      onChange={(event) =>
-                        void handleRoleChange(peer.peer_id, event.target.value as FederationRole)
-                      }
-                      className="w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white focus:border-cyan-500 focus:outline-none"
-                    >
-                      <option value="master">master</option>
-                      <option value="worker">worker</option>
-                      <option value="both">both</option>
-                      <option value="disabled">disabled</option>
-                    </select>
+                  <div className="space-y-3">
+                    <div>
+                      <label htmlFor={`role-${peer.peer_id}`} className="mb-1 block text-[11px] uppercase tracking-wide text-gray-500">
+                        Assigned role
+                      </label>
+                      <select
+                        id={`role-${peer.peer_id}`}
+                        value={peer.assigned_role}
+                        onChange={(event) =>
+                          void handleRoleChange(peer.peer_id, event.target.value as FederationRole)
+                        }
+                        className="w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white focus:border-cyan-500 focus:outline-none"
+                      >
+                        <option value="master">master</option>
+                        <option value="worker">worker</option>
+                        <option value="both">both</option>
+                        <option value="disabled">disabled</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label htmlFor={`priority-${peer.peer_id}`} className="mb-1 block text-[11px] uppercase tracking-wide text-gray-500">
+                        Priority
+                      </label>
+                      <input
+                        id={`priority-${peer.peer_id}`}
+                        type="number"
+                        min={0}
+                        max={99}
+                        value={peer.priority}
+                        onChange={(event) =>
+                          void handleHintsChange(
+                            peer.peer_id,
+                            peer.specialization,
+                            Number(event.target.value),
+                          )
+                        }
+                        className="w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white focus:border-cyan-500 focus:outline-none"
+                      />
+                    </div>
                   </div>
+                </div>
+
+                <div className="mt-3">
+                  <label htmlFor={`spec-${peer.peer_id}`} className="mb-1 block text-[11px] uppercase tracking-wide text-gray-500">
+                    Specialization hint
+                  </label>
+                  <input
+                    id={`spec-${peer.peer_id}`}
+                    type="text"
+                    value={peer.specialization}
+                    placeholder="e.g. use for planning and architecture"
+                    onBlur={(event) =>
+                      void handleHintsChange(peer.peer_id, event.target.value, peer.priority)
+                    }
+                    onChange={(event) => handleSpecializationEdit(peer.peer_id, event.target.value)}
+                    className="w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white placeholder-gray-600 focus:border-cyan-500 focus:outline-none"
+                  />
                 </div>
               </div>
             );

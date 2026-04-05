@@ -3585,11 +3585,28 @@ pub(crate) fn build_auto_plan_execute_instructions() -> String {
         .to_string()
 }
 
-pub(crate) fn build_federation_delegation_instructions(remote_agents: &[String]) -> String {
-    let agent_list = remote_agents.join(", ");
+pub(crate) fn build_federation_delegation_instructions(
+    remote_agents: &[crate::federation::peer_registry::RemoteAgentInfo],
+) -> String {
+    let agent_lines: String = remote_agents
+        .iter()
+        .map(|info| {
+            if info.specialization.is_empty() {
+                format!("- `{}`\n", info.agent_name)
+            } else {
+                format!("- `{}` — {}\n", info.agent_name, info.specialization)
+            }
+        })
+        .collect();
+    let first_agent = remote_agents
+        .first()
+        .map(|info| info.agent_name.as_str())
+        .unwrap_or("the worker");
     format!(
         "\n## Remote Worker Delegation\n\n\
-         You have {n} remote worker node(s) available: {agents}\n\n\
+         You have {n} remote worker node(s) available:\n{agent_lines}\n\
+         Route tasks based on the worker descriptions above. When a worker has a specialization, \
+         prefer it for matching task types.\n\n\
          When planning multi-step tasks, actively distribute work across workers:\n\
          - Include `delegate` calls as steps in your `task_plan` just like any local tool step\n\
          - Use `delegate` with agentic=true when the remote worker needs to run its own tool loop \
@@ -3605,8 +3622,8 @@ pub(crate) fn build_federation_delegation_instructions(remote_agents: &[String])
          You do not need to wait for one delegate to finish before starting the next — \
          use subagent_spawn for fire-and-forget parallel delegation.\n",
         n = remote_agents.len(),
-        agents = agent_list,
-        first_agent = remote_agents.first().map(String::as_str).unwrap_or("the worker"),
+        agent_lines = agent_lines,
+        first_agent = first_agent,
     )
 }
 

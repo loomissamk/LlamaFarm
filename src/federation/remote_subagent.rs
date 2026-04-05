@@ -198,6 +198,17 @@ impl FederationRemoteSubagentAdapter {
             .unwrap_or_default()
     }
 
+    pub fn available_remote_agents_info(
+        &self,
+    ) -> Vec<crate::federation::peer_registry::RemoteAgentInfo> {
+        current_chat_context()
+            .map(|context| {
+                self.registry
+                    .available_remote_agent_infos(&context.selected_peer_ids)
+            })
+            .unwrap_or_default()
+    }
+
     pub fn resolve_remote_agent(&self, agent_name: &str) -> Option<FederationPeerTarget> {
         let context = current_chat_context()?;
         self.registry

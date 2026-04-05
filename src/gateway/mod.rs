@@ -506,7 +506,11 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
     let actual_port = listener.local_addr()?.port();
     let display_addr = format!("{host}:{actual_port}");
 
-    let federation = crate::federation::FederationService::new(&config.federation, actual_port)?;
+    let federation = crate::federation::FederationService::new(
+        &config.federation,
+        actual_port,
+        config.config_path.parent(),
+    )?;
     let federation_tasks = federation
         .as_ref()
         .map(|_| Arc::new(FederationTaskManager::new()));
@@ -897,6 +901,10 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .route(
             "/api/federation/peers/{peer_id}/role",
             put(api::handle_api_federation_peer_role_put),
+        )
+        .route(
+            "/api/federation/peers/{peer_id}/hints",
+            put(api::handle_api_federation_peer_hints_put),
         )
         .route("/api/logs", get(logs::handle_api_logs))
         .route("/api/logs/stream", get(logs::handle_log_stream))
