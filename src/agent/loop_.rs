@@ -3585,6 +3585,31 @@ pub(crate) fn build_auto_plan_execute_instructions() -> String {
         .to_string()
 }
 
+pub(crate) fn build_federation_delegation_instructions(remote_agents: &[String]) -> String {
+    let agent_list = remote_agents.join(", ");
+    format!(
+        "\n## Remote Worker Delegation\n\n\
+         You have {n} remote worker node(s) available: {agents}\n\n\
+         When planning multi-step tasks, actively distribute work across workers:\n\
+         - Include `delegate` calls as steps in your `task_plan` just like any local tool step\n\
+         - Use `delegate` with agentic=true when the remote worker needs to run its own tool loop \
+           (file operations, shell commands, multi-step research on that machine)\n\
+         - Use `delegate` without agentic for single-shot inference tasks (summarization, \
+           code generation, analysis where you pass all context in the prompt)\n\n\
+         Good candidates to send to a remote worker:\n\
+         - Tasks that can run in parallel with local work\n\
+         - Compute-heavy inference where the remote has a better/different model\n\
+         - Operations that need to run on the remote machine's filesystem or services\n\
+         - Subtasks that are fully self-contained and don't need local context\n\n\
+         Example plan step: delegate to {first_agent} with agentic=true: [subtask]\n\
+         You do not need to wait for one delegate to finish before starting the next — \
+         use subagent_spawn for fire-and-forget parallel delegation.\n",
+        n = remote_agents.len(),
+        agents = agent_list,
+        first_agent = remote_agents.first().map(String::as_str).unwrap_or("the worker"),
+    )
+}
+
 // ── CLI Entrypoint ───────────────────────────────────────────────────────
 // Wires up all subsystems (observer, runtime, security, memory, tools,
 // provider, hardware RAG, peripherals) and enters either single-shot or
