@@ -12,6 +12,7 @@ import type {
   HealthSnapshot,
   FederationPeerRoleUpdateResponse,
   FederationPeersResponse,
+  FederationPeerSummary,
   FederationRole,
   WorkspaceBlobWriteResponse,
   WorkspaceBrowserResponse,
