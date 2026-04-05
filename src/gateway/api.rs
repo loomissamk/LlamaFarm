@@ -113,30 +113,25 @@ fn require_federation_peer_auth(
     }
 }
 
-fn fallback_local_federation_summary(state: &AppState) -> FederationLocalNodeSummary {
-    let config = state.config.lock().clone();
-    FederationLocalNodeSummary {
-        node_id: config.federation.node_name.clone(),
-        display_name: config.federation.node_name,
-        api_port: config.federation.api_port.unwrap_or(config.gateway.port),
-        role: config.federation.default_role,
-        allow_remote_subagents: config.federation.allow_remote_subagents,
-        discovery_mode: config.federation.discovery_mode,
-        service_name: config.federation.service_name,
-        gateway_host: config.gateway.host,
-    }
-}
-
 fn build_federation_peers_response(state: &AppState) -> FederationPeersResponse {
-    let gateway_host = state.config.lock().gateway.host.clone();
+    let config = state.config.lock().clone();
     if let Some(federation) = &state.federation {
         let mut response = federation.peers_response();
-        response.local_node.gateway_host = gateway_host;
+        response.local_node.gateway_host = config.gateway.host;
         response
     } else {
         FederationPeersResponse {
             enabled: false,
-            local_node: fallback_local_federation_summary(state),
+            local_node: FederationLocalNodeSummary {
+                node_id: config.federation.node_name.clone(),
+                display_name: config.federation.node_name,
+                api_port: config.federation.api_port.unwrap_or(config.gateway.port),
+                role: config.federation.default_role,
+                allow_remote_subagents: config.federation.allow_remote_subagents,
+                discovery_mode: config.federation.discovery_mode,
+                service_name: config.federation.service_name,
+                gateway_host: config.gateway.host,
+            },
             peers: Vec::new(),
         }
     }

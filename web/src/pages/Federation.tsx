@@ -76,7 +76,7 @@ function peerStatusClasses(peer: FederationPeerSummary): string {
 
 function isLocalhostBind(host: string): boolean {
   const h = host.trim().toLowerCase();
-  return h === '127.0.0.1' || h === 'localhost' || h === '::1' || h === '';
+  return h === '127.0.0.1' || h === 'localhost' || h === '::1' || h === '[::1]' || h === '';
 }
 
 export default function FederationPage() {
@@ -484,23 +484,20 @@ allow_public_bind = true`}
                     e.preventDefault();
                     const endpoint = manualPeerInput.trim();
                     if (!endpoint) return;
-                    setAddingPeer(true);
-                    setAddPeerError(null);
-                    void addFederationManualPeer(endpoint)
-                      .then(() => {
+                    void (async () => {
+                      setAddingPeer(true);
+                      setAddPeerError(null);
+                      try {
+                        await addFederationManualPeer(endpoint);
                         setManualPeerInput('');
                         manualPeerRef.current?.focus();
-                        return getFederationPeers();
-                      })
-                      .then((response) => {
-                        setFederation(response);
-                      })
-                      .catch(() => {
+                        setFederation(await getFederationPeers());
+                      } catch {
                         setAddPeerError('Failed to add peer — check the address and try again.');
-                      })
-                      .finally(() => {
+                      } finally {
                         setAddingPeer(false);
-                      });
+                      }
+                    })();
                   }}
                 >
                   <input
