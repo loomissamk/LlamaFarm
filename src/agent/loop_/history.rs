@@ -67,6 +67,21 @@ pub(super) async fn auto_compact_history(
     max_history: usize,
     memory: Option<&dyn Memory>,
 ) -> Result<bool> {
+    auto_compact_history_focused(history, provider, model, max_history, memory, None).await
+}
+
+/// Like [`auto_compact_history`] but with an optional `focus` hint that
+/// tells the summariser to prioritise information relevant to the current
+/// objective.  Used by the autonomous loop so compacted context stays
+/// task-relevant across many retry attempts.
+pub(super) async fn auto_compact_history_focused(
+    history: &mut Vec<ChatMessage>,
+    provider: &dyn Provider,
+    model: &str,
+    max_history: usize,
+    memory: Option<&dyn Memory>,
+    focus: Option<&str>,
+) -> Result<bool> {
     let has_system = history.first().map_or(false, |m| m.role == "system");
     let non_system_count = if has_system {
         history.len().saturating_sub(1)
@@ -91,9 +106,12 @@ pub(super) async fn auto_compact_history(
 
     let summarizer_system = "You are a conversation compaction engine. Summarize older chat history into concise context for future turns. Preserve: user preferences, commitments, decisions, unresolved tasks, key facts. Omit: filler, repeated chit-chat, verbose tool logs. Output plain text bullet points only.";
 
+    let focus_hint = focus
+        .map(|f| format!("\n\nCurrent objective (prioritise related facts): {f}"))
+        .unwrap_or_default();
+
     let summarizer_user = format!(
-        "Summarize the following conversation history for context preservation. Keep it short (max 12 bullet points).\n\n{}",
-        transcript
+        "Summarize the following conversation history for context preservation. Keep it short (max 12 bullet points).{focus_hint}\n\n{transcript}",
     );
 
     let summary_raw = provider

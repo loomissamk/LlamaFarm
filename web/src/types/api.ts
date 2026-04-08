@@ -219,8 +219,75 @@ export interface RuntimeLogsResponse {
   entries: RuntimeLogEntry[];
 }
 
+export type FederationRole = 'master' | 'worker' | 'both' | 'disabled';
+export type FederationDiscoveryMode = 'mdns' | 'manual';
+
+export interface FederationToolCapability {
+  name: string;
+  description: string;
+  local_only: boolean;
+}
+
+export interface FederationLocalNodeSummary {
+  node_id: string;
+  display_name: string;
+  api_port: number;
+  role: FederationRole;
+  allow_remote_subagents: boolean;
+  discovery_mode: FederationDiscoveryMode;
+  service_name: string;
+  gateway_host: string;
+}
+
+export interface FederationPeerSummary {
+  peer_id: string;
+  node_id: string;
+  display_name: string;
+  delegate_agent: string;
+  source: 'mdns' | 'manual';
+  base_url: string;
+  host: string;
+  api_port: number;
+  app_version: string;
+  role_support: FederationRole;
+  assigned_role: FederationRole;
+  allow_remote_subagents: boolean;
+  online: boolean;
+  health: string;
+  model_summary: string;
+  tool_summary: string;
+  installed_models: string[];
+  tools: FederationToolCapability[];
+  last_seen?: string | null;
+  specialization: string;
+  priority: number;
+}
+
+export interface FederationPeersResponse {
+  enabled: boolean;
+  local_node: FederationLocalNodeSummary;
+  peers: FederationPeerSummary[];
+}
+
+export interface FederationPeerRoleUpdateResponse {
+  status: 'ok';
+  peer: FederationPeerSummary;
+}
+
 export interface WsMessage {
-  type: 'message' | 'chunk' | 'tool_call' | 'tool_result' | 'done' | 'error';
+  type:
+    | 'message'
+    | 'chunk'
+    | 'tool_call'
+    | 'tool_result'
+    | 'done'
+    | 'error'
+    | 'federation_status'
+    | 'federation_chunk'
+    | 'federation_tool_call'
+    | 'federation_tool_result'
+    | 'federation_done'
+    | 'federation_error';
   session_id?: string;
   content?: string;
   full_response?: string;
@@ -230,4 +297,8 @@ export interface WsMessage {
   duration_secs?: number;
   output?: string;
   message?: string;
+  peer_id?: string;
+  peer_name?: string;
+  delegate_agent?: string;
+  task_id?: string;
 }

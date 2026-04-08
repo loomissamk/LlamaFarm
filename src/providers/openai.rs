@@ -300,6 +300,7 @@ impl OpenAiProvider {
             text,
             tool_calls,
             usage: None,
+            metrics: None,
             reasoning_content,
         }
     }

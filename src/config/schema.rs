@@ -180,6 +180,10 @@ pub struct Config {
     #[serde(default)]
     pub goal_loop: GoalLoopConfig,
 
+    /// SOP engine configuration: execution mode, concurrency, approval timeouts (`[sop]`).
+    #[serde(default)]
+    pub sop: SopConfig,
+
     /// Channel configurations: Telegram, Discord, Slack, etc. (`[channels_config]`).
     #[serde(default)]
     pub channels_config: ChannelsConfig,
@@ -199,6 +203,10 @@ pub struct Config {
     /// Gateway server configuration: host, port, pairing, rate limits (`[gateway]`).
     #[serde(default)]
     pub gateway: GatewayConfig,
+
+    /// LAN federation discovery and remote subagent settings (`[federation]`).
+    #[serde(default)]
+    pub federation: FederationConfig,
 
     /// Composio managed OAuth tools integration (`[composio]`).
     #[serde(default)]
@@ -300,6 +308,42 @@ pub struct ProviderConfig {
     /// (e.g. OpenAI Codex `/responses` reasoning effort).
     #[serde(default)]
     pub reasoning_level: Option<String>,
+
+    /// Ollama: number of model layers to load onto GPU(s).
+    ///
+    /// | Value  | Behaviour                                                   |
+    /// |--------|-------------------------------------------------------------|
+    /// | absent | Defer to Ollama server default / `OLLAMA_NUM_GPU` env var   |
+    /// | `0`    | CPU-only — no GPU offload                                   |
+    /// | `999`  | Fill GPU to capacity; remaining layers spill to CPU RAM     |
+    ///
+    /// Set to `999` to get "max GPU, overflow to CPU" on a local GPU box.
+    /// The env var `OLLAMA_GPU_LAYERS` (or `OLLAMA_NUM_GPU`) is also read as a
+    /// fallback when this field is absent, so you can also just export it in
+    /// your shell.
+    #[serde(default)]
+    pub ollama_gpu_layers: Option<i32>,
+
+    /// Ollama: GPU index to use for the largest weight tensors (0-indexed).
+    /// Only relevant when multiple GPUs are present. Default: 0.
+    #[serde(default)]
+    pub ollama_main_gpu: Option<u32>,
+
+    /// Ollama: context window size override (tokens).
+    ///
+    /// Increases the context window beyond the model's default, enabling longer
+    /// autonomous runs without context truncation. Setting this higher than the
+    /// model default requires more VRAM for the KV cache.
+    ///
+    /// **Recommended**: pair with `OLLAMA_KV_CACHE_TYPE=q8_0` in Ollama's
+    /// service environment. q8_0 halves KV cache VRAM usage, allowing context
+    /// windows 2x larger in the same VRAM — the same effect as turboquant's
+    /// KV cache compression but using Ollama's built-in capability.
+    ///
+    /// Example: set to `32768` or `65536` for long agentic task runs.
+    /// The env var `OLLAMA_NUM_CTX` is also read as a fallback.
+    #[serde(default)]
+    pub ollama_num_ctx: Option<u32>,
 }
 
 /// Multi-workspace registry configuration (`[workspaces]`).
@@ -1077,6 +1121,102 @@ pub struct GatewayConfig {
     /// Node-control protocol scaffold (`[gateway.node_control]`).
     #[serde(default)]
     pub node_control: NodeControlConfig,
+}
+
+/// Peer discovery mode for LAN federation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum FederationDiscoveryMode {
+    #[default]
+    Mdns,
+    Manual,
+}
+
+/// Operator-assigned role for a LAN federation node.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum FederationRole {
+    Master,
+    Worker,
+    #[default]
+    Both,
+    Disabled,
+}
+
+impl FederationRole {
+    pub const fn allows_master(self) -> bool {
+        matches!(self, Self::Master | Self::Both)
+    }
+
+    pub const fn allows_worker(self) -> bool {
+        matches!(self, Self::Worker | Self::Both)
+    }
+}
+
+/// Gateway-adjacent LAN federation settings under `[federation]`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FederationConfig {
+    /// Enable LAN federation discovery and remote subagent execution.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Friendly node name shown in the federation panel and mDNS records.
+    #[serde(default = "default_federation_node_name")]
+    pub node_name: String,
+    /// Optional API port override used for peer-to-peer federation requests.
+    /// Defaults to `gateway.port` when unset.
+    #[serde(default)]
+    pub api_port: Option<u16>,
+    /// Preferred LAN discovery mode.
+    #[serde(default)]
+    pub discovery_mode: FederationDiscoveryMode,
+    /// DNS-SD service type used for federation discovery.
+    #[serde(default = "default_federation_service_name")]
+    pub service_name: String,
+    /// Staleness timeout for discovered peers.
+    #[serde(default = "default_federation_peer_timeout_seconds")]
+    pub peer_timeout_seconds: u64,
+    /// Manual fallback seed peers, expressed as host:port or full http(s) URLs.
+    #[serde(default)]
+    pub manual_peers: Vec<String>,
+    /// Default operator role assignment for newly discovered peers.
+    #[serde(default)]
+    pub default_role: FederationRole,
+    /// Allow this node to accept and initiate remote subagent tasks.
+    #[serde(default = "default_true")]
+    pub allow_remote_subagents: bool,
+}
+
+fn default_federation_node_name() -> String {
+    hostname::get()
+        .ok()
+        .and_then(|value| value.into_string().ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "llamafarm-node".to_string())
+}
+
+fn default_federation_service_name() -> String {
+    "_llamafarm._tcp".to_string()
+}
+
+fn default_federation_peer_timeout_seconds() -> u64 {
+    30
+}
+
+impl Default for FederationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            node_name: default_federation_node_name(),
+            api_port: None,
+            discovery_mode: FederationDiscoveryMode::default(),
+            service_name: default_federation_service_name(),
+            peer_timeout_seconds: default_federation_peer_timeout_seconds(),
+            manual_peers: Vec::new(),
+            default_role: FederationRole::default(),
+            allow_remote_subagents: true,
+        }
+    }
 }
 
 /// Node-control scaffold settings under `[gateway.node_control]`.
@@ -2424,6 +2564,72 @@ pub struct AutonomyConfig {
     #[serde(default)]
     pub non_cli_natural_language_approval_mode_by_channel:
         HashMap<String, NonCliNaturalLanguageApprovalMode>,
+
+    /// Agent execution mode. Controls how the agent behaves during a run.
+    ///
+    /// - `chat` (default): interactive assistant with supervised approvals
+    /// - `operator`: machine operator, `level = full`, no per-step confirmation
+    /// - `autonomous_operator`: full autonomy, long multi-step tasks, goal loop enabled
+    /// - `chaos_lab`: intentional break/recover experimentation on disposable targets
+    #[serde(default)]
+    pub execution_mode: AgentExecutionMode,
+
+    /// chaos_lab: maximum disk fill quota in MB (0 = no stress filling). Default: `0`.
+    #[serde(default)]
+    pub chaos_disk_quota_mb: u64,
+
+    /// chaos_lab: maximum retry budget for break-recover loops. Default: `20`.
+    #[serde(default = "default_chaos_retry_budget")]
+    pub chaos_retry_budget: u32,
+
+    /// chaos_lab / autonomous_operator: wall-clock cap in seconds (0 = no cap). Default: `0`.
+    #[serde(default)]
+    pub wall_clock_cap_secs: u64,
+}
+
+// ── AgentExecutionMode ───────────────────────────────────────────
+
+/// Controls the overall agent execution behaviour for a run.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentExecutionMode {
+    /// Interactive assistant with supervised approvals (default).
+    #[default]
+    Chat,
+    /// Machine operator: `autonomy.level = full`, no per-step confirmation.
+    Operator,
+    /// Full autonomy with goal loop enabled. Long multi-step tasks run unattended.
+    AutonomousOperator,
+    /// Intentional break/recover experimentation on disposable targets.
+    /// Unlocks disk stress, config mutation, service restart, and recovery loops.
+    ChaosLab,
+}
+
+impl AgentExecutionMode {
+    /// Whether this mode allows destructive experiments (disk fill, config mutation, etc.).
+    pub fn is_chaos(&self) -> bool {
+        matches!(self, Self::ChaosLab)
+    }
+
+    /// Whether this mode runs fully autonomously (no approval prompts).
+    pub fn is_autonomous(&self) -> bool {
+        matches!(self, Self::Operator | Self::AutonomousOperator | Self::ChaosLab)
+    }
+}
+
+impl std::fmt::Display for AgentExecutionMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Chat => write!(f, "chat"),
+            Self::Operator => write!(f, "operator"),
+            Self::AutonomousOperator => write!(f, "autonomous_operator"),
+            Self::ChaosLab => write!(f, "chaos_lab"),
+        }
+    }
+}
+
+fn default_chaos_retry_budget() -> u32 {
+    20
 }
 
 fn default_auto_approve() -> Vec<String> {
@@ -2525,6 +2731,10 @@ impl Default for AutonomyConfig {
             non_cli_approval_approvers: Vec::new(),
             non_cli_natural_language_approval_mode: NonCliNaturalLanguageApprovalMode::default(),
             non_cli_natural_language_approval_mode_by_channel: HashMap::new(),
+            execution_mode: AgentExecutionMode::Chat,
+            chaos_disk_quota_mb: 0,
+            chaos_retry_budget: default_chaos_retry_budget(),
+            wall_clock_cap_secs: 0,
         }
     }
 }
@@ -3176,6 +3386,84 @@ impl Default for GoalLoopConfig {
             max_steps_per_cycle: 3,
             channel: None,
             target: None,
+        }
+    }
+}
+
+// ── SopExecutionMode ─────────────────────────────────────────────
+
+/// How much autonomy the agent has when executing an SOP.
+///
+/// Defined here (in config) so both the lib and binary crates can reference it
+/// without a cross-module `crate::sop` path.  `sop::types` re-exports this.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SopExecutionMode {
+    /// Execute all steps without human approval.
+    Auto,
+    /// Request approval before starting, then execute all steps (default).
+    #[default]
+    Supervised,
+    /// Request approval before each step.
+    StepByStep,
+    /// Critical/High → Auto, Normal/Low → Supervised.
+    PriorityBased,
+}
+
+impl std::fmt::Display for SopExecutionMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Auto => write!(f, "auto"),
+            Self::Supervised => write!(f, "supervised"),
+            Self::StepByStep => write!(f, "step_by_step"),
+            Self::PriorityBased => write!(f, "priority_based"),
+        }
+    }
+}
+
+// ── SOP Config ──────────────────────────────────────────────────
+
+/// SOP (Standard Operating Procedure) engine configuration (`[sop]` section).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SopConfig {
+    /// Optional path to the SOPs directory. Defaults to `<workspace>/sops`.
+    #[serde(default)]
+    pub sops_dir: Option<String>,
+    /// Default execution mode applied to SOPs that don't specify their own.
+    /// - `auto`: execute all steps without human approval (use for god/autonomous mode)
+    /// - `supervised`: request approval before starting, then execute all steps (default)
+    /// - `step_by_step`: request approval before each step
+    /// - `priority_based`: Critical/High → Auto, Normal/Low → Supervised
+    #[serde(default)]
+    pub default_execution_mode: SopExecutionMode,
+    /// Maximum total concurrent SOP runs across all SOPs. `0` means unlimited. Default: `16`.
+    #[serde(default = "default_sop_max_concurrent_total")]
+    pub max_concurrent_total: usize,
+    /// Seconds before a WaitingApproval run times out for Critical/High-priority SOPs.
+    /// `0` disables the timeout check entirely. Default: `0`.
+    #[serde(default)]
+    pub approval_timeout_secs: u64,
+    /// Maximum finished runs to retain in memory for status queries. `0` means unlimited. Default: `200`.
+    #[serde(default = "default_sop_max_finished_runs")]
+    pub max_finished_runs: usize,
+}
+
+fn default_sop_max_concurrent_total() -> usize {
+    16
+}
+
+fn default_sop_max_finished_runs() -> usize {
+    200
+}
+
+impl Default for SopConfig {
+    fn default() -> Self {
+        Self {
+            sops_dir: None,
+            default_execution_mode: SopExecutionMode::default(),
+            max_concurrent_total: default_sop_max_concurrent_total(),
+            approval_timeout_secs: 0,
+            max_finished_runs: default_sop_max_finished_runs(),
         }
     }
 }
@@ -4843,11 +5131,13 @@ impl Default for Config {
             heartbeat: HeartbeatConfig::default(),
             cron: CronConfig::default(),
             goal_loop: GoalLoopConfig::default(),
+            sop: SopConfig::default(),
             channels_config: ChannelsConfig::default(),
             memory: MemoryConfig::default(),
             storage: StorageConfig::default(),
             tunnel: TunnelConfig::default(),
             gateway: GatewayConfig::default(),
+            federation: FederationConfig::default(),
             composio: ComposioConfig::default(),
             secrets: SecretsConfig::default(),
             browser: BrowserConfig::default(),
@@ -6385,6 +6675,27 @@ impl Config {
             anyhow::bail!("coordination.max_seen_message_ids must be greater than 0");
         }
 
+        if self.federation.enabled {
+            if self.federation.node_name.trim().is_empty() {
+                anyhow::bail!("federation.node_name must not be empty when federation is enabled");
+            }
+            if self.federation.service_name.trim().is_empty() {
+                anyhow::bail!(
+                    "federation.service_name must not be empty when federation is enabled"
+                );
+            }
+            if self.federation.peer_timeout_seconds == 0 {
+                anyhow::bail!(
+                    "federation.peer_timeout_seconds must be greater than 0 when federation is enabled"
+                );
+            }
+            if let Some(api_port) = self.federation.api_port {
+                if api_port == 0 {
+                    anyhow::bail!("federation.api_port must be greater than 0 when set");
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -6505,6 +6816,90 @@ impl Config {
         {
             if !host.is_empty() {
                 self.gateway.host = host;
+            }
+        }
+
+        if let Ok(enabled) = std::env::var("LLAMAFARM_FEDERATION_ENABLED") {
+            match enabled.trim().to_ascii_lowercase().as_str() {
+                "1" | "true" | "yes" | "on" => self.federation.enabled = true,
+                "0" | "false" | "no" | "off" => self.federation.enabled = false,
+                _ => tracing::warn!(
+                    "Ignoring invalid LLAMAFARM_FEDERATION_ENABLED (valid: 1|0|true|false|yes|no|on|off)"
+                ),
+            }
+        }
+
+        if let Ok(node_name) = std::env::var("LLAMAFARM_NODE_NAME") {
+            let trimmed = node_name.trim();
+            if !trimmed.is_empty() {
+                self.federation.node_name = trimmed.to_string();
+            }
+        }
+
+        if let Ok(api_port) = std::env::var("LLAMAFARM_API_PORT") {
+            if let Ok(port) = api_port.parse::<u16>() {
+                if port > 0 {
+                    self.federation.api_port = Some(port);
+                }
+            }
+        }
+
+        if let Ok(mode) = std::env::var("LLAMAFARM_DISCOVERY_MODE") {
+            match mode.trim().to_ascii_lowercase().as_str() {
+                "mdns" => self.federation.discovery_mode = FederationDiscoveryMode::Mdns,
+                "manual" => self.federation.discovery_mode = FederationDiscoveryMode::Manual,
+                _ => tracing::warn!(
+                    "Ignoring invalid LLAMAFARM_DISCOVERY_MODE (valid: mdns|manual)"
+                ),
+            }
+        }
+
+        if let Ok(service_name) = std::env::var("LLAMAFARM_SERVICE_NAME") {
+            let trimmed = service_name.trim();
+            if !trimmed.is_empty() {
+                self.federation.service_name = trimmed.to_string();
+            }
+        }
+
+        if let Ok(timeout_secs) = std::env::var("LLAMAFARM_PEER_TIMEOUT_SECONDS") {
+            if let Ok(timeout) = timeout_secs.parse::<u64>() {
+                if timeout > 0 {
+                    self.federation.peer_timeout_seconds = timeout;
+                }
+            }
+        }
+
+        if let Ok(peers) = std::env::var("LLAMAFARM_MANUAL_PEERS") {
+            let parsed = peers
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>();
+            if !parsed.is_empty() {
+                self.federation.manual_peers = parsed;
+            }
+        }
+
+        if let Ok(role) = std::env::var("LLAMAFARM_DEFAULT_ROLE") {
+            match role.trim().to_ascii_lowercase().as_str() {
+                "master" => self.federation.default_role = FederationRole::Master,
+                "worker" => self.federation.default_role = FederationRole::Worker,
+                "both" => self.federation.default_role = FederationRole::Both,
+                "disabled" => self.federation.default_role = FederationRole::Disabled,
+                _ => tracing::warn!(
+                    "Ignoring invalid LLAMAFARM_DEFAULT_ROLE (valid: master|worker|both|disabled)"
+                ),
+            }
+        }
+
+        if let Ok(enabled) = std::env::var("LLAMAFARM_ALLOW_REMOTE_SUBAGENTS") {
+            match enabled.trim().to_ascii_lowercase().as_str() {
+                "1" | "true" | "yes" | "on" => self.federation.allow_remote_subagents = true,
+                "0" | "false" | "no" | "off" => self.federation.allow_remote_subagents = false,
+                _ => tracing::warn!(
+                    "Ignoring invalid LLAMAFARM_ALLOW_REMOTE_SUBAGENTS (valid: 1|0|true|false|yes|no|on|off)"
+                ),
             }
         }
 
@@ -7286,6 +7681,10 @@ default_temperature = 0.7
                 non_cli_natural_language_approval_mode:
                     NonCliNaturalLanguageApprovalMode::RequestConfirm,
                 non_cli_natural_language_approval_mode_by_channel: HashMap::new(),
+                execution_mode: AgentExecutionMode::Chat,
+                chaos_disk_quota_mb: 0,
+                chaos_retry_budget: 20,
+                wall_clock_cap_secs: 0,
             },
             security: SecurityConfig::default(),
             runtime: RuntimeConfig {
@@ -7310,6 +7709,7 @@ default_temperature = 0.7
             },
             cron: CronConfig::default(),
             goal_loop: GoalLoopConfig::default(),
+            sop: SopConfig::default(),
             channels_config: ChannelsConfig {
                 cli: true,
                 bridge: None,
@@ -7356,6 +7756,7 @@ default_temperature = 0.7
             web_fetch: WebFetchConfig::default(),
             web_search: WebSearchConfig::default(),
             proxy: ProxyConfig::default(),
+            federation: FederationConfig::default(),
             agent: AgentConfig::default(),
             identity: IdentityConfig::default(),
             cost: CostConfig::default(),
@@ -7738,6 +8139,7 @@ tool_dispatcher = "xml"
             heartbeat: HeartbeatConfig::default(),
             cron: CronConfig::default(),
             goal_loop: GoalLoopConfig::default(),
+            sop: SopConfig::default(),
             channels_config: ChannelsConfig::default(),
             memory: MemoryConfig::default(),
             storage: StorageConfig::default(),
@@ -7751,6 +8153,7 @@ tool_dispatcher = "xml"
             web_fetch: WebFetchConfig::default(),
             web_search: WebSearchConfig::default(),
             proxy: ProxyConfig::default(),
+            federation: FederationConfig::default(),
             agent: AgentConfig::default(),
             identity: IdentityConfig::default(),
             cost: CostConfig::default(),

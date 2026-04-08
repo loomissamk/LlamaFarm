@@ -27,6 +27,7 @@ export interface SendChatMessageOptions {
   sessionId?: string;
   temporary?: boolean;
   historySeed?: SeedChatMessage[];
+  federationPeerIds?: string[];
 }
 
 const DEFAULT_RECONNECT_DELAY = 1000;
@@ -109,6 +110,7 @@ export class WebSocketClient {
         session_id: options.sessionId,
         temporary: options.temporary,
         history_seed: options.historySeed,
+        federation_peer_ids: options.federationPeerIds,
       }),
     );
   }

@@ -301,6 +301,7 @@ impl OpenRouterProvider {
             text: message.content,
             tool_calls,
             usage: None,
+            metrics: None,
             reasoning_content,
         }
     }

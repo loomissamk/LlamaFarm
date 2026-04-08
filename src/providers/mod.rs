@@ -683,6 +683,14 @@ pub struct ProviderRuntimeOptions {
     pub custom_provider_api_mode: Option<CompatibleApiMode>,
     pub max_tokens_override: Option<u32>,
     pub model_support_vision: Option<bool>,
+    /// Ollama: number of layers to offload to GPU (None = server default).
+    /// Set to 999 for "fill GPU, spill to CPU" behaviour.
+    pub ollama_gpu_layers: Option<i32>,
+    /// Ollama: GPU index for the largest weight tensors (None = 0).
+    pub ollama_main_gpu: Option<u32>,
+    /// Ollama: context window size override. `None` uses the model's default.
+    /// Set to e.g. 32768 or 65536 for long autonomous runs.
+    pub ollama_num_ctx: Option<u32>,
 }
 
 impl Default for ProviderRuntimeOptions {
@@ -697,6 +705,9 @@ impl Default for ProviderRuntimeOptions {
             custom_provider_api_mode: None,
             max_tokens_override: None,
             model_support_vision: None,
+            ollama_gpu_layers: None,
+            ollama_main_gpu: None,
+            ollama_num_ctx: None,
         }
     }
 }
@@ -1064,10 +1075,13 @@ fn create_provider_with_url_and_options(
             options.max_tokens_override,
         ))),
         // Ollama uses api_url for custom base URL (e.g. remote Ollama instance)
-        "ollama" => Ok(Box::new(ollama::OllamaProvider::new_with_reasoning(
+        "ollama" => Ok(Box::new(ollama::OllamaProvider::new_full(
             api_url,
             key,
             options.reasoning_enabled,
+            options.ollama_gpu_layers,
+            options.ollama_main_gpu,
+            options.ollama_num_ctx,
         ))),
         "gemini" | "google" | "google-gemini" => {
             let state_dir = options

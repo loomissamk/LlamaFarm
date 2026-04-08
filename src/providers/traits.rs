@@ -56,8 +56,28 @@ pub struct TokenUsage {
     pub output_tokens: Option<u64>,
 }
 
+/// Inference timing metrics for a single LLM call.
+///
+/// Populated by providers that expose per-call timing (currently Ollama).
+/// Other providers return `None` for fields they cannot measure.
+#[derive(Debug, Clone, Default)]
+pub struct InferenceMetrics {
+    /// Time from request start until the model began generating tokens (ms).
+    /// For Ollama: `(load_duration + prompt_eval_duration) / 1_000_000`.
+    pub ttft_ms: Option<f64>,
+    /// Decode (generation) tokens per second — output tokens only, excludes prefill.
+    /// This is the most meaningful throughput metric for interactive use.
+    /// For Ollama: `eval_count / (eval_duration / 1e9)`.
+    pub generation_tps: Option<f64>,
+    /// Prefill tokens per second (how fast the input context was processed).
+    /// For Ollama: `prompt_eval_count / (prompt_eval_duration / 1e9)`.
+    pub prefill_tps: Option<f64>,
+    /// Total wall-clock time for the full request (ms), including load and HTTP overhead.
+    pub total_ms: Option<f64>,
+}
+
 /// An LLM response that may contain text, tool calls, or both.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ChatResponse {
     /// Text content of the response (may be empty if only tool calls).
     pub text: Option<String>,
@@ -65,6 +85,9 @@ pub struct ChatResponse {
     pub tool_calls: Vec<ToolCall>,
     /// Token usage reported by the provider, if available.
     pub usage: Option<TokenUsage>,
+    /// Inference timing metrics (TTFT, generation TPS, prefill TPS).
+    /// Populated by Ollama; other providers leave this `None`.
+    pub metrics: Option<InferenceMetrics>,
     /// Raw reasoning/thinking content from thinking models (e.g. DeepSeek-R1,
     /// Kimi K2.5, GLM-4.7). Preserved as an opaque pass-through so it can be
     /// sent back in subsequent API requests — some providers reject tool-call
@@ -362,6 +385,7 @@ pub trait Provider: Send + Sync {
                     text: Some(text),
                     tool_calls: Vec::new(),
                     usage: None,
+                    metrics: None,
                     reasoning_content: None,
                 });
             }
@@ -374,6 +398,7 @@ pub trait Provider: Send + Sync {
             text: Some(text),
             tool_calls: Vec::new(),
             usage: None,
+            metrics: None,
             reasoning_content: None,
         })
     }
@@ -409,6 +434,7 @@ pub trait Provider: Send + Sync {
             text: Some(text),
             tool_calls: Vec::new(),
             usage: None,
+            metrics: None,
             reasoning_content: None,
         })
     }
@@ -558,6 +584,7 @@ mod tests {
             text: None,
             tool_calls: vec![],
             usage: None,
+            metrics: None,
             reasoning_content: None,
         };
         assert!(!empty.has_tool_calls());
@@ -571,6 +598,7 @@ mod tests {
                 arguments: "{}".into(),
             }],
             usage: None,
+            metrics: None,
             reasoning_content: None,
         };
         assert!(with_tools.has_tool_calls());
@@ -593,6 +621,7 @@ mod tests {
                 input_tokens: Some(100),
                 output_tokens: Some(50),
             }),
+            metrics: None,
             reasoning_content: None,
         };
         assert_eq!(resp.usage.as_ref().unwrap().input_tokens, Some(100));

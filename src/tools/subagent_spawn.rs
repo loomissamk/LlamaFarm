@@ -4,9 +4,14 @@
 //! asynchronously via `tokio::spawn`, returning a session ID immediately.
 //! See `AGENTS.md` §7.3 for the tool change playbook.
 
-use super::subagent_registry::{SubAgentRegistry, SubAgentSession, SubAgentStatus};
+use super::subagent_registry::{
+    RemoteSubAgentHandle, SubAgentHandle, SubAgentRegistry, SubAgentSession, SubAgentStatus,
+};
 use super::traits::{Tool, ToolResult};
 use crate::config::DelegateAgentConfig;
+use crate::federation::remote_subagent::{
+    current_chat_context, FederationRemoteSubagentAdapter, FederationTaskRequest,
+};
 use crate::observability::traits::{Observer, ObserverEvent, ObserverMetric};
 use crate::providers::{self, ChatMessage, Provider};
 use crate::security::policy::ToolOperation;
@@ -34,6 +39,7 @@ pub struct SubAgentSpawnTool {
     registry: Arc<SubAgentRegistry>,
     parent_tools: Arc<Vec<Arc<dyn Tool>>>,
     multimodal_config: crate::config::MultimodalConfig,
+    federation: Option<Arc<FederationRemoteSubagentAdapter>>,
 }
 
 impl SubAgentSpawnTool {
@@ -55,7 +61,13 @@ impl SubAgentSpawnTool {
             registry,
             parent_tools,
             multimodal_config,
+            federation: None,
         }
+    }
+
+    pub fn with_federation(mut self, federation: Arc<FederationRemoteSubagentAdapter>) -> Self {
+        self.federation = Some(federation);
+        self
     }
 }
 
@@ -71,7 +83,12 @@ impl Tool for SubAgentSpawnTool {
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
-        let agent_names: Vec<&str> = self.agents.keys().map(|s: &String| s.as_str()).collect();
+        let mut agent_names = self.agents.keys().cloned().collect::<Vec<_>>();
+        if let Some(federation) = &self.federation {
+            agent_names.extend(federation.available_remote_agents());
+        }
+        agent_names.sort();
+        agent_names.dedup();
         json!({
             "type": "object",
             "additionalProperties": false,
@@ -149,27 +166,116 @@ impl Tool for SubAgentSpawnTool {
             });
         }
 
-        // Look up agent config
-        let agent_config = match self.agents.get(agent_name) {
-            Some(cfg) => cfg.clone(),
-            None => {
-                let available: Vec<&str> =
-                    self.agents.keys().map(|s: &String| s.as_str()).collect();
+        if let Some(agent_config) = self.agents.get(agent_name).cloned() {
+            return self
+                .spawn_local_agent(agent_name, task, context, agent_config)
+                .await;
+        }
+
+        if let Some(federation) = &self.federation {
+            if let Some(peer) = federation.resolve_remote_agent(agent_name) {
+                let session_id = uuid::Uuid::new_v4().to_string();
+                let session = SubAgentSession {
+                    id: session_id.clone(),
+                    agent_name: agent_name.to_string(),
+                    task: task.to_string(),
+                    status: SubAgentStatus::Running,
+                    started_at: Utc::now(),
+                    completed_at: None,
+                    result: None,
+                    handle: None,
+                };
+                if let Err(_running) = self.registry.try_insert(session, MAX_CONCURRENT_SUBAGENTS) {
+                    return Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(format!(
+                            "Maximum concurrent sub-agents reached ({MAX_CONCURRENT_SUBAGENTS}). \
+                             Wait for running agents to complete or kill some."
+                        )),
+                    });
+                }
+
+                let request = FederationTaskRequest {
+                    prompt: task.to_string(),
+                    context: (!context.is_empty()).then(|| context.to_string()),
+                    session_id: current_chat_context().map(|value| value.session_id),
+                    requester_node_id: None,
+                    requester_name: None,
+                    agentic: true,
+                    max_iterations: 12,
+                };
+                let accepted = federation.start_remote_task(&peer, &request).await?;
+                let registry = self.registry.clone();
+                let session_id_clone = session_id.clone();
+                let federation = federation.clone();
+                let federation_client = federation.http_client();
+                let peer_clone = peer.clone();
+                let task_id = accepted.task_id.clone();
+                let relay_handle = tokio::spawn(async move {
+                    match federation.consume_remote_task(&peer_clone, &task_id).await {
+                        Ok(result) if result.success => registry.complete(&session_id_clone, result),
+                        Ok(result) => registry.fail(
+                            &session_id_clone,
+                            result.error.unwrap_or_else(|| "Remote worker failed".to_string()),
+                        ),
+                        Err(error) => registry.fail(&session_id_clone, error.to_string()),
+                    }
+                });
+
+                self.registry.set_handle(
+                    &session_id,
+                    SubAgentHandle::Remote(RemoteSubAgentHandle {
+                        relay_handle,
+                        cancel_url: format!("{}/federation/tasks/{}/cancel", peer.base_url, accepted.task_id),
+                        client: federation_client,
+                    }),
+                );
+
                 return Ok(ToolResult {
-                    success: false,
-                    output: String::new(),
-                    error: Some(format!(
-                        "Unknown agent '{agent_name}'. Available agents: {}",
-                        if available.is_empty() {
-                            "(none configured)".to_string()
-                        } else {
-                            available.join(", ")
-                        }
-                    )),
+                    success: true,
+                    output: json!({
+                        "session_id": session_id,
+                        "agent": agent_name,
+                        "status": "running",
+                        "remote_task_id": accepted.task_id,
+                        "message": format!("Remote sub-agent spawned on '{}'. Use subagent_list or subagent_manage to check progress.", peer.display_name)
+                    })
+                    .to_string(),
+                    error: None,
                 });
             }
-        };
+        }
 
+        let mut available = self.agents.keys().cloned().collect::<Vec<_>>();
+        if let Some(federation) = &self.federation {
+            available.extend(federation.available_remote_agents());
+        }
+        available.sort();
+        available.dedup();
+        Ok(ToolResult {
+            success: false,
+            output: String::new(),
+            error: Some(format!(
+                "Unknown agent '{agent_name}'. Available agents: {}",
+                if available.is_empty() {
+                    "(none configured)".to_string()
+                } else {
+                    available.join(", ")
+                }
+            )),
+        })
+    }
+}
+
+impl SubAgentSpawnTool {
+    async fn spawn_local_agent(
+        &self,
+        agent_name: &str,
+        task: &str,
+        context: &str,
+        agent_config: DelegateAgentConfig,
+    ) -> anyhow::Result<ToolResult> {
         // Create provider for this agent
         let provider_credential_owned = agent_config
             .api_key
@@ -274,7 +380,8 @@ impl Tool for SubAgentSpawnTool {
         });
 
         // Store the handle for cancellation
-        self.registry.set_handle(&session_id, handle);
+        self.registry
+            .set_handle(&session_id, SubAgentHandle::Local(handle));
 
         Ok(ToolResult {
             success: true,

@@ -29,31 +29,10 @@ impl fmt::Display for SopPriority {
 
 // ── Execution Mode ──────────────────────────────────────────────
 
-/// How much autonomy the agent has when executing an SOP.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum SopExecutionMode {
-    /// Execute all steps without human approval.
-    Auto,
-    /// Request approval before starting, then execute all steps.
-    #[default]
-    Supervised,
-    /// Request approval before each step.
-    StepByStep,
-    /// Critical/High → Auto, Normal/Low → Supervised.
-    PriorityBased,
-}
-
-impl fmt::Display for SopExecutionMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Auto => write!(f, "auto"),
-            Self::Supervised => write!(f, "supervised"),
-            Self::StepByStep => write!(f, "step_by_step"),
-            Self::PriorityBased => write!(f, "priority_based"),
-        }
-    }
-}
+// Defined in config::schema to avoid a cross-crate `crate::sop` reference
+// in the binary target.  Re-exported here for ergonomic imports within the
+// sop module tree.
+pub use crate::config::SopExecutionMode;
 
 // ── Trigger ─────────────────────────────────────────────────────
 

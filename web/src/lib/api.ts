@@ -10,6 +10,10 @@ import type {
   CostSummary,
   CliTool,
   HealthSnapshot,
+  FederationPeerRoleUpdateResponse,
+  FederationPeersResponse,
+  FederationPeerSummary,
+  FederationRole,
   WorkspaceBlobWriteResponse,
   WorkspaceBrowserResponse,
   WorkspaceFileResponse,
@@ -132,6 +136,44 @@ export function getHealth(): Promise<HealthSnapshot> {
   return apiFetch<HealthSnapshot | { health: HealthSnapshot }>('/api/health').then((data) =>
     unwrapField(data, 'health'),
   );
+}
+
+export function getFederationPeers(): Promise<FederationPeersResponse> {
+  return apiFetch<FederationPeersResponse>('/api/federation/peers');
+}
+
+export function updateFederationPeerRole(
+  peerId: string,
+  role: FederationRole,
+): Promise<FederationPeerRoleUpdateResponse> {
+  return apiFetch<FederationPeerRoleUpdateResponse>(
+    `/api/federation/peers/${encodeURIComponent(peerId)}/role`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ role }),
+    },
+  );
+}
+
+export function updateFederationPeerHints(
+  peerId: string,
+  specialization: string,
+  priority: number,
+): Promise<{ status: string; peer: FederationPeerSummary }> {
+  return apiFetch<{ status: string; peer: FederationPeerSummary }>(
+    `/api/federation/peers/${encodeURIComponent(peerId)}/hints`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ specialization, priority }),
+    },
+  );
+}
+
+export function addFederationManualPeer(endpoint: string): Promise<{ status: string; base_url: string }> {
+  return apiFetch('/api/federation/peers', {
+    method: 'POST',
+    body: JSON.stringify({ endpoint }),
+  });
 }
 
 // ---------------------------------------------------------------------------

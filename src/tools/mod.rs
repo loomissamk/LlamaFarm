@@ -30,7 +30,10 @@ pub mod cron_runs;
 pub mod cron_update;
 pub mod delegate;
 pub mod delegate_coordination_status;
+pub mod docker;
 pub mod file_edit;
+pub mod package_manager;
+pub mod service_control;
 pub mod file_read;
 pub mod file_write;
 pub mod git_operations;
@@ -99,8 +102,10 @@ pub use memory_store::MemoryStoreTool;
 pub use model_routing_config::ModelRoutingConfigTool;
 pub use ollama_model::OllamaModelTool;
 pub use pdf_read::PdfReadTool;
+pub use package_manager::PackageManagerTool;
 pub use process::ProcessTool;
 pub use proxy_config::ProxyConfigTool;
+pub use service_control::ServiceControlTool;
 pub use pushover::PushoverTool;
 pub use schedule::ScheduleTool;
 #[allow(unused_imports)]
@@ -122,7 +127,7 @@ pub use web_search_tool::WebSearchTool;
 use crate::config::{Config, DelegateAgentConfig};
 use crate::memory::Memory;
 use crate::runtime::{NativeRuntime, RuntimeAdapter};
-use crate::security::SecurityPolicy;
+use crate::security::{NoopSandbox, Sandbox, SecurityPolicy};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -173,10 +178,15 @@ pub fn default_tools_with_runtime(
 ) -> Vec<Box<dyn Tool>> {
     let has_shell_access = runtime.has_shell_access();
     let has_filesystem_access = runtime.has_filesystem_access();
+    let command_sandbox: Arc<dyn Sandbox> = Arc::new(NoopSandbox);
     let mut tools: Vec<Box<dyn Tool>> = Vec::new();
 
     if has_shell_access {
-        tools.push(Box::new(ShellTool::new(security.clone(), runtime.clone())));
+        tools.push(Box::new(ShellTool::new_with_sandbox(
+            security.clone(),
+            runtime.clone(),
+            command_sandbox.clone(),
+        )));
     }
     if has_filesystem_access {
         tools.push(Box::new(FileReadTool::new(security.clone())));
@@ -209,7 +219,7 @@ pub fn all_tools(
     fallback_api_key: Option<&str>,
     root_config: &crate::config::Config,
 ) -> Vec<Box<dyn Tool>> {
-    all_tools_with_runtime(
+    all_tools_with_runtime_and_federation(
         config,
         security,
         Arc::new(NativeRuntime::new()),
@@ -223,6 +233,7 @@ pub fn all_tools(
         agents,
         fallback_api_key,
         root_config,
+        None,
     )
 }
 
@@ -243,6 +254,42 @@ pub fn all_tools_with_runtime(
     fallback_api_key: Option<&str>,
     root_config: &crate::config::Config,
 ) -> Vec<Box<dyn Tool>> {
+    all_tools_with_runtime_and_federation(
+        config,
+        security,
+        runtime,
+        memory,
+        composio_key,
+        composio_entity_id,
+        browser_config,
+        http_config,
+        web_fetch_config,
+        workspace_dir,
+        agents,
+        fallback_api_key,
+        root_config,
+        None,
+    )
+}
+
+/// Create full tool registry including optional LAN federation-backed delegation.
+#[allow(clippy::implicit_hasher, clippy::too_many_arguments)]
+pub fn all_tools_with_runtime_and_federation(
+    config: Arc<Config>,
+    security: &Arc<SecurityPolicy>,
+    runtime: Arc<dyn RuntimeAdapter>,
+    memory: Arc<dyn Memory>,
+    composio_key: Option<&str>,
+    composio_entity_id: Option<&str>,
+    browser_config: &crate::config::BrowserConfig,
+    http_config: &crate::config::HttpRequestConfig,
+    web_fetch_config: &crate::config::WebFetchConfig,
+    workspace_dir: &std::path::Path,
+    agents: &HashMap<String, DelegateAgentConfig>,
+    fallback_api_key: Option<&str>,
+    root_config: &crate::config::Config,
+    federation: Option<Arc<crate::federation::remote_subagent::FederationRemoteSubagentAdapter>>,
+) -> Vec<Box<dyn Tool>> {
     let has_shell_access = runtime.has_shell_access();
     let has_filesystem_access = runtime.has_filesystem_access();
     let llamafarm_dir = root_config
@@ -255,6 +302,7 @@ pub fn all_tools_with_runtime(
         &llamafarm_dir,
         root_config.security.audit.clone(),
     ));
+    let command_sandbox = crate::security::create_sandbox(&root_config.security);
 
     let mut tool_arcs: Vec<Arc<dyn Tool>> = vec![
         Arc::new(CronAddTool::new(config.clone(), security.clone())),
@@ -284,19 +332,33 @@ pub fn all_tools_with_runtime(
     ];
 
     if has_shell_access {
-        tool_arcs.push(Arc::new(ShellTool::new_with_syscall_detector(
+        tool_arcs.push(Arc::new(ShellTool::new_with_syscall_detector_and_sandbox(
             security.clone(),
             runtime.clone(),
             Some(syscall_detector.clone()),
+            command_sandbox.clone(),
         )));
-        tool_arcs.push(Arc::new(ProcessTool::new_with_syscall_detector(
+        tool_arcs.push(Arc::new(ProcessTool::new_with_syscall_detector_and_sandbox(
             security.clone(),
             runtime.clone(),
             Some(syscall_detector),
+            command_sandbox.clone(),
         )));
         tool_arcs.push(Arc::new(GitOperationsTool::new(
             security.clone(),
             workspace_dir.to_path_buf(),
+        )));
+        tool_arcs.push(Arc::new(docker::DockerTool::new_with_sandbox(
+            security.clone(),
+            command_sandbox.clone(),
+        )));
+        tool_arcs.push(Arc::new(PackageManagerTool::new_with_sandbox(
+            security.clone(),
+            command_sandbox.clone(),
+        )));
+        tool_arcs.push(Arc::new(ServiceControlTool::new_with_sandbox(
+            security.clone(),
+            command_sandbox.clone(),
         )));
     }
 
@@ -410,7 +472,7 @@ pub fn all_tools_with_runtime(
     }
 
     // Add delegation and sub-agent orchestration tools when agents are configured
-    if !agents.is_empty() {
+    if !agents.is_empty() || federation.is_some() {
         let delegate_agents: HashMap<String, DelegateAgentConfig> = agents
             .iter()
             .map(|(name, cfg)| (name.clone(), cfg.clone()))
@@ -434,6 +496,7 @@ pub fn all_tools_with_runtime(
                 .map(|mode| mode.as_compatible_mode()),
             max_tokens_override: None,
             model_support_vision: root_config.model_support_vision,
+            ..Default::default()
         };
         let parent_tools = Arc::new(tool_arcs.clone());
         let mut delegate_tool = DelegateTool::new_with_options(
@@ -444,6 +507,9 @@ pub fn all_tools_with_runtime(
         )
         .with_parent_tools(parent_tools.clone())
         .with_multimodal_config(root_config.multimodal.clone());
+        if let Some(federation) = federation.clone() {
+            delegate_tool = delegate_tool.with_federation(federation);
+        }
 
         if root_config.coordination.enabled {
             let coordination_lead_agent = {
@@ -490,7 +556,7 @@ pub fn all_tools_with_runtime(
         }
 
         let subagent_registry = Arc::new(SubAgentRegistry::new());
-        tool_arcs.push(Arc::new(SubAgentSpawnTool::new(
+        let mut subagent_spawn_tool = SubAgentSpawnTool::new(
             delegate_agents,
             delegate_fallback_credential,
             security.clone(),
@@ -498,7 +564,11 @@ pub fn all_tools_with_runtime(
             subagent_registry.clone(),
             parent_tools,
             root_config.multimodal.clone(),
-        )));
+        );
+        if let Some(federation) = federation {
+            subagent_spawn_tool = subagent_spawn_tool.with_federation(federation);
+        }
+        tool_arcs.push(Arc::new(subagent_spawn_tool));
         tool_arcs.push(Arc::new(SubAgentListTool::new(subagent_registry.clone())));
         tool_arcs.push(Arc::new(SubAgentManageTool::new(
             subagent_registry,

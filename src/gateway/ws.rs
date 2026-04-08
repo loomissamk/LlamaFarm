@@ -12,6 +12,9 @@
 use super::{AppState, GatewayRuntimeSnapshot};
 use crate::agent::loop_::{run_tool_call_loop, DRAFT_CLEAR_SENTINEL, DRAFT_PROGRESS_SENTINEL};
 use crate::approval::ApprovalManager;
+use crate::federation::remote_subagent::{
+    with_chat_context, FederationChatContext, FederationChatEvent,
+};
 use crate::memory::MemoryCategory;
 use crate::providers::ChatMessage;
 use axum::{
@@ -118,6 +121,23 @@ fn parse_seed_history(value: Option<&serde_json::Value>) -> Vec<ChatMessage> {
             })
         })
         .collect()
+}
+
+fn parse_selected_federation_peer_ids(value: Option<&serde_json::Value>) -> Vec<String> {
+    let Some(items) = value.and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+
+    let mut peers = items
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    peers.sort();
+    peers.dedup();
+    peers
 }
 
 fn resolve_ws_chat_store_path(config: &crate::config::Config) -> PathBuf {
@@ -578,32 +598,16 @@ fn direct_shell_fallback_response(raw_output: &str, success: bool) -> String {
 
 fn describe_direct_shell_result(command: &str, raw_output: &str, success: bool) -> String {
     let base = direct_shell_fallback_response(raw_output, success);
-    let command_name = command
-        .split_whitespace()
-        .next()
-        .unwrap_or("command")
-        .trim()
-        .to_ascii_lowercase();
-    let detail = match command_name.as_str() {
-        "curl" => {
-            "This fetched data from the target endpoint. The raw HTTP or payload response is shown above."
-        }
-        "lsusb" => {
-            "This lists USB devices currently visible to the system, including bus/device IDs and vendor or product labels."
-        }
-        "lsblk" => "This lists block devices and partitions currently visible to the kernel.",
-        "lspci" => "This lists PCI devices detected on the system.",
-        "docker" | "docker-compose" => {
-            "This ran a Docker command against the local container runtime."
-        }
-        "git" => "This ran a Git command. The repository result is shown in the raw output above.",
-        _ if raw_output.trim().is_empty() => {
-            "The command finished without producing any stdout or stderr output."
-        }
-        _ => "The raw command output is shown above.",
-    };
+    if !success {
+        return format!(
+            "{base} The command returned a non-zero exit status. Inspect stderr in the raw output above."
+        );
+    }
+    if raw_output.trim().is_empty() {
+        return format!("{base} The command finished without producing visible output.");
+    }
 
-    format!("{base} {detail}")
+    format!("{base} Executed: `{command}`")
 }
 
 fn summarize_direct_shell_command(command: &str, raw_output: &str, success: bool) -> String {
@@ -696,9 +700,19 @@ fn looks_like_direct_shell_command(candidate: &str) -> bool {
         .any(|prefix| lowered == *prefix || lowered.starts_with(prefix))
 }
 
+fn has_explanatory_suffix(command: &str) -> bool {
+    static EXPLANATION_SUFFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?i)\b(?:and|then)\s+(?:explain|describe|summari[sz]e|interpret|analy[sz]e)\b",
+        )
+        .unwrap()
+    });
+    EXPLANATION_SUFFIX_RE.is_match(command)
+}
+
 fn extract_direct_shell_command(message: &str) -> Option<String> {
     let trimmed = message.trim();
-    if looks_like_direct_shell_command(trimmed) {
+    if looks_like_direct_shell_command(trimmed) && !has_explanatory_suffix(trimmed) {
         return Some(trimmed.to_string());
     }
 
@@ -717,7 +731,7 @@ fn extract_direct_shell_command(message: &str) -> Option<String> {
             .strip_prefix(prefix)
             .map(|_| trimmed[prefix.len()..].trim().trim_matches('`'))
         {
-            if looks_like_direct_shell_command(rest) {
+            if looks_like_direct_shell_command(rest) && !has_explanatory_suffix(rest) {
                 return Some(rest.to_string());
             }
         }
@@ -1298,6 +1312,26 @@ async fn emit_ws_delta_event(socket: &mut WebSocket, session_id: &str, event: Ws
     let _ = socket.send(Message::Text(payload.to_string().into())).await;
 }
 
+async fn emit_ws_federation_event(socket: &mut WebSocket, event: FederationChatEvent) {
+    let payload = json!({
+        "type": event.event_type,
+        "session_id": event.session_id,
+        "peer_id": event.peer_id,
+        "peer_name": event.peer_name,
+        "delegate_agent": event.delegate_agent,
+        "task_id": event.task_id,
+        "content": event.content,
+        "name": event.name,
+        "args": event.args,
+        "success": event.success,
+        "duration_secs": event.duration_secs,
+        "output": event.output,
+        "message": event.message,
+    });
+
+    let _ = socket.send(Message::Text(payload.to_string().into())).await;
+}
+
 async fn execute_direct_shell_command(
     socket: &mut WebSocket,
     session_id: &str,
@@ -1731,71 +1765,6 @@ pub async fn handle_ws_chat(
 
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
     while let Some(msg) = socket.recv().await {
-        let runtime = state.runtime_snapshot();
-        let (
-            provider_label,
-            parallel_tools,
-            native_tools,
-            approval_manager,
-            system_prompt,
-            ws_chat_store_path,
-        ) = {
-            let config_guard = state.config.lock();
-            let provider_label = config_guard
-                .default_provider
-                .clone()
-                .unwrap_or_else(|| "unknown".to_string());
-            let tool_descs: Vec<(&str, &str)> = runtime
-                .tools_registry
-                .iter()
-                .map(|spec| (spec.name.as_str(), spec.description.as_str()))
-                .collect();
-            let skills =
-                crate::skills::load_skills_with_config(&config_guard.workspace_dir, &config_guard);
-            let bootstrap_max_chars = if config_guard.agent.compact_context {
-                Some(6000)
-            } else {
-                None
-            };
-            let native_tools = crate::agent::loop_::configured_native_tools_enabled(
-                &config_guard.agent.tool_dispatcher,
-                runtime.provider.supports_native_tools(),
-            );
-            let mut system_prompt = crate::channels::build_system_prompt_with_mode(
-                &config_guard.workspace_dir,
-                &runtime.model,
-                &tool_descs,
-                &skills,
-                Some(&config_guard.identity),
-                bootstrap_max_chars,
-                native_tools,
-                config_guard.skills.prompt_injection_mode,
-            );
-            if !native_tools {
-                system_prompt.push_str(&crate::agent::loop_::build_tool_instructions(
-                    runtime.tools_registry_exec.as_ref(),
-                ));
-            }
-            system_prompt.push_str(&crate::agent::loop_::build_shell_policy_instructions(
-                &config_guard.autonomy,
-            ));
-            system_prompt.push_str(
-                &crate::agent::loop_::build_runtime_tool_availability_notice(
-                    runtime.tools_registry_exec.as_ref(),
-                ),
-            );
-            system_prompt.push_str(&crate::agent::loop_::build_auto_plan_execute_instructions());
-
-            (
-                provider_label,
-                config_guard.agent.parallel_tools,
-                native_tools,
-                ApprovalManager::from_config(&config_guard.autonomy),
-                system_prompt,
-                resolve_ws_chat_store_path(&config_guard),
-            )
-        };
-
         let msg = match msg {
             Ok(Message::Text(text)) => text,
             Ok(Message::Close(_)) | Err(_) => break,
@@ -1812,129 +1781,366 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             }
         };
 
-        let msg_type = parsed["type"].as_str().unwrap_or("");
+        let runtime = state.runtime_snapshot();
+        let msg_type = parsed["type"].as_str().unwrap_or("").to_string();
         let session_id =
             normalize_ws_session_id(parsed.get("session_id").and_then(serde_json::Value::as_str))
                 .unwrap_or_else(|| "default".to_string());
+        let selected_federation_peer_ids =
+            parse_selected_federation_peer_ids(parsed.get("federation_peer_ids"));
+        let (federation_event_tx, mut federation_event_rx) =
+            tokio::sync::mpsc::unbounded_channel::<FederationChatEvent>();
+        let federation_context = state.federation.as_ref().map(|_| FederationChatContext {
+            session_id: session_id.clone(),
+            selected_peer_ids: selected_federation_peer_ids,
+            event_tx: Some(federation_event_tx),
+        });
 
-        if msg_type == "session_delete" {
-            delete_ws_chat_history(&session_id, &ws_chat_store_path).await;
-            continue;
-        }
+        with_chat_context(federation_context, async {
+            let (
+                provider_label,
+                parallel_tools,
+                native_tools,
+                approval_manager,
+                system_prompt,
+                ws_chat_store_path,
+            ) = {
+                let config_guard = state.config.lock();
+                let provider_label = config_guard
+                    .default_provider
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string());
+                let tool_descs: Vec<(&str, &str)> = runtime
+                    .tools_registry
+                    .iter()
+                    .map(|spec| (spec.name.as_str(), spec.description.as_str()))
+                    .collect();
+                let skills = crate::skills::load_skills_with_config(
+                    &config_guard.workspace_dir,
+                    &config_guard,
+                );
+                let bootstrap_max_chars = if config_guard.agent.compact_context {
+                    Some(6000)
+                } else {
+                    None
+                };
+                let native_tools = crate::agent::loop_::configured_native_tools_enabled(
+                    &config_guard.agent.tool_dispatcher,
+                    runtime.provider.supports_native_tools(),
+                );
+                let mut system_prompt = crate::channels::build_system_prompt_with_mode(
+                    &config_guard.workspace_dir,
+                    &runtime.model,
+                    &tool_descs,
+                    &skills,
+                    Some(&config_guard.identity),
+                    bootstrap_max_chars,
+                    native_tools,
+                    config_guard.skills.prompt_injection_mode,
+                );
+                if !native_tools {
+                    system_prompt.push_str(&crate::agent::loop_::build_tool_instructions(
+                        runtime.tools_registry_exec.as_ref(),
+                    ));
+                }
+                system_prompt.push_str(&crate::agent::loop_::build_shell_policy_instructions(
+                    &config_guard.autonomy,
+                ));
+                system_prompt.push_str(
+                    &crate::agent::loop_::build_runtime_tool_availability_notice(
+                        runtime.tools_registry_exec.as_ref(),
+                    ),
+                );
+                system_prompt.push_str(&crate::agent::loop_::build_auto_plan_execute_instructions());
 
-        if msg_type != "message" {
-            continue;
-        }
+                if let Some(federation) = &state.federation {
+                    let remote_agents = federation.remote_adapter().available_remote_agents_info();
+                    if !remote_agents.is_empty() {
+                        system_prompt.push_str(
+                            &crate::agent::loop_::build_federation_delegation_instructions(
+                                &remote_agents,
+                            ),
+                        );
+                    }
+                }
 
-        let content = parsed["content"].as_str().unwrap_or("").to_string();
-        if content.is_empty() {
-            continue;
-        }
-
-        let direct_intent = classify_direct_intent(&content);
-        let temporary = parsed["temporary"].as_bool().unwrap_or(false);
-        let history_seed = parse_seed_history(parsed.get("history_seed"));
-        let mut history =
-            load_ws_chat_history(&session_id, temporary, &history_seed, &ws_chat_store_path).await;
-        let effective_system_prompt = match direct_intent.as_ref() {
-            Some(DirectIntent::ForceTool(DirectForcedToolIntent::FileWrite(request))) => {
-                build_forced_file_write_prompt(&system_prompt, request)
-            }
-            _ => system_prompt.clone(),
-        };
-
-        if let Some(first) = history.first_mut() {
-            if first.role == "system" {
-                *first = ChatMessage::system(&effective_system_prompt);
-            } else {
-                history.insert(0, ChatMessage::system(&effective_system_prompt));
-            }
-        } else {
-            history.push(ChatMessage::system(&effective_system_prompt));
-        }
-
-        let history_before_turn = history.clone();
-
-        if state.auto_save && content.chars().count() >= WS_AUTOSAVE_MIN_MESSAGE_CHARS {
-            let key = websocket_memory_key();
-            let _ = runtime
-                .mem
-                .store(
-                    &key,
-                    &content,
-                    MemoryCategory::Conversation,
-                    Some(session_id.as_str()),
+                (
+                    provider_label,
+                    config_guard.agent.parallel_tools,
+                    native_tools,
+                    ApprovalManager::from_config(&config_guard.autonomy),
+                    system_prompt,
+                    resolve_ws_chat_store_path(&config_guard),
                 )
-                .await;
-        }
-
-        history.push(ChatMessage::user(&content));
-
-        // Broadcast agent_start event
-        let _ = state.event_tx.send(serde_json::json!({
-            "type": "agent_start",
-            "provider": provider_label,
-            "model": runtime.model,
-        }));
-
-        if let Some(DirectIntent::ExecuteNow(intent)) = direct_intent.as_ref() {
-            let result = match intent {
-                DirectExecutionIntent::FileRead(path) => {
-                    execute_direct_file_read(&mut socket, &session_id, &runtime, &mut history, path)
-                        .await
-                }
-                DirectExecutionIntent::WorkspaceDelete(path) => {
-                    let config = state.config.lock().clone();
-                    execute_direct_workspace_delete(
-                        &mut socket,
-                        &session_id,
-                        &config,
-                        &mut history,
-                        path,
-                    )
-                    .await
-                }
-                DirectExecutionIntent::WorkspaceCreateDirectory(path) => {
-                    let config = state.config.lock().clone();
-                    execute_direct_workspace_directory_create(
-                        &mut socket,
-                        &session_id,
-                        &config,
-                        &mut history,
-                        path,
-                    )
-                    .await
-                }
-                DirectExecutionIntent::OllamaModel(request) => {
-                    execute_direct_ollama_model(
-                        &mut socket,
-                        &session_id,
-                        &runtime,
-                        &mut history,
-                        request,
-                    )
-                    .await
-                }
-                DirectExecutionIntent::Shell(command) => {
-                    execute_direct_shell_command(
-                        &mut socket,
-                        &session_id,
-                        &runtime,
-                        &mut history,
-                        command,
-                    )
-                    .await
-                }
             };
+
+            if msg_type == "session_delete" {
+                delete_ws_chat_history(&session_id, &ws_chat_store_path).await;
+                return;
+            }
+
+            if msg_type != "message" {
+                return;
+            }
+
+            let content = parsed["content"].as_str().unwrap_or("").to_string();
+            if content.is_empty() {
+                return;
+            }
+
+            let direct_intent = classify_direct_intent(&content);
+            let temporary = parsed["temporary"].as_bool().unwrap_or(false);
+            let history_seed = parse_seed_history(parsed.get("history_seed"));
+            let mut history = load_ws_chat_history(
+                &session_id,
+                temporary,
+                &history_seed,
+                &ws_chat_store_path,
+            )
+            .await;
+            let effective_system_prompt = match direct_intent.as_ref() {
+                Some(DirectIntent::ForceTool(DirectForcedToolIntent::FileWrite(request))) => {
+                    build_forced_file_write_prompt(&system_prompt, request)
+                }
+                _ => system_prompt.clone(),
+            };
+
+            if let Some(first) = history.first_mut() {
+                if first.role == "system" {
+                    *first = ChatMessage::system(&effective_system_prompt);
+                } else {
+                    history.insert(0, ChatMessage::system(&effective_system_prompt));
+                }
+            } else {
+                history.push(ChatMessage::system(&effective_system_prompt));
+            }
+
+            let history_before_turn = history.clone();
+
+            if state.auto_save && content.chars().count() >= WS_AUTOSAVE_MIN_MESSAGE_CHARS {
+                let key = websocket_memory_key();
+                let _ = runtime
+                    .mem
+                    .store(
+                        &key,
+                        &content,
+                        MemoryCategory::Conversation,
+                        Some(session_id.as_str()),
+                    )
+                    .await;
+            }
+
+            let already_present = history
+                .iter()
+                .rev()
+                .find(|m| m.role != "system")
+                .is_some_and(|m| m.role == "user" && m.content == content);
+            if !already_present {
+                history.push(ChatMessage::user(&content));
+            }
+
+            let _ = state.event_tx.send(serde_json::json!({
+                "type": "agent_start",
+                "provider": provider_label,
+                "model": runtime.model,
+            }));
+
+            if let Some(DirectIntent::ExecuteNow(intent)) = direct_intent.as_ref() {
+                let result = match intent {
+                    DirectExecutionIntent::FileRead(path) => {
+                        execute_direct_file_read(
+                            &mut socket,
+                            &session_id,
+                            &runtime,
+                            &mut history,
+                            path,
+                        )
+                        .await
+                    }
+                    DirectExecutionIntent::WorkspaceDelete(path) => {
+                        let config = state.config.lock().clone();
+                        execute_direct_workspace_delete(
+                            &mut socket,
+                            &session_id,
+                            &config,
+                            &mut history,
+                            path,
+                        )
+                        .await
+                    }
+                    DirectExecutionIntent::WorkspaceCreateDirectory(path) => {
+                        let config = state.config.lock().clone();
+                        execute_direct_workspace_directory_create(
+                            &mut socket,
+                            &session_id,
+                            &config,
+                            &mut history,
+                            path,
+                        )
+                        .await
+                    }
+                    DirectExecutionIntent::OllamaModel(request) => {
+                        execute_direct_ollama_model(
+                            &mut socket,
+                            &session_id,
+                            &runtime,
+                            &mut history,
+                            request,
+                        )
+                        .await
+                    }
+                    DirectExecutionIntent::Shell(command) => {
+                        execute_direct_shell_command(
+                            &mut socket,
+                            &session_id,
+                            &runtime,
+                            &mut history,
+                            command,
+                        )
+                        .await
+                    }
+                };
+
+                match result {
+                    Ok(response) => {
+                        store_ws_chat_history(
+                            &session_id,
+                            &history,
+                            temporary,
+                            &ws_chat_store_path,
+                        )
+                        .await;
+                        let done = serde_json::json!({
+                            "type": "done",
+                            "session_id": session_id,
+                            "full_response": response,
+                        });
+                        let _ = socket.send(Message::Text(done.to_string().into())).await;
+
+                        let _ = state.event_tx.send(serde_json::json!({
+                            "type": "agent_end",
+                            "provider": provider_label,
+                            "model": runtime.model,
+                        }));
+                    }
+                    Err(error) => {
+                        store_ws_chat_history(
+                            &session_id,
+                            &history_before_turn,
+                            temporary,
+                            &ws_chat_store_path,
+                        )
+                        .await;
+                        let sanitized = crate::providers::sanitize_api_error(&error.to_string());
+                        let err = serde_json::json!({
+                            "type": "error",
+                            "session_id": session_id,
+                            "message": sanitized,
+                        });
+                        let _ = socket.send(Message::Text(err.to_string().into())).await;
+
+                        let _ = state.event_tx.send(serde_json::json!({
+                            "type": "error",
+                            "component": "ws_chat",
+                            "message": sanitized,
+                        }));
+                    }
+                }
+
+                return;
+            }
+
+            let excluded_tools: Vec<String> = match direct_intent {
+                Some(DirectIntent::ForceTool(DirectForcedToolIntent::FileWrite(_))) => runtime
+                    .tools_registry_exec
+                    .iter()
+                    .map(|tool| tool.name().to_string())
+                    .filter(|name| !matches!(name.as_str(), "file_write" | "task_plan"))
+                    .collect(),
+                _ => Vec::new(),
+            };
+
+            let result = crate::agent::loop_::with_tool_loop_settings(
+                parallel_tools,
+                native_tools,
+                async {
+                    let (delta_tx, mut delta_rx) = tokio::sync::mpsc::channel::<String>(128);
+                    let mut loop_future = std::pin::pin!(run_tool_call_loop(
+                        runtime.provider.as_ref(),
+                        &mut history,
+                        runtime.tools_registry_exec.as_ref(),
+                        state.observer.as_ref(),
+                        &provider_label,
+                        &runtime.model,
+                        runtime.temperature,
+                        true,
+                        Some(&approval_manager),
+                        "webchat",
+                        &state.multimodal,
+                        state.max_tool_iterations,
+                        None,
+                        Some(delta_tx),
+                        None,
+                        &excluded_tools,
+                    ));
+
+                    loop {
+                        tokio::select! {
+                            federation_event = federation_event_rx.recv() => {
+                                if let Some(federation_event) = federation_event {
+                                    emit_ws_federation_event(&mut socket, federation_event).await;
+                                }
+                            }
+                            maybe_delta = delta_rx.recv() => {
+                                if let Some(delta) = maybe_delta {
+                                    if let Some(event) = parse_ws_delta_event(&delta) {
+                                        emit_ws_delta_event(&mut socket, &session_id, event).await;
+                                    }
+                                } else {
+                                    break loop_future.await;
+                                }
+                            }
+                            response = &mut loop_future => {
+                                while let Ok(federation_event) = federation_event_rx.try_recv() {
+                                    emit_ws_federation_event(&mut socket, federation_event).await;
+                                }
+                                while let Ok(delta) = delta_rx.try_recv() {
+                                    if let Some(event) = parse_ws_delta_event(&delta) {
+                                        emit_ws_delta_event(&mut socket, &session_id, event).await;
+                                    }
+                                }
+                                break response;
+                            }
+                        }
+                    }
+                },
+            )
+            .await;
+
+            while let Ok(federation_event) = federation_event_rx.try_recv() {
+                emit_ws_federation_event(&mut socket, federation_event).await;
+            }
 
             match result {
                 Ok(response) => {
-                    store_ws_chat_history(&session_id, &history, temporary, &ws_chat_store_path)
-                        .await;
+                    let safe_response = finalize_ws_response(
+                        &response,
+                        &history,
+                        runtime.tools_registry_exec.as_ref(),
+                    );
+                    history.push(ChatMessage::assistant(&safe_response));
+                    store_ws_chat_history(
+                        &session_id,
+                        &history,
+                        temporary,
+                        &ws_chat_store_path,
+                    )
+                    .await;
+
                     let done = serde_json::json!({
                         "type": "done",
                         "session_id": session_id,
-                        "full_response": response,
+                        "full_response": safe_response,
                     });
                     let _ = socket.send(Message::Text(done.to_string().into())).await;
 
@@ -1967,112 +2173,8 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                     }));
                 }
             }
-
-            continue;
-        }
-
-        let excluded_tools: Vec<String> = match direct_intent {
-            Some(DirectIntent::ForceTool(DirectForcedToolIntent::FileWrite(_))) => runtime
-                .tools_registry_exec
-                .iter()
-                .map(|tool| tool.name().to_string())
-                .filter(|name| !matches!(name.as_str(), "file_write" | "task_plan"))
-                .collect(),
-            _ => Vec::new(),
-        };
-
-        let result =
-            crate::agent::loop_::with_tool_loop_settings(parallel_tools, native_tools, async {
-                let (delta_tx, mut delta_rx) = tokio::sync::mpsc::channel::<String>(128);
-                let mut loop_future = std::pin::pin!(run_tool_call_loop(
-                    runtime.provider.as_ref(),
-                    &mut history,
-                    runtime.tools_registry_exec.as_ref(),
-                    state.observer.as_ref(),
-                    &provider_label,
-                    &runtime.model,
-                    runtime.temperature,
-                    true,
-                    Some(&approval_manager),
-                    "webchat",
-                    &state.multimodal,
-                    state.max_tool_iterations,
-                    None,
-                    Some(delta_tx),
-                    None,
-                    &excluded_tools,
-                ));
-
-                loop {
-                    tokio::select! {
-                        maybe_delta = delta_rx.recv() => {
-                            if let Some(delta) = maybe_delta {
-                                if let Some(event) = parse_ws_delta_event(&delta) {
-                                    emit_ws_delta_event(&mut socket, &session_id, event).await;
-                                }
-                            } else {
-                                break loop_future.await;
-                            }
-                        }
-                        response = &mut loop_future => {
-                            while let Ok(delta) = delta_rx.try_recv() {
-                                if let Some(event) = parse_ws_delta_event(&delta) {
-                                    emit_ws_delta_event(&mut socket, &session_id, event).await;
-                                }
-                            }
-                            break response;
-                        }
-                    }
-                }
-            })
-            .await;
-
-        match result {
-            Ok(response) => {
-                let safe_response =
-                    finalize_ws_response(&response, &history, runtime.tools_registry_exec.as_ref());
-                history.push(ChatMessage::assistant(&safe_response));
-                store_ws_chat_history(&session_id, &history, temporary, &ws_chat_store_path).await;
-
-                // Send the full response as a done message
-                let done = serde_json::json!({
-                    "type": "done",
-                    "session_id": session_id,
-                    "full_response": safe_response,
-                });
-                let _ = socket.send(Message::Text(done.to_string().into())).await;
-
-                // Broadcast agent_end event
-                let _ = state.event_tx.send(serde_json::json!({
-                    "type": "agent_end",
-                    "provider": provider_label,
-                    "model": runtime.model,
-                }));
-            }
-            Err(e) => {
-                store_ws_chat_history(
-                    &session_id,
-                    &history_before_turn,
-                    temporary,
-                    &ws_chat_store_path,
-                )
-                .await;
-                let sanitized = crate::providers::sanitize_api_error(&e.to_string());
-                let err = serde_json::json!({
-                    "type": "error",
-                    "session_id": session_id,
-                    "message": sanitized,
-                });
-                let _ = socket.send(Message::Text(err.to_string().into())).await;
-
-                // Broadcast error event
-                let _ = state.event_tx.send(serde_json::json!({
-                    "type": "error",
-                    "component": "ws_chat",
-                    "message": sanitized,
-                }));
-            }
-        }
+        })
+        .await;
     }
 }
 
@@ -2499,12 +2601,46 @@ Reminder set successfully."#;
     }
 
     #[test]
+    fn extract_direct_shell_command_rejects_command_plus_explanation_suffix() {
+        assert_eq!(
+            extract_direct_shell_command("run lsusb and explain all the results"),
+            None
+        );
+        assert_eq!(
+            extract_direct_shell_command("lsblk then summarize"),
+            None
+        );
+    }
+
+    #[test]
     fn extract_direct_shell_command_rejects_normal_chat_text() {
         assert_eq!(extract_direct_shell_command("How are you today?"), None);
         assert_eq!(
             extract_direct_shell_command("Please explain what curl does."),
             None
         );
+    }
+
+    #[test]
+    fn describe_direct_shell_result_failure_is_not_misleading() {
+        let summary = describe_direct_shell_result(
+            "lsusb and explain all the results",
+            "Usage: lsusb [options]...",
+            false,
+        );
+        assert!(summary.contains("Command failed"));
+        assert!(summary.contains("non-zero exit status"));
+    }
+
+    #[test]
+    fn describe_direct_shell_result_is_generic_and_non_hardcoded() {
+        let output = "Bus 001 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub\n\
+Bus 003 Device 003: ID 04f2:b809 Chicony Electronics Co., Ltd HP True Vision FHD Camera\n\
+Bus 003 Device 004: ID 8087:0033 Intel Corp.";
+        let summary = describe_direct_shell_result("lsusb", output, true);
+        assert!(summary.contains("Command completed successfully"));
+        assert!(summary.contains("Executed: `lsusb`"));
+        assert!(!summary.contains("This lists USB devices"));
     }
 
     #[test]
@@ -2626,6 +2762,10 @@ Reminder set successfully."#;
                     name: Some("gemma3:1b".to_string()),
                 })
             ))
+        );
+        assert_eq!(
+            classify_direct_intent("run lsusb and explain all the results"),
+            None
         );
     }
 }

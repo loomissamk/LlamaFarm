@@ -65,6 +65,7 @@ impl Provider for MockProvider {
                 text: Some("done".into()),
                 tool_calls: vec![],
                 usage: None,
+                metrics: None,
                 reasoning_content: None,
             });
         }
@@ -191,6 +192,7 @@ impl Provider for RecordingProvider {
                 text: Some("done".into()),
                 tool_calls: vec![],
                 usage: None,
+                metrics: None,
                 reasoning_content: None,
             });
         }
@@ -240,6 +242,7 @@ fn text_response(text: &str) -> ChatResponse {
         text: Some(text.into()),
         tool_calls: vec![],
         usage: None,
+        metrics: None,
         reasoning_content: None,
     }
 }
@@ -249,6 +252,7 @@ fn tool_response(calls: Vec<ToolCall>) -> ChatResponse {
         text: Some(String::new()),
         tool_calls: calls,
         usage: None,
+        metrics: None,
         reasoning_content: None,
     }
 }
@@ -374,6 +378,7 @@ async fn e2e_xml_dispatcher_tool_call() {
             ),
             tool_calls: vec![],
             usage: None,
+            metrics: None,
             reasoning_content: None,
         },
         text_response("XML tool executed"),
@@ -1013,6 +1018,7 @@ async fn e2e_agent_research_prompt_guided() {
                     text: Some("done".into()),
                     tool_calls: vec![],
                     usage: None,
+                    metrics: None,
                     reasoning_content: None,
                 });
             }
@@ -1031,6 +1037,7 @@ async fn e2e_agent_research_prompt_guided() {
         ),
         tool_calls: vec![], // Empty! Tool call is in text
         usage: None,
+        metrics: None,
         reasoning_content: None,
     };
 
@@ -1039,6 +1046,7 @@ async fn e2e_agent_research_prompt_guided() {
         text: Some("[RESEARCH COMPLETE]\n- Found: echo works".to_string()),
         tool_calls: vec![],
         usage: None,
+        metrics: None,
         reasoning_content: None,
     };
 

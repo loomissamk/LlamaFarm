@@ -50,8 +50,19 @@ pub struct SubAgentSession {
     pub started_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
     pub result: Option<ToolResult>,
-    /// Handle to the spawned tokio task, used for cancellation via `abort()`.
-    pub handle: Option<JoinHandle<()>>,
+    /// Handle to the local or remote relay task, used for cancellation.
+    pub handle: Option<SubAgentHandle>,
+}
+
+pub struct RemoteSubAgentHandle {
+    pub relay_handle: JoinHandle<()>,
+    pub cancel_url: String,
+    pub client: reqwest::Client,
+}
+
+pub enum SubAgentHandle {
+    Local(JoinHandle<()>),
+    Remote(RemoteSubAgentHandle),
 }
 
 /// Thread-safe registry for tracking background sub-agent sessions.
@@ -92,7 +103,7 @@ impl SubAgentRegistry {
 
     /// Set the tokio task handle for a session (used to enable cancellation).
     /// pub fn set_handle.
-    pub fn set_handle(&self, session_id: &str, handle: JoinHandle<()>) {
+    pub fn set_handle(&self, session_id: &str, handle: SubAgentHandle) {
         let mut sessions = self.sessions.write();
         if let Some(session) = sessions.get_mut(session_id) {
             session.handle = Some(handle);
@@ -137,7 +148,17 @@ impl SubAgentRegistry {
                 return false;
             }
             if let Some(handle) = session.handle.take() {
-                handle.abort();
+                match handle {
+                    SubAgentHandle::Local(handle) => handle.abort(),
+                    SubAgentHandle::Remote(remote) => {
+                        let cancel_url = remote.cancel_url.clone();
+                        let client = remote.client.clone();
+                        tokio::spawn(async move {
+                            let _ = client.post(cancel_url).send().await;
+                        });
+                        remote.relay_handle.abort();
+                    }
+                }
             }
             session.status = SubAgentStatus::Killed;
             session.completed_at = Some(Utc::now());

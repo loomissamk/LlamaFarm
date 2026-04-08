@@ -4,7 +4,10 @@
 //! Validates: config defaults, backward compatibility, invalid input rejection,
 //! and gateway/security/agent config boundary conditions.
 
-use llamafarm::config::{AutonomyConfig, ChannelsConfig, Config, GatewayConfig, SecurityConfig};
+use llamafarm::config::{
+    AutonomyConfig, ChannelsConfig, Config, FederationConfig, FederationDiscoveryMode,
+    GatewayConfig, SecurityConfig,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Invalid value fail-fast
@@ -140,6 +143,17 @@ port = 9090
     assert_eq!(parsed.gateway.host, "127.0.0.1");
     assert!(parsed.gateway.require_pairing);
     assert_eq!(parsed.gateway.pair_rate_limit_per_minute, 10);
+}
+
+#[test]
+fn federation_config_defaults_enable_lan_runtime() {
+    let federation = FederationConfig::default();
+    assert!(
+        federation.enabled,
+        "federation should default on so the LAN page is always available"
+    );
+    assert_eq!(federation.discovery_mode, FederationDiscoveryMode::Mdns);
+    assert!(federation.allow_remote_subagents);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

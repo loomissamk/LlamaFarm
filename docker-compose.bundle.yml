@@ -16,6 +16,7 @@
 # CPU-only / generic fallback:
 #   docker compose -f docker-compose.bundle.yml up -d --build
 #   open http://127.0.0.1:42617
+#   open http://127.0.0.1:3000
 #   or set HOST_BIND_IP=0.0.0.0 for LAN access
 
 name: llamafarm-bundle
@@ -38,9 +39,19 @@ services:
       - LLAMAFARM_GATEWAY_HOST=0.0.0.0
       - LLAMAFARM_REQUIRE_PAIRING=false
       - LLAMAFARM_GATEWAY_PORT=${LLAMAFARM_GATEWAY_PORT:-42617}
+      - LLAMAFARM_FEDERATION_ENABLED=${LLAMAFARM_FEDERATION_ENABLED:-true}
+      - LLAMAFARM_NODE_NAME=${LLAMAFARM_NODE_NAME:-llamafarm-node}
+      - LLAMAFARM_API_PORT=${LLAMAFARM_API_PORT:-42617}
+      - LLAMAFARM_DISCOVERY_MODE=${LLAMAFARM_DISCOVERY_MODE:-mdns}
+      - LLAMAFARM_SERVICE_NAME=${LLAMAFARM_SERVICE_NAME:-_llamafarm._tcp}
+      - LLAMAFARM_PEER_TIMEOUT_SECONDS=${LLAMAFARM_PEER_TIMEOUT_SECONDS:-30}
+      - LLAMAFARM_MANUAL_PEERS=${LLAMAFARM_MANUAL_PEERS:-}
+      - LLAMAFARM_DEFAULT_ROLE=${LLAMAFARM_DEFAULT_ROLE:-both}
+      - LLAMAFARM_ALLOW_REMOTE_SUBAGENTS=${LLAMAFARM_ALLOW_REMOTE_SUBAGENTS:-true}
       - LLAMAFARM_RUNTIME_UID=${LLAMAFARM_RUNTIME_UID:-65534}
       - LLAMAFARM_RUNTIME_GID=${LLAMAFARM_RUNTIME_GID:-65534}
-      - OLLAMA_PULL_MODELS=${OLLAMA_PULL_MODELS-qwen3.5:9b,devstral-small-2:latest}
+      - OLLAMA_HOST=0.0.0.0:11434
+      - OLLAMA_PULL_MODELS=${OLLAMA_PULL_MODELS-devstral-small-2:latest,qwen3-coder:30b,gpt-oss:20b,devstral-2:123b-cloud,gemma4:e2b}
 
     volumes:
       - llamafarm-bundle-data:/llamafarm-data
@@ -52,7 +63,8 @@ services:
       - /media:/media
 
     ports:
-      - "${HOST_BIND_IP:-127.0.0.1}:${HOST_PORT:-42617}:${LLAMAFARM_GATEWAY_PORT:-42617}"
+      - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT:-42617}:${LLAMAFARM_GATEWAY_PORT:-42617}"
+      - "${HOST_BIND_IP:-0.0.0.0}:11434:11434"
 
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:${LLAMAFARM_GATEWAY_PORT:-42617}/health >/dev/null && curl -fsS http://127.0.0.1:11434/api/tags >/dev/null && curl -fsS http://127.0.0.1:9515/status >/dev/null"]
@@ -61,6 +73,22 @@ services:
       retries: 3
       start_period: 1800s
 
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: OpenWebUI
+    restart: unless-stopped
+    depends_on:
+      llamafarm:
+        condition: service_healthy
+    environment:
+      - OLLAMA_BASE_URL=http://llamafarm:11434
+    volumes:
+      - open-webui-data:/app/backend/data
+    ports:
+      - "${HOST_BIND_IP:-0.0.0.0}:${OPEN_WEBUI_PORT:-3000}:8080"
+
 volumes:
   llamafarm-bundle-data:
     name: llamafarm-bundle-data
+  open-webui-data:
+    name: open-webui-data

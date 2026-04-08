@@ -34,7 +34,21 @@ use execution::{
 };
 #[cfg(test)]
 use history::{apply_compaction_summary, build_compaction_transcript};
-use history::{auto_compact_history, trim_history};
+use history::{auto_compact_history, auto_compact_history_focused, trim_history};
+
+/// Compact conversation history with an optional objective focus.
+///
+/// Intended for use by [`AutonomousLoop`] between retry attempts so that
+/// compacted context stays relevant to the current task.
+pub(crate) async fn compact_history_with_focus(
+    history: &mut Vec<ChatMessage>,
+    provider: &dyn Provider,
+    model: &str,
+    max_history: usize,
+    focus: Option<&str>,
+) -> Result<bool> {
+    auto_compact_history_focused(history, provider, model, max_history, None, focus).await
+}
 #[allow(unused_imports)]
 use parsing::{
     default_param_for_tool, detect_tool_call_parse_issue, extract_json_values, map_tool_name_alias,
@@ -179,6 +193,12 @@ tokio::task_local! {
     static TOOL_LOOP_NATIVE_TOOLS_ENABLED: Option<bool>;
 }
 
+tokio::task_local! {
+    /// Optional tool-result cache active for the current autonomous run.
+    /// Set via [`AutonomousLoop`] before calling `run_tool_call_loop`.
+    pub(crate) static TOOL_CACHE: Option<Arc<crate::agent::tool_cache::ToolResultCache>>;
+}
+
 const AUTO_CRON_DELIVERY_CHANNELS: &[&str] = &["telegram", "discord", "slack", "mattermost"];
 
 const NON_CLI_APPROVAL_WAIT_TIMEOUT_SECS: u64 = 300;
@@ -191,7 +211,7 @@ const TOOL_UNAVAILABLE_RETRY_PROMPT_PREFIX: &str = "Internal correction: your pr
 /// without an accompanying tool call.
 static ACTION_COMPLETION_CUE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?ix)\b(done|completed?|finished|successfully|i(?:'ve|\s+have)|we(?:'ve|\s+have))\b",
+        r"(?ix)\b(done|completed?|finished|successfully|i(?:'ve|\s+have)|we(?:'ve|\s+have)|i(?:'ll|\s+will)|let\s+me)\b",
     )
     .unwrap()
 });
@@ -207,10 +227,20 @@ static SIDE_EFFECT_ACTION_VERB_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 /// Concrete artifacts often referenced in file/system action completion claims.
 static SIDE_EFFECT_ACTION_OBJECT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?ix)\b(file|files|folder|folders|directory|directories|workspace|cwd|current\s+working\s+directory|command|commands|script|scripts|path|paths)\b",
+        r"(?ix)\b(file|files|folder|folders|directory|directories|workspace|cwd|current\s+working\s+directory|command|commands|script|scripts|path|paths|tool|tools|file_read|file_write|file_edit|web_search_tool|shell|task_plan|http_request)\b",
     )
     .unwrap()
 });
+
+static DEFERRED_TOOL_ACTION_CUE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?ix)\b(i(?:'ll|\s+will)|let\s+me|now\s+(?:executing|running|using))\b.{0,120}\b(call|use|run|execute|search|read|write)\b.{0,120}\b(tool|file_read|file_write|file_edit|web_search_tool|shell|task_plan|http_request|glob_search|content_search)\b",
+    )
+    .unwrap()
+});
+
+static URL_IN_TEXT_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"https?://[^\s<>"'`)]+"#).unwrap());
 
 /// Detect responses that incorrectly claim file tooling is unavailable even
 /// when runtime policy allows file tools in this turn.
@@ -508,6 +538,23 @@ fn build_assistant_history_with_tool_calls(text: &str, tool_calls: &[ToolCall]) 
     parts.join("\n")
 }
 
+/// Returns true for models that are too small for reliable native function-calling
+/// (≤2B actual parameters, detected from common Ollama tag suffixes like `:1b`, `:2b`).
+/// These models use the prompt-based `<tool_call>` path instead, which gives more
+/// explicit formatting guidance and avoids native API confusion.
+///
+/// Note: `:e2b` / `:e4b` tags (Google Gemma edge variants) are NOT tiny — they are
+/// ~5B and ~8B actual parameters respectively and should use native tools normally.
+fn is_small_model_for_native_tools(model: &str) -> bool {
+    // Strip optional `:cloud` suffix before checking the tag.
+    let base = model.strip_suffix(":cloud").unwrap_or(model);
+    let tag = base.rsplit_once(':').map_or("", |(_, t)| t).to_ascii_lowercase();
+    // Only match bare :1b / :2b or quantized variants like :1b-q4_0 — not :e2b / :e4b.
+    matches!(tag.as_str(), "1b" | "2b")
+        || tag.starts_with("1b-")
+        || tag.starts_with("2b-")
+}
+
 fn looks_like_unverified_action_completion_without_tool_call(text: &str) -> bool {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -517,6 +564,15 @@ fn looks_like_unverified_action_completion_without_tool_call(text: &str) -> bool
     ACTION_COMPLETION_CUE_REGEX.is_match(trimmed)
         && SIDE_EFFECT_ACTION_VERB_REGEX.is_match(trimmed)
         && SIDE_EFFECT_ACTION_OBJECT_REGEX.is_match(trimmed)
+}
+
+fn looks_like_deferred_tool_action_without_call(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    DEFERRED_TOOL_ACTION_CUE_REGEX.is_match(trimmed)
 }
 
 fn looks_like_tool_unavailability_claim(text: &str, tool_specs: &[crate::tools::ToolSpec]) -> bool {
@@ -647,6 +703,30 @@ fn extract_file_read_content(output: &str) -> Option<String> {
     (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
+fn extract_preferred_url(output: &str) -> Option<String> {
+    let mut urls = URL_IN_TEXT_REGEX
+        .find_iter(output)
+        .map(|m| {
+            m.as_str()
+                .trim_end_matches(['.', ',', ';', ':', ')', ']', '}', '>'])
+                .to_string()
+        })
+        .filter(|url| !url.is_empty())
+        .collect::<Vec<_>>();
+    if urls.is_empty() {
+        return None;
+    }
+
+    if let Some(preferred) = urls
+        .iter()
+        .find(|url| url.to_ascii_lowercase().contains("rust-lang.org"))
+    {
+        return Some(preferred.clone());
+    }
+
+    Some(urls.remove(0))
+}
+
 fn looks_like_tool_result_misinterpretation(text: &str) -> bool {
     let lowered = text.trim().to_ascii_lowercase();
     if lowered.is_empty() {
@@ -674,6 +754,11 @@ fn looks_like_tool_result_misinterpretation(text: &str) -> bool {
         "pdf read operation failed",
         "i need to actually create the file using the file_write tool",
         "<tool_result name=",
+        "<web_search_tool",
+        "i'll execute the `file_read` tool",
+        "i will execute the `file_read` tool",
+        "i'll execute the file_read tool",
+        "i will execute the file_read tool",
     ]
     .iter()
     .any(|needle| lowered.contains(needle))
@@ -789,10 +874,24 @@ fn latest_external_user_request(history: &[ChatMessage]) -> Option<&str> {
         .map(|message| message.content.as_str())
 }
 
+fn build_missing_tool_call_retry_prompt(history: &[ChatMessage]) -> String {
+    let mut prompt = MISSING_TOOL_CALL_RETRY_PROMPT.to_string();
+
+    if let Some(request) = latest_external_user_request(history) {
+        prompt.push_str("\n\nCurrent user task:\n");
+        prompt.push_str(request.trim());
+        prompt.push_str(
+            "\n\nStay on that exact task. Emit the next real tool call now if action is still required.",
+        );
+    }
+
+    prompt
+}
+
 fn actionable_request_step_count(text: &str) -> usize {
     static ACTION_STEP_REGEX: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(
-            r"(?i)\b(write_?file|create_?file|save_?file|write|create|save|read|show|open|run|execute|print|delete|remove|rm|mkdir|make|list|pull)\b",
+            r"(?i)\b(write_?file|create_?file|save_?file|write|create|save|read|show|open|run|execute|print|delete|remove|rm|mkdir|make|list|pull|build|compile|install|fix|update|add|implement|test|verify|check|explore|find|search|start|continue|deploy|generate|parse|edit|modify|refactor|debug|launch|init|initialize|setup|configure)\b",
         )
         .unwrap()
     });
@@ -978,6 +1077,178 @@ fn task_plan_progress_snapshot(records: &[SuccessfulToolRecord]) -> Option<TaskP
     })
 }
 
+/// Injected immediately after a `task_plan create` turn where no real execution tool ran yet.
+/// Drives the model to start executing step 1 without waiting for user input.
+/// After web search, nudge the model to read result pages with `web_fetch`
+/// instead of stopping at search snippets.
+fn build_post_web_search_fetch_prompt(records: &[SuccessfulToolRecord]) -> Option<String> {
+    let (search_idx, search_record) = records
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, record)| record.name == "web_search_tool")?;
+
+    let urls = extract_candidate_urls_from_search_output(&search_record.output, 5);
+    if urls.is_empty() {
+        return None;
+    }
+
+    let fetched_after_search: HashSet<String> = records[search_idx + 1..]
+        .iter()
+        .filter(|record| record.name == "web_fetch")
+        .filter_map(|record| {
+            record
+                .arguments
+                .get("url")
+                .and_then(|value| value.as_str())
+                .map(normalize_url_for_tracking)
+        })
+        .collect();
+
+    let pending_urls = urls
+        .into_iter()
+        .filter(|url| !fetched_after_search.contains(url))
+        .take(3)
+        .collect::<Vec<_>>();
+    if pending_urls.is_empty() {
+        return None;
+    }
+
+    Some(format!(
+        "Internal continuation: web search returned results. \
+         Now use web_fetch to read the full content of the most relevant URLs: {}. \
+         Fetch them one at a time and synthesize the content into a complete answer. \
+         Do not summarize only the search snippets — read the actual pages.",
+        pending_urls.join(", ")
+    ))
+}
+
+fn normalize_url_for_tracking(url: &str) -> String {
+    url.trim()
+        .trim_end_matches(['.', ',', ';', ':', ')', ']', '}', '>'])
+        .to_string()
+}
+
+fn extract_candidate_urls_from_search_output(output: &str, limit: usize) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut urls = Vec::new();
+
+    for found in URL_IN_TEXT_REGEX.find_iter(output) {
+        let normalized = normalize_url_for_tracking(found.as_str());
+        if normalized.is_empty() {
+            continue;
+        }
+        if seen.insert(normalized.clone()) {
+            urls.push(normalized);
+            if urls.len() >= limit {
+                break;
+            }
+        }
+    }
+
+    urls
+}
+
+fn is_deep_web_research_request(text: &str) -> bool {
+    static DEEP_RESEARCH_HINT_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?ix)\b(in[-\s]?depth|deep(?:er)?|comprehensive|thorough|agentic(?:ally)?|research|analyze|analysis|compare|cross[-\s]?check|multiple\s+sources|source\s+validation)\b",
+        )
+        .unwrap()
+    });
+    DEEP_RESEARCH_HINT_RE.is_match(text)
+}
+
+fn build_agentic_web_research_followup_prompt(
+    history: &[ChatMessage],
+    records: &[SuccessfulToolRecord],
+) -> Option<String> {
+    let (search_idx, search_record) = records
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, record)| record.name == "web_search_tool")?;
+
+    let candidate_urls = extract_candidate_urls_from_search_output(&search_record.output, 6);
+    if candidate_urls.is_empty() {
+        return None;
+    }
+
+    let fetched_after_search = records[search_idx + 1..]
+        .iter()
+        .filter(|record| record.name == "web_fetch")
+        .filter_map(|record| {
+            record
+                .arguments
+                .get("url")
+                .and_then(|value| value.as_str())
+                .map(normalize_url_for_tracking)
+        })
+        .collect::<Vec<_>>();
+    let fetched_set = fetched_after_search.iter().cloned().collect::<HashSet<_>>();
+    let fetched_count = fetched_after_search.len();
+
+    let request = latest_external_user_request(history).unwrap_or_default();
+    let target_fetches = if is_deep_web_research_request(request) {
+        3
+    } else {
+        1
+    };
+    if fetched_count >= target_fetches {
+        return None;
+    }
+
+    let pending = candidate_urls
+        .into_iter()
+        .filter(|url| !fetched_set.contains(url))
+        .collect::<Vec<_>>();
+    if pending.is_empty() {
+        return None;
+    }
+
+    let needed = target_fetches.saturating_sub(fetched_count).max(1);
+    let next_urls = pending
+        .into_iter()
+        .take(needed.min(2))
+        .collect::<Vec<_>>();
+    if next_urls.is_empty() {
+        return None;
+    }
+
+    let mode_text = if target_fetches > 1 {
+        format!(
+            "This is a deeper online-research task (fetched {fetched_count}/{target_fetches} pages so far)."
+        )
+    } else {
+        "Fetch at least one primary source page before finalizing.".to_string()
+    };
+
+    Some(format!(
+        "Internal continuation: {mode_text} \
+         Next, call `web_fetch` on the most relevant pending URL(s): {}. \
+         Fetch one URL at a time. After each fetch, decide whether more evidence is needed; \
+         if yes, continue fetching, otherwise provide a grounded final answer with source URLs.",
+        next_urls.join(", ")
+    ))
+}
+
+fn build_post_plan_create_start_prompt(records: &[SuccessfulToolRecord]) -> Option<String> {
+    let snapshot = task_plan_snapshot(records)?;
+    let next = snapshot
+        .items
+        .iter()
+        .find(|item| item.status != "completed")?;
+
+    Some(format!(
+        "Internal continuation: task plan created ({total} steps). \
+         Now immediately execute step [{id}]: {title}. \
+         Call the appropriate tool right now — do not summarize, do not ask the user, just execute.",
+        total = snapshot.items.len(),
+        id = next.id,
+        title = next.title,
+    ))
+}
+
 fn build_task_plan_execution_followup_prompt(records: &[SuccessfulToolRecord]) -> Option<String> {
     let snapshot = task_plan_snapshot(records)?;
     let progress = task_plan_progress_snapshot(records)?;
@@ -1098,6 +1369,12 @@ fn looks_like_failed_tool_followthrough(text: &str, records: &[FailedToolRecord]
         .iter()
         .any(|needle| lowered.contains(needle)),
         "shell" => [
+            "i need a command to execute",
+            "need a command to execute",
+            "i need a command",
+            "need a command",
+            "please provide a command",
+            "provide a command to execute",
             "would you like me to create it first",
             "would you like me to write it first",
             "please provide the correct path",
@@ -1284,15 +1561,19 @@ fn should_short_circuit_after_tool_execution(
 fn synthesize_grounded_final_answer(records: &[SuccessfulToolRecord]) -> Option<String> {
     let last_task_plan = records
         .iter()
+        .enumerate()
         .rev()
-        .find(|record| record.name == "task_plan");
-    if let Some(record) = last_task_plan {
+        .find(|(_, record)| record.name == "task_plan");
+    if let Some((idx, record)) = last_task_plan {
+        let has_later_execution = records[idx + 1..]
+            .iter()
+            .any(|later| later.name != "task_plan");
         let action = record
             .arguments
             .get("action")
             .and_then(|value| value.as_str())
             .unwrap_or_default();
-        if action == "create" {
+        if action == "create" && !has_later_execution {
             if let Some(tasks) = record
                 .arguments
                 .get("tasks")
@@ -1314,7 +1595,20 @@ fn synthesize_grounded_final_answer(records: &[SuccessfulToolRecord]) -> Option<
             }
         }
 
-        if action == "list" && !record.output.trim().is_empty() {
+        if action == "list" && !has_later_execution && !record.output.trim().is_empty() {
+            return Some(record.output.trim().to_string());
+        }
+    }
+
+    let last_web_search = records
+        .iter()
+        .rev()
+        .find(|record| record.name == "web_search_tool");
+    if let Some(record) = last_web_search {
+        if let Some(url) = extract_preferred_url(&record.output) {
+            return Some(format!("The main URL is {url}"));
+        }
+        if !record.output.trim().is_empty() {
             return Some(record.output.trim().to_string());
         }
     }
@@ -1763,7 +2057,7 @@ pub(crate) async fn run_tool_call_loop(
         .try_with(|enabled| *enabled)
         .ok()
         .flatten()
-        .unwrap_or_else(|| provider.supports_native_tools())
+        .unwrap_or_else(|| provider.supports_native_tools() && !is_small_model_for_native_tools(model))
         && !tool_specs.is_empty();
     let turn_id = Uuid::new_v4().to_string();
     let mut seen_tool_signatures: HashSet<(String, String)> = HashSet::new();
@@ -1898,6 +2192,7 @@ pub(crate) async fn run_tool_call_loop(
                         text: Some(streamed.response_text),
                         tool_calls: Vec::new(),
                         usage: None,
+                        metrics: None,
                         reasoning_content: None,
                     })
                 }
@@ -2252,12 +2547,15 @@ pub(crate) async fn run_tool_call_loop(
                 );
             }
 
-            let completion_claim_signal = !successful_tool_execution_seen
-                && looks_like_unverified_action_completion_without_tool_call(&display_text);
+            let completion_claim_signal =
+                looks_like_unverified_action_completion_without_tool_call(&display_text);
+            let deferred_tool_action_signal =
+                looks_like_deferred_tool_action_without_call(&display_text);
             let tool_unavailable_signal =
                 looks_like_tool_unavailability_claim(&display_text, &tool_specs);
             let missing_tool_call_signal = parse_issue_detected
                 || completion_claim_signal
+                || deferred_tool_action_signal
                 || tool_unavailable_signal
                 || (!successful_tool_execution_seen
                     && looks_like_failed_tool_followthrough(
@@ -2323,10 +2621,12 @@ pub(crate) async fn run_tool_call_loop(
                 } else if tool_unavailable_signal {
                     build_tool_unavailable_retry_prompt(&tool_specs)
                 } else {
-                    MISSING_TOOL_CALL_RETRY_PROMPT.to_string()
+                    build_missing_tool_call_retry_prompt(history)
                 });
                 let retry_reason = if parse_issue_detected {
                     "parse_issue_detected"
+                } else if deferred_tool_action_signal {
+                    "deferred_tool_action_detected"
                 } else if failed_tool_followthrough {
                     "tool_error_followthrough_detected"
                 } else if tool_unavailable_signal {
@@ -2908,6 +3208,21 @@ pub(crate) async fn run_tool_call_loop(
                     "task_plan" | "memory_store" | "memory_recall"
                 )
             });
+        let iteration_had_only_task_plan_create =
+            !iteration_executed_non_plan_tool
+                && current_successful_tool_records.iter().any(|record| {
+                    record.name == "task_plan"
+                        && record
+                            .arguments
+                            .get("action")
+                            .and_then(|v| v.as_str())
+                            .is_some_and(|a| a == "create")
+                });
+        // Track web_search_tool without web_fetch so we can prompt the model to
+        // read the actual pages instead of just citing search snippets.
+        let iteration_had_web_search_without_fetch =
+            current_successful_tool_records.iter().any(|r| r.name == "web_search_tool")
+                && !current_successful_tool_records.iter().any(|r| r.name == "web_fetch");
 
         if !current_successful_tool_records.is_empty() {
             recent_successful_tool_records.extend(current_successful_tool_records);
@@ -2999,12 +3314,41 @@ pub(crate) async fn run_tool_call_loop(
             }
         }
 
-        post_tool_execution_prompt =
-            if !iteration_had_failed_tools && iteration_executed_non_plan_tool {
-                build_task_plan_execution_followup_prompt(&recent_successful_tool_records)
+        post_tool_execution_prompt = if !iteration_had_failed_tools {
+            // Prefer web-research continuation whenever the latest search still
+            // has relevant, unfetched URLs for the current request.
+            if iteration_had_web_search_without_fetch {
+                build_agentic_web_research_followup_prompt(
+                    history,
+                    &recent_successful_tool_records,
+                )
+                .or_else(|| build_post_web_search_fetch_prompt(&recent_successful_tool_records))
+                .or_else(|| {
+                    build_task_plan_execution_followup_prompt(&recent_successful_tool_records)
+                })
+            } else if iteration_executed_non_plan_tool {
+                build_agentic_web_research_followup_prompt(history, &recent_successful_tool_records)
+                    .or_else(|| {
+                        build_task_plan_execution_followup_prompt(&recent_successful_tool_records)
+                    })
+            } else if iteration_had_only_task_plan_create {
+                build_agentic_web_research_followup_prompt(history, &recent_successful_tool_records)
+                    .or_else(|| build_post_plan_create_start_prompt(&recent_successful_tool_records))
             } else {
-                None
-            };
+                build_agentic_web_research_followup_prompt(history, &recent_successful_tool_records)
+            }
+        } else {
+            None
+        };
+
+        if !iteration_had_failed_tools
+            && post_tool_execution_prompt.is_none()
+            && iteration_executed_non_plan_tool
+        {
+            post_tool_execution_prompt =
+                build_task_plan_execution_followup_prompt(&recent_successful_tool_records)
+                    .or_else(|| build_post_plan_create_start_prompt(&recent_successful_tool_records));
+        }
 
         let duplicate_only_followthrough = successful_tool_execution_seen
             && !duplicate_tool_call_retry_used
@@ -3229,12 +3573,58 @@ pub(crate) fn build_ipc_state_usage_instructions(tools_registry: &[Box<dyn Tool>
 
 pub(crate) fn build_auto_plan_execute_instructions() -> String {
     "\n## Auto Plan & Execute\n\n\
-     If the current user request contains multiple actionable steps, create a short `task_plan` first and then continue executing the plan in the same turn.\n\
-     - Use `task_plan` create before other tools for real multi-step work.\n\
-     - After the plan exists, keep executing with real tools instead of stopping at the plan summary.\n\
-     - Update the plan as steps finish, then continue to the next incomplete step.\n\
-     - Ask the user what to do next only when a tool returns a blocking error or a critical detail is missing.\n"
+     For any request with multiple actionable steps, follow this exact pattern without stopping:\n\
+     1. Call `task_plan` with action=create and a `tasks` array listing every step.\n\
+     2. Immediately — in the same turn — start executing step 1 using real tools.\n\
+     3. After each step succeeds, call `task_plan` with action=update to mark it completed, then start the next step.\n\
+     4. Never stop after creating the plan to summarize or wait for user input. Execute immediately.\n\
+     5. Never stop mid-execution to describe what you are about to do. Use the tool and show the result.\n\
+     6. Only pause to ask the user if a tool returns a hard blocking error or a required input is genuinely unknown.\n\
+     7. When all steps are completed, provide a single grounded final answer backed by the actual tool results.\n\n\
+     CRITICAL: Creating the plan is step zero. The first real work tool call must happen in the same LLM turn as the plan creation.\n"
         .to_string()
+}
+
+pub(crate) fn build_federation_delegation_instructions(
+    remote_agents: &[crate::federation::peer_registry::RemoteAgentInfo],
+) -> String {
+    let agent_lines: String = remote_agents
+        .iter()
+        .map(|info| {
+            if info.specialization.is_empty() {
+                format!("- `{}`\n", info.agent_name)
+            } else {
+                format!("- `{}` — {}\n", info.agent_name, info.specialization)
+            }
+        })
+        .collect();
+    let first_agent = remote_agents
+        .first()
+        .map(|info| info.agent_name.as_str())
+        .unwrap_or("the worker");
+    format!(
+        "\n## Remote Worker Delegation\n\n\
+         You have {n} remote worker node(s) available:\n{agent_lines}\n\
+         Route tasks based on the worker descriptions above. When a worker has a specialization, \
+         prefer it for matching task types.\n\n\
+         When planning multi-step tasks, actively distribute work across workers:\n\
+         - Include `delegate` calls as steps in your `task_plan` just like any local tool step\n\
+         - Use `delegate` with agentic=true when the remote worker needs to run its own tool loop \
+           (file operations, shell commands, multi-step research on that machine)\n\
+         - Use `delegate` without agentic for single-shot inference tasks (summarization, \
+           code generation, analysis where you pass all context in the prompt)\n\n\
+         Good candidates to send to a remote worker:\n\
+         - Tasks that can run in parallel with local work\n\
+         - Compute-heavy inference where the remote has a better/different model\n\
+         - Operations that need to run on the remote machine's filesystem or services\n\
+         - Subtasks that are fully self-contained and don't need local context\n\n\
+         Example plan step: delegate to {first_agent} with agentic=true: [subtask]\n\
+         You do not need to wait for one delegate to finish before starting the next — \
+         use subagent_spawn for fire-and-forget parallel delegation.\n",
+        n = remote_agents.len(),
+        agent_lines = agent_lines,
+        first_agent = first_agent,
+    )
 }
 
 // ── CLI Entrypoint ───────────────────────────────────────────────────────
@@ -3333,6 +3723,7 @@ pub async fn run(
         custom_provider_api_mode: config.provider_api.map(|mode| mode.as_compatible_mode()),
         max_tokens_override: None,
         model_support_vision: config.model_support_vision,
+        ..Default::default()
     };
 
     let provider: Box<dyn Provider> = providers::create_routed_provider_with_options(
@@ -3819,6 +4210,7 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
         custom_provider_api_mode: config.provider_api.map(|mode| mode.as_compatible_mode()),
         max_tokens_override: None,
         model_support_vision: config.model_support_vision,
+        ..Default::default()
     };
     let provider: Box<dyn Provider> = providers::create_routed_provider_with_options(
         provider_name,
@@ -4141,6 +4533,7 @@ mod tests {
                 text: Some("vision-ok".to_string()),
                 tool_calls: Vec::new(),
                 usage: None,
+                metrics: None,
                 reasoning_content: None,
             })
         }
@@ -4159,6 +4552,7 @@ mod tests {
                     text: Some(text.to_string()),
                     tool_calls: Vec::new(),
                     usage: None,
+                    metrics: None,
                     reasoning_content: None,
                 })
                 .collect();
@@ -4220,6 +4614,7 @@ mod tests {
                     text: Some(text.to_string()),
                     tool_calls: Vec::new(),
                     usage: None,
+                    metrics: None,
                     reasoning_content: None,
                 })
                 .collect();
@@ -5353,9 +5748,9 @@ mod tests {
             "system prompt should switch into prompt tool fallback mode after parse failure"
         );
         assert!(
-            history
-                .iter()
-                .any(|msg| msg.role == "user" && msg.content == MISSING_TOOL_CALL_RETRY_PROMPT),
+            history.iter().any(|msg| {
+                msg.role == "user" && msg.content.starts_with(MISSING_TOOL_CALL_RETRY_PROMPT)
+            }),
             "loop should inject corrective retry guidance after malformed tool payloads"
         );
     }
@@ -5808,6 +6203,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_tool_call_loop_fast_exits_after_post_tool_followthrough_claim() {
+        let provider = ScriptedProvider::from_text_responses(vec![
+            r#"<tool_call>
+{"name":"file_write","arguments":{"path":"/llamafarm-data/workspace/tool_smoke_matrix.txt","content":"tool smoke llamafarm"}}
+</tool_call>"#,
+            "The file write operation has already been completed according to the verified tool results. Let me verify the content was written correctly by reading the file:",
+        ]);
+
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(StaticOutputTool::new(
+            "file_write",
+            "Written 20 bytes to /llamafarm-data/workspace/tool_smoke_matrix.txt",
+            Arc::clone(&invocations),
+        ))];
+
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("write the file and confirm success"),
+        ];
+        let observer = NoopObserver;
+
+        let result = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None,
+            "cli",
+            &crate::config::MultimodalConfig::default(),
+            5,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .await
+        .expect("followthrough claim after file_write should short-circuit to grounded answer");
+
+        assert_eq!(
+            result,
+            "The file `/llamafarm-data/workspace/tool_smoke_matrix.txt` was written successfully with content:\n\n```\ntool smoke llamafarm\n```"
+        );
+        assert_eq!(invocations.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
     async fn run_tool_call_loop_falls_back_to_grounded_file_read_after_meta_correction_text() {
         let provider = ScriptedProvider::from_text_responses(vec![
             r#"<tool_call>
@@ -5872,6 +6317,7 @@ mod tests {
                     ),
                     tool_calls: Vec::new(),
                     usage: None,
+                    metrics: None,
                     reasoning_content: None,
                 }),
                 Err(anyhow::anyhow!("upstream timeout after tool execution")),
@@ -6200,6 +6646,7 @@ mod tests {
                     ),
                     tool_calls: Vec::new(),
                     usage: None,
+                    metrics: None,
                     reasoning_content: None,
                 }),
                 Ok(ChatResponse {
@@ -6211,6 +6658,7 @@ mod tests {
                     ),
                     tool_calls: Vec::new(),
                     usage: None,
+                    metrics: None,
                     reasoning_content: None,
                 }),
                 Err(anyhow::anyhow!("provider should not be called after grounded fast exit")),
@@ -6343,6 +6791,19 @@ mod tests {
             }),
             "loop should inject shell-specific repair guidance after placeholder-path failures"
         );
+    }
+
+    #[test]
+    fn failed_shell_followthrough_detects_missing_command_prompt() {
+        let records = vec![FailedToolRecord {
+            name: "shell".to_string(),
+            output: "Error executing shell: Missing 'command' parameter".to_string(),
+        }];
+
+        assert!(looks_like_failed_tool_followthrough(
+            "I need a command to execute.",
+            &records
+        ));
     }
 
     #[tokio::test]
@@ -6796,6 +7257,28 @@ mod tests {
         assert_eq!(calls[0].arguments["tasks"][0]["title"], "Write a file");
         assert_eq!(calls[0].arguments["tasks"][1]["title"], "Read the file");
         assert_eq!(calls[0].arguments["tasks"][2]["title"], "Delete the file");
+    }
+
+    #[test]
+    fn parse_tool_calls_normalizes_task_plan_tasks_with_descriptions() {
+        let response = r#"{"task_plan":{"action":"create","tasks":[{"step":1,"action":"file_write","description":"Create Python file that prints 2 + 2","target":"/llamafarm-data/workspace/smoke_test.py"},{"step":2,"action":"shell","description":"Run the Python file with python3","command":"python3 /llamafarm-data/workspace/smoke_test.py"},{"step":3,"action":"shell","description":"Delete the Python file","command":"rm /llamafarm-data/workspace/smoke_test.py"}]}}"#;
+        let (text, calls) = parse_tool_calls(response);
+        assert!(text.is_empty());
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "task_plan");
+        assert_eq!(calls[0].arguments["action"], "create");
+        assert_eq!(
+            calls[0].arguments["tasks"][0]["title"],
+            "Create Python file that prints 2 + 2"
+        );
+        assert_eq!(
+            calls[0].arguments["tasks"][1]["title"],
+            "Run the Python file with python3"
+        );
+        assert_eq!(
+            calls[0].arguments["tasks"][2]["title"],
+            "Delete the Python file"
+        );
     }
 
     #[test]
@@ -7253,6 +7736,25 @@ content="console.log(2 + 3);"
         assert_eq!(
             calls[0].arguments.get("content").unwrap().as_str().unwrap(),
             "console.log(2 + 3);"
+        );
+    }
+
+    #[test]
+    fn parse_tool_calls_handles_direct_file_write_self_closing_xml_tag() {
+        let response = r#"I'll use the file_write tool.
+<file_write path="/llamafarm-data/workspace/tool_smoke_matrix.txt" content="tool smoke llamafarm"/>"#;
+
+        let (text, calls) = parse_tool_calls(response);
+        assert_eq!(text, "I'll use the file_write tool.");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "file_write");
+        assert_eq!(
+            calls[0].arguments.get("path").unwrap().as_str().unwrap(),
+            "/llamafarm-data/workspace/tool_smoke_matrix.txt"
+        );
+        assert_eq!(
+            calls[0].arguments.get("content").unwrap().as_str().unwrap(),
+            "tool smoke llamafarm"
         );
     }
 
@@ -7993,6 +8495,21 @@ Tail"#;
     }
 
     #[test]
+    fn parse_tool_calls_recovers_malformed_jsonish_named_tool_payload() {
+        let response =
+            r#"{"name": "file_read", "parameters": {"arguments": {"/llamafarm-data/workspace/tool_smoke_matrix.txt"}}}"#;
+
+        let (text, calls) = parse_tool_calls(response);
+        assert!(text.is_empty());
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "file_read");
+        assert_eq!(
+            calls[0].arguments.get("path").and_then(|value| value.as_str()),
+            Some("/llamafarm-data/workspace/tool_smoke_matrix.txt")
+        );
+    }
+
+    #[test]
     fn build_tool_instructions_includes_all_tools() {
         use crate::security::SecurityPolicy;
         let security = Arc::new(SecurityPolicy::from_config(
@@ -8092,6 +8609,189 @@ Tail"#;
         assert!(prompt.contains("[1] [completed] Write a file"));
         assert!(prompt.contains("[2] [pending] Run it"));
         assert!(prompt.contains("Next incomplete step: [2] Run it"));
+    }
+
+    #[test]
+    fn build_post_plan_create_start_prompt_targets_first_incomplete_step() {
+        let records = vec![
+            SuccessfulToolRecord {
+                name: "task_plan".into(),
+                arguments: serde_json::json!({
+                    "action": "create",
+                    "tasks": [
+                        { "title": "Write a file" },
+                        { "title": "Run it" }
+                    ]
+                }),
+                output: "Created 2 task(s).".into(),
+            },
+            SuccessfulToolRecord {
+                name: "task_plan".into(),
+                arguments: serde_json::json!({
+                    "action": "update",
+                    "id": 1,
+                    "status": "completed"
+                }),
+                output: "Task [1] updated to completed.".into(),
+            },
+        ];
+
+        let prompt = build_post_plan_create_start_prompt(&records)
+            .expect("task plan should have an incomplete step");
+
+        assert!(prompt.contains("task plan created (2 steps)"));
+        assert!(prompt.contains("execute step [2]: Run it"));
+        assert!(prompt.contains("do not ask the user"));
+    }
+
+    #[test]
+    fn build_post_web_search_fetch_prompt_extracts_top_urls() {
+        let records = vec![SuccessfulToolRecord {
+            name: "web_search_tool".into(),
+            arguments: serde_json::json!({ "query": "official Rust language website" }),
+            output: "Search results for: official Rust language website (via DuckDuckGo)\n1. Rust Programming Language\n   https://www.rust-lang.org/\n   Empowering everyone to build reliable software.\n2. Rust Book\n   https://doc.rust-lang.org/book/\n   The Rust Programming Language book."
+                .into(),
+        }];
+
+        let prompt = build_post_web_search_fetch_prompt(&records)
+            .expect("web search output should yield fetch URLs");
+
+        assert!(prompt.contains("use web_fetch"));
+        assert!(prompt.contains("https://www.rust-lang.org/"));
+        assert!(prompt.contains("https://doc.rust-lang.org/book/"));
+        assert!(prompt.contains("Do not summarize only the search snippets"));
+    }
+
+    #[test]
+    fn build_agentic_web_research_followup_prompt_requests_multi_hop_fetches_for_deep_research() {
+        let history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user(
+                "look online and do an in-depth research comparison across multiple sources",
+            ),
+        ];
+        let records = vec![SuccessfulToolRecord {
+            name: "web_search_tool".into(),
+            arguments: serde_json::json!({ "query": "rust language official site and docs" }),
+            output: "Search results:\n1. Rust\nhttps://www.rust-lang.org/\n2. Rust Book\nhttps://doc.rust-lang.org/book/\n3. Rust std docs\nhttps://doc.rust-lang.org/std/"
+                .into(),
+        }];
+
+        let prompt = build_agentic_web_research_followup_prompt(&history, &records)
+            .expect("deep research request should produce a multi-hop follow-up prompt");
+
+        assert!(prompt.contains("deeper online-research task"));
+        assert!(prompt.contains("web_fetch"));
+        assert!(prompt.contains("https://www.rust-lang.org/"));
+        assert!(prompt.contains("https://doc.rust-lang.org/book/"));
+    }
+
+    #[test]
+    fn build_agentic_web_research_followup_prompt_stops_after_single_fetch_for_basic_lookup() {
+        let history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("find the official rust language website"),
+        ];
+        let records = vec![
+            SuccessfulToolRecord {
+                name: "web_search_tool".into(),
+                arguments: serde_json::json!({ "query": "official rust language website" }),
+                output: "Search results:\n1. Rust\nhttps://www.rust-lang.org/".into(),
+            },
+            SuccessfulToolRecord {
+                name: "web_fetch".into(),
+                arguments: serde_json::json!({ "url": "https://www.rust-lang.org/" }),
+                output: "Rust Programming Language".into(),
+            },
+        ];
+
+        assert!(
+            build_agentic_web_research_followup_prompt(&history, &records).is_none(),
+            "basic lookup should not force extra fetch hops after one page is read"
+        );
+    }
+
+    #[test]
+    fn synthesize_python_execution_answer_includes_output_and_cleanup() {
+        let records = vec![
+            SuccessfulToolRecord {
+                name: "file_write".into(),
+                arguments: serde_json::json!({
+                    "path": "/llamafarm-data/workspace/add_two.py",
+                    "content": "print(2 + 2)"
+                }),
+                output: "Written 12 bytes to /llamafarm-data/workspace/add_two.py".into(),
+            },
+            SuccessfulToolRecord {
+                name: "shell".into(),
+                arguments: serde_json::json!({
+                    "command": "python3 /llamafarm-data/workspace/add_two.py"
+                }),
+                output: "4".into(),
+            },
+            SuccessfulToolRecord {
+                name: "shell".into(),
+                arguments: serde_json::json!({
+                    "command": "rm /llamafarm-data/workspace/add_two.py"
+                }),
+                output: "deleted successfully".into(),
+            },
+        ];
+
+        let answer = synthesize_python_execution_answer(&records)
+            .expect("python execution should synthesize a grounded answer");
+
+        assert!(answer.contains("created and executed successfully"));
+        assert!(answer.contains("```text\n4\n```"));
+        assert!(answer.contains("```python\nprint(2 + 2)\n```"));
+        assert!(answer.contains("deleted after execution"));
+    }
+
+    #[test]
+    fn synthesize_grounded_final_answer_prefers_python_result_after_task_plan_execution() {
+        let records = vec![
+            SuccessfulToolRecord {
+                name: "task_plan".into(),
+                arguments: serde_json::json!({
+                    "action": "create",
+                    "tasks": [
+                        {"title": "Write Python file"},
+                        {"title": "Run the Python script"},
+                        {"title": "Delete the file"},
+                    ]
+                }),
+                output: "Task plan created.".into(),
+            },
+            SuccessfulToolRecord {
+                name: "file_write".into(),
+                arguments: serde_json::json!({
+                    "path": "/llamafarm-data/workspace/add_two.py",
+                    "content": "print(2 + 2)"
+                }),
+                output: "Written 12 bytes to /llamafarm-data/workspace/add_two.py".into(),
+            },
+            SuccessfulToolRecord {
+                name: "shell".into(),
+                arguments: serde_json::json!({
+                    "command": "python3 /llamafarm-data/workspace/add_two.py"
+                }),
+                output: "4".into(),
+            },
+            SuccessfulToolRecord {
+                name: "shell".into(),
+                arguments: serde_json::json!({
+                    "command": "rm /llamafarm-data/workspace/add_two.py"
+                }),
+                output: "deleted successfully".into(),
+            },
+        ];
+
+        let answer = synthesize_grounded_final_answer(&records)
+            .expect("python execution should outrank a prior task plan summary");
+
+        assert!(answer.contains("created and executed successfully"));
+        assert!(answer.contains("```text\n4\n```"));
+        assert!(!answer.starts_with("Task plan created with"));
     }
 
     #[test]
@@ -8324,9 +9024,32 @@ Done."#;
     }
 
     #[test]
+    fn detect_tool_call_parse_issue_flags_jsonish_task_plan_tail() {
+        let response = r#"{"task_plan":{"action":"create","tasks":[{"action":"write","file":"/llamafarm-data/workspace/smoke_test.py","content":"print(2 + 2)"}]}"#;
+        let issue = detect_tool_call_parse_issue(response, &[]);
+        assert!(
+            issue.is_some(),
+            "truncated json-ish task_plan payload should be flagged for retry"
+        );
+    }
+
+    #[test]
     fn detect_tool_call_parse_issue_ignores_normal_text() {
         let issue = detect_tool_call_parse_issue("Thanks, done.", &[]);
         assert!(issue.is_none());
+    }
+
+    #[test]
+    fn build_missing_tool_call_retry_prompt_includes_current_user_task() {
+        let history = vec![
+            ChatMessage::user("Write a Python file, run it, and delete it."),
+            ChatMessage::assistant("I'll do that."),
+        ];
+
+        let prompt = build_missing_tool_call_retry_prompt(&history);
+        assert!(prompt.starts_with(MISSING_TOOL_CALL_RETRY_PROMPT));
+        assert!(prompt.contains("Current user task:"));
+        assert!(prompt.contains("Write a Python file, run it, and delete it."));
     }
 
     #[test]
@@ -8818,6 +9541,49 @@ browser_open/url>https://example.com"#;
             text.contains("search for the top news stories online"),
             "surrounding explanatory text should be preserved"
         );
+    }
+
+    #[test]
+    fn parse_tool_calls_recovers_trailing_json_tool_call_after_preamble() {
+        let response = r#"I'll use the web_search_tool to find the official Rust language website.
+</think>
+
+{
+  "tool_name": "web_search_tool",
+  "arguments": {
+    "query": "official Rust language website main URL"
+  }
+}"#;
+        let (text, calls) = parse_tool_calls(response);
+        assert_eq!(calls.len(), 1, "should extract the trailing json tool call");
+        assert_eq!(calls[0].name, "web_search_tool");
+        assert_eq!(
+            calls[0].arguments["query"],
+            "official Rust language website main URL"
+        );
+        assert!(
+            !text.contains("</think>"),
+            "trailing stray think close tag should be stripped from preserved text"
+        );
+        assert!(
+            text.contains("official Rust language website"),
+            "assistant preamble should still be preserved"
+        );
+    }
+
+    #[test]
+    fn parse_tool_calls_recovers_unclosed_attribute_style_web_tool_tag() {
+        let response = r#"I'll search for the official Rust site now.
+<web_search_tool query="official Rust language website">"#;
+        let (text, calls) = parse_tool_calls(response);
+
+        assert_eq!(calls.len(), 1, "should recover attribute-style web tool call");
+        assert_eq!(calls[0].name, "web_search_tool");
+        assert_eq!(
+            calls[0].arguments["query"],
+            "official Rust language website"
+        );
+        assert!(text.contains("official Rust site"));
     }
 
     #[test]

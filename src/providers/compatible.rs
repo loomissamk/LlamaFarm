@@ -938,6 +938,7 @@ fn parse_responses_chat_response(response: ResponsesResponse) -> ProviderChatRes
         text,
         tool_calls,
         usage: None,
+        metrics: None,
         reasoning_content: None,
     }
 }
@@ -1641,6 +1642,7 @@ impl OpenAiCompatibleProvider {
             text,
             tool_calls,
             usage: None,
+            metrics: None,
             reasoning_content,
         }
     }
@@ -2013,6 +2015,7 @@ impl Provider for OpenAiCompatibleProvider {
                     text: Some(text),
                     tool_calls: vec![],
                     usage: None,
+                    metrics: None,
                     reasoning_content: None,
                 });
             }
@@ -2068,6 +2071,7 @@ impl Provider for OpenAiCompatibleProvider {
             text,
             tool_calls,
             usage,
+            metrics: None,
             reasoning_content,
         })
     }
@@ -2165,6 +2169,7 @@ impl Provider for OpenAiCompatibleProvider {
                     text: Some(text),
                     tool_calls: vec![],
                     usage: None,
+                    metrics: None,
                     reasoning_content: None,
                 });
             }

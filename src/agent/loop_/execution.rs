@@ -1,15 +1,22 @@
 use super::parsing::ParsedToolCall;
-use super::{scrub_credentials, ToolLoopCancelled};
+use super::{scrub_credentials, ToolLoopCancelled, TOOL_CACHE};
+use crate::agent::tool_cache::ToolResultCache;
 use crate::approval::ApprovalManager;
 use crate::observability::{Observer, ObserverEvent};
 use crate::tools::Tool;
 use anyhow::Result;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
 fn find_tool<'a>(tools: &'a [Box<dyn Tool>], name: &str) -> Option<&'a dyn Tool> {
     tools.iter().find(|t| t.name() == name).map(|t| t.as_ref())
 }
+
+fn active_cache() -> Option<Arc<ToolResultCache>> {
+    TOOL_CACHE.try_with(|c| c.clone()).ok().flatten()
+}
+
 async fn execute_one_tool(
     call_name: &str,
     call_arguments: serde_json::Value,
@@ -17,6 +24,27 @@ async fn execute_one_tool(
     observer: &dyn Observer,
     cancellation_token: Option<&CancellationToken>,
 ) -> Result<ToolExecutionOutcome> {
+    // ── cache check ────────────────────────────────────────────────
+    if let Some(cache) = active_cache() {
+        if let Some(cached) = cache.get(call_name, &call_arguments) {
+            observer.record_event(&ObserverEvent::ToolCallStart {
+                tool: call_name.to_string(),
+            });
+            let duration = Duration::ZERO;
+            observer.record_event(&ObserverEvent::ToolCall {
+                tool: call_name.to_string(),
+                duration,
+                success: cached.success,
+            });
+            return Ok(ToolExecutionOutcome {
+                output: cached.output,
+                success: cached.success,
+                error_reason: None,
+                duration,
+            });
+        }
+    }
+
     observer.record_event(&ObserverEvent::ToolCallStart {
         tool: call_name.to_string(),
     });
@@ -38,7 +66,7 @@ async fn execute_one_tool(
         });
     };
 
-    let tool_future = tool.execute(call_arguments);
+    let tool_future = tool.execute(call_arguments.clone());
     let tool_result = if let Some(token) = cancellation_token {
         tokio::select! {
             () = token.cancelled() => return Err(ToolLoopCancelled.into()),
@@ -57,6 +85,10 @@ async fn execute_one_tool(
                 success: r.success,
             });
             if r.success {
+                // Populate cache for read-only tools.
+                if let Some(cache) = active_cache() {
+                    cache.set(call_name, &call_arguments, &r);
+                }
                 Ok(ToolExecutionOutcome {
                     output: scrub_credentials(&r.output),
                     success: true,

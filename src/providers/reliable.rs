@@ -1806,6 +1806,7 @@ mod tests {
                 text: Some(self.response_text.to_string()),
                 tool_calls: self.tool_calls.clone(),
                 usage: None,
+                metrics: None,
                 reasoning_content: None,
             })
         }
@@ -1999,6 +2000,7 @@ mod tests {
                 text: Some(self.response_text.to_string()),
                 tool_calls: vec![],
                 usage: None,
+                metrics: None,
                 reasoning_content: None,
             })
         }

@@ -12,6 +12,7 @@ const translations: Record<Locale, Record<string, string>> = {
     // Navigation
     'nav.dashboard': 'Dashboard',
     'nav.agent': 'Agent',
+    'nav.federation': 'Federation',
     'nav.tools': 'Tools',
     'nav.cron': 'Scheduled Jobs',
     'nav.integrations': 'Ollama',
@@ -197,6 +198,7 @@ const translations: Record<Locale, Record<string, string>> = {
     // Navigation
     'nav.dashboard': 'Kontrol Paneli',
     'nav.agent': 'Ajan',
+    'nav.federation': 'Federasyon',
     'nav.tools': 'Araclar',
     'nav.cron': 'Zamanlanmis Gorevler',
     'nav.integrations': 'Entegrasyonlar',
@@ -382,6 +384,7 @@ const translations: Record<Locale, Record<string, string>> = {
     // Navigation
     'nav.dashboard': '仪表盘',
     'nav.agent': '智能体',
+    'nav.federation': '联邦',
     'nav.tools': '工具',
     'nav.cron': '定时任务',
     'nav.integrations': '集成',

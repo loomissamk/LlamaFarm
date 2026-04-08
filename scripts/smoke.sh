@@ -224,31 +224,34 @@ for i in "${!PROVIDERS[@]}"; do
 
         printf "  %-20s ... " "$label"
 
+        # Keep the full matrix running even when an individual smoke case fails.
+        set +e
         captured_output=$(run_test "$label" "$check_fn" "$prompt" "$provider" "$model" 2>&1)
         test_result=$?
+        set -e
 
         case $test_result in
             0)
                 echo -e "${GREEN}PASS${RESET}"
                 record_result "$model" "$label" "pass"
-                (( TOTAL_PASS++ ))
+                TOTAL_PASS=$((TOTAL_PASS + 1))
                 ;;
             1)
                 echo -e "${RED}FAIL${RESET} (check did not match)"
                 echo "    output excerpt: $(echo "$captured_output" | tail -3 | head -1)"
                 record_result "$model" "$label" "fail"
-                (( TOTAL_FAIL++ ))
+                TOTAL_FAIL=$((TOTAL_FAIL + 1))
                 ;;
             2)
                 echo -e "${YELLOW}TIMEOUT${RESET} (>${TIMEOUT}s)"
                 record_result "$model" "$label" "timeout"
-                (( TOTAL_FAIL++ ))
+                TOTAL_FAIL=$((TOTAL_FAIL + 1))
                 ;;
             3)
                 echo -e "${RED}ERROR${RESET} (non-zero exit)"
                 echo "    output excerpt: $(echo "$captured_output" | grep -i 'error\|fail\|panic' | head -1)"
                 record_result "$model" "$label" "error"
-                (( TOTAL_ERROR++ ))
+                TOTAL_ERROR=$((TOTAL_ERROR + 1))
                 ;;
         esac
     done

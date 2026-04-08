@@ -2,20 +2,38 @@
 //!
 //! All `/api/*` routes require bearer token authentication (PairingGuard).
 
-use super::{build_gateway_runtime_snapshot, AppState};
+use super::{
+    build_gateway_runtime_snapshot_with_federation, client_key_from_request, AppState,
+};
+use crate::config::FederationRole;
+use crate::federation::peer_registry::{
+    FederationCapabilities, FederationLocalNodeSummary, FederationPeersResponse,
+};
+use crate::federation::remote_subagent::{
+    FederationTaskAccepted, FederationTaskEvent, FederationTaskManager, FederationTaskRequest,
+};
 use axum::{
     body::{Body, Bytes},
-    extract::{Path, Query, State},
+    extract::{ConnectInfo, Path, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
-    response::{IntoResponse, Json, Response},
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        IntoResponse, Json, Response,
+    },
 };
 use chrono::{DateTime, Utc};
+use futures_util::stream;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
+    convert::Infallible,
+    net::SocketAddr,
     path::{Component, Path as FsPath, PathBuf},
+    sync::Arc,
 };
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 const MASKED_SECRET: &str = "***MASKED***";
 const WORKSPACE_EDITOR_FILES: &[&str] = &["AGENTS.md", "SOUL.md"];
@@ -55,6 +73,67 @@ fn require_auth(
                 "error": "Unauthorized — pair first via POST /pair, then send Authorization: Bearer <token>"
             })),
         ))
+    }
+}
+
+fn federation_disabled_response() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({
+            "error": "Federation is disabled on this node"
+        })),
+    )
+        .into_response()
+}
+
+fn require_federation_peer_auth(
+    state: &AppState,
+    headers: &HeaderMap,
+    peer_addr: SocketAddr,
+) -> Result<(), Response> {
+    if state.federation.is_none() {
+        return Err(federation_disabled_response());
+    }
+
+    let client = client_key_from_request(
+        Some(peer_addr),
+        headers,
+        state.trust_forwarded_headers,
+    );
+    if crate::tools::url_validation::is_private_or_local_host(&client) {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "Federation peer API only accepts trusted local/LAN callers"
+            })),
+        )
+            .into_response())
+    }
+}
+
+fn build_federation_peers_response(state: &AppState) -> FederationPeersResponse {
+    let config = state.config.lock().clone();
+    if let Some(federation) = &state.federation {
+        let mut response = federation.peers_response();
+        response.local_node.gateway_host = config.gateway.host;
+        response
+    } else {
+        FederationPeersResponse {
+            enabled: false,
+            local_node: FederationLocalNodeSummary {
+                node_id: config.federation.node_name.clone(),
+                display_name: config.federation.node_name,
+                api_port: config.federation.api_port.unwrap_or(config.gateway.port),
+                role: config.federation.default_role,
+                allow_remote_subagents: config.federation.allow_remote_subagents,
+                discovery_mode: config.federation.discovery_mode,
+                service_name: config.federation.service_name,
+                gateway_host: config.gateway.host,
+            },
+            peers: Vec::new(),
+        }
     }
 }
 
@@ -128,6 +207,357 @@ fn cron_job_json(job: &crate::cron::CronJob) -> serde_json::Value {
     })
 }
 
+fn federation_event_is_terminal(event: &FederationTaskEvent) -> bool {
+    matches!(event.event_type.as_str(), "done" | "error")
+}
+
+fn serialize_federation_sse_event(
+    event: &FederationTaskEvent,
+) -> Result<Event, Infallible> {
+    Ok(Event::default().data(serde_json::to_string(event).unwrap_or_else(
+        |_| {
+            serde_json::json!({
+                "type": "error",
+                "task_id": event.task_id,
+                "timestamp": Utc::now().to_rfc3339(),
+                "message": "Failed to serialize federation event",
+            })
+            .to_string()
+        },
+    )))
+}
+
+fn build_federation_user_prompt(request: &FederationTaskRequest) -> String {
+    let prompt = request.prompt.trim();
+    let context = request
+        .context
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let requester = request
+        .requester_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            request
+                .requester_node_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or("federation-peer");
+
+    match context {
+        Some(context) => format!(
+            "[Requester]\n{requester}\n\n[Context]\n{context}\n\n[Task]\n{prompt}"
+        ),
+        None => format!("[Requester]\n{requester}\n\n[Task]\n{prompt}"),
+    }
+}
+
+fn split_federation_tool_progress_payload(raw: &str) -> (&str, Option<&str>) {
+    let trimmed = raw.trim_end();
+    match trimmed.split_once('\n') {
+        Some((header, output)) => (header.trim(), Some(output)),
+        None => (trimmed.trim(), None),
+    }
+}
+
+fn parse_federation_tool_completion_payload(raw: &str) -> Option<(String, Option<u64>)> {
+    let trimmed = raw.trim();
+    let (name_part, duration_part) = trimmed.rsplit_once(" (")?;
+    let duration_part = duration_part.strip_suffix(')')?;
+    let secs = duration_part.strip_suffix('s')?.parse::<u64>().ok();
+    Some((name_part.trim().to_string(), secs))
+}
+
+fn federation_event_from_delta(task_id: &str, delta: &str) -> Option<FederationTaskEvent> {
+    if delta == crate::agent::loop_::DRAFT_CLEAR_SENTINEL {
+        return None;
+    }
+
+    if let Some(progress) = delta.strip_prefix(crate::agent::loop_::DRAFT_PROGRESS_SENTINEL) {
+        let progress = progress.trim();
+        if let Some(rest) = progress.strip_prefix("⏳ ") {
+            let rest = rest.trim();
+            if rest.is_empty() {
+                return None;
+            }
+            let (name, hint) = match rest.split_once(": ") {
+                Some((name, hint)) => (
+                    name.trim().to_string(),
+                    (!hint.trim().is_empty()).then(|| hint.trim().to_string()),
+                ),
+                None => (rest.to_string(), None),
+            };
+            return Some(FederationTaskEvent {
+                event_type: "tool_call".to_string(),
+                task_id: task_id.to_string(),
+                timestamp: Utc::now().to_rfc3339(),
+                content: None,
+                full_response: None,
+                name: Some(name),
+                args: Some(serde_json::json!({ "hint": hint })),
+                success: None,
+                duration_secs: None,
+                output: None,
+                message: None,
+            });
+        }
+
+        if let Some(rest) = progress.strip_prefix("✅ ") {
+            let (header, output) = split_federation_tool_progress_payload(rest);
+            if let Some((name, duration_secs)) =
+                parse_federation_tool_completion_payload(header)
+            {
+                return Some(FederationTaskEvent {
+                    event_type: "tool_result".to_string(),
+                    task_id: task_id.to_string(),
+                    timestamp: Utc::now().to_rfc3339(),
+                    content: None,
+                    full_response: None,
+                    name: Some(name),
+                    args: None,
+                    success: Some(true),
+                    duration_secs,
+                    output: Some(output.unwrap_or("(no output)").to_string()),
+                    message: None,
+                });
+            }
+        }
+
+        if let Some(rest) = progress.strip_prefix("❌ ") {
+            let (header, output) = split_federation_tool_progress_payload(rest);
+            if let Some((name, duration_secs)) =
+                parse_federation_tool_completion_payload(header)
+            {
+                return Some(FederationTaskEvent {
+                    event_type: "tool_result".to_string(),
+                    task_id: task_id.to_string(),
+                    timestamp: Utc::now().to_rfc3339(),
+                    content: None,
+                    full_response: None,
+                    name: Some(name),
+                    args: None,
+                    success: Some(false),
+                    duration_secs,
+                    output: Some(output.unwrap_or("(no output)").to_string()),
+                    message: None,
+                });
+            }
+        }
+
+        return None;
+    }
+
+    (!delta.is_empty()).then(|| FederationTaskEvent {
+        event_type: "chunk".to_string(),
+        task_id: task_id.to_string(),
+        timestamp: Utc::now().to_rfc3339(),
+        content: Some(delta.to_string()),
+        full_response: None,
+        name: None,
+        args: None,
+        success: None,
+        duration_secs: None,
+        output: None,
+        message: None,
+    })
+}
+
+async fn build_federation_capabilities(
+    state: &AppState,
+) -> anyhow::Result<FederationCapabilities> {
+    let federation = state
+        .federation
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Federation is disabled"))?;
+    let local = federation.local_node_summary();
+    let runtime = state.runtime_snapshot();
+    let config = state.config.lock().clone();
+    let ollama = fetch_ollama_dashboard_info(&config).await;
+    let mut installed_models = ollama.installed_models;
+    if installed_models.is_empty() {
+        installed_models.push(runtime.model.clone());
+    }
+    installed_models.sort();
+    installed_models.dedup();
+
+    Ok(FederationCapabilities {
+        node_id: local.node_id,
+        display_name: local.display_name,
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        provider: config.default_provider.clone(),
+        model: runtime.model.clone(),
+        installed_models,
+        tools: crate::federation::tools_to_capabilities(runtime.tools_registry.as_ref()),
+        role_support: local.role,
+        allow_remote_subagents: local.allow_remote_subagents,
+        health: "online".to_string(),
+        api_port: local.api_port,
+        last_seen: Utc::now().to_rfc3339(),
+    })
+}
+
+async fn execute_federation_task(
+    state: AppState,
+    task_manager: Arc<FederationTaskManager>,
+    task_id: String,
+    request: FederationTaskRequest,
+    cancellation_token: CancellationToken,
+) {
+    task_manager.publish(
+        &task_id,
+        FederationTaskEvent::status(&task_id, "Task accepted by remote worker"),
+    );
+
+    let runtime = state.runtime_snapshot();
+    let (
+        provider_label,
+        parallel_tools,
+        native_tools,
+        approval_manager,
+        system_prompt,
+        max_tool_iterations,
+    ) = {
+        let config_guard = state.config.lock();
+        let provider_label = config_guard
+            .default_provider
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        let tool_descs: Vec<(&str, &str)> = runtime
+            .tools_registry
+            .iter()
+            .map(|spec| (spec.name.as_str(), spec.description.as_str()))
+            .collect();
+        let skills =
+            crate::skills::load_skills_with_config(&config_guard.workspace_dir, &config_guard);
+        let bootstrap_max_chars = if config_guard.agent.compact_context {
+            Some(6000)
+        } else {
+            None
+        };
+        let native_tools = crate::agent::loop_::configured_native_tools_enabled(
+            &config_guard.agent.tool_dispatcher,
+            runtime.provider.supports_native_tools(),
+        );
+        let mut system_prompt = crate::channels::build_system_prompt_with_mode(
+            &config_guard.workspace_dir,
+            &runtime.model,
+            &tool_descs,
+            &skills,
+            Some(&config_guard.identity),
+            bootstrap_max_chars,
+            native_tools,
+            config_guard.skills.prompt_injection_mode,
+        );
+        if !native_tools {
+            system_prompt.push_str(&crate::agent::loop_::build_tool_instructions(
+                runtime.tools_registry_exec.as_ref(),
+            ));
+        }
+        system_prompt.push_str(&crate::agent::loop_::build_shell_policy_instructions(
+            &config_guard.autonomy,
+        ));
+        system_prompt.push_str(
+            &crate::agent::loop_::build_runtime_tool_availability_notice(
+                runtime.tools_registry_exec.as_ref(),
+            ),
+        );
+        system_prompt.push_str(&crate::agent::loop_::build_auto_plan_execute_instructions());
+
+        (
+            provider_label,
+            config_guard.agent.parallel_tools,
+            native_tools,
+            crate::approval::ApprovalManager::from_config(&config_guard.autonomy),
+            system_prompt,
+            config_guard.agent.max_tool_iterations,
+        )
+    };
+
+    let user_prompt = build_federation_user_prompt(&request);
+    let mut history = vec![
+        crate::providers::ChatMessage::system(&system_prompt),
+        crate::providers::ChatMessage::user(&user_prompt),
+    ];
+
+    let loop_result = crate::agent::loop_::with_tool_loop_settings(
+        parallel_tools,
+        native_tools,
+        async {
+            let (delta_tx, mut delta_rx) = tokio::sync::mpsc::channel::<String>(128);
+            let mut loop_future = std::pin::pin!(crate::agent::loop_::run_tool_call_loop(
+                runtime.provider.as_ref(),
+                &mut history,
+                runtime.tools_registry_exec.as_ref(),
+                state.observer.as_ref(),
+                &provider_label,
+                &runtime.model,
+                runtime.temperature,
+                true,
+                Some(&approval_manager),
+                "federation",
+                &state.multimodal,
+                request.max_iterations.max(max_tool_iterations),
+                Some(cancellation_token.clone()),
+                Some(delta_tx),
+                None,
+                &[],
+            ));
+
+            loop {
+                tokio::select! {
+                    _ = cancellation_token.cancelled() => {
+                        anyhow::bail!("Federation task cancelled");
+                    }
+                    maybe_delta = delta_rx.recv() => {
+                        if let Some(delta) = maybe_delta {
+                            if let Some(event) = federation_event_from_delta(&task_id, &delta) {
+                                task_manager.publish(&task_id, event);
+                            }
+                        } else {
+                            break loop_future.await;
+                        }
+                    }
+                    response = &mut loop_future => {
+                        while let Ok(delta) = delta_rx.try_recv() {
+                            if let Some(event) = federation_event_from_delta(&task_id, &delta) {
+                                task_manager.publish(&task_id, event);
+                            }
+                        }
+                        break response;
+                    }
+                }
+            }
+        },
+    )
+    .await;
+
+    match loop_result {
+        Ok(response) => {
+            let rendered =
+                super::sanitize_gateway_response(&response, runtime.tools_registry_exec.as_ref());
+            let final_response = if rendered.trim().is_empty() {
+                "Tool execution completed, but no final response text was returned.".to_string()
+            } else {
+                rendered
+            };
+            task_manager.publish(&task_id, FederationTaskEvent::done(&task_id, final_response));
+        }
+        Err(error) => {
+            task_manager.publish(
+                &task_id,
+                FederationTaskEvent::error(
+                    &task_id,
+                    crate::providers::sanitize_api_error(&error.to_string()),
+                ),
+            );
+        }
+    }
+}
+
 // ── Query parameters ─────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -168,6 +598,23 @@ pub struct CronUpdateBody {
 #[derive(Deserialize)]
 pub struct MemoryClearBody {
     pub scope: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FederationPeerRoleUpdateBody {
+    pub role: FederationRole,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FederationPeerHintsBody {
+    pub specialization: String,
+    #[serde(default)]
+    pub priority: i32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FederationAddManualPeerBody {
+    pub endpoint: String,
 }
 
 #[derive(Deserialize)]
@@ -1769,7 +2216,10 @@ pub async fn handle_api_config_put(
             .into_response();
     }
 
-    let runtime_snapshot = match build_gateway_runtime_snapshot(&new_config) {
+    let runtime_snapshot = match build_gateway_runtime_snapshot_with_federation(
+        &new_config,
+        state.federation.as_ref().map(|federation| federation.remote_adapter()),
+    ) {
         Ok(snapshot) => snapshot,
         Err(error) => {
             return (
@@ -1821,6 +2271,367 @@ pub async fn handle_api_tools(
         .collect();
 
     Json(serde_json::json!({"tools": tools})).into_response()
+}
+
+/// GET /api/federation/peers — dashboard peer registry and local federation status.
+pub async fn handle_api_federation_peers(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(error) = require_auth(&state, &headers) {
+        return error.into_response();
+    }
+
+    Json(build_federation_peers_response(&state)).into_response()
+}
+
+/// PUT /api/federation/peers/:peer_id/role — update an operator-assigned peer role.
+pub async fn handle_api_federation_peer_role_put(
+    State(state): State<AppState>,
+    Path(peer_id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<FederationPeerRoleUpdateBody>,
+) -> impl IntoResponse {
+    if let Err(error) = require_auth(&state, &headers) {
+        return error.into_response();
+    }
+
+    let Some(federation) = &state.federation else {
+        return federation_disabled_response();
+    };
+
+    match federation.set_assigned_role(&peer_id, body.role) {
+        Some(peer) => Json(serde_json::json!({
+            "status": "ok",
+            "peer": peer,
+        }))
+        .into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!("Unknown federation peer '{peer_id}'")
+            })),
+        )
+            .into_response(),
+    }
+}
+
+/// PUT /api/federation/peers/:peer_id/hints — set specialization and priority for a peer.
+pub async fn handle_api_federation_peer_hints_put(
+    State(state): State<AppState>,
+    Path(peer_id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<FederationPeerHintsBody>,
+) -> impl IntoResponse {
+    if let Err(error) = require_auth(&state, &headers) {
+        return error.into_response();
+    }
+
+    let Some(federation) = &state.federation else {
+        return federation_disabled_response();
+    };
+
+    match federation.set_peer_hints(&peer_id, body.specialization, body.priority) {
+        Some(peer) => Json(serde_json::json!({
+            "status": "ok",
+            "peer": peer,
+        }))
+        .into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!("Unknown federation peer '{peer_id}'")
+            })),
+        )
+            .into_response(),
+    }
+}
+
+/// POST /api/federation/peers — add a manual peer by endpoint URL.
+pub async fn handle_api_federation_peer_add(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<FederationAddManualPeerBody>,
+) -> impl IntoResponse {
+    if let Err(error) = require_auth(&state, &headers) {
+        return error.into_response();
+    }
+
+    let Some(federation) = &state.federation else {
+        return federation_disabled_response();
+    };
+
+    match crate::federation::normalize_peer_endpoint(&body.endpoint) {
+        None => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "Invalid endpoint — expected http://host:port or host:port"
+            })),
+        )
+            .into_response(),
+        Some((base_url, host, port)) => {
+            federation
+                .registry()
+                .seed_manual_peer(base_url.clone(), base_url.clone(), host, port);
+            Json(serde_json::json!({
+                "status": "ok",
+                "base_url": base_url,
+            }))
+            .into_response()
+        }
+    }
+}
+
+/// GET /federation/health — private/LAN-only worker health probe.
+pub async fn handle_federation_health(
+    State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(response) = require_federation_peer_auth(&state, &headers, peer_addr) {
+        return response;
+    }
+
+    let Some(federation) = &state.federation else {
+        return federation_disabled_response();
+    };
+    let local = federation.local_node_summary();
+    Json(serde_json::json!({
+        "status": "ok",
+        "node_id": local.node_id,
+        "display_name": local.display_name,
+        "role": local.role,
+        "allow_remote_subagents": local.allow_remote_subagents,
+        "api_port": local.api_port,
+        "app_version": env!("CARGO_PKG_VERSION"),
+        "last_seen": Utc::now().to_rfc3339(),
+    }))
+    .into_response()
+}
+
+/// GET /federation/capabilities — private/LAN-only worker capabilities.
+pub async fn handle_federation_capabilities(
+    State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(response) = require_federation_peer_auth(&state, &headers, peer_addr) {
+        return response;
+    }
+
+    match build_federation_capabilities(&state).await {
+        Ok(capabilities) => Json::<FederationCapabilities>(capabilities).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Failed to build federation capabilities: {error}")
+            })),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /federation/models — private/LAN-only installed model snapshot.
+pub async fn handle_federation_models(
+    State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(response) = require_federation_peer_auth(&state, &headers, peer_addr) {
+        return response;
+    }
+
+    match build_federation_capabilities(&state).await {
+        Ok(capabilities) => Json(serde_json::json!({
+            "node_id": capabilities.node_id,
+            "display_name": capabilities.display_name,
+            "model": capabilities.model,
+            "installed_models": capabilities.installed_models,
+        }))
+        .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Failed to build federation model list: {error}")
+            })),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /federation/tools — private/LAN-only tool capability snapshot.
+pub async fn handle_federation_tools(
+    State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(response) = require_federation_peer_auth(&state, &headers, peer_addr) {
+        return response;
+    }
+
+    match build_federation_capabilities(&state).await {
+        Ok(capabilities) => Json(serde_json::json!({
+            "node_id": capabilities.node_id,
+            "display_name": capabilities.display_name,
+            "tools": capabilities.tools,
+        }))
+        .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Failed to build federation tool list: {error}")
+            })),
+        )
+            .into_response(),
+    }
+}
+
+/// POST /federation/tasks — private/LAN-only remote subagent task ingress.
+pub async fn handle_federation_task_create(
+    State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<FederationTaskRequest>,
+) -> impl IntoResponse {
+    if let Err(response) = require_federation_peer_auth(&state, &headers, peer_addr) {
+        return response;
+    }
+
+    let Some(federation) = &state.federation else {
+        return federation_disabled_response();
+    };
+    let local = federation.local_node_summary();
+    if !local.role.allows_worker() || !local.allow_remote_subagents {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "This node is not accepting remote worker tasks"
+            })),
+        )
+            .into_response();
+    }
+
+    let Some(task_manager) = state.federation_tasks.clone() else {
+        return federation_disabled_response();
+    };
+
+    let task_id = Uuid::new_v4().to_string();
+    task_manager.create_task(&task_id);
+
+    let cancellation = CancellationToken::new();
+    let task_state = state.clone();
+    let task_request = request.clone();
+    let task_manager_clone = task_manager.clone();
+    let task_id_clone = task_id.clone();
+    let cancellation_for_task = cancellation.clone();
+    let handle = tokio::spawn(async move {
+        execute_federation_task(
+            task_state,
+            task_manager_clone,
+            task_id_clone,
+            task_request,
+            cancellation_for_task,
+        )
+        .await;
+    });
+    task_manager.set_running_handle(&task_id, handle, cancellation);
+
+    Json(FederationTaskAccepted {
+        task_id,
+        status: "accepted".to_string(),
+    })
+    .into_response()
+}
+
+/// GET /federation/tasks/:task_id/stream — private/LAN-only SSE task stream.
+pub async fn handle_federation_task_stream(
+    State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(response) = require_federation_peer_auth(&state, &headers, peer_addr) {
+        return response;
+    }
+
+    let Some(task_manager) = &state.federation_tasks else {
+        return federation_disabled_response();
+    };
+    let Some((history, receiver)) = task_manager.stream(&task_id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!("Unknown federation task '{task_id}'")
+            })),
+        )
+            .into_response();
+    };
+
+    let event_stream = stream::unfold(
+        (history.into_iter(), receiver, false),
+        |(mut history, mut receiver, done)| async move {
+            if let Some(event) = history.next() {
+                let terminal = done || federation_event_is_terminal(&event);
+                return Some((
+                    serialize_federation_sse_event(&event),
+                    (history, receiver, terminal),
+                ));
+            }
+            if done {
+                return None;
+            }
+
+            loop {
+                match receiver.recv().await {
+                    Ok(event) => {
+                        let terminal = federation_event_is_terminal(&event);
+                        return Some((
+                            serialize_federation_sse_event(&event),
+                            (history, receiver, terminal),
+                        ));
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+                }
+            }
+        },
+    );
+
+    Sse::new(event_stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
+}
+
+/// POST /federation/tasks/:task_id/cancel — private/LAN-only task cancellation.
+pub async fn handle_federation_task_cancel(
+    State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(response) = require_federation_peer_auth(&state, &headers, peer_addr) {
+        return response;
+    }
+
+    let Some(task_manager) = &state.federation_tasks else {
+        return federation_disabled_response();
+    };
+
+    if task_manager.cancel(&task_id) {
+        Json(serde_json::json!({
+            "status": "cancelled",
+            "task_id": task_id,
+        }))
+        .into_response()
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!("Unknown or completed federation task '{task_id}'")
+            })),
+        )
+            .into_response()
+    }
 }
 
 /// GET /api/cron — list cron jobs
@@ -2168,7 +2979,10 @@ pub async fn handle_api_integration_credentials_put(
         .into_response();
     }
 
-    let runtime_snapshot = match build_gateway_runtime_snapshot(&updated) {
+    let runtime_snapshot = match build_gateway_runtime_snapshot_with_federation(
+        &updated,
+        state.federation.as_ref().map(|federation| federation.remote_adapter()),
+    ) {
         Ok(snapshot) => snapshot,
         Err(error) => {
             return (

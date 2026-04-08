@@ -51,6 +51,7 @@ credentials.json
 /power_agent_smoke*.txt
 .cache/buildx-smoke/
 /playground/
+/rust_kernel/
 
 # Nix
 result

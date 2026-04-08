@@ -60,6 +60,7 @@ impl Provider for MockProvider {
                 text: Some("done".into()),
                 tool_calls: vec![],
                 usage: None,
+                metrics: None,
                 reasoning_content: None,
             });
         }
@@ -182,6 +183,7 @@ fn text_response(text: &str) -> ChatResponse {
         text: Some(text.into()),
         tool_calls: vec![],
         usage: None,
+        metrics: None,
         reasoning_content: None,
     }
 }
@@ -191,6 +193,7 @@ fn tool_response(calls: Vec<ToolCall>) -> ChatResponse {
         text: Some(String::new()),
         tool_calls: calls,
         usage: None,
+        metrics: None,
         reasoning_content: None,
     }
 }
@@ -360,6 +363,7 @@ async fn agent_handles_empty_provider_response() {
         text: Some(String::new()),
         tool_calls: vec![],
         usage: None,
+        metrics: None,
         reasoning_content: None,
     }]));
 
@@ -375,6 +379,7 @@ async fn agent_handles_none_text_response() {
         text: None,
         tool_calls: vec![],
         usage: None,
+        metrics: None,
         reasoning_content: None,
     }]));
 

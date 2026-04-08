@@ -3,6 +3,7 @@ import {
   AlertCircle,
   Bot,
   History,
+  Network,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
@@ -10,8 +11,21 @@ import {
   Trash2,
   User,
 } from 'lucide-react';
-import type { WsMessage } from '@/types/api';
+import { getFederationPeers } from '@/lib/api';
+import {
+  loadFederationPeerSelections,
+  loadFederationTasksBySession,
+  persistFederationPeerSelections,
+  persistFederationTasksBySession,
+  type FederationTaskState,
+} from '@/lib/federationState';
 import { WebSocketClient, type SeedChatMessage } from '@/lib/ws';
+import type {
+  FederationPeerSummary,
+  FederationPeersResponse,
+  FederationRole,
+  WsMessage,
+} from '@/types/api';
 
 type ChatRole = 'user' | 'agent';
 type ChatMessageKind = 'message' | 'tool_call' | 'tool_result' | 'error';
@@ -22,8 +36,15 @@ interface ChatMessage {
   kind: ChatMessageKind;
   content: string;
   timestamp: Date;
+  stats?: ChatMessageStats;
   seedRole?: SeedChatMessage['role'];
   seedContent?: string;
+}
+
+interface ChatMessageStats {
+  completionSeconds: number;
+  estimatedOutputTokens: number;
+  estimatedTokensPerSecond: number;
 }
 
 interface ChatSession {
@@ -41,6 +62,7 @@ interface PersistedChatMessage {
   kind: ChatMessageKind;
   content: string;
   timestamp: string;
+  stats?: ChatMessageStats;
   seedRole?: SeedChatMessage['role'];
   seedContent?: string;
 }
@@ -62,6 +84,11 @@ interface InitialChatState {
 interface PendingToolCallSeed {
   id: string;
   name: string;
+}
+
+interface AppendMessageOptions {
+  stats?: ChatMessageStats;
+  seed?: Pick<ChatMessage, 'seedRole' | 'seedContent'>;
 }
 
 let fallbackMessageIdCounter = 0;
@@ -119,6 +146,44 @@ function buildSessionPreview(session: ChatSession): string {
   }
 
   return truncateLabel(lastMessage.content.replace(/\s+/g, ' '), 72);
+}
+
+function estimateOutputTokens(text: string): number {
+  const normalized = text.trim();
+  if (!normalized) {
+    return 0;
+  }
+
+  return Math.max(1, Math.round(normalized.length / 4));
+}
+
+function formatCompletionSeconds(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return '0.0s';
+  }
+
+  if (seconds < 60) {
+    return `${seconds.toFixed(1)}s`;
+  }
+
+  const wholeSeconds = Math.round(seconds);
+  const minutes = Math.floor(wholeSeconds / 60);
+  const remainderSeconds = wholeSeconds % 60;
+  return `${minutes}m ${remainderSeconds}s`;
+}
+
+function formatAssistantMessageMeta(message: ChatMessage): string {
+  const timestamp = message.timestamp.toLocaleTimeString();
+  if (message.role !== 'agent' || message.kind !== 'message' || !message.stats) {
+    return timestamp;
+  }
+
+  return [
+    timestamp,
+    formatCompletionSeconds(message.stats.completionSeconds),
+    `~${message.stats.estimatedOutputTokens} tok`,
+    `~${message.stats.estimatedTokensPerSecond.toFixed(1)} t/s`,
+  ].join(' · ');
 }
 
 function createChatSession(temporary: boolean): ChatSession {
@@ -204,6 +269,23 @@ function loadPersistedSessions(): ChatSession[] {
               kind: message.kind,
               content: message.content,
               timestamp,
+              stats:
+                message.stats &&
+                typeof message.stats.completionSeconds === 'number' &&
+                Number.isFinite(message.stats.completionSeconds) &&
+                message.stats.completionSeconds > 0 &&
+                typeof message.stats.estimatedOutputTokens === 'number' &&
+                Number.isFinite(message.stats.estimatedOutputTokens) &&
+                message.stats.estimatedOutputTokens >= 0 &&
+                typeof message.stats.estimatedTokensPerSecond === 'number' &&
+                Number.isFinite(message.stats.estimatedTokensPerSecond) &&
+                message.stats.estimatedTokensPerSecond > 0
+                  ? {
+                      completionSeconds: message.stats.completionSeconds,
+                      estimatedOutputTokens: message.stats.estimatedOutputTokens,
+                      estimatedTokensPerSecond: message.stats.estimatedTokensPerSecond,
+                    }
+                  : undefined,
               seedRole:
                 message.seedRole === 'user' ||
                 message.seedRole === 'assistant' ||
@@ -259,6 +341,7 @@ function persistSessions(sessions: ChatSession[]): void {
           kind: message.kind,
           content: message.content,
           timestamp: message.timestamp.toISOString(),
+          stats: message.stats,
           seedRole: message.seedRole,
           seedContent: message.seedContent,
         })),
@@ -394,6 +477,19 @@ function buildHistorySeed(messages: ChatMessage[]): SeedChatMessage[] {
     });
 }
 
+function federationRoleAllowsWorker(role: FederationRole): boolean {
+  return role === 'worker' || role === 'both';
+}
+
+function canUseFederationPeer(peer: FederationPeerSummary): boolean {
+  return (
+    peer.online &&
+    peer.allow_remote_subagents &&
+    federationRoleAllowsWorker(peer.assigned_role) &&
+    federationRoleAllowsWorker(peer.role_support)
+  );
+}
+
 export default function AgentChat() {
   const initialStateRef = useRef<InitialChatState | null>(null);
   if (initialStateRef.current === null) {
@@ -407,12 +503,24 @@ export default function AgentChat() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => loadSidebarCollapsed());
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [tps, setTps] = useState(0);
+  const [streaming, setStreaming] = useState(false);
+  const [federation, setFederation] = useState<FederationPeersResponse | null>(null);
+  const [federationLoading, setFederationLoading] = useState(true);
+  const [selectedFederationPeerIdsBySession, setSelectedFederationPeerIdsBySession] =
+    useState<Record<string, string[]>>(() => loadFederationPeerSelections());
+  const [federationTasksBySession, setFederationTasksBySession] = useState<
+    Record<string, FederationTaskState[]>
+  >(() => loadFederationTasksBySession());
 
   const wsRef = useRef<WebSocketClient | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const pendingContentRef = useRef<Record<string, string>>({});
   const pendingToolCallsRef = useRef<Record<string, PendingToolCallSeed[]>>({});
+  const responseStartRef = useRef<number | null>(null);
+  const streamStartRef = useRef<number | null>(null);
+  const charCountRef = useRef(0);
   const activeSessionIdRef = useRef(activeSessionId);
 
   const activeSession = useMemo(
@@ -424,10 +532,68 @@ export default function AgentChat() {
   const activeSessionTyping = activeSession
     ? typingSessionIds.includes(activeSession.id)
     : false;
+  const activeFederationTasks = activeSession
+    ? federationTasksBySession[activeSession.id] ?? []
+    : [];
+  const selectedFederationPeerIds = activeSession
+    ? selectedFederationPeerIdsBySession[activeSession.id] ?? []
+    : [];
+  const availableFederationPeers = federation?.peers ?? [];
 
   useEffect(() => {
     activeSessionIdRef.current = activeSession?.id ?? activeSessionId;
   }, [activeSession, activeSessionId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const refreshFederation = async () => {
+      try {
+        const response = await getFederationPeers();
+        if (!cancelled) {
+          setFederation(response);
+          setFederationLoading(false);
+        }
+      } catch {
+        if (!cancelled) {
+          setFederationLoading(false);
+        }
+      }
+    };
+
+    void refreshFederation();
+    const interval = window.setInterval(() => {
+      void refreshFederation();
+    }, 5000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!federation?.enabled) {
+      return;
+    }
+
+    const validPeerIds = new Set(
+      federation.peers.filter(canUseFederationPeer).map((peer) => peer.peer_id),
+    );
+    setSelectedFederationPeerIdsBySession((prev) => {
+      let changed = false;
+      const next = Object.fromEntries(
+        Object.entries(prev).map(([sessionId, peerIds]) => {
+          const filtered = peerIds.filter((peerId) => validPeerIds.has(peerId));
+          if (filtered.length !== peerIds.length) {
+            changed = true;
+          }
+          return [sessionId, filtered];
+        }),
+      );
+      return changed ? next : prev;
+    });
+  }, [federation]);
 
   useEffect(() => {
     const ws = new WebSocketClient();
@@ -439,10 +605,15 @@ export default function AgentChat() {
 
     ws.onClose = () => {
       setConnected(false);
+      responseStartRef.current = null;
+      streamStartRef.current = null;
+      charCountRef.current = 0;
+      setStreaming(false);
     };
 
     ws.onError = () => {
       setError('Connection error. Attempting to reconnect...');
+      setStreaming(false);
     };
 
     ws.onMessage = (msg: WsMessage) => {
@@ -456,7 +627,7 @@ export default function AgentChat() {
         kind: ChatMessageKind,
         content: string,
         timestamp = new Date(),
-        seed?: Pick<ChatMessage, 'seedRole' | 'seedContent'>,
+        options?: AppendMessageOptions,
       ) => {
         setSessions((prev) => {
           const existing = prev.find((session) => session.id === sessionId);
@@ -476,8 +647,9 @@ export default function AgentChat() {
                 kind,
                 content,
                 timestamp,
-                seedRole: seed?.seedRole,
-                seedContent: seed?.seedContent,
+                stats: options?.stats,
+                seedRole: options?.seed?.seedRole,
+                seedContent: options?.seed?.seedContent,
               },
             ],
             updatedAt: timestamp,
@@ -495,14 +667,49 @@ export default function AgentChat() {
         delete pendingContentRef.current[sessionId];
       };
 
+      const upsertFederationTask = (
+        taskId: string,
+        update: (current: FederationTaskState | undefined) => FederationTaskState,
+      ) => {
+        setFederationTasksBySession((prev) => {
+          const existingTasks = prev[sessionId] ?? [];
+          const taskIndex = existingTasks.findIndex((task) => task.taskId === taskId);
+          const current = taskIndex >= 0 ? existingTasks[taskIndex] : undefined;
+          const nextTask = update(current);
+          const nextTasks =
+            taskIndex >= 0
+              ? existingTasks.map((task, index) => (index === taskIndex ? nextTask : task))
+              : [nextTask, ...existingTasks];
+
+          return {
+            ...prev,
+            [sessionId]: nextTasks
+              .sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime())
+              .slice(0, 8),
+          };
+        });
+      };
+
       switch (msg.type) {
-        case 'chunk':
+        case 'chunk': {
           setTypingSessionIds((prev) =>
             prev.includes(sessionId) ? prev : [...prev, sessionId],
           );
           pendingContentRef.current[sessionId] =
             (pendingContentRef.current[sessionId] ?? '') + (msg.content ?? '');
+          setStreaming(true);
+          // TPS tracking
+          if (streamStartRef.current === null) {
+            streamStartRef.current = performance.now();
+            charCountRef.current = 0;
+          }
+          charCountRef.current += (msg.content ?? '').length;
+          const elapsed = (performance.now() - streamStartRef.current) / 1000;
+          if (elapsed > 0.2) {
+            setTps(Math.max(1, Math.round(charCountRef.current / 4 / elapsed)));
+          }
           break;
+        }
 
         case 'message':
         case 'done': {
@@ -512,11 +719,42 @@ export default function AgentChat() {
             pendingContentRef.current[sessionId] ??
             ''
           ).trim();
-          appendMessage('agent', 'message', content || EMPTY_DONE_FALLBACK, new Date(), {
-            seedRole: 'assistant',
-            seedContent: content || EMPTY_DONE_FALLBACK,
-          });
+          const outputTokens = estimateOutputTokens(content);
+          const startedAt = responseStartRef.current ?? streamStartRef.current;
+          const completionSeconds =
+            startedAt !== null ? Math.max((performance.now() - startedAt) / 1000, 0.05) : 0;
+          const estimatedTokensPerSecond =
+            completionSeconds > 0 && outputTokens > 0 ? outputTokens / completionSeconds : 0;
+          if (estimatedTokensPerSecond > 0) {
+            setTps(Math.max(1, Math.round(estimatedTokensPerSecond)));
+          }
+          appendMessage(
+            'agent',
+            'message',
+            content || EMPTY_DONE_FALLBACK,
+            new Date(),
+            {
+              stats:
+                completionSeconds > 0 &&
+                outputTokens > 0 &&
+                estimatedTokensPerSecond > 0
+                  ? {
+                      completionSeconds,
+                      estimatedOutputTokens: outputTokens,
+                      estimatedTokensPerSecond,
+                    }
+                  : undefined,
+              seed: {
+                seedRole: 'assistant',
+                seedContent: content || EMPTY_DONE_FALLBACK,
+              },
+            },
+          );
           clearTypingForSession();
+          responseStartRef.current = null;
+          streamStartRef.current = null;
+          charCountRef.current = 0;
+          setStreaming(false);
           break;
         }
 
@@ -532,8 +770,10 @@ export default function AgentChat() {
             `[Tool Call] ${toolName}(${JSON.stringify(msg.args ?? {})})`,
             new Date(),
             {
-              seedRole: 'assistant',
-              seedContent: buildAssistantToolCallSeed(toolCallId, toolName, msg.args),
+              seed: {
+                seedRole: 'assistant',
+                seedContent: buildAssistantToolCallSeed(toolCallId, toolName, msg.args),
+              },
             },
           );
           break;
@@ -554,23 +794,128 @@ export default function AgentChat() {
           }
 
           const output = extractToolResultOutput(msg);
-          appendMessage('agent', 'tool_result', formatToolResultMessage(msg), new Date(), {
-            seedRole: 'tool',
-            seedContent: buildToolResultSeed(
-              pendingCall?.id ?? `ws_tool_${makeMessageId()}`,
-              toolName,
-              output,
-            ),
+          appendMessage(
+            'agent',
+            'tool_result',
+            formatToolResultMessage(msg),
+            new Date(),
+            {
+              seed: {
+                seedRole: 'tool',
+                seedContent: buildToolResultSeed(
+                  pendingCall?.id ?? `ws_tool_${makeMessageId()}`,
+                  toolName,
+                  output,
+                ),
+              },
+            },
+          );
+          break;
+        }
+
+        case 'federation_status':
+        case 'federation_chunk':
+        case 'federation_tool_call':
+        case 'federation_tool_result':
+        case 'federation_done':
+        case 'federation_error': {
+          if (!msg.task_id || !msg.peer_id || !msg.peer_name || !msg.delegate_agent) {
+            break;
+          }
+
+          const now = new Date();
+          upsertFederationTask(msg.task_id, (current) => {
+            const base: FederationTaskState =
+              current ?? {
+                taskId: msg.task_id!,
+                peerId: msg.peer_id!,
+                peerName: msg.peer_name!,
+                delegateAgent: msg.delegate_agent!,
+                status: 'status',
+                content: '',
+                message: '',
+                updatedAt: now,
+              };
+
+            switch (msg.type) {
+              case 'federation_status':
+                return {
+                  ...base,
+                  status: 'status',
+                  message: msg.message ?? `Delegated to ${msg.peer_name}`,
+                  updatedAt: now,
+                };
+              case 'federation_chunk':
+                return {
+                  ...base,
+                  status: 'streaming',
+                  content: `${base.content}${msg.content ?? ''}`,
+                  message: msg.message ?? `Streaming from ${msg.peer_name}`,
+                  updatedAt: now,
+                };
+              case 'federation_tool_call':
+                return {
+                  ...base,
+                  status: base.status === 'done' ? 'done' : 'streaming',
+                  lastToolName: msg.name ?? base.lastToolName,
+                  message: msg.name
+                    ? `${msg.peer_name} running ${msg.name}`
+                    : `Tool call on ${msg.peer_name}`,
+                  updatedAt: now,
+                };
+              case 'federation_tool_result':
+                return {
+                  ...base,
+                  status: base.status === 'done' ? 'done' : 'streaming',
+                  lastToolName: msg.name ?? base.lastToolName,
+                  lastToolOutput: msg.output ?? base.lastToolOutput,
+                  lastToolSuccess: msg.success ?? base.lastToolSuccess,
+                  lastToolDurationSecs: msg.duration_secs ?? base.lastToolDurationSecs,
+                  message: msg.name
+                    ? `${msg.peer_name} finished ${msg.name}`
+                    : `Tool result from ${msg.peer_name}`,
+                  updatedAt: now,
+                };
+              case 'federation_done':
+                return {
+                  ...base,
+                  status: 'done',
+                  content: base.content || msg.message || '',
+                  message: msg.message ?? `Remote task completed on ${msg.peer_name}`,
+                  updatedAt: now,
+                };
+              case 'federation_error':
+                return {
+                  ...base,
+                  status: 'error',
+                  message: msg.message ?? `Remote task failed on ${msg.peer_name}`,
+                  updatedAt: now,
+                };
+              default:
+                return base;
+            }
           });
           break;
         }
 
         case 'error':
-          appendMessage('agent', 'error', `[Error] ${msg.message ?? 'Unknown error'}`, new Date(), {
-            seedRole: 'assistant',
-            seedContent: `[Error] ${msg.message ?? 'Unknown error'}`,
-          });
+          appendMessage(
+            'agent',
+            'error',
+            `[Error] ${msg.message ?? 'Unknown error'}`,
+            new Date(),
+            {
+              seed: {
+                seedRole: 'assistant',
+                seedContent: `[Error] ${msg.message ?? 'Unknown error'}`,
+              },
+            },
+          );
           clearTypingForSession();
+          responseStartRef.current = null;
+          streamStartRef.current = null;
+          charCountRef.current = 0;
+          setStreaming(false);
           break;
       }
     };
@@ -597,6 +942,14 @@ export default function AgentChat() {
   useEffect(() => {
     persistActiveSessionId(activeSession);
   }, [activeSession]);
+
+  useEffect(() => {
+    persistFederationPeerSelections(selectedFederationPeerIdsBySession);
+  }, [selectedFederationPeerIdsBySession]);
+
+  useEffect(() => {
+    persistFederationTasksBySession(federationTasksBySession);
+  }, [federationTasksBySession]);
 
   useEffect(() => {
     try {
@@ -629,6 +982,16 @@ export default function AgentChat() {
     delete pendingContentRef.current[sessionId];
     delete pendingToolCallsRef.current[sessionId];
     setTypingSessionIds((prev) => prev.filter((id) => id !== sessionId));
+    setSelectedFederationPeerIdsBySession((prev) => {
+      const next = { ...prev };
+      delete next[sessionId];
+      return next;
+    });
+    setFederationTasksBySession((prev) => {
+      const next = { ...prev };
+      delete next[sessionId];
+      return next;
+    });
 
     setSessions((prev) => {
       const next = prev.filter((session) => session.id !== sessionId);
@@ -674,7 +1037,13 @@ export default function AgentChat() {
         sessionId: activeSession.id,
         temporary: activeSession.temporary,
         historySeed: buildHistorySeed(updatedSession.messages),
+        federationPeerIds: federationEnabled ? selectedFederationPeerIds : [],
       });
+      responseStartRef.current = performance.now();
+      streamStartRef.current = null;
+      charCountRef.current = 0;
+      setTps(0);
+      setStreaming(true);
       setTypingSessionIds((prev) =>
         prev.includes(activeSession.id) ? prev : [...prev, activeSession.id],
       );
@@ -693,6 +1062,14 @@ export default function AgentChat() {
       handleSend();
     }
   };
+
+  const visibleFederationTasks = [...activeFederationTasks]
+    .sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime())
+    .slice(0, 6);
+  const federationEnabled = federation?.enabled ?? false;
+  const onlineFederationPeers = availableFederationPeers.filter((peer) => peer.online).length;
+  const selectedFederationWorkerCount = federationEnabled ? selectedFederationPeerIds.length : 0;
+  const latestFederationTask = visibleFederationTasks[0];
 
   return (
     <div
@@ -791,12 +1168,12 @@ export default function AgentChat() {
       </aside>
 
       <section className="flex min-h-0 flex-col">
-        <div className="border-b border-gray-800 bg-gray-950 px-4 py-3">
+        <div className="border-b border-gray-800 bg-gray-950 px-4 py-2">
           <div className="flex items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-3">
+            <div className="flex min-w-0 items-center gap-2">
               <button
                 onClick={() => setSidebarCollapsed((prev) => !prev)}
-                className="inline-flex h-10 items-center gap-2 rounded-lg border border-gray-700 px-3 text-sm text-gray-300 transition-colors hover:bg-gray-900 hover:text-white"
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-gray-700 px-2.5 text-sm text-gray-300 transition-colors hover:bg-gray-900 hover:text-white"
                 title={sidebarCollapsed ? 'Show chat history' : 'Hide chat history'}
               >
                 {sidebarCollapsed ? (
@@ -804,24 +1181,27 @@ export default function AgentChat() {
                 ) : (
                   <PanelLeftClose className="h-4 w-4" />
                 )}
-                <span className="hidden sm:inline">
+                <span className="hidden sm:inline text-xs">
                   {sidebarCollapsed ? 'Show history' : 'Hide history'}
                 </span>
               </button>
 
-              <div className="min-w-0">
-                <h2 className="truncate text-lg font-semibold text-white">
-                  {activeSession?.title ?? 'Agent Chat'}
-                </h2>
-                <p className="mt-1 text-xs text-gray-500">
-                  {activeSession?.temporary
-                    ? 'Temporary chat with isolated backend session context.'
-                    : 'Saved local chat with reusable backend session context.'}
-                </p>
-              </div>
+              <h2 className="truncate text-sm font-semibold text-white">
+                {activeSession?.title ?? 'Agent Chat'}
+              </h2>
             </div>
-            <div className="rounded-full border border-gray-800 px-3 py-1 text-xs text-gray-400">
-              {activeMessages.length} messages
+            <div className="flex items-center gap-2">
+              {streaming && tps > 0 && (
+                <span
+                  className="font-mono text-xs tabular-nums text-green-400"
+                  title="Estimated tokens per second while the current reply is streaming"
+                >
+                  ~{tps} t/s live
+                </span>
+              )}
+              <div className="rounded-full border border-gray-800 px-3 py-1 text-xs text-gray-400">
+                {activeMessages.length} messages
+              </div>
             </div>
           </div>
         </div>
@@ -832,6 +1212,58 @@ export default function AgentChat() {
             {error}
           </div>
         )}
+
+        <div className="border-b border-gray-800 bg-gray-950/70 px-4 py-2">
+          <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-white">
+            <Network className="h-4 w-4 flex-shrink-0 text-cyan-400" />
+            <span>Federation</span>
+            <span
+              className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+                federationEnabled
+                  ? 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                  : 'border border-amber-500/30 bg-amber-500/10 text-amber-300'
+              }`}
+            >
+              {federationEnabled ? 'enabled' : 'disabled'}
+            </span>
+            {federationLoading && (
+              <span className="text-xs font-normal text-gray-500">checking peers...</span>
+            )}
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-gray-400">
+            <span className="rounded-full border border-gray-800 bg-gray-900 px-2.5 py-1">
+              {federationEnabled && federation?.local_node
+                ? `${federation.local_node.display_name} on :${federation.local_node.api_port}`
+                : 'Local-only chat'}
+            </span>
+            <span className="rounded-full border border-gray-800 bg-gray-900 px-2.5 py-1">
+              {federationEnabled
+                ? `${onlineFederationPeers}/${availableFederationPeers.length} peers online`
+                : 'federation runtime off'}
+            </span>
+            <span className="rounded-full border border-gray-800 bg-gray-900 px-2.5 py-1">
+              {selectedFederationWorkerCount} worker
+              {selectedFederationWorkerCount === 1 ? '' : 's'} selected
+            </span>
+            <span className="rounded-full border border-gray-800 bg-gray-900 px-2.5 py-1">
+              {visibleFederationTasks.length} recent remote task
+              {visibleFederationTasks.length === 1 ? '' : 's'}
+            </span>
+            {federationEnabled && federation?.local_node && (
+              <span className="rounded-full border border-gray-800 bg-gray-900 px-2.5 py-1">
+                discovery {federation.local_node.discovery_mode}
+              </span>
+            )}
+          </div>
+
+          {latestFederationTask && (
+            <p className="mt-2 text-xs text-gray-500">
+              Latest remote task: {latestFederationTask.peerName} {latestFederationTask.status}{' '}
+              at {latestFederationTask.updatedAt.toLocaleTimeString()}.
+            </p>
+          )}
+        </div>
 
         <div className="flex-1 overflow-y-auto p-4">
           {activeMessages.length === 0 ? (
@@ -876,7 +1308,7 @@ export default function AgentChat() {
                         message.role === 'user' ? 'text-blue-200' : 'text-gray-500'
                       }`}
                     >
-                      {message.timestamp.toLocaleTimeString()}
+                      {formatAssistantMessageMeta(message)}
                     </p>
                   </div>
                 </div>
