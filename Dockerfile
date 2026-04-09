@@ -17,7 +17,7 @@ RUN npm run build
 FROM ${OLLAMA_BASE_IMAGE} AS ollama_base
 
 # ── Stage 2: Build Rust Binary ────────────────────────────────
-FROM rust:1.93-slim@sha256:7e6fa79cf81be23fd45d857f75f583d80cfdbb11c91fa06180fd747fda37a61d AS builder
+FROM rust:1.94-slim@sha256:a08d20a404f947ed358dfb63d1ee7e0b88ecad3c45ba9682ccbf2cb09c98acca AS builder
 
 WORKDIR /app
 ARG LLAMAFARM_CARGO_FEATURES=""
