@@ -1,0 +1,110 @@
+# LlamaFarm — all-devices overlay
+# NVIDIA GPU (primary) + Intel iGPU/CPU via ipex-llm + Intel NPU via OpenVINO
+#
+# Usage:
+#   docker compose -f docker-compose.bundle.yml \
+#                  -f docker-compose.bundle.nvidia.yml \
+#                  -f docker-compose.bundle.alldevices.yml \
+#                  up -d
+#
+# Endpoints after startup:
+#   http://localhost:11434  — Ollama on RTX 4070 (primary, fast)
+#   http://localhost:11435  — ipex-llm on Intel iGPU/CPU (overflow / large models)
+#   http://localhost:11436  — OpenVINO on Intel NPU (embeddings + small models)
+#   http://localhost:3000   — OpenWebUI (sees all three)
+
+name: llamafarm-bundle
+
+services:
+
+  # ── Primary Ollama (NVIDIA RTX 4070) — tuned ─────────────────────────────
+  llamafarm:
+    devices:
+      - /dev/dri:/dev/dri
+      - /dev/accel:/dev/accel
+    group_add:
+      - video
+      - render
+    environment:
+      - LLAMAFARM_GPU_BACKEND=nvidia
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      # Flash attention — reduces VRAM usage, faster long contexts
+      - OLLAMA_FLASH_ATTENTION=1
+      # KV cache at q8 — halves VRAM for KV, enables larger contexts
+      - OLLAMA_KV_CACHE_TYPE=q8_0
+      # 32K context window — critical: system prompt + tools consumes ~4K alone
+      - OLLAMA_NUM_CTX=${OLLAMA_NUM_CTX:-131072}
+      # Allow 2 models loaded simultaneously (GPU + keep 1 warm)
+      - OLLAMA_MAX_LOADED_MODELS=2
+      # 2 parallel inference streams
+      - OLLAMA_NUM_PARALLEL=2
+      # Reserve 512MB VRAM for overhead (avoids OOM on load)
+      - OLLAMA_GPU_OVERHEAD=536870912
+      # For layers that overflow VRAM → use RAM (NVMe-backed mmap)
+      - OLLAMA_MAX_VRAM=7516192768
+      # Tell LlamaFarm about the ipex-llm peer (Intel iGPU Ollama)
+      - LLAMAFARM_MANUAL_PEERS=http://ipex-llm:11435
+
+  # ── Intel iGPU + CPU via ipex-llm (Ollama-compatible API on :11435) ──────
+  ipex-llm:
+    image: intelanalytics/ipex-llm-inference-cpp-xpu:latest
+    container_name: ipex-llm
+    restart: unless-stopped
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+      - render
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11435
+      # Use level_zero:0 = Intel Arc iGPU (device index 0 on Meteor Lake)
+      - ONEAPI_DEVICE_SELECTOR=level_zero:0
+      # Keep all layers on iGPU where possible
+      - OLLAMA_NUM_GPU=999
+      - no_proxy=localhost,127.0.0.1
+      - ZES_ENABLE_SYSMAN=1
+    volumes:
+      - ipex-llm-models:/root/.ollama
+    ports:
+      - "0.0.0.0:11435:11435"
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        source /opt/intel/oneapi/setvars.sh --force 2>/dev/null || true
+        export OLLAMA_HOST=0.0.0.0:11435
+        /llm/scripts/start-ollama.sh || ollama serve
+
+  # ── Intel NPU via OpenVINO GenAI (embeddings + small models on :11436) ───
+  openvino-npu:
+    image: python:3.12-slim
+    container_name: openvino-npu
+    restart: unless-stopped
+    devices:
+      - /dev/accel:/dev/accel
+    group_add:
+      - render
+    environment:
+      - OPENVINO_DEVICE=NPU
+    volumes:
+      - openvino-models:/models
+      - /usr/lib/x86_64-linux-gnu/libze_intel_npu.so:/usr/lib/x86_64-linux-gnu/libze_intel_npu.so:ro
+      - /usr/lib/x86_64-linux-gnu/libze_intel_npu.so.1:/usr/lib/x86_64-linux-gnu/libze_intel_npu.so.1:ro
+      - /usr/lib/x86_64-linux-gnu/libze_intel_npu.so.1.33.0:/usr/lib/x86_64-linux-gnu/libze_intel_npu.so.1.33.0:ro
+      - /usr/lib/x86_64-linux-gnu/libopenvino_intel_npu_compiler_loader.so:/usr/lib/x86_64-linux-gnu/libopenvino_intel_npu_compiler_loader.so:ro
+      - ./npu-server:/app
+    ports:
+      - "0.0.0.0:11436:11436"
+    command:
+      - bash
+      - -c
+      - |
+        pip install --quiet openvino openvino-genai fastapi uvicorn sentence-transformers
+        python /app/server.py
+
+volumes:
+  ipex-llm-models:
+    name: ipex-llm-models
+  openvino-models:
+    name: openvino-models

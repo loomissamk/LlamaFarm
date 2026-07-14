@@ -1,0 +1,118 @@
+# LlamaFarm bundled local Docker Compose
+#
+# This stack is fully self-contained:
+# - LlamaFarm gateway
+# - local Ollama runtime inside the same container
+# - local Chromium + chromedriver inside the same container
+#
+# Quick start (auto GPU detection):
+#   ./scripts/docker/up-bundle.sh
+#
+# NVIDIA gaming desktop (explicit GPU passthrough):
+#   ./scripts/docker/up-bundle-nvidia.sh
+#   -- or --
+#   docker compose -f docker-compose.bundle.yml -f docker-compose.bundle.nvidia.yml up -d --build
+#
+# CPU-only / generic fallback:
+#   docker compose -f docker-compose.bundle.yml up -d --build
+#   open http://127.0.0.1:42617
+#   open http://127.0.0.1:3000
+#   or set HOST_BIND_IP=0.0.0.0 for LAN access
+
+name: llamafarm-bundle
+
+services:
+  llamafarm:
+    image: llamafarm-local:bundle
+    build:
+      context: .
+      target: bundle
+      args:
+        LLAMAFARM_CARGO_FEATURES: browser-native,db-mongo
+    container_name: LlamaFarm
+    restart: unless-stopped
+    init: true
+    shm_size: 2gb
+
+    environment:
+      - LLAMAFARM_ALLOW_PUBLIC_BIND=true
+      - LLAMAFARM_GATEWAY_HOST=0.0.0.0
+      - LLAMAFARM_REQUIRE_PAIRING=false
+      - LLAMAFARM_GATEWAY_PORT=${LLAMAFARM_GATEWAY_PORT:-42617}
+      - LLAMAFARM_FEDERATION_ENABLED=${LLAMAFARM_FEDERATION_ENABLED:-true}
+      - LLAMAFARM_NODE_NAME=${LLAMAFARM_NODE_NAME:-llamafarm-node}
+      - LLAMAFARM_API_PORT=${LLAMAFARM_API_PORT:-42617}
+      - LLAMAFARM_DISCOVERY_MODE=${LLAMAFARM_DISCOVERY_MODE:-mdns}
+      - LLAMAFARM_SERVICE_NAME=${LLAMAFARM_SERVICE_NAME:-_llamafarm._tcp}
+      - LLAMAFARM_PEER_TIMEOUT_SECONDS=${LLAMAFARM_PEER_TIMEOUT_SECONDS:-30}
+      - LLAMAFARM_MANUAL_PEERS=${LLAMAFARM_MANUAL_PEERS:-}
+      - LLAMAFARM_DEFAULT_ROLE=${LLAMAFARM_DEFAULT_ROLE:-both}
+      - LLAMAFARM_ALLOW_REMOTE_SUBAGENTS=${LLAMAFARM_ALLOW_REMOTE_SUBAGENTS:-true}
+      - LLAMAFARM_RUNTIME_UID=${LLAMAFARM_RUNTIME_UID:-65534}
+      - LLAMAFARM_RUNTIME_GID=${LLAMAFARM_RUNTIME_GID:-65534}
+      - OLLAMA_HOST=0.0.0.0:11434
+      - OLLAMA_PULL_MODELS=${OLLAMA_PULL_MODELS:-}
+      # KV cache quantization: halves KV cache VRAM usage, allowing ~2x larger
+      # context windows in the same VRAM budget (turboquant-style compression).
+      - OLLAMA_KV_CACHE_TYPE=${OLLAMA_KV_CACHE_TYPE:-q8_0}
+      # Context window: 128K default — flash attention + q8 KV cache keeps VRAM
+      # usage manageable. Override per-machine in .env if needed.
+      - OLLAMA_NUM_CTX=${OLLAMA_NUM_CTX:-131072}
+      - OLLAMA_NUM_PARALLEL=${OLLAMA_NUM_PARALLEL:-2}
+      - OLLAMA_MAX_LOADED_MODELS=${OLLAMA_MAX_LOADED_MODELS:-2}
+      - OLLAMA_FLASH_ATTENTION=${OLLAMA_FLASH_ATTENTION:-1}
+      - OLLAMA_GPU_OVERHEAD=${OLLAMA_GPU_OVERHEAD:-536870912}
+      # VRAM cap: leave unset to let Ollama auto-detect. Override in .env:
+      #   OLLAMA_MAX_VRAM=<bytes>  (e.g. 7516192768 for a 7 GB laptop GPU)
+      - OLLAMA_MAX_VRAM=${OLLAMA_MAX_VRAM:-}
+      # Reasoning/thinking mode: enabled by default for better tool planning and
+      # follow-through. Override with LLAMAFARM_REASONING_ENABLED=false on
+      # smaller machines or when a model burns too much context on thinking.
+      - LLAMAFARM_REASONING_ENABLED=${LLAMAFARM_REASONING_ENABLED:-true}
+
+    volumes:
+      - llamafarm-bundle-data:/llamafarm-data
+      # Mirror common host paths so the local-first bundle can work directly
+      # against the operator's files and attached storage.
+      - ${HOME}:${HOME}
+      - /srv:/srv
+      - /mnt:/mnt
+      - /media:/media
+      # Docker socket — lets the docker tool control the host Docker daemon
+      - /var/run/docker.sock:/var/run/docker.sock
+
+    ports:
+      - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT:-42617}:${LLAMAFARM_GATEWAY_PORT:-42617}"
+      - "${HOST_BIND_IP:-0.0.0.0}:11434:11434"
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:${LLAMAFARM_GATEWAY_PORT:-42617}/health >/dev/null && curl -fsS http://127.0.0.1:11434/api/tags >/dev/null && curl -fsS http://127.0.0.1:9515/status >/dev/null"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 1800s
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: Qdrant
+    restart: unless-stopped
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    volumes:
+      - qdrant-data:/qdrant/storage
+    # Expose REST port to LAN so the ingest script on the host can reach it.
+    # Change HOST_BIND_IP to 127.0.0.1 to lock it to localhost only.
+    ports:
+      - "${HOST_BIND_IP:-0.0.0.0}:${QDRANT_PORT:-6333}:6333"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/6333' 2>/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  llamafarm-bundle-data:
+    name: llamafarm-bundle-data
+  qdrant-data:
+    name: qdrant-data

@@ -1,0 +1,57 @@
+/target
+/.dev-state/
+/target-jammy
+/target-jammy-debug
+/target-jammy-fast
+firmware/*/target
+*.db
+*.db-journal
+.DS_Store
+._*
+.wt-pr37/
+__pycache__/
+*.pyc
+docker-compose.override.yml
+site/node_modules/
+site/.vite/
+site/public/docs-content/
+gh-pages/
+.idea/
+.claude/
+.vscode/
+.vs/
+.fleet/
+.zed/
+/.history/
+*.code-workspace
+
+# Environment files (may contain secrets)
+.env
+
+# Python virtual environments
+
+.venv/
+venv/
+
+# ESP32 build cache (esp-idf-sys managed)
+
+.embuild/
+.env.local
+.env.*.local
+
+# Secret keys and credentials
+.secret_key
+*.key
+*.pem
+credentials.json
+.worktrees/
+/memory/
+/state/
+/wt/
+/power_agent_smoke*.txt
+.cache/buildx-smoke/
+/playground/
+/rust_kernel/
+
+# Nix
+result

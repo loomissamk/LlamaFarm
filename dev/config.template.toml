@@ -1,0 +1,507 @@
+# God local engineering/operator profile.
+#
+# Intended use:
+# - full Ollama-first autonomy with broad userland, build, and Docker authority
+# - very large action/tool budgets for long local runs
+# - audit logging and emergency stop preserved
+# - enough room to widen into lower-level host access by editing the command and
+#   path allowlists below
+#
+# If you run Ollama directly on the host instead of the dev container,
+# change the Ollama URL below to `http://127.0.0.1:11434`.
+api_url = "http://host.docker.internal:11434"
+default_provider = "ollama"
+default_model = "qwen3-coder:30b"
+default_temperature = 0.2
+model_support_vision = true
+
+[gateway]
+port = 42617
+host = "127.0.0.1"
+require_pairing = false
+allow_public_bind = false
+request_timeout_secs = 300
+
+[agent]
+compact_context = false
+max_tool_iterations = 512
+max_history_messages = 160
+parallel_tools = false
+# Local Ollama models on this machine are still more reliable with the XML
+# dispatcher than native function-calling in this stack.
+tool_dispatcher = "xml"
+
+[autonomy]
+level = "full"
+workspace_only = false
+allowed_commands = [
+  "blkid",
+  "bun",
+  "apt",
+  "apt-get",
+  "awk",
+  "bash",
+  "basename",
+  "bpftrace",
+  "cargo",
+  "cat",
+  "chmod",
+  "chown",
+  "clang",
+  "cmake",
+  "cp",
+  "curl",
+  "cut",
+  "date",
+  "dd",
+  "df",
+  "diff",
+  "dirname",
+  "dmesg",
+  "dmidecode",
+  "docker",
+  "docker-compose",
+  "dotnet",
+  "du",
+  "echo",
+  "env",
+  "ethtool",
+  "fdisk",
+  "file",
+  "find",
+  "fio",
+  "free",
+  "g++",
+  "gcc",
+  "gdb",
+  "getent",
+  "getfacl",
+  "git",
+  "go",
+  "gradle",
+  "grep",
+  "gzip",
+  "head",
+  "hexdump",
+  "htop",
+  "ip",
+  "iostat",
+  "ip6tables",
+  "iptables",
+  "jq",
+  "java",
+  "javac",
+  "journalctl",
+  "kill",
+  "killall",
+  "ln",
+  "lldb",
+  "losetup",
+  "ls",
+  "lsblk",
+  "lsmod",
+  "lsof",
+  "lsusb",
+  "lspci",
+  "make",
+  "mdadm",
+  "meson",
+  "mkfs",
+  "mkfs.ext4",
+  "mkfs.vfat",
+  "mkdir",
+  "mongosh",
+  "mount",
+  "mv",
+  "mvn",
+  "netstat",
+  "nft",
+  "ninja",
+  "node",
+  "npm",
+  "nvidia-smi",
+  "nvcc",
+  "patch",
+  "parted",
+  "partprobe",
+  "perl",
+  "php",
+  "ping",
+  "pip",
+  "pip3",
+  "pnpm",
+  "ps",
+  "pwd",
+  "pytest",
+  "python",
+  "python3",
+  "readlink",
+  "realpath",
+  "rm",
+  "rg",
+  "ruby",
+  "rsync",
+  "rustc",
+  "scp",
+  "sed",
+  "setfacl",
+  "sh",
+  "sfdisk",
+  "smartctl",
+  "socat",
+  "sqlite3",
+  "sort",
+  "ss",
+  "stat",
+  "strace",
+  "strings",
+  "ssh",
+  "sysctl",
+  "systemctl",
+  "systemd-analyze",
+  "tail",
+  "tar",
+  "tcpdump",
+  "tee",
+  "timeout",
+  "tmux",
+  "top",
+  "touch",
+  "tr",
+  "traceroute",
+  "udevadm",
+  "ufw",
+  "uname",
+  "uniq",
+  "umount",
+  "unzip",
+  "watch",
+  "wc",
+  "wget",
+  "wipefs",
+  "whoami",
+  "xfs_repair",
+  "xargs",
+  "yarn",
+]
+# God still blocks raw device/kernel paths by default so a pasted preset does
+# not immediately hand the model firmware or live-device write access. To go
+# lower-level, widen `allowed_roots` and remove specific entries here on purpose.
+forbidden_paths = [
+  "/boot",
+  "/dev",
+  "/efi",
+  "/lib",
+  "/lib64",
+  "/lib/modules",
+  "/proc",
+  "/root",
+  "/run",
+  "/sbin",
+  "/snap",
+  "/sys",
+  "/usr/lib/firmware",
+  "/usr/lib/modules",
+  "~/.aws",
+  "~/.config",
+  "~/.gnupg",
+  "~/.ssh",
+]
+max_actions_per_hour = 200000
+max_cost_per_day_cents = 2000000
+require_approval_for_medium_risk = false
+block_high_risk_commands = false
+# God mode allows shell redirects after path validation so local Ollama models
+# can create files with `echo > file`, `cat > file << 'EOF'`, and similar flows.
+shell_redirect_policy = "allow"
+shell_env_passthrough = [
+  "CUDA_VISIBLE_DEVICES",
+  "DOCKER_HOST",
+  "NVIDIA_VISIBLE_DEVICES",
+  "OLLAMA_HOST",
+]
+auto_approve = [
+  "agents_inbox",
+  "agents_list",
+  "agents_send",
+  "apply_patch",
+  "browser",
+  "browser_open",
+  "content_search",
+  "cron_add",
+  "cron_list",
+  "cron_remove",
+  "cron_run",
+  "cron_runs",
+  "cron_update",
+  "delegate",
+  "delegate_coordination_status",
+  "file_edit",
+  "file_read",
+  "file_write",
+  "git_operations",
+  "glob_search",
+  "http_request",
+  "memory_forget",
+  "memory_recall",
+  "memory_store",
+  "model_routing_config",
+  "pdf_read",
+  "process",
+  "schedule",
+  "shell",
+  "task_plan",
+  "web_fetch",
+  "web_search_tool",
+]
+always_ask = []
+# execution_mode options: chat | operator | autonomous_operator | chaos_lab
+execution_mode = "autonomous_operator"
+# Uncomment for full chaos mode (intentional break/recover on disposable targets):
+# execution_mode = "chaos_lab"
+# chaos_disk_quota_mb = 4096
+chaos_retry_budget = 50
+wall_clock_cap_secs = 0
+allowed_roots = [
+  "/",
+  "~",
+  "/llamafarm-data",
+]
+non_cli_excluded_tools = [
+  "composio",
+  "image_info",
+  "proxy_config",
+  "pushover",
+  "screenshot",
+]
+non_cli_natural_language_approval_mode = "direct"
+
+[browser]
+enabled = true
+allowed_domains = ["*"]
+browser_open = "disable"
+session_name = "llamafarm-local"
+backend = "auto"
+native_headless = true
+native_webdriver_url = "http://chromium:4444"
+
+[http_request]
+enabled = true
+allowed_domains = ["*"]
+max_response_size = 5000000
+timeout_secs = 60
+
+[web_fetch]
+enabled = true
+provider = "fast_html2md"
+allowed_domains = ["*"]
+blocked_domains = []
+max_response_size = 1000000
+timeout_secs = 60
+
+[web_search]
+enabled = true
+provider = "duckduckgo"
+max_results = 8
+timeout_secs = 20
+
+[research]
+enabled = true
+trigger = "keywords"
+keywords = ["check", "compare", "find", "how", "inspect", "investigate", "search", "show", "where", "why"]
+max_iterations = 16
+show_progress = true
+
+[skills]
+prompt_injection_mode = "compact"
+
+[workspaces]
+enabled = true
+root = "workspaces"
+
+[agents_ipc]
+enabled = true
+db_path = "~/.llamafarm/agents.db"
+staleness_secs = 600
+
+[security.resources]
+max_memory_mb = 16384
+max_cpu_time_seconds = 7200
+max_subprocesses = 256
+memory_monitoring = true
+
+[security.audit]
+enabled = true
+log_path = "audit.log"
+max_size_mb = 250
+sign_events = true
+
+[security.estop]
+enabled = true
+state_file = "estop-state.json"
+require_otp_to_resume = false
+
+[hooks]
+enabled = true
+
+[hooks.builtin]
+command_logger = true
+
+[observability]
+backend = "log"
+runtime_trace_mode = "rolling"
+runtime_trace_path = "state/runtime-trace.jsonl"
+runtime_trace_max_entries = 2000
+
+[goal_loop]
+enabled = true
+interval_minutes = 5
+step_timeout_secs = 600
+max_steps_per_cycle = 16
+
+# SOP engine: all SOPs default to fully autonomous execution (no approval gates).
+[sop]
+default_execution_mode = "auto"
+max_concurrent_total = 32
+approval_timeout_secs = 0
+max_finished_runs = 500
+
+[[model_routes]]
+hint = "planner"
+provider = "ollama"
+model = "devstral-small-2:latest"
+
+[[model_routes]]
+hint = "coder"
+provider = "ollama"
+model = "devstral-small-2:latest"
+
+[[model_routes]]
+hint = "verifier"
+provider = "ollama"
+model = "devstral-small-2:latest"
+
+[[model_routes]]
+hint = "operator"
+provider = "ollama"
+model = "devstral-small-2:latest"
+
+[agents.planner]
+provider = "ollama"
+model = "devstral-small-2:latest"
+temperature = 0.1
+max_depth = 2
+agentic = true
+allowed_tools = [
+  "content_search",
+  "delegate_coordination_status",
+  "file_read",
+  "glob_search",
+  "http_request",
+  "memory_recall",
+  "schedule",
+  "shell",
+  "web_fetch",
+  "web_search_tool",
+]
+max_iterations = 24
+
+[agents.coder]
+provider = "ollama"
+model = "devstral-small-2:latest"
+temperature = 0.1
+max_depth = 2
+agentic = true
+allowed_tools = [
+  "apply_patch",
+  "content_search",
+  "file_edit",
+  "file_read",
+  "file_write",
+  "git_operations",
+  "glob_search",
+  "memory_recall",
+  "process",
+  "shell",
+]
+max_iterations = 48
+
+[agents.verifier]
+provider = "ollama"
+model = "devstral-small-2:latest"
+temperature = 0.0
+max_depth = 2
+agentic = true
+allowed_tools = [
+  "content_search",
+  "file_read",
+  "git_operations",
+  "glob_search",
+  "http_request",
+  "memory_recall",
+  "process",
+  "shell",
+  "web_fetch",
+]
+max_iterations = 24
+
+[agents.operator]
+provider = "ollama"
+model = "devstral-small-2:latest"
+temperature = 0.1
+max_depth = 2
+agentic = true
+allowed_tools = [
+  "agents_inbox",
+  "agents_list",
+  "agents_send",
+  "content_search",
+  "cron_add",
+  "cron_list",
+  "cron_remove",
+  "cron_run",
+  "cron_runs",
+  "cron_update",
+  "delegate_coordination_status",
+  "file_read",
+  "glob_search",
+  "http_request",
+  "memory_recall",
+  "process",
+  "schedule",
+  "shell",
+  "web_fetch",
+]
+max_iterations = 32
+
+
+# ── arXiv RAG ──────────────────────────────────────────────────────────────────
+# Semantic search over the local arXiv corpus stored in Qdrant.
+# Set enabled = true after running scripts/arxiv_to_qdrant.py to populate the index.
+[arxiv_rag]
+enabled = false
+qdrant_url = "http://qdrant:6333"
+embed_url = "http://127.0.0.1:11434"
+embed_model = "nomic-embed-text"
+collection = "arxiv_papers"
+
+
+# ── Database Explorer ──────────────────────────────────────────────────────────
+# Add one [[db_connections]] block per database.
+# Supported drivers: sqlite, postgres, mongodb  (mysql coming soon)
+# These connections appear in the Database tab and are available to the LLM via
+# the db_schema and db_query tools.
+#
+# [[db_connections]]
+# name     = "arxiv"
+# driver   = "mongodb"
+# uri      = "mongodb://192.168.1.176:27017"
+# database = "ArXivDB"
+# read_only = true
+# max_rows  = 200
+#
+# [[db_connections]]
+# name     = "local"
+# driver   = "sqlite"
+# uri      = "/llamafarm-data/local.db"
+# read_only = false

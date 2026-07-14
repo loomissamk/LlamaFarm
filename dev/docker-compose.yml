@@ -1,0 +1,81 @@
+# Development Environment for LlamaFarm Agentic Testing
+#
+# Use this for:
+# - Running the agent in a sandboxed environment
+# - Testing dangerous commands safely
+# - Developing new skills/integrations
+#
+# Usage:
+#   cd dev && ./cli.sh up
+#   or from root: ./dev/cli.sh up
+name: llamafarm-dev
+services:
+  # ── The Agent (Development Image) ──
+  # Builds from source using the 'dev' stage of the root Dockerfile
+  llamafarm-dev:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: dev
+      args:
+        LLAMAFARM_CARGO_FEATURES: browser-native
+    container_name: llamafarm-dev
+    restart: unless-stopped
+    user: "${LLAMAFARM_UID:-1000}:${LLAMAFARM_GID:-1000}"
+    depends_on:
+      - chromium
+      - sandbox
+    environment:
+      - LLAMAFARM_GATEWAY_PORT=42617
+      - LLAMAFARM_GATEWAY_HOST=0.0.0.0
+      - LLAMAFARM_REQUIRE_PAIRING=false
+      - LLAMAFARM_ALLOW_PUBLIC_BIND=true
+      - SANDBOX_HOST=sandbox
+    entrypoint: ["/bin/bash", "-lc"]
+    command:
+      - |
+        exec llamafarm gateway
+    volumes:
+      # Mount the full local state directory so pairing, IPC, and memory files persist.
+      - ../.dev-state/.llamafarm:/llamafarm-data/.llamafarm
+      # Mount shared workspace
+      - ../playground:/llamafarm-data/workspace
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:42617:42617"
+    networks:
+      - dev-net
+
+  chromium:
+    image: selenium/standalone-chromium:latest
+    container_name: llamafarm-chromium
+    restart: unless-stopped
+    shm_size: 2gb
+    ports:
+      - "127.0.0.1:4444:4444"
+    networks:
+      - dev-net
+
+  # ── The Sandbox (Ubuntu Environment) ──
+  # A fully loaded Ubuntu environment for the agent to play in.
+  sandbox:
+    build:
+      context: sandbox # Context relative to dev/
+      dockerfile: Dockerfile
+    container_name: llamafarm-sandbox
+    hostname: dev-box
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /home/developer/workspace
+    user: developer
+    environment:
+      - TERM=xterm-256color
+      - SHELL=/bin/bash
+    volumes:
+      - ../playground:/home/developer/workspace # Mount local playground
+    networks:
+      - dev-net
+
+networks:
+  dev-net:
+    driver: bridge

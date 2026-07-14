@@ -1,0 +1,11 @@
+LlamaFarm Nodes
+===============
+
+192.168.1.158:42617   (local laptop)
+192.168.1.154:42617   (gpu box)
+192.168.1.153:42617   (nas)
+192.168.1.163:42617   (windows)
+192.168.1.164
+
+Paste any of these into the "Add peer manually" field
+on the Federation page of any node to connect them.

@@ -1,0 +1,26 @@
+# LlamaFarm bundle — NVIDIA GPU override
+#
+# Use this on a gaming desktop / NVIDIA workstation so that a plain
+# `docker compose` invocation uses the GPU without extra flags:
+#
+#   docker compose -f docker-compose.bundle.yml -f docker-compose.bundle.nvidia.yml up -d --build
+#
+# Or just run the dedicated helper script which does the same thing:
+#   ./scripts/docker/up-bundle-nvidia.sh
+
+name: llamafarm-bundle
+
+services:
+  llamafarm:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    environment:
+      - LLAMAFARM_GPU_BACKEND=nvidia
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility

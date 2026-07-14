@@ -1,0 +1,107 @@
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+
+pub mod sqlite;
+
+#[cfg(feature = "db-postgres")]
+pub mod postgres;
+
+#[cfg(feature = "db-mongo")]
+pub mod mongodb;
+
+// ── Shared output types ────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ColumnInfo {
+    pub name: String,
+    pub data_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TableInfo {
+    /// Table, view, or collection name.
+    pub name: String,
+    pub columns: Vec<ColumnInfo>,
+    /// "table", "view", or "collection"
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DbSchema {
+    pub driver: String,
+    pub database: Option<String>,
+    pub tables: Vec<TableInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryResult {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<serde_json::Value>>,
+    pub row_count: usize,
+    pub truncated: bool,
+}
+
+// ── Adapter trait ─────────────────────────────────────────────────────────────
+
+#[async_trait]
+pub trait DbAdapter: Send + Sync {
+    fn driver_name(&self) -> &str;
+    async fn schema(&self) -> anyhow::Result<DbSchema>;
+    async fn query(&self, sql: &str, max_rows: usize) -> anyhow::Result<QueryResult>;
+}
+
+// ── Factory ───────────────────────────────────────────────────────────────────
+
+pub fn build_adapter(
+    conn: &crate::config::DbConnectionConfig,
+) -> anyhow::Result<Box<dyn DbAdapter>> {
+    use crate::config::DbDriver;
+    match &conn.driver {
+        DbDriver::Sqlite => Ok(Box::new(sqlite::SqliteAdapter::new(
+            &conn.uri,
+            conn.read_only,
+        )?)),
+        DbDriver::Postgres => build_postgres(conn),
+        DbDriver::Mongodb => build_mongo(conn),
+        DbDriver::Mysql => {
+            anyhow::bail!("MySQL/MariaDB support is not yet implemented in the DB explorer")
+        }
+    }
+}
+
+#[cfg(feature = "db-postgres")]
+fn build_postgres(conn: &crate::config::DbConnectionConfig) -> anyhow::Result<Box<dyn DbAdapter>> {
+    Ok(Box::new(postgres::PostgresAdapter::new(
+        conn.uri.clone(),
+        conn.read_only,
+    )))
+}
+
+#[cfg(not(feature = "db-postgres"))]
+fn build_postgres(
+    _conn: &crate::config::DbConnectionConfig,
+) -> anyhow::Result<Box<dyn DbAdapter>> {
+    anyhow::bail!(
+        "PostgreSQL support requires the 'db-postgres' Cargo feature \
+         (add db-postgres to LLAMAFARM_CARGO_FEATURES)"
+    )
+}
+
+#[cfg(feature = "db-mongo")]
+fn build_mongo(conn: &crate::config::DbConnectionConfig) -> anyhow::Result<Box<dyn DbAdapter>> {
+    Ok(Box::new(mongodb::MongoAdapter::new(
+        conn.uri.clone(),
+        conn.database.clone(),
+        conn.read_only,
+    )))
+}
+
+#[cfg(not(feature = "db-mongo"))]
+fn build_mongo(
+    _conn: &crate::config::DbConnectionConfig,
+) -> anyhow::Result<Box<dyn DbAdapter>> {
+    anyhow::bail!(
+        "MongoDB support requires the 'db-mongo' Cargo feature \
+         (add db-mongo to LLAMAFARM_CARGO_FEATURES)"
+    )
+}

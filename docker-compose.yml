@@ -1,0 +1,66 @@
+# LlamaFarm local Docker Compose
+#
+# Quick start:
+#   1. Make sure Ollama is running on the host at http://127.0.0.1:11434
+#   2. Run: docker compose up -d --build
+#   3. Open http://127.0.0.1:42617
+
+name: llamafarm-local
+
+services:
+  llamafarm:
+    image: llamafarm-local:dev
+    build:
+      context: .
+      target: dev
+    container_name: LlamaFarm
+    restart: unless-stopped
+
+    environment:
+      - LLAMAFARM_ALLOW_PUBLIC_BIND=true
+      - LLAMAFARM_GATEWAY_HOST=0.0.0.0
+      - LLAMAFARM_REQUIRE_PAIRING=false
+      - SHELL=/bin/bash
+      # Default gateway port inside container
+      - LLAMAFARM_GATEWAY_PORT=${LLAMAFARM_GATEWAY_PORT:-42617}
+      # LAN federation defaults on for trusted local networks.
+      - LLAMAFARM_FEDERATION_ENABLED=${LLAMAFARM_FEDERATION_ENABLED:-true}
+      - LLAMAFARM_NODE_NAME=${LLAMAFARM_NODE_NAME:-llamafarm-node}
+      - LLAMAFARM_API_PORT=${LLAMAFARM_API_PORT:-42617}
+      - LLAMAFARM_DISCOVERY_MODE=${LLAMAFARM_DISCOVERY_MODE:-mdns}
+      - LLAMAFARM_SERVICE_NAME=${LLAMAFARM_SERVICE_NAME:-_llamafarm._tcp}
+      - LLAMAFARM_PEER_TIMEOUT_SECONDS=${LLAMAFARM_PEER_TIMEOUT_SECONDS:-30}
+      - LLAMAFARM_MANUAL_PEERS=${LLAMAFARM_MANUAL_PEERS:-}
+      - LLAMAFARM_DEFAULT_ROLE=${LLAMAFARM_DEFAULT_ROLE:-both}
+      - LLAMAFARM_ALLOW_REMOTE_SUBAGENTS=${LLAMAFARM_ALLOW_REMOTE_SUBAGENTS:-true}
+
+    volumes:
+      # Keep the local operator state on a stable volume so redeploys from
+      # different worktrees do not silently fork the live data set.
+      - llamafarm-data:/llamafarm-data
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    ports:
+      - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT:-42617}:${LLAMAFARM_GATEWAY_PORT:-42617}"
+
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:${LLAMAFARM_GATEWAY_PORT:-42617}/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  llamafarm-data:
+    name: llamafarm-data
