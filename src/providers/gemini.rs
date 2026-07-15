@@ -1130,6 +1130,7 @@ impl GeminiProvider {
         let usage = result.usage_metadata.map(|u| TokenUsage {
             input_tokens: u.prompt_token_count,
             output_tokens: u.candidates_token_count,
+            output_truncated: false,
         });
 
         let text = result
@@ -1330,7 +1331,7 @@ impl Provider for GeminiProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reqwest::{header::AUTHORIZATION, StatusCode};
+    use reqwest::{StatusCode, header::AUTHORIZATION};
 
     /// Helper to create a test OAuth auth variant.
     fn test_oauth_auth(token: &str) -> GeminiAuth {
@@ -2128,10 +2129,12 @@ mod tests {
 
         let result = provider.warmup().await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("ManagedOAuth requires auth_service"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("ManagedOAuth requires auth_service")
+        );
     }
 
     /// Validates that warmup() for CLI OAuth skips validation (existing behavior).

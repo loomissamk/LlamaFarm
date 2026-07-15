@@ -1,6 +1,6 @@
 use crate::tools::ToolSpec;
 use async_trait::async_trait;
-use futures_util::{stream, StreamExt};
+use futures_util::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 
@@ -54,6 +54,10 @@ pub struct ToolCall {
 pub struct TokenUsage {
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
+    /// Whether the provider ended this response because the configured
+    /// per-segment output budget was reached. The agent loop treats this as a
+    /// checkpoint/continuation boundary, not as task failure.
+    pub output_truncated: bool,
 }
 
 /// Inference timing metrics for a single LLM call.
@@ -431,7 +435,6 @@ pub trait Provider: Send + Sync {
     /// LLM request.  Default is a no-op; Ollama overrides by calling `/api/show`.
     async fn prefetch_model_capabilities(&self, _model: &str) {}
 
-
     /// Chat with tool definitions for native function calling support.
     /// The default implementation falls back to chat_with_history and returns
     /// an empty tool_calls vector (prompt-based tool use only).
@@ -633,6 +636,7 @@ mod tests {
             usage: Some(TokenUsage {
                 input_tokens: Some(100),
                 output_tokens: Some(50),
+                output_truncated: false,
             }),
             metrics: None,
             reasoning_content: None,

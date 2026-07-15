@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::memory::{self, Memory, MemoryCategory};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use std::collections::HashSet;
 use std::fs;
@@ -624,9 +624,10 @@ mod tests {
 
         let all = target_mem.list(None, None).await.unwrap();
         assert!(all.iter().any(|e| e.key == "k" && e.content == "new value"));
-        assert!(all
-            .iter()
-            .any(|e| e.key.starts_with("k__openclaw_") && e.content == "old value"));
+        assert!(
+            all.iter()
+                .any(|e| e.key.starts_with("k__openclaw_") && e.content == "old value")
+        );
     }
 
     #[tokio::test]

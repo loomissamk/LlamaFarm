@@ -835,6 +835,19 @@ pub struct AgentConfig {
     /// Maximum conversation history messages retained per session. Default: `50`.
     #[serde(default = "default_agent_max_history_messages")]
     pub max_history_messages: usize,
+    /// Maximum tokens a provider may generate for one inference segment.
+    ///
+    /// This is deliberately a *per-segment* budget, not a task budget.  When a
+    /// local thinking model reaches it, the agent checkpoints the partial turn
+    /// and continues the task in a fresh request.  That keeps a pathological
+    /// reasoning pass from monopolising a GPU while allowing long autonomous
+    /// tasks to keep running until they genuinely finish or are cancelled.
+    ///
+    /// For Ollama this is sent as `options.num_predict`, which includes hidden
+    /// thinking tokens as well as visible output. `None` leaves the provider's
+    /// native default unchanged.
+    #[serde(default)]
+    pub max_output_tokens_per_turn: Option<u32>,
     /// Enable parallel tool execution within a single iteration. Default: `false`.
     #[serde(default)]
     pub parallel_tools: bool,
@@ -861,6 +874,7 @@ impl Default for AgentConfig {
             compact_context: false,
             max_tool_iterations: default_agent_max_tool_iterations(),
             max_history_messages: default_agent_max_history_messages(),
+            max_output_tokens_per_turn: None,
             parallel_tools: false,
             tool_dispatcher: default_agent_tool_dispatcher(),
         }
@@ -1187,8 +1201,8 @@ pub struct GatewayConfig {
     /// Gateway host (default: 127.0.0.1)
     #[serde(default = "default_gateway_host")]
     pub host: String,
-    /// Require pairing before accepting requests (default: true)
-    #[serde(default = "default_true")]
+    /// Legacy compatibility field. Gateway pairing is retired and ignored.
+    #[serde(default)]
     pub require_pairing: bool,
     /// Allow binding to non-localhost without a tunnel (default: false)
     #[serde(default)]
@@ -1389,7 +1403,7 @@ impl Default for GatewayConfig {
         Self {
             port: default_gateway_port(),
             host: default_gateway_host(),
-            require_pairing: true,
+            require_pairing: false,
             allow_public_bind: false,
             request_timeout_secs: default_gateway_request_timeout_secs(),
             paired_tokens: Vec::new(),
@@ -2168,15 +2182,35 @@ pub fn build_runtime_proxy_client_with_timeouts(
     timeout_secs: u64,
     connect_timeout_secs: u64,
 ) -> reqwest::Client {
-    let cache_key =
-        runtime_proxy_cache_key(service_key, Some(timeout_secs), Some(connect_timeout_secs));
+    build_runtime_proxy_client_with_optional_timeouts(
+        service_key,
+        Some(timeout_secs),
+        Some(connect_timeout_secs),
+    )
+}
+
+/// Build a proxy-aware HTTP client with explicitly optional total and connect
+/// deadlines. Passing `None` for the total timeout leaves the builder without
+/// a response deadline. Long-running local inference uses this with a bounded
+/// connect timeout and no arbitrary generation deadline; it remains
+/// cancellable by dropping the request future.
+pub fn build_runtime_proxy_client_with_optional_timeouts(
+    service_key: &str,
+    timeout_secs: Option<u64>,
+    connect_timeout_secs: Option<u64>,
+) -> reqwest::Client {
+    let cache_key = runtime_proxy_cache_key(service_key, timeout_secs, connect_timeout_secs);
     if let Some(client) = runtime_proxy_cached_client(&cache_key) {
         return client;
     }
 
-    let builder = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(timeout_secs))
-        .connect_timeout(std::time::Duration::from_secs(connect_timeout_secs));
+    let mut builder = reqwest::Client::builder();
+    if let Some(timeout_secs) = timeout_secs {
+        builder = builder.timeout(std::time::Duration::from_secs(timeout_secs));
+    }
+    if let Some(connect_timeout_secs) = connect_timeout_secs {
+        builder = builder.connect_timeout(std::time::Duration::from_secs(connect_timeout_secs));
+    }
     let builder = apply_runtime_proxy_to_builder(builder, service_key);
     let client = builder.build().unwrap_or_else(|error| {
         tracing::warn!(
@@ -2724,7 +2758,10 @@ impl AgentExecutionMode {
 
     /// Whether this mode runs fully autonomously (no approval prompts).
     pub fn is_autonomous(&self) -> bool {
-        matches!(self, Self::Operator | Self::AutonomousOperator | Self::ChaosLab)
+        matches!(
+            self,
+            Self::Operator | Self::AutonomousOperator | Self::ChaosLab
+        )
     }
 }
 
@@ -6501,6 +6538,12 @@ impl Config {
             anyhow::bail!("gateway.host must not be empty");
         }
 
+        // Agent execution. A zero token budget would make every provider
+        // request immediately exhaust without producing a usable checkpoint.
+        if self.agent.max_output_tokens_per_turn == Some(0) {
+            anyhow::bail!("agent.max_output_tokens_per_turn must be greater than 0 when set");
+        }
+
         // Reliability
         let configured_fallbacks = self
             .reliability
@@ -6586,9 +6629,9 @@ impl Config {
             &self.security.otp.gated_domains,
             &self.security.otp.gated_domain_categories,
         )
-        .with_context(|| {
-            "Invalid security.otp.gated_domains or security.otp.gated_domain_categories"
-        })?;
+        .with_context(
+            || "Invalid security.otp.gated_domains or security.otp.gated_domain_categories",
+        )?;
         if self.security.estop.state_file.trim().is_empty() {
             anyhow::bail!("security.estop.state_file must not be empty");
         }
@@ -6961,9 +7004,9 @@ impl Config {
             match mode.trim().to_ascii_lowercase().as_str() {
                 "mdns" => self.federation.discovery_mode = FederationDiscoveryMode::Mdns,
                 "manual" => self.federation.discovery_mode = FederationDiscoveryMode::Manual,
-                _ => tracing::warn!(
-                    "Ignoring invalid LLAMAFARM_DISCOVERY_MODE (valid: mdns|manual)"
-                ),
+                _ => {
+                    tracing::warn!("Ignoring invalid LLAMAFARM_DISCOVERY_MODE (valid: mdns|manual)")
+                }
             }
         }
 
@@ -7016,10 +7059,63 @@ impl Config {
             }
         }
 
-        // Pairing requirement: LLAMAFARM_REQUIRE_PAIRING
-        if let Ok(val) = std::env::var("LLAMAFARM_REQUIRE_PAIRING") {
-            self.gateway.require_pairing = val == "1" || val.eq_ignore_ascii_case("true");
+        // Agent runtime controls: keep explicit deployment profiles in sync
+        // with the tool loop rather than relying on hard-coded defaults.
+        if let Ok(enabled) = std::env::var("LLAMAFARM_AGENT_COMPACT_CONTEXT") {
+            match enabled.trim().to_ascii_lowercase().as_str() {
+                "1" | "true" | "yes" | "on" => self.agent.compact_context = true,
+                "0" | "false" | "no" | "off" => self.agent.compact_context = false,
+                _ => tracing::warn!(
+                    "Ignoring invalid LLAMAFARM_AGENT_COMPACT_CONTEXT (valid: 1|0|true|false|yes|no|on|off)"
+                ),
+            }
         }
+
+        if let Ok(max_history) = std::env::var("LLAMAFARM_AGENT_MAX_HISTORY_MESSAGES") {
+            match max_history.trim().parse::<usize>() {
+                Ok(value) if value > 0 => self.agent.max_history_messages = value,
+                _ => tracing::warn!(
+                    "Ignoring invalid LLAMAFARM_AGENT_MAX_HISTORY_MESSAGES (must be a positive integer)"
+                ),
+            }
+        }
+
+        if let Ok(max_iterations) = std::env::var("LLAMAFARM_AGENT_MAX_TOOL_ITERATIONS") {
+            match max_iterations.trim().parse::<usize>() {
+                Ok(value) if value > 0 => self.agent.max_tool_iterations = value,
+                _ => tracing::warn!(
+                    "Ignoring invalid LLAMAFARM_AGENT_MAX_TOOL_ITERATIONS (must be a positive integer)"
+                ),
+            }
+        }
+
+        if let Ok(max_output_tokens) = std::env::var("LLAMAFARM_AGENT_MAX_OUTPUT_TOKENS") {
+            match max_output_tokens.trim().parse::<u32>() {
+                Ok(value) if value > 0 => self.agent.max_output_tokens_per_turn = Some(value),
+                _ => tracing::warn!(
+                    "Ignoring invalid LLAMAFARM_AGENT_MAX_OUTPUT_TOKENS (must be a positive integer)"
+                ),
+            }
+        }
+
+        if let Ok(enabled) = std::env::var("LLAMAFARM_AGENT_PARALLEL_TOOLS") {
+            match enabled.trim().to_ascii_lowercase().as_str() {
+                "1" | "true" | "yes" | "on" => self.agent.parallel_tools = true,
+                "0" | "false" | "no" | "off" => self.agent.parallel_tools = false,
+                _ => tracing::warn!(
+                    "Ignoring invalid LLAMAFARM_AGENT_PARALLEL_TOOLS (valid: 1|0|true|false|yes|no|on|off)"
+                ),
+            }
+        }
+
+        // Gateway pairing is intentionally retired. Keep the legacy field
+        // false even if an old config or environment file still contains it.
+        if std::env::var_os("LLAMAFARM_REQUIRE_PAIRING").is_some() {
+            tracing::warn!(
+                "LLAMAFARM_REQUIRE_PAIRING is ignored; gateway pairing has been removed"
+            );
+        }
+        self.gateway.require_pairing = false;
 
         // Allow public bind: LLAMAFARM_ALLOW_PUBLIC_BIND
         if let Ok(val) = std::env::var("LLAMAFARM_ALLOW_PUBLIC_BIND") {
@@ -7423,8 +7519,8 @@ mod tests {
     use tempfile::TempDir;
     use tokio::sync::{Mutex, MutexGuard};
     use tokio::test;
-    use tokio_stream::wrappers::ReadDirStream;
     use tokio_stream::StreamExt;
+    use tokio_stream::wrappers::ReadDirStream;
 
     // ── Defaults ─────────────────────────────────────────────
 
@@ -7620,9 +7716,11 @@ allowed_roots = []
         let parsed: AutonomyConfig = toml::from_str(raw).unwrap();
         assert_eq!(parsed.shell_redirect_policy, ShellRedirectPolicy::Block);
         assert!(parsed.non_cli_excluded_tools.contains(&"shell".to_string()));
-        assert!(parsed
-            .non_cli_excluded_tools
-            .contains(&"browser".to_string()));
+        assert!(
+            parsed
+                .non_cli_excluded_tools
+                .contains(&"browser".to_string())
+        );
     }
 
     #[test]
@@ -7630,9 +7728,10 @@ allowed_roots = []
         let mut cfg = Config::default();
         cfg.autonomy.non_cli_excluded_tools = vec!["shell".into(), "shell".into()];
         let err = cfg.validate().unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("autonomy.non_cli_excluded_tools contains duplicate entry"));
+        assert!(
+            err.to_string()
+                .contains("autonomy.non_cli_excluded_tools contains duplicate entry")
+        );
     }
 
     #[test]
@@ -8089,10 +8188,12 @@ calc = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         assert_eq!(parsed.default_provider.as_deref(), Some("ollama"));
         assert_eq!(parsed.autonomy.level, AutonomyLevel::Full);
         assert!(!parsed.autonomy.workspace_only);
-        assert!(parsed
-            .autonomy
-            .allowed_commands
-            .contains(&"docker".to_string()));
+        assert!(
+            parsed
+                .autonomy
+                .allowed_commands
+                .contains(&"docker".to_string())
+        );
         assert!(parsed.autonomy.allowed_roots.contains(&"~".to_string()));
         assert!(parsed.browser.enabled);
         assert!(parsed.http_request.enabled);
@@ -8101,10 +8202,12 @@ calc = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         assert!(parsed.workspaces.enabled);
         assert!(parsed.agents_ipc.enabled);
         assert!(parsed.security.estop.enabled);
-        assert!(parsed
-            .autonomy
-            .auto_approve
-            .contains(&"delegate".to_string()));
+        assert!(
+            parsed
+                .autonomy
+                .auto_approve
+                .contains(&"delegate".to_string())
+        );
     }
 
     #[test]
@@ -8184,6 +8287,7 @@ reasoning_level = "high"
         assert!(!cfg.compact_context);
         assert_eq!(cfg.max_tool_iterations, 20);
         assert_eq!(cfg.max_history_messages, 50);
+        assert_eq!(cfg.max_output_tokens_per_turn, None);
         assert!(!cfg.parallel_tools);
         assert_eq!(cfg.tool_dispatcher, "auto");
     }
@@ -8196,6 +8300,7 @@ default_temperature = 0.7
 compact_context = true
 max_tool_iterations = 20
 max_history_messages = 80
+max_output_tokens_per_turn = 2048
 parallel_tools = true
 tool_dispatcher = "xml"
 "#;
@@ -8203,6 +8308,7 @@ tool_dispatcher = "xml"
         assert!(parsed.agent.compact_context);
         assert_eq!(parsed.agent.max_tool_iterations, 20);
         assert_eq!(parsed.agent.max_history_messages, 80);
+        assert_eq!(parsed.agent.max_output_tokens_per_turn, Some(2048));
         assert!(parsed.agent.parallel_tools);
         assert_eq!(parsed.agent.tool_dispatcher, "xml");
     }
@@ -8288,10 +8394,12 @@ tool_dispatcher = "xml"
 
         let contents = tokio::fs::read_to_string(&config_path).await.unwrap();
         let loaded: Config = toml::from_str(&contents).unwrap();
-        assert!(loaded
-            .api_key
-            .as_deref()
-            .is_some_and(crate::security::SecretStore::is_encrypted));
+        assert!(
+            loaded
+                .api_key
+                .as_deref()
+                .is_some_and(crate::security::SecretStore::is_encrypted)
+        );
         let store = crate::security::SecretStore::new(&dir, true);
         let decrypted = store.decrypt(loaded.api_key.as_deref().unwrap()).unwrap();
         assert_eq!(decrypted, "sk-roundtrip");
@@ -9232,9 +9340,9 @@ channel_id = "C123"
     // ══════════════════════════════════════════════════════════
 
     #[test]
-    async fn checklist_gateway_default_requires_pairing() {
+    async fn checklist_gateway_default_disables_pairing() {
         let g = GatewayConfig::default();
-        assert!(g.require_pairing, "Pairing must be required by default");
+        assert!(!g.require_pairing, "Gateway pairing must stay disabled");
     }
 
     #[test]
@@ -9270,8 +9378,8 @@ channel_id = "C123"
         // Here we verify the config default matches
         let c = Config::default();
         assert!(
-            c.gateway.require_pairing,
-            "Config default must require pairing"
+            !c.gateway.require_pairing,
+            "Config default must disable pairing"
         );
         assert!(
             !c.gateway.allow_public_bind,
@@ -9332,8 +9440,8 @@ default_temperature = 0.7
 "#;
         let parsed: Config = toml::from_str(minimal).unwrap();
         assert!(
-            parsed.gateway.require_pairing,
-            "Missing [gateway] must default to require_pairing=true"
+            !parsed.gateway.require_pairing,
+            "Missing [gateway] must default to require_pairing=false"
         );
         assert!(
             !parsed.gateway.allow_public_bind,
@@ -9806,9 +9914,10 @@ provider_api = "not-a-real-mode"
         let err = config
             .validate()
             .expect_err("model route max_tokens=0 should be rejected");
-        assert!(err
-            .to_string()
-            .contains("model_routes[0].max_tokens must be greater than 0"));
+        assert!(
+            err.to_string()
+                .contains("model_routes[0].max_tokens must be greater than 0")
+        );
     }
 
     #[test]
@@ -9826,9 +9935,10 @@ provider_api = "not-a-real-mode"
         let err = config
             .validate()
             .expect_err("model route api_url with non-http scheme should be rejected");
-        assert!(err
-            .to_string()
-            .contains("model_routes[0].api_url must use http/https"));
+        assert!(
+            err.to_string()
+                .contains("model_routes[0].api_url must use http/https")
+        );
     }
 
     #[test]
@@ -10013,9 +10123,11 @@ provider_api = "not-a-real-mode"
         };
 
         let error = config.validate().expect_err("expected validation failure");
-        assert!(error
-            .to_string()
-            .contains("wire_api must be one of: responses, chat_completions"));
+        assert!(
+            error
+                .to_string()
+                .contains("wire_api must be one of: responses, chat_completions")
+        );
     }
 
     #[test]
@@ -10483,16 +10595,41 @@ default_model = "legacy-model"
     }
 
     #[test]
-    async fn env_override_require_pairing() {
+    async fn env_override_require_pairing_is_ignored() {
         let _env_guard = env_override_lock().await;
         let mut config = Config::default();
-        assert!(config.gateway.require_pairing);
+        assert!(!config.gateway.require_pairing);
 
-        std::env::set_var("LLAMAFARM_REQUIRE_PAIRING", "false");
+        std::env::set_var("LLAMAFARM_REQUIRE_PAIRING", "true");
         config.apply_env_overrides();
         assert!(!config.gateway.require_pairing);
 
         std::env::remove_var("LLAMAFARM_REQUIRE_PAIRING");
+    }
+
+    #[test]
+    async fn env_override_agent_runtime_controls() {
+        let _env_guard = env_override_lock().await;
+        let mut config = Config::default();
+
+        std::env::set_var("LLAMAFARM_AGENT_COMPACT_CONTEXT", "true");
+        std::env::set_var("LLAMAFARM_AGENT_MAX_HISTORY_MESSAGES", "48");
+        std::env::set_var("LLAMAFARM_AGENT_MAX_TOOL_ITERATIONS", "96");
+        std::env::set_var("LLAMAFARM_AGENT_MAX_OUTPUT_TOKENS", "2048");
+        std::env::set_var("LLAMAFARM_AGENT_PARALLEL_TOOLS", "true");
+        config.apply_env_overrides();
+
+        assert!(config.agent.compact_context);
+        assert_eq!(config.agent.max_history_messages, 48);
+        assert_eq!(config.agent.max_tool_iterations, 96);
+        assert_eq!(config.agent.max_output_tokens_per_turn, Some(2048));
+        assert!(config.agent.parallel_tools);
+
+        std::env::remove_var("LLAMAFARM_AGENT_COMPACT_CONTEXT");
+        std::env::remove_var("LLAMAFARM_AGENT_MAX_HISTORY_MESSAGES");
+        std::env::remove_var("LLAMAFARM_AGENT_MAX_TOOL_ITERATIONS");
+        std::env::remove_var("LLAMAFARM_AGENT_MAX_OUTPUT_TOKENS");
+        std::env::remove_var("LLAMAFARM_AGENT_PARALLEL_TOOLS");
     }
 
     #[test]
@@ -10764,9 +10901,11 @@ default_model = "legacy-model"
             std::env::var("HTTPS_PROXY").ok().as_deref(),
             Some("http://127.0.0.1:7891")
         );
-        assert!(std::env::var("NO_PROXY")
-            .ok()
-            .is_some_and(|value| value.contains("localhost")));
+        assert!(
+            std::env::var("NO_PROXY")
+                .ok()
+                .is_some_and(|value| value.contains("localhost"))
+        );
 
         clear_proxy_env_test_vars();
     }
@@ -10823,7 +10962,7 @@ default_model = "legacy-model"
         let g = GatewayConfig::default();
         assert_eq!(g.port, 42617);
         assert_eq!(g.host, "127.0.0.1");
-        assert!(g.require_pairing);
+        assert!(!g.require_pairing);
         assert!(!g.allow_public_bind);
         assert!(g.paired_tokens.is_empty());
         assert!(!g.trust_forwarded_headers);
@@ -11329,9 +11468,10 @@ baseline_syscalls = ["read", "write", "openat", "close"]
         let err = config
             .validate()
             .expect_err("expected fallback_api_keys empty value validation failure");
-        assert!(err
-            .to_string()
-            .contains("reliability.fallback_api_keys.openrouter must not be empty"));
+        assert!(
+            err.to_string()
+                .contains("reliability.fallback_api_keys.openrouter must not be empty")
+        );
     }
 
     #[test]
@@ -11346,9 +11486,10 @@ baseline_syscalls = ["read", "write", "openat", "close"]
         let err = config
             .validate()
             .expect_err("expected fallback_api_keys mapping validation failure");
-        assert!(err
-            .to_string()
-            .contains("reliability.fallback_api_keys.anthropic has no matching entry"));
+        assert!(
+            err.to_string()
+                .contains("reliability.fallback_api_keys.anthropic has no matching entry")
+        );
     }
 
     #[test]
@@ -11427,9 +11568,10 @@ baseline_syscalls = ["read", "write", "openat", "close"]
         let err = config
             .validate()
             .expect_err("expected syscall threshold ordering validation failure");
-        assert!(err
-            .to_string()
-            .contains("max_denied_events_per_minute must be less than or equal"));
+        assert!(
+            err.to_string()
+                .contains("max_denied_events_per_minute must be less than or equal")
+        );
     }
 
     #[test]
@@ -11440,9 +11582,10 @@ baseline_syscalls = ["read", "write", "openat", "close"]
         let err = config
             .validate()
             .expect_err("expected semantic_guard_collection validation failure");
-        assert!(err
-            .to_string()
-            .contains("security.semantic_guard_collection"));
+        assert!(
+            err.to_string()
+                .contains("security.semantic_guard_collection")
+        );
     }
 
     #[test]
@@ -11453,9 +11596,10 @@ baseline_syscalls = ["read", "write", "openat", "close"]
         let err = config
             .validate()
             .expect_err("expected semantic_guard_threshold validation failure");
-        assert!(err
-            .to_string()
-            .contains("security.semantic_guard_threshold"));
+        assert!(
+            err.to_string()
+                .contains("security.semantic_guard_threshold")
+        );
     }
 
     #[test]
@@ -11496,9 +11640,10 @@ baseline_syscalls = ["read", "write", "openat", "close"]
         let err = config
             .validate()
             .expect_err("expected coordination inbox limit validation failure");
-        assert!(err
-            .to_string()
-            .contains("coordination.max_inbox_messages_per_agent"));
+        assert!(
+            err.to_string()
+                .contains("coordination.max_inbox_messages_per_agent")
+        );
 
         let mut config = Config::default();
         config.coordination.max_dead_letters = 0;
@@ -11519,9 +11664,10 @@ baseline_syscalls = ["read", "write", "openat", "close"]
         let err = config
             .validate()
             .expect_err("expected coordination dedupe-window validation failure");
-        assert!(err
-            .to_string()
-            .contains("coordination.max_seen_message_ids"));
+        assert!(
+            err.to_string()
+                .contains("coordination.max_seen_message_ids")
+        );
 
         let mut config = Config::default();
         config.coordination.lead_agent = "   ".into();

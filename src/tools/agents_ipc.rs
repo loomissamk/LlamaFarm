@@ -6,8 +6,8 @@
 
 use super::traits::{Tool, ToolResult};
 use crate::config::AgentsIpcConfig;
-use crate::security::policy::ToolOperation;
 use crate::security::SecurityPolicy;
+use crate::security::policy::ToolOperation;
 use async_trait::async_trait;
 use rusqlite::Connection;
 use serde_json::json;
@@ -275,7 +275,7 @@ impl Tool for AgentsSendTool {
                     success: false,
                     output: String::new(),
                     error: Some("Missing 'to_agent' parameter".into()),
-                })
+                });
             }
         };
 
@@ -286,7 +286,7 @@ impl Tool for AgentsSendTool {
                     success: false,
                     output: String::new(),
                     error: Some("Missing 'payload' parameter".into()),
-                })
+                });
             }
         };
 
@@ -426,7 +426,7 @@ impl Tool for StateGetTool {
                     success: false,
                     output: String::new(),
                     error: Some("Missing 'key' parameter".into()),
-                })
+                });
             }
         };
 
@@ -527,7 +527,7 @@ impl Tool for StateSetTool {
                     success: false,
                     output: String::new(),
                     error: Some("Missing 'key' parameter".into()),
-                })
+                });
             }
         };
 
@@ -538,7 +538,7 @@ impl Tool for StateSetTool {
                     success: false,
                     output: String::new(),
                     error: Some("Missing 'value' parameter".into()),
-                })
+                });
             }
         };
 

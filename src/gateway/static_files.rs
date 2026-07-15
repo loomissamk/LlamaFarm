@@ -3,7 +3,7 @@
 //! Uses `rust-embed` to bundle the `web/dist/` directory into the binary at compile time.
 
 use axum::{
-    http::{header, StatusCode, Uri},
+    http::{StatusCode, Uri, header},
     response::IntoResponse,
 };
 use rust_embed::Embed;

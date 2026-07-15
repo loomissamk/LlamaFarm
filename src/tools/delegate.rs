@@ -5,8 +5,8 @@ use crate::coordination::{CoordinationEnvelope, CoordinationPayload, InMemoryMes
 use crate::federation::remote_subagent::FederationRemoteSubagentAdapter;
 use crate::observability::traits::{Observer, ObserverEvent, ObserverMetric};
 use crate::providers::{self, ChatMessage, Provider};
-use crate::security::policy::ToolOperation;
 use crate::security::SecurityPolicy;
+use crate::security::policy::ToolOperation;
 use async_trait::async_trait;
 use serde_json::json;
 use std::collections::HashMap;
@@ -291,7 +291,9 @@ impl Tool for DelegateTool {
                         "base_url": peer.base_url,
                     }),
                 );
-                let result = federation.execute_delegate(agent_name, prompt, context).await?;
+                let result = federation
+                    .execute_delegate(agent_name, prompt, context)
+                    .await?;
                 let summary = if result.success {
                     result.output.as_str()
                 } else {
@@ -300,7 +302,12 @@ impl Tool for DelegateTool {
                         .as_deref()
                         .unwrap_or("delegate remote execution failed")
                 };
-                self.finish_coordination_trace(agent_name, &coordination_trace, result.success, summary);
+                self.finish_coordination_trace(
+                    agent_name,
+                    &coordination_trace,
+                    result.success,
+                    summary,
+                );
                 return Ok(result);
             }
         }
@@ -1196,11 +1203,13 @@ mod tests {
             .await
             .unwrap();
         assert!(!result.success);
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap_or("")
-            .contains("read-only mode"));
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("read-only mode")
+        );
     }
 
     #[tokio::test]
@@ -1215,11 +1224,13 @@ mod tests {
             .await
             .unwrap();
         assert!(!result.success);
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap_or("")
-            .contains("Rate limit exceeded"));
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("Rate limit exceeded")
+        );
     }
 
     #[tokio::test]
@@ -1250,11 +1261,13 @@ mod tests {
             .unwrap();
 
         assert!(!result.success);
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap_or("")
-            .contains("Failed to create provider"));
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("Failed to create provider")
+        );
     }
 
     #[tokio::test]
@@ -1285,11 +1298,13 @@ mod tests {
             .unwrap();
 
         assert!(!result.success);
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap_or("")
-            .contains("Failed to create provider"));
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("Failed to create provider")
+        );
     }
 
     #[test]
@@ -1321,11 +1336,13 @@ mod tests {
             .unwrap();
 
         assert!(!result.success);
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap_or("")
-            .contains("allowed_tools is empty"));
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("allowed_tools is empty")
+        );
     }
 
     #[tokio::test]
@@ -1344,11 +1361,13 @@ mod tests {
             .unwrap();
 
         assert!(!result.success);
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap_or("")
-            .contains("no executable tools"));
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("no executable tools")
+        );
     }
 
     #[tokio::test]
@@ -1390,11 +1409,13 @@ mod tests {
             .unwrap();
 
         assert!(!result.success);
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap_or("")
-            .contains("no executable tools"));
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("no executable tools")
+        );
     }
 
     #[tokio::test]
@@ -1410,11 +1431,13 @@ mod tests {
             .unwrap();
 
         assert!(!result.success);
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap_or("")
-            .contains("maximum tool iterations (2)"));
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("maximum tool iterations (2)")
+        );
     }
 
     #[tokio::test]
@@ -1430,11 +1453,13 @@ mod tests {
             .unwrap();
 
         assert!(!result.success);
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap_or("")
-            .contains("provider boom"));
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("provider boom")
+        );
     }
 
     #[tokio::test]
@@ -1465,11 +1490,13 @@ mod tests {
             .await
             .unwrap();
         assert!(!result.success);
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap_or("")
-            .contains("Failed to create provider"));
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("Failed to create provider")
+        );
 
         let bus = tool
             .coordination_bus_snapshot()

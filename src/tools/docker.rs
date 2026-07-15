@@ -24,9 +24,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 
+use super::traits::{Tool, ToolResult};
 use crate::security::SecurityPolicy;
 use crate::security::{NoopSandbox, Sandbox};
-use super::traits::{Tool, ToolResult};
 
 /// Maximum output bytes per stream.
 const MAX_OUTPUT: usize = 524_288; // 512 KB
@@ -156,7 +156,11 @@ impl Tool for DockerTool {
         let cmd_args = match action {
             "run" => self.build_run_args(&args)?,
             "exec" => self.build_exec_args(&args)?,
-            "ps" => vec!["ps".to_string(), "--format".to_string(), "table {{.ID}}\t{{.Image}}\t{{.Status}}\t{{.Names}}".to_string()],
+            "ps" => vec![
+                "ps".to_string(),
+                "--format".to_string(),
+                "table {{.ID}}\t{{.Image}}\t{{.Status}}\t{{.Names}}".to_string(),
+            ],
             "stop" => {
                 let c = require_str(&args, "container")?;
                 vec!["stop".to_string(), c.to_string()]
@@ -172,10 +176,19 @@ impl Tool for DockerTool {
             "logs" => {
                 let c = require_str(&args, "container")?;
                 let tail = args.get("tail").and_then(|v| v.as_u64()).unwrap_or(100);
-                vec!["logs".to_string(), "--tail".to_string(), tail.to_string(), c.to_string()]
+                vec![
+                    "logs".to_string(),
+                    "--tail".to_string(),
+                    tail.to_string(),
+                    c.to_string(),
+                ]
             }
             "build" => self.build_build_args(&args)?,
-            "images" => vec!["images".to_string(), "--format".to_string(), "table {{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.Size}}".to_string()],
+            "images" => vec![
+                "images".to_string(),
+                "--format".to_string(),
+                "table {{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.Size}}".to_string(),
+            ],
             "pull_image" => {
                 let img = require_str(&args, "image")?;
                 vec!["pull".to_string(), img.to_string()]
@@ -268,10 +281,7 @@ impl DockerTool {
     }
 
     fn build_build_args(&self, args: &serde_json::Value) -> anyhow::Result<Vec<String>> {
-        let context = args
-            .get("context")
-            .and_then(|v| v.as_str())
-            .unwrap_or(".");
+        let context = args.get("context").and_then(|v| v.as_str()).unwrap_or(".");
         let mut cmd = vec!["build".to_string()];
 
         if let Some(tag) = args.get("tag").and_then(|v| v.as_str()) {
@@ -315,7 +325,11 @@ impl DockerTool {
 
     // ── Execution ────────────────────────────────────────────────
 
-    async fn run_docker(&self, sub_args: Vec<String>, timeout_secs: u64) -> anyhow::Result<ToolResult> {
+    async fn run_docker(
+        &self,
+        sub_args: Vec<String>,
+        timeout_secs: u64,
+    ) -> anyhow::Result<ToolResult> {
         let mut full_args = vec!["docker".to_string()];
 
         // For podman compat, rewrite leading "compose" sub-commands
@@ -371,11 +385,7 @@ impl DockerTool {
             read_capped(stderr_handle, MAX_OUTPUT),
         );
 
-        let result = tokio::time::timeout(
-            Duration::from_secs(timeout_secs),
-            child.wait(),
-        )
-        .await;
+        let result = tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait()).await;
 
         let exit_status = match result {
             Ok(Ok(s)) => s,
@@ -496,11 +506,10 @@ mod tests {
     fn exec_args_requires_container_and_command() {
         let t = tool();
         assert!(t.build_exec_args(&json!({})).is_err());
-        assert!(t
-            .build_exec_args(&json!({"container": "myapp"}))
-            .is_err());
-        assert!(t
-            .build_exec_args(&json!({"container": "myapp", "command": "ls -la"}))
-            .is_ok());
+        assert!(t.build_exec_args(&json!({"container": "myapp"})).is_err());
+        assert!(
+            t.build_exec_args(&json!({"container": "myapp", "command": "ls -la"}))
+                .is_ok()
+        );
     }
 }

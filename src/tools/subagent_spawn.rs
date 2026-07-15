@@ -10,12 +10,12 @@ use super::subagent_registry::{
 use super::traits::{Tool, ToolResult};
 use crate::config::DelegateAgentConfig;
 use crate::federation::remote_subagent::{
-    current_chat_context, FederationRemoteSubagentAdapter, FederationTaskRequest,
+    FederationRemoteSubagentAdapter, FederationTaskRequest, current_chat_context,
 };
 use crate::observability::traits::{Observer, ObserverEvent, ObserverMetric};
 use crate::providers::{self, ChatMessage, Provider};
-use crate::security::policy::ToolOperation;
 use crate::security::SecurityPolicy;
+use crate::security::policy::ToolOperation;
 use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::json;
@@ -214,10 +214,14 @@ impl Tool for SubAgentSpawnTool {
                 let task_id = accepted.task_id.clone();
                 let relay_handle = tokio::spawn(async move {
                     match federation.consume_remote_task(&peer_clone, &task_id).await {
-                        Ok(result) if result.success => registry.complete(&session_id_clone, result),
+                        Ok(result) if result.success => {
+                            registry.complete(&session_id_clone, result)
+                        }
                         Ok(result) => registry.fail(
                             &session_id_clone,
-                            result.error.unwrap_or_else(|| "Remote worker failed".to_string()),
+                            result
+                                .error
+                                .unwrap_or_else(|| "Remote worker failed".to_string()),
                         ),
                         Err(error) => registry.fail(&session_id_clone, error.to_string()),
                     }
@@ -227,7 +231,10 @@ impl Tool for SubAgentSpawnTool {
                     &session_id,
                     SubAgentHandle::Remote(RemoteSubAgentHandle {
                         relay_handle,
-                        cancel_url: format!("{}/federation/tasks/{}/cancel", peer.base_url, accepted.task_id),
+                        cancel_url: format!(
+                            "{}/federation/tasks/{}/cancel",
+                            peer.base_url, accepted.task_id
+                        ),
                         client: federation_client,
                     }),
                 );
@@ -731,11 +738,13 @@ mod tests {
             .await
             .unwrap();
         assert!(!result.success);
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap_or("")
-            .contains("read-only mode"));
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("read-only mode")
+        );
     }
 
     #[tokio::test]
@@ -750,11 +759,13 @@ mod tests {
             .await
             .unwrap();
         assert!(!result.success);
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap_or("")
-            .contains("Rate limit exceeded"));
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("Rate limit exceeded")
+        );
     }
 
     #[tokio::test]

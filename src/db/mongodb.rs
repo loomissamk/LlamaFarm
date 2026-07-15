@@ -2,7 +2,7 @@ use super::{ColumnInfo, DbAdapter, DbSchema, QueryResult, TableInfo};
 use anyhow::Result;
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use mongodb::{bson, Client};
+use mongodb::{Client, bson};
 use serde_json::Value;
 
 pub struct MongoAdapter {
@@ -33,9 +33,9 @@ impl MongoAdapter {
 
 fn bson_to_json(bson: &bson::Bson) -> Value {
     match bson {
-        bson::Bson::Double(f) => {
-            serde_json::Number::from_f64(*f).map(Value::Number).unwrap_or(Value::Null)
-        }
+        bson::Bson::Double(f) => serde_json::Number::from_f64(*f)
+            .map(Value::Number)
+            .unwrap_or(Value::Null),
         bson::Bson::String(s) => Value::String(s.clone()),
         bson::Bson::Boolean(b) => Value::Bool(*b),
         bson::Bson::Null => Value::Null,
@@ -43,12 +43,12 @@ fn bson_to_json(bson: &bson::Bson) -> Value {
         bson::Bson::Int64(i) => Value::Number((*i).into()),
         bson::Bson::ObjectId(oid) => Value::String(oid.to_string()),
         bson::Bson::DateTime(dt) => Value::String(dt.to_string()),
-        bson::Bson::Array(arr) => {
-            Value::Array(arr.iter().map(bson_to_json).collect())
-        }
+        bson::Bson::Array(arr) => Value::Array(arr.iter().map(bson_to_json).collect()),
         bson::Bson::Document(doc) => {
-            let map: serde_json::Map<String, Value> =
-                doc.iter().map(|(k, v)| (k.clone(), bson_to_json(v))).collect();
+            let map: serde_json::Map<String, Value> = doc
+                .iter()
+                .map(|(k, v)| (k.clone(), bson_to_json(v)))
+                .collect();
             Value::Object(map)
         }
         other => Value::String(format!("{other}")),
@@ -176,11 +176,19 @@ impl DbAdapter for MongoAdapter {
         // 15-second server-side timeout prevents full-collection scans from hanging.
         find_opts.max_time = Some(std::time::Duration::from_secs(15));
 
-        if let Some(proj) = q.get("projection").and_then(|p| bson::to_bson(p).ok()).and_then(|b| b.as_document().cloned()) {
+        if let Some(proj) = q
+            .get("projection")
+            .and_then(|p| bson::to_bson(p).ok())
+            .and_then(|b| b.as_document().cloned())
+        {
             find_opts.projection = Some(proj);
         }
 
-        if let Some(sort) = q.get("sort").and_then(|s| bson::to_bson(s).ok()).and_then(|b| b.as_document().cloned()) {
+        if let Some(sort) = q
+            .get("sort")
+            .and_then(|s| bson::to_bson(s).ok())
+            .and_then(|b| b.as_document().cloned())
+        {
             find_opts.sort = Some(sort);
         }
 
@@ -208,8 +216,7 @@ impl DbAdapter for MongoAdapter {
             .filter(|k| has_explicit_projection || *k != "text")
             .cloned()
             .collect();
-        let row_data: Vec<Vec<Value>> =
-            docs.iter().map(|doc| doc_to_row(doc, &columns)).collect();
+        let row_data: Vec<Vec<Value>> = docs.iter().map(|doc| doc_to_row(doc, &columns)).collect();
         let row_count = row_data.len();
 
         Ok(QueryResult {

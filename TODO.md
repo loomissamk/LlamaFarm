@@ -1,4 +1,115 @@
-# TODO.md — LlamaFarm Disposable Chaos Agent Build
+# LlamaFarm platform backlog
+
+This is the durable implementation backlog for the two-node, local-first
+LlamaFarm deployment.  Keep this file current when an operator asks for a
+feature; do not rely on an agent's transient chat context as the record of
+requested work.
+
+## Non-negotiable operating constraints
+
+- [x] Run fully locally and free by default.  Keep Ollama as the baseline;
+  only add another serving backend when local evaluations demonstrate a real
+  advantage.
+- [x] Keep models and Qdrant data volumes intact across redeploys.
+- [x] Browser pairing is permanently disabled for this private LAN deployment.
+- [x] Support distinct hardware profiles: 8 GB RTX 4070 Laptop and 16 GB RTX
+  5070 Ti, each with create-time Docker GPU/resource limits.
+- [x] Document deployment, verification, recovery, and acceptance tests in
+  the repository for the next redeploy/operator.
+
+## Delivered in the two-node foundation pass
+
+- [ ] Make run-and-forget `test all tools` jobs durable and evidence-based:
+  retain the autonomous executable plan, checkpoint every result, classify
+  prerequisites/side effects, use disposable fixtures where appropriate, and
+  end with a truthful capability matrix rather than model claims.  A quick
+  non-destructive preflight is complementary, never a substitute for the
+  operator-requested integration run.
+- [x] Show live operational progress in the Agent UI, with an expanded by
+  default, collapsible live-output panel.  Do not expose hidden reasoning;
+  show useful execution state, tools, artifacts, and final answer instead.
+- [x] Fix capability/status questions so they do not trigger a false
+  “deferred action without a tool call” follow-through retry.
+- [ ] Re-run the UI acceptance matrix on both machines after the current
+  agent runs finish: chat, tool registry, file write/read, code execution,
+  web search, local Qdrant RAG, and federation delegation.
+
+## Next-generation agent workflow
+
+- [x] Add first-class **follow-ups**.  A user message can attach to, amend,
+  reprioritize, or cancel an active run without losing its verified steps,
+  artifacts, or context. The initial implementation queues the message against
+  the active session, checkpoints/cancels the current segment, and starts the
+  follow-up immediately. Durable reconnect/restart resume remains part of the
+  run-inspector work below.
+- [x] Add a real **Stop** control to the Agent UI.  `cancel` is scoped to the
+  active chat session, interrupts the cancellation-aware model/tool loop,
+  forwards cancellation to accepted federation tasks, reports a clean terminal
+  state, retains completed tool evidence, and leaves the next message as an
+  intentional follow-up.  See `src/gateway/ws.rs`,
+  `src/federation/remote_subagent.rs`, and `web/src/pages/AgentChat.tsx`.
+- [ ] Persist planner → executor → verifier records.  Each step needs allowed
+  tools, dependencies, expected evidence, artifact paths/hashes, and a
+  deterministic verifier.  “Done” must require evidence, not model prose.
+- [ ] Make every plan item a task-local context capsule: root goal, item
+  acceptance criteria, dependency summaries, relevant artifacts, token/GPU
+  budget, and nothing else.  Archive raw tool output to the evidence ledger,
+  compact it after verifier success, then run an explicit final acceptance pass
+  across the original plan before declaring an unattended run complete.
+- [ ] Add a run inspector: plan/state, current model/node, GPU queue,
+  context budget, tool timeline, artifact links, elapsed time, retry reason,
+  cancel, and resume controls.
+- [ ] Make federation a durable queue with idempotency keys, leases,
+  cancellation propagation, reconnection/resume, and resource-aware routing.
+- [ ] Schedule whole subproblems, not one inference split across unequal GPUs:
+  4070 for responsive chat/light tools and 5070 Ti for deeper coding,
+  long-context, RAG, and batch evaluation.
+- [ ] Add a token-budget allocator and layered memory/project evidence ledger.
+  Reserve context for instructions, tools, current task, retrieved evidence,
+  and response; summarize old tool output into cited artifact references.
+- [x] Enforce per-segment generation/reasoning checkpoints. Preserve deep
+  reasoning and autonomous continuation, but checkpoint after a bounded tool
+  decision rather than allowing one hidden-thinking segment to monopolize the
+  node. Local Ollama inference has no response wall-clock deadline and a
+  length-stopped segment continues automatically until a real terminal state
+  or an operator presses Stop. Adaptive allocation remains future work.
+
+## Local IDE, data, and model capabilities
+
+- [ ] Build workspace RAG: local Ollama embeddings, per-workspace Qdrant
+  collections, incremental git-aware indexing, lexical+vector fusion,
+  optional local reranking, and exact file/line citations.
+- [ ] Add a versioned local eval suite in disposable repos: tool calls,
+  code changes plus tests, recovery, web citations, RAG grounding, memory
+  resume, federation retry, and long-run completion.  Promote models/prompts
+  only when they beat the deployed baseline.
+- [ ] Benchmark an optional llama.cpp server lane for models too large for one
+  GPU.  Prefer it for explicit unequal-VRAM tensor splitting; only benchmark
+  vLLM/SGLang on the 5070 Ti when throughput/prefix-cache measurements justify
+  their additional complexity.
+- [ ] Evaluate local model roles with the test suite: small fast tool router on
+  the 4070, Qwen 9B main agent on the 5070 Ti, and optional larger coding or
+  reasoning models only when they leave practical KV-cache headroom.
+
+## Operator experience and safety boundaries
+
+- [ ] Add an **Operator Integrations** page for Git identity and credentials.
+  Support local SSH-key selection and scoped GitHub/GitLab access tokens stored
+  owner-only in the persistent node volume.  Broker credentials only to Git
+  operations; never expose a raw secret in model context, tool output, traces,
+  memory, or browser storage.  Surface authenticated/repository capability
+  state so the agent can clone, branch, commit, push, and create reviews using
+  the operator's configured scopes.
+- [ ] Preserve unrestricted operator capability while running routine browser,
+  RAG, and coding jobs in isolated disposable worktrees/containers with
+  explicit resource limits.  Expose privileged actions as deliberate operator
+  runs rather than pretending every registered tool is usable everywhere.
+- [ ] Make capability reports distinguish registered, configured, verified,
+  unavailable, and intentionally non-destructive tools so the agent never
+  falsely claims Docker, git, systemd, Pushover, cron, or similar integrations
+  are functional without evidence.
+
+## Baseline implementation backlog (preserved)
 
 ## Mission
 

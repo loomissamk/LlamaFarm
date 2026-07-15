@@ -13,7 +13,10 @@ pub struct DbQueryTool {
 impl DbQueryTool {
     pub fn new(connections: Vec<DbConnectionConfig>) -> Self {
         let desc = Self::build_description(&connections);
-        Self { connections, description: desc }
+        Self {
+            connections,
+            description: desc,
+        }
     }
 
     fn build_description(connections: &[DbConnectionConfig]) -> String {
@@ -141,7 +144,8 @@ impl Tool for DbQueryTool {
         let conn_cfg = match self.find_conn(conn_name) {
             Some(c) => c,
             None => {
-                let available: Vec<&str> = self.connections.iter().map(|c| c.name.as_str()).collect();
+                let available: Vec<&str> =
+                    self.connections.iter().map(|c| c.name.as_str()).collect();
                 return Ok(ToolResult {
                     success: false,
                     output: String::new(),
@@ -159,7 +163,8 @@ impl Tool for DbQueryTool {
         let query_owned: String;
         let query_injected: String;
         let query: &str = {
-            let raw: &str = if let Some(s) = args["query"].as_str().filter(|s| !s.trim().is_empty()) {
+            let raw: &str = if let Some(s) = args["query"].as_str().filter(|s| !s.trim().is_empty())
+            {
                 s
             } else if args["query"].is_object() || args["query"].is_array() {
                 query_owned = args["query"].to_string();
@@ -168,7 +173,8 @@ impl Tool for DbQueryTool {
                 // Models sometimes pass MongoDB args flat (filter, projection, sort, limit)
                 // as top-level params instead of wrapping them in a "query" object.
                 // Detect this and build the query object automatically.
-                const MONGO_FLAT_KEYS: &[&str] = &["filter", "projection", "sort", "limit", "pipeline"];
+                const MONGO_FLAT_KEYS: &[&str] =
+                    &["filter", "projection", "sort", "limit", "pipeline"];
                 let flat_obj = args.as_object().and_then(|m| {
                     let has_mongo_keys = m.keys().any(|k| MONGO_FLAT_KEYS.contains(&k.as_str()));
                     if has_mongo_keys {
@@ -192,7 +198,10 @@ impl Tool for DbQueryTool {
                     // Last resort: pick any non-empty string value from args (covers alternate key names)
                     let fallback = args.as_object().and_then(|m| {
                         m.iter()
-                            .filter(|(k, _)| !["connection", "database", "db", "max_rows", "collection"].contains(&k.as_str()))
+                            .filter(|(k, _)| {
+                                !["connection", "database", "db", "max_rows", "collection"]
+                                    .contains(&k.as_str())
+                            })
                             .find_map(|(_, v)| v.as_str().filter(|s| !s.trim().is_empty()))
                     });
                     match fallback {
@@ -212,7 +221,12 @@ impl Tool for DbQueryTool {
             if matches!(conn_cfg.driver, DbDriver::Mongodb) {
                 if let Some(coll) = args["collection"].as_str().filter(|s| !s.trim().is_empty()) {
                     if let Ok(mut q) = serde_json::from_str::<serde_json::Value>(raw) {
-                        if q.get("collection").map(|v| v.is_null() || v.as_str().map(|s| s.is_empty()).unwrap_or(false)).unwrap_or(true) {
+                        if q.get("collection")
+                            .map(|v| {
+                                v.is_null() || v.as_str().map(|s| s.is_empty()).unwrap_or(false)
+                            })
+                            .unwrap_or(true)
+                        {
                             q["collection"] = json!(coll);
                             query_injected = q.to_string();
                             &query_injected
@@ -243,7 +257,7 @@ impl Tool for DbQueryTool {
                     success: false,
                     output: String::new(),
                     error: Some(format!("Failed to connect to '{}': {e}", conn_cfg.name)),
-                })
+                });
             }
         };
 

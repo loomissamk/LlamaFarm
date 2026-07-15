@@ -33,14 +33,14 @@
     dead_code
 )]
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use dialoguer::{Input, Password};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::PathBuf;
 use tracing::{info, warn};
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt};
 
 fn parse_temperature(s: &str) -> std::result::Result<f64, String> {
     let t: f64 = s.parse().map_err(|e| format!("{e}"))?;
@@ -61,8 +61,8 @@ mod config;
 mod coordination;
 mod cost;
 mod cron;
-mod db;
 mod daemon;
+mod db;
 mod doctor;
 mod federation;
 mod gateway;
@@ -83,10 +83,10 @@ mod providers;
 mod runtime;
 mod runtime_logs;
 mod security;
-mod sop;
 mod service;
 mod skillforge;
 mod skills;
+mod sop;
 mod tools;
 mod tunnel;
 mod update;
@@ -98,7 +98,7 @@ use config::Config;
 // Re-export so binary modules can use crate::<CommandEnum> while keeping a single source of truth.
 pub use llamafarm::{
     ChannelCommands, CronCommands, HardwareCommands, IntegrationCommands, MigrateCommands,
-    PeripheralCommands, ServiceCommands, SopCommands, SkillCommands,
+    PeripheralCommands, ServiceCommands, SkillCommands, SopCommands,
 };
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -244,8 +244,7 @@ Examples:
   llamafarm gateway                  # use config defaults
   llamafarm gateway -p 8080          # listen on port 8080
   llamafarm gateway --host 0.0.0.0   # bind to all interfaces
-  llamafarm gateway -p 0             # random available port
-  llamafarm gateway --new-pairing    # clear tokens and generate fresh pairing code")]
+  llamafarm gateway -p 0             # random available port")]
     Gateway {
         /// Port to listen on (use 0 for random available port); defaults to config gateway.port
         #[arg(short, long)]
@@ -254,10 +253,6 @@ Examples:
         /// Host to bind to; defaults to config gateway.host
         #[arg(long)]
         host: Option<String>,
-
-        /// Clear all paired tokens and generate a fresh pairing code
-        #[arg(long)]
-        new_pairing: bool,
     },
 
     /// Start long-running autonomous runtime (gateway + channels + heartbeat + scheduler)
@@ -1013,19 +1008,7 @@ async fn main() -> Result<()> {
             .map(|_| ())
         }
 
-        Commands::Gateway {
-            port,
-            host,
-            new_pairing,
-        } => {
-            if new_pairing {
-                // Persist token reset from raw config so env-derived overrides are not written to disk.
-                let mut persisted_config = Config::load_or_init().await?;
-                persisted_config.gateway.paired_tokens.clear();
-                persisted_config.save().await?;
-                config.gateway.paired_tokens.clear();
-                info!("🔐 Cleared paired tokens — a fresh pairing code will be generated");
-            }
+        Commands::Gateway { port, host } => {
             let port = port.unwrap_or(config.gateway.port);
             let host = host.unwrap_or_else(|| config.gateway.host.clone());
             if port == 0 {
@@ -2338,7 +2321,7 @@ mod tests {
     }
 
     #[test]
-    fn gateway_help_includes_new_pairing_flag() {
+    fn gateway_help_omits_retired_pairing_flag() {
         let cmd = Cli::command();
         let gateway = cmd
             .get_subcommands()
@@ -2350,30 +2333,13 @@ mod tests {
         });
 
         assert!(
-            has_new_pairing_flag,
-            "gateway help should include --new-pairing"
+            !has_new_pairing_flag,
+            "gateway help must not expose retired pairing"
         );
-    }
-
-    #[test]
-    fn gateway_cli_accepts_new_pairing_flag() {
-        let cli = Cli::try_parse_from(["llamafarm", "gateway", "--new-pairing"])
-            .expect("gateway --new-pairing should parse");
-
-        match cli.command {
-            Commands::Gateway { new_pairing, .. } => assert!(new_pairing),
-            other => panic!("expected gateway command, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn gateway_cli_defaults_new_pairing_to_false() {
-        let cli = Cli::try_parse_from(["llamafarm", "gateway"]).expect("gateway should parse");
-
-        match cli.command {
-            Commands::Gateway { new_pairing, .. } => assert!(!new_pairing),
-            other => panic!("expected gateway command, got {other:?}"),
-        }
+        assert!(
+            Cli::try_parse_from(["llamafarm", "gateway", "--new-pairing"]).is_err(),
+            "gateway must reject the retired pairing flag"
+        );
     }
 
     #[test]
@@ -2435,8 +2401,8 @@ mod tests {
 
     #[test]
     fn trace_cli_parses_list() {
-        let cli = Cli::try_parse_from(["llamafarm", "trace", "list"])
-            .expect("trace list should parse");
+        let cli =
+            Cli::try_parse_from(["llamafarm", "trace", "list"]).expect("trace list should parse");
 
         match cli.command {
             Commands::Trace {
@@ -2455,7 +2421,9 @@ mod tests {
             Commands::Trace {
                 trace_command:
                     TraceCommands::Replay {
-                        run_id, latest: true, ..
+                        run_id,
+                        latest: true,
+                        ..
                     },
             } => {
                 assert!(run_id.is_none());

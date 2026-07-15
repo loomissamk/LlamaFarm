@@ -171,7 +171,9 @@ impl Tool for ImageInfoTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
         let path_str = args

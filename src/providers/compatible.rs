@@ -9,20 +9,20 @@ use crate::providers::traits::{
     ToolCall as ProviderToolCall,
 };
 use async_trait::async_trait;
-use futures_util::{stream, SinkExt, StreamExt};
+use futures_util::{SinkExt, StreamExt, stream};
 use reqwest::{
-    header::{HeaderMap, HeaderValue, USER_AGENT},
     Client,
+    header::{HeaderMap, HeaderValue, USER_AGENT},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio_tungstenite::{
     connect_async,
     tungstenite::{
-        client::IntoClientRequest,
-        http::header::{HeaderName, AUTHORIZATION},
-        http::HeaderValue as WsHeaderValue,
         Message as WsMessage,
+        client::IntoClientRequest,
+        http::HeaderValue as WsHeaderValue,
+        http::header::{AUTHORIZATION, HeaderName},
     },
 };
 
@@ -2041,6 +2041,7 @@ impl Provider for OpenAiCompatibleProvider {
         let usage = chat_response.usage.map(|u| TokenUsage {
             input_tokens: u.prompt_tokens,
             output_tokens: u.completion_tokens,
+            output_truncated: false,
         });
         let choice = chat_response
             .choices
@@ -2199,6 +2200,7 @@ impl Provider for OpenAiCompatibleProvider {
         let usage = native_response.usage.map(|u| TokenUsage {
             input_tokens: u.prompt_tokens,
             output_tokens: u.completion_tokens,
+            output_truncated: false,
         });
         let message = native_response
             .choices
@@ -2444,10 +2446,12 @@ mod tests {
             .chat_with_system(None, "hello", "llama-3.3-70b", 0.7)
             .await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Venice API key not set"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Venice API key not set")
+        );
     }
 
     #[test]
@@ -2662,21 +2666,23 @@ mod tests {
     fn websocket_accumulator_parses_delta_and_completed_event() {
         let mut acc = ResponsesWebSocketAccumulator::default();
 
-        assert!(acc
-            .apply_event(&serde_json::json!({
+        assert!(
+            acc.apply_event(&serde_json::json!({
                 "type":"response.created",
                 "response":{"id":"resp_123"}
             }))
             .unwrap()
-            .is_none());
+            .is_none()
+        );
 
-        assert!(acc
-            .apply_event(&serde_json::json!({
+        assert!(
+            acc.apply_event(&serde_json::json!({
                 "type":"response.output_text.delta",
                 "delta":"Hello"
             }))
             .unwrap()
-            .is_none());
+            .is_none()
+        );
 
         let response = acc
             .apply_event(&serde_json::json!({
@@ -2696,8 +2702,8 @@ mod tests {
     #[test]
     fn websocket_accumulator_falls_back_to_output_items() {
         let mut acc = ResponsesWebSocketAccumulator::default();
-        assert!(acc
-            .apply_event(&serde_json::json!({
+        assert!(
+            acc.apply_event(&serde_json::json!({
                 "type":"response.output_item.done",
                 "item":{
                     "type":"function_call",
@@ -2707,7 +2713,8 @@ mod tests {
                 }
             }))
             .unwrap()
-            .is_none());
+            .is_none()
+        );
 
         let fallback = acc
             .fallback_response()
@@ -2763,9 +2770,10 @@ mod tests {
             .await
             .expect_err("system-only fallback payload should fail");
 
-        assert!(err
-            .to_string()
-            .contains("requires at least one non-system message"));
+        assert!(
+            err.to_string()
+                .contains("requires at least one non-system message")
+        );
     }
 
     #[test]
@@ -3462,10 +3470,12 @@ mod tests {
 
         let result = p.chat_with_tools(&messages, &tools, "model", 0.7).await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("TestProvider API key not set"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("TestProvider API key not set")
+        );
     }
 
     #[test]

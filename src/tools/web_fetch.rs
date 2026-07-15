@@ -1,12 +1,12 @@
 use super::traits::{Tool, ToolResult};
 use super::url_validation::{
-    normalize_allowed_domains, validate_url, DomainPolicy, UrlSchemePolicy,
+    DomainPolicy, UrlSchemePolicy, normalize_allowed_domains, validate_url,
 };
 use crate::security::SecurityPolicy;
 use async_trait::async_trait;
 use serde_json::json;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 /// Web fetch tool: fetches a web page and returns text/markdown content for LLM consumption.
@@ -419,7 +419,9 @@ impl Tool for WebFetchTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
         let url = args

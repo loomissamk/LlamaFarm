@@ -51,6 +51,79 @@ Exact rebundle command:
 docker compose -f docker-compose.bundle.yml -f docker-compose.bundle.nvidia.yml up -d --build
 ```
 
+## Two-node NVIDIA deployment
+
+Use the checked-in profiles for the 8 GB RTX 4070 laptop and the 16 GB RTX
+5070 Ti coordinator. They set a quality-first Qwen 3.5 lane, q8_0 KV cache,
+Flash Attention, a single model stream, bounded agent history, and asymmetric
+RAM ceilings. Full details, model promotion rules, durable working-state
+memory, and the browser acceptance procedure are in
+[`deploy/node-profiles/README.md`](deploy/node-profiles/README.md).
+
+```bash
+./scripts/docker/up-node.sh rtx4070-laptop
+./scripts/docker/up-node.sh rtx5070ti-16gb
+```
+
+The bundle has no browser or gateway pairing flow: the `/pair` endpoint and
+dashboard gate are removed, and stale paired config cannot re-enable them.
+The two hosts still authenticate federation task traffic with the private
+`LLAMAFARM_FEDERATION_TOKEN`; raw Ollama and Qdrant ports remain loopback-only.
+
+Resource ceilings are set during container creation. Do **not** run `docker
+update` on a live GPU bundle: older NVIDIA Container Toolkit hooks can lose
+GPU cgroup access and leave in-container `nvidia-smi` reporting `Unknown
+Error`. Change limits with a normal recreate instead:
+
+```bash
+./scripts/docker/up-node.sh rtx4070-laptop up -d --force-recreate
+```
+
+`up-node.sh` requires NVIDIA Container Toolkit 1.19.1+ and verifies a real
+`nvidia-smi -L` GPU container before deployment. Upgrade/configure the toolkit
+using NVIDIA's official instructions, restart Docker, then recreate the
+bundle; do not delete its named model or Qdrant volumes.
+
+## Unattended agent runs
+
+Long jobs use an executable task plan: each item is marked **completed** only
+after concrete evidence, while **failed**, **blocked**, and **skipped**
+preserve an honest terminal result without trapping the run in pointless
+retries. A “test all tools” request remains a real autonomous integration run;
+it probes applicable tools, records evidence, and ends with a repair matrix
+rather than claiming that registered tools are automatically functional.
+
+The committed [platform backlog](TODO.md) is the durable record of operator
+requests and next-generation work. Update it alongside implementation; do not
+rely on a transient chat context to preserve requested features.
+
+Local Ollama inference has no response wall-clock deadline. The per-node
+`LLAMAFARM_AGENT_MAX_OUTPUT_TOKENS` value is a generation checkpoint, not a job
+timeout: if a model reaches it while thinking or answering, LlamaFarm preserves
+the run/plan state and continues in another segment. Long plans retain their
+task-plan ledger, compact completed item context into
+`memory/WORKING_STATE.md`, and require a final evidence pass before returning.
+The hot prompt intentionally loads `AGENTS.md`, `TOOLS.md`, `USER.md`, and the
+bounded working-state checkpoint rather than redundant persona files.
+
+### Following up while a run is active
+
+The Agent composer remains available during a run. Sending another message
+queues it on the same session, cleanly ends the current inference segment, and
+immediately resumes from the verified transcript and artifacts with the new
+direction. The UI reports the queued transition; completed side effects and
+tool evidence are retained.
+
+### Stopping a live Agent run
+
+While a web Agent response is active, the composer shows **Stop**. It sends a
+session-scoped cancellation frame without closing the chat: the model stream
+and cancellation-aware tool loop stop, completed tool results stay in the
+transcript, and accepted federation tasks receive a remote cancel request.
+The UI then records a clear stopped terminal state and permits an intentional
+follow-up. Stop cannot roll back a side effect that had already completed
+before the request arrived.
+
 ## Agentic Online Research Example
 
 ```bash

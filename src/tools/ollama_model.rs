@@ -5,7 +5,7 @@
 //! `http://localhost:11434`).
 
 use super::traits::{Tool, ToolResult};
-use crate::security::{policy::ToolOperation, SecurityPolicy};
+use crate::security::{SecurityPolicy, policy::ToolOperation};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::Deserialize;

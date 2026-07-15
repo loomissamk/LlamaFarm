@@ -1,5 +1,5 @@
 use crate::config::Config;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -183,8 +183,11 @@ fn stop(config: &Config, init_system: InitSystem) -> Result<()> {
 fn stop_linux(init_system: InitSystem) -> Result<()> {
     match init_system {
         InitSystem::Systemd => {
-            let _ =
-                run_checked(Command::new("systemctl").args(["--user", "stop", "llamafarm.service"]));
+            let _ = run_checked(Command::new("systemctl").args([
+                "--user",
+                "stop",
+                "llamafarm.service",
+            ]));
         }
         InitSystem::Openrc => {
             let _ = run_checked(Command::new("rc-service").args(["llamafarm", "stop"]));
@@ -222,7 +225,11 @@ fn restart_linux(init_system: InitSystem) -> Result<()> {
     match init_system {
         InitSystem::Systemd => {
             run_checked(Command::new("systemctl").args(["--user", "daemon-reload"]))?;
-            run_checked(Command::new("systemctl").args(["--user", "restart", "llamafarm.service"]))?;
+            run_checked(Command::new("systemctl").args([
+                "--user",
+                "restart",
+                "llamafarm.service",
+            ]))?;
         }
         InitSystem::Openrc => {
             run_checked(Command::new("rc-service").args(["llamafarm", "restart"]))?;
@@ -489,7 +496,9 @@ fn current_uid() -> Option<u32> {
 /// Returns Ok if user doesn't exist (OpenRC will handle creation or fail gracefully).
 /// Returns error if user exists but has unexpected properties.
 fn check_llamafarm_user() -> Result<()> {
-    let output = Command::new("getent").args(["passwd", "llamafarm"]).output();
+    let output = Command::new("getent")
+        .args(["passwd", "llamafarm"])
+        .output();
     let is_alpine = Path::new("/etc/alpine-release").exists();
 
     let (del_cmd, add_cmd) = if is_alpine {
@@ -515,7 +524,9 @@ fn check_llamafarm_user() -> Result<()> {
                     bail!(
                         "User 'llamafarm' exists but has unexpected UID {} (expected system UID < 1000).\n\
                          Recreate with: sudo {} && sudo {}",
-                        uid, del_cmd, add_cmd
+                        uid,
+                        del_cmd,
+                        add_cmd
                     );
                 }
 
@@ -545,7 +556,9 @@ fn check_llamafarm_user() -> Result<()> {
 }
 
 fn ensure_llamafarm_user() -> Result<()> {
-    let output = Command::new("getent").args(["passwd", "llamafarm"]).output();
+    let output = Command::new("getent")
+        .args(["passwd", "llamafarm"])
+        .output();
     if let Ok(output) = output {
         if output.status.success() {
             return check_llamafarm_user();

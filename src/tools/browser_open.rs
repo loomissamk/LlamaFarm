@@ -1,6 +1,6 @@
 use super::traits::{Tool, ToolResult};
 use super::url_validation::{
-    normalize_allowed_domains, validate_url, DomainPolicy, UrlSchemePolicy,
+    DomainPolicy, UrlSchemePolicy, normalize_allowed_domains, validate_url,
 };
 use crate::security::SecurityPolicy;
 use async_trait::async_trait;
@@ -95,7 +95,7 @@ impl Tool for BrowserOpenTool {
                     success: false,
                     output: String::new(),
                     error: Some(e.to_string()),
-                })
+                });
             }
         };
 

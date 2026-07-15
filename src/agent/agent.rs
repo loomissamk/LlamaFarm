@@ -898,10 +898,12 @@ mod tests {
 
         let response = agent.turn("hi").await.unwrap();
         assert_eq!(response, "done");
-        assert!(agent
-            .history()
-            .iter()
-            .any(|msg| matches!(msg, ConversationMessage::ToolResults(_))));
+        assert!(
+            agent
+                .history()
+                .iter()
+                .any(|msg| matches!(msg, ConversationMessage::ToolResults(_)))
+        );
     }
 
     #[tokio::test]

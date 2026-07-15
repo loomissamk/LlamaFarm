@@ -10,8 +10,8 @@ use crate::config::{FederationConfig, FederationDiscoveryMode, FederationRole};
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -133,10 +133,16 @@ impl FederationService {
         specialization: String,
         priority: i32,
     ) -> Option<peer_registry::FederationPeerSummary> {
-        self.registry.set_peer_hints(peer_id, specialization, priority)
+        self.registry
+            .set_peer_hints(peer_id, specialization, priority)
     }
 
-    pub fn update_local_runtime(&self, gateway_port: u16, default_model: &str, tool_names: &[String]) {
+    pub fn update_local_runtime(
+        &self,
+        gateway_port: u16,
+        default_model: &str,
+        tool_names: &[String],
+    ) {
         let mut local = self.local_state.write();
         local.api_port = self.config.api_port.unwrap_or(gateway_port);
         local.default_model = default_model.to_string();
@@ -200,7 +206,10 @@ impl FederationService {
             ("node_id".to_string(), local.node_id.clone()),
             ("display_name".to_string(), local.display_name.clone()),
             ("api_port".to_string(), local.api_port.to_string()),
-            ("app_version".to_string(), env!("CARGO_PKG_VERSION").to_string()),
+            (
+                "app_version".to_string(),
+                env!("CARGO_PKG_VERSION").to_string(),
+            ),
             (
                 "role".to_string(),
                 format!("{:?}", local.role).to_ascii_lowercase(),
@@ -260,7 +269,12 @@ pub fn delegate_agent_name(display_name: &str, peer_id: &str) -> String {
 }
 
 fn build_node_id(node_name: &str, api_port: u16, machine_uuid: &str) -> String {
-    format!("{}-{}-{}", sanitize_token(node_name), api_port, &machine_uuid[..8])
+    format!(
+        "{}-{}-{}",
+        sanitize_token(node_name),
+        api_port,
+        &machine_uuid[..8]
+    )
 }
 
 fn load_or_create_machine_uuid(config_dir: Option<&std::path::Path>) -> String {
@@ -404,7 +418,12 @@ fn discovered_peer_from_service(
     let allow_remote_subagents = service
         .txt_properties
         .get_property_val_str("allow_remote_subagents")
-        .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
         .unwrap_or(true);
     let model_summary = service
         .txt_properties
@@ -486,7 +505,8 @@ pub fn normalize_peer_endpoint(raw: &str) -> Option<(String, String, u16)> {
 }
 
 pub fn tools_to_capabilities(tools: &[crate::tools::ToolSpec]) -> Vec<FederationToolCapability> {
-    tools.iter()
+    tools
+        .iter()
         .map(|tool| FederationToolCapability {
             name: tool.name.clone(),
             description: tool.description.clone(),

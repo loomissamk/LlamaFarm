@@ -55,3 +55,9 @@ credentials.json
 
 # Nix
 result
+
+# Local bench outputs and large local model files
+bench_results*
+bench_notes.txt
+arxiv_ingest.log
+npu-server/models/

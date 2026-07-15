@@ -1,4 +1,4 @@
-use crate::config::{FederationRole, FederationDiscoveryMode};
+use crate::config::{FederationDiscoveryMode, FederationRole};
 use chrono::{DateTime, Utc};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -174,41 +174,41 @@ impl FederationPeerRegistry {
 
     pub fn seed_manual_peer(&self, peer_id: String, base_url: String, host: String, api_port: u16) {
         let mut peers = self.peers.write();
-        peers.entry(peer_id.clone()).or_insert(FederationPeerRecord {
-            peer_id,
-            node_id: String::new(),
-            display_name: host.clone(),
-            delegate_agent: super::delegate_agent_name(&host, &base_url),
-            mdns_fullname: None,
-            source: FederationPeerSource::Manual,
-            base_url,
-            host,
-            api_port,
-            app_version: String::new(),
-            role_support: FederationRole::Both,
-            assigned_role: self.default_role,
-            allow_remote_subagents: true,
-            online: false,
-            health: "offline".to_string(),
-            model_summary: String::new(),
-            tool_summary: String::new(),
-            installed_models: Vec::new(),
-            tools: Vec::new(),
-            last_seen: None,
-            specialization: String::new(),
-            priority: 0,
-        });
+        peers
+            .entry(peer_id.clone())
+            .or_insert(FederationPeerRecord {
+                peer_id,
+                node_id: String::new(),
+                display_name: host.clone(),
+                delegate_agent: super::delegate_agent_name(&host, &base_url),
+                mdns_fullname: None,
+                source: FederationPeerSource::Manual,
+                base_url,
+                host,
+                api_port,
+                app_version: String::new(),
+                role_support: FederationRole::Both,
+                assigned_role: self.default_role,
+                allow_remote_subagents: true,
+                online: false,
+                health: "offline".to_string(),
+                model_summary: String::new(),
+                tool_summary: String::new(),
+                installed_models: Vec::new(),
+                tools: Vec::new(),
+                last_seen: None,
+                specialization: String::new(),
+                priority: 0,
+            });
     }
 
     pub fn upsert_discovered_peer(&self, discovered: FederationDiscoveredPeer) {
         let mut peers = self.peers.write();
-        let record = peers
-            .values_mut()
-            .find(|peer| {
-                (!discovered.node_id.is_empty() && peer.node_id == discovered.node_id)
-                    || peer.base_url == discovered.base_url
-                    || peer.peer_id == discovered.peer_id
-            });
+        let record = peers.values_mut().find(|peer| {
+            (!discovered.node_id.is_empty() && peer.node_id == discovered.node_id)
+                || peer.base_url == discovered.base_url
+                || peer.peer_id == discovered.peer_id
+        });
 
         let now = Utc::now();
         if let Some(record) = record {
@@ -372,7 +372,11 @@ impl FederationPeerRegistry {
             .collect()
     }
 
-    pub fn set_assigned_role(&self, peer_id: &str, role: FederationRole) -> Option<FederationPeerSummary> {
+    pub fn set_assigned_role(
+        &self,
+        peer_id: &str,
+        role: FederationRole,
+    ) -> Option<FederationPeerSummary> {
         let mut peers = self.peers.write();
         let record = peers.get_mut(peer_id)?;
         record.assigned_role = role;
@@ -440,7 +444,11 @@ impl FederationPeerRegistry {
                 priority: peer.priority,
             })
             .collect();
-        infos.sort_by(|a, b| b.priority.cmp(&a.priority).then_with(|| a.agent_name.cmp(&b.agent_name)));
+        infos.sort_by(|a, b| {
+            b.priority
+                .cmp(&a.priority)
+                .then_with(|| a.agent_name.cmp(&b.agent_name))
+        });
         infos
     }
 
@@ -512,7 +520,10 @@ fn summarize_tool_names(tools: &[FederationToolCapability]) -> String {
         return String::new();
     }
 
-    let mut names = tools.iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>();
+    let mut names = tools
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect::<Vec<_>>();
     names.sort_unstable();
     names.dedup();
 

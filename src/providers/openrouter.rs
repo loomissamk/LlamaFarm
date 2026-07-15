@@ -486,6 +486,7 @@ impl Provider for OpenRouterProvider {
         let usage = native_response.usage.map(|u| TokenUsage {
             input_tokens: u.prompt_tokens,
             output_tokens: u.completion_tokens,
+            output_truncated: false,
         });
         let message = native_response
             .choices
@@ -540,11 +541,7 @@ impl Provider for OpenRouterProvider {
                     })
                 })
                 .collect();
-            if specs.is_empty() {
-                None
-            } else {
-                Some(specs)
-            }
+            if specs.is_empty() { None } else { Some(specs) }
         };
 
         // Convert ChatMessage to NativeMessage, preserving structured assistant/tool entries
@@ -581,6 +578,7 @@ impl Provider for OpenRouterProvider {
         let usage = native_response.usage.map(|u| TokenUsage {
             input_tokens: u.prompt_tokens,
             output_tokens: u.completion_tokens,
+            output_truncated: false,
         });
         let message = native_response
             .choices

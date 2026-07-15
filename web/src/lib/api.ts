@@ -25,7 +25,7 @@ import type {
   DbQueryResult,
   DbTestResult,
 } from '../types/api';
-import { clearToken, getToken, setToken } from './auth';
+import { clearToken, getToken } from './auth';
 
 // ---------------------------------------------------------------------------
 // Base fetch wrapper
@@ -95,38 +95,6 @@ function unwrapField<T>(value: T | Record<string, T>, key: string): T {
     }
   }
   return value as T;
-}
-
-// ---------------------------------------------------------------------------
-// Pairing
-// ---------------------------------------------------------------------------
-
-export async function pair(code: string): Promise<{ token: string }> {
-  const response = await fetch('/pair', {
-    method: 'POST',
-    headers: { 'X-Pairing-Code': code },
-  });
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    throw new Error(`Pairing failed (${response.status}): ${text || response.statusText}`);
-  }
-
-  const data = (await response.json()) as { token: string };
-  setToken(data.token);
-  return data;
-}
-
-// ---------------------------------------------------------------------------
-// Public health (no auth required)
-// ---------------------------------------------------------------------------
-
-export async function getPublicHealth(): Promise<{ require_pairing: boolean; paired: boolean }> {
-  const response = await fetch('/health');
-  if (!response.ok) {
-    throw new Error(`Health check failed (${response.status})`);
-  }
-  return response.json() as Promise<{ require_pairing: boolean; paired: boolean }>;
 }
 
 // ---------------------------------------------------------------------------

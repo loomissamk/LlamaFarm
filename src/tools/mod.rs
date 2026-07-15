@@ -18,8 +18,6 @@
 pub mod agents_ipc;
 pub mod apply_patch;
 pub mod arxiv_search;
-pub mod db_query;
-pub mod db_schema;
 pub mod browser;
 pub mod browser_open;
 pub mod cli_discovery;
@@ -31,12 +29,12 @@ pub mod cron_remove;
 pub mod cron_run;
 pub mod cron_runs;
 pub mod cron_update;
+pub mod db_query;
+pub mod db_schema;
 pub mod delegate;
 pub mod delegate_coordination_status;
 pub mod docker;
 pub mod file_edit;
-pub mod package_manager;
-pub mod service_control;
 pub mod file_read;
 pub mod file_write;
 pub mod git_operations;
@@ -54,6 +52,7 @@ pub mod memory_recall;
 pub mod memory_store;
 pub mod model_routing_config;
 pub mod ollama_model;
+pub mod package_manager;
 pub mod pdf_read;
 pub mod process;
 pub mod proxy_config;
@@ -61,16 +60,17 @@ pub mod pushover;
 pub mod schedule;
 pub mod schema;
 pub mod screenshot;
+pub mod service_control;
 pub mod shell;
-pub mod subagent_list;
-pub mod subagent_manage;
-pub mod subagent_registry;
-pub mod subagent_spawn;
 pub mod sop_advance;
 pub mod sop_approve;
 pub mod sop_execute;
 pub mod sop_list;
 pub mod sop_status;
+pub mod subagent_list;
+pub mod subagent_manage;
+pub mod subagent_registry;
+pub mod subagent_spawn;
 pub mod task_plan;
 pub mod traits;
 pub mod url_validation;
@@ -80,8 +80,6 @@ pub mod web_search_tool;
 
 pub use apply_patch::ApplyPatchTool;
 pub use arxiv_search::ArxivSearchTool;
-pub use db_query::DbQueryTool;
-pub use db_schema::DbSchemaTool;
 pub use browser::{BrowserTool, ComputerUseConfig};
 pub use browser_open::BrowserOpenTool;
 pub use composio::ComposioTool;
@@ -92,6 +90,8 @@ pub use cron_remove::CronRemoveTool;
 pub use cron_run::CronRunTool;
 pub use cron_runs::CronRunsTool;
 pub use cron_update::CronUpdateTool;
+pub use db_query::DbQueryTool;
+pub use db_schema::DbSchemaTool;
 pub use delegate::DelegateTool;
 pub use delegate_coordination_status::DelegateCoordinationStatusTool;
 pub use file_edit::FileEditTool;
@@ -112,26 +112,26 @@ pub use memory_recall::MemoryRecallTool;
 pub use memory_store::MemoryStoreTool;
 pub use model_routing_config::ModelRoutingConfigTool;
 pub use ollama_model::OllamaModelTool;
-pub use pdf_read::PdfReadTool;
 pub use package_manager::PackageManagerTool;
+pub use pdf_read::PdfReadTool;
 pub use process::ProcessTool;
 pub use proxy_config::ProxyConfigTool;
-pub use service_control::ServiceControlTool;
 pub use pushover::PushoverTool;
 pub use schedule::ScheduleTool;
 #[allow(unused_imports)]
 pub use schema::{CleaningStrategy, SchemaCleanr};
 pub use screenshot::ScreenshotTool;
+pub use service_control::ServiceControlTool;
 pub use shell::ShellTool;
-pub use subagent_list::SubAgentListTool;
-pub use subagent_manage::SubAgentManageTool;
-pub use subagent_registry::SubAgentRegistry;
-pub use subagent_spawn::SubAgentSpawnTool;
 pub use sop_advance::SopAdvanceTool;
 pub use sop_approve::SopApproveTool;
 pub use sop_execute::SopExecuteTool;
 pub use sop_list::SopListTool;
 pub use sop_status::SopStatusTool;
+pub use subagent_list::SubAgentListTool;
+pub use subagent_manage::SubAgentManageTool;
+pub use subagent_registry::SubAgentRegistry;
+pub use subagent_spawn::SubAgentSpawnTool;
 pub use task_plan::TaskPlanTool;
 pub use traits::Tool;
 #[allow(unused_imports)]
@@ -377,12 +377,14 @@ pub fn all_tools_with_runtime_and_federation(
             Some(syscall_detector.clone()),
             command_sandbox.clone(),
         )));
-        tool_arcs.push(Arc::new(ProcessTool::new_with_syscall_detector_and_sandbox(
-            security.clone(),
-            runtime.clone(),
-            Some(syscall_detector),
-            command_sandbox.clone(),
-        )));
+        tool_arcs.push(Arc::new(
+            ProcessTool::new_with_syscall_detector_and_sandbox(
+                security.clone(),
+                runtime.clone(),
+                Some(syscall_detector),
+                command_sandbox.clone(),
+            ),
+        ));
         tool_arcs.push(Arc::new(GitOperationsTool::new(
             security.clone(),
             workspace_dir.to_path_buf(),
@@ -550,7 +552,7 @@ pub fn all_tools_with_runtime_and_federation(
             custom_provider_api_mode: root_config
                 .provider_api
                 .map(|mode| mode.as_compatible_mode()),
-            max_tokens_override: None,
+            max_tokens_override: root_config.agent.max_output_tokens_per_turn,
             model_support_vision: root_config.model_support_vision,
             ..Default::default()
         };

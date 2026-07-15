@@ -73,7 +73,9 @@ impl Tool for HardwareMemoryMapTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
         let board = args
@@ -193,10 +195,11 @@ mod tests {
     fn static_map_nucleo() {
         let tool = HardwareMemoryMapTool::new(vec!["nucleo-f401re".into()]);
         assert!(tool.static_map_for_board("nucleo-f401re").is_some());
-        assert!(tool
-            .static_map_for_board("nucleo-f401re")
-            .unwrap()
-            .contains("Flash"));
+        assert!(
+            tool.static_map_for_board("nucleo-f401re")
+                .unwrap()
+                .contains("Flash")
+        );
     }
 
     #[test]

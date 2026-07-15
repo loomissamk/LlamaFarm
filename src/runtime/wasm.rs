@@ -13,7 +13,7 @@
 
 use super::traits::RuntimeAdapter;
 use crate::config::{WasmCapabilityEscalationMode, WasmModuleHashPolicy, WasmRuntimeConfig};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
@@ -784,10 +784,12 @@ mod tests {
         let rt = WasmRuntime::new(default_config());
         let result = rt.build_shell_command("echo hello", Path::new("/tmp"));
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("does not support shell"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("does not support shell")
+        );
     }
 
     #[test]
@@ -1058,9 +1060,10 @@ mod tests {
             ..Default::default()
         };
         let err = rt.validate_capabilities(&caps).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("not in runtime.wasm.allowed_hosts"));
+        assert!(
+            err.to_string()
+                .contains("not in runtime.wasm.allowed_hosts")
+        );
     }
 
     #[test]

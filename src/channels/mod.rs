@@ -70,14 +70,14 @@ pub use whatsapp::WhatsAppChannel;
 pub use whatsapp_web::WhatsAppWebChannel;
 
 use crate::agent::loop_::{
-    build_shell_policy_instructions, build_tool_instructions_from_specs,
-    run_tool_call_loop_with_non_cli_approval_context, scrub_credentials, NonCliApprovalContext,
+    NonCliApprovalContext, build_shell_policy_instructions, build_tool_instructions_from_specs,
+    run_tool_call_loop_with_non_cli_approval_context, scrub_credentials,
 };
 use crate::approval::{ApprovalManager, ApprovalResponse, PendingApprovalError};
 use crate::config::{Config, NonCliNaturalLanguageApprovalMode};
 use crate::identity;
 use crate::memory::{self, Memory};
-use crate::observability::{self, runtime_trace, Observer};
+use crate::observability::{self, Observer, runtime_trace};
 use crate::providers::{self, ChatMessage, Provider};
 use crate::runtime;
 use crate::security::SecurityPolicy;
@@ -2408,7 +2408,9 @@ async fn handle_runtime_command_if_needed(
                 ctx.approval_manager.grant_non_cli_session(&tool_name);
                 ctx.approval_manager
                     .apply_persistent_runtime_grant(&tool_name);
-                let persistence_message = match persist_non_cli_approval_to_config(ctx, &tool_name).await {
+                let persistence_message = match persist_non_cli_approval_to_config(ctx, &tool_name)
+                    .await
+                {
                     Ok(Some(path)) => format!(
                         "Approved supervised execution for `{tool_name}`.\nPersisted to `{}` so future channel sessions (including after restart) remain approved.",
                         path.display()
@@ -2426,7 +2428,9 @@ async fn handle_runtime_command_if_needed(
                         "{persistence_message}\nRuntime pending requests cleared: {cleared_pending}.\nNote: `{tool_name}` is currently listed in `autonomy.non_cli_excluded_tools` for this runtime. Remove it from config; the channel runtime auto-reloads this list from disk."
                     )
                 } else {
-                    format!("{persistence_message}\nRuntime pending requests cleared: {cleared_pending}.")
+                    format!(
+                        "{persistence_message}\nRuntime pending requests cleared: {cleared_pending}."
+                    )
                 }
             }
         }
@@ -2445,8 +2449,16 @@ async fn handle_runtime_command_if_needed(
                 match remove_non_cli_approval_from_config(ctx, &tool_name).await {
                     Ok(Some((path, removed_persistent))) => format!(
                         "Persistent approval removed for `{tool_name}`: {}.\nRuntime effective auto_approve removed: {}.\nRuntime pending requests cleared: {}.\nConfig path: `{}`.\nRuntime session grant removed: {}.",
-                        if removed_persistent { "yes" } else { "no (not present)" },
-                        if removed_runtime_persistent { "yes" } else { "no (not present)" },
+                        if removed_persistent {
+                            "yes"
+                        } else {
+                            "no (not present)"
+                        },
+                        if removed_runtime_persistent {
+                            "yes"
+                        } else {
+                            "no (not present)"
+                        },
                         removed_pending,
                         path.display(),
                         if removed_session { "yes" } else { "no" }
@@ -3105,11 +3117,7 @@ semantic_match={:.2} (threshold {:.2}), category={}.",
     let timestamped_content = format!("[{now}] {}", msg.content);
 
     // Preserve user turn before the LLM call so interrupted requests keep context.
-    append_sender_turn(
-        ctx.as_ref(),
-        &history_key,
-        ChatMessage::user(&msg.content),
-    );
+    append_sender_turn(ctx.as_ref(), &history_key, ChatMessage::user(&msg.content));
 
     // Build history from per-sender conversation cache.
     let prior_turns_raw = ctx
@@ -3871,7 +3879,12 @@ fn load_openclaw_bootstrap_files(
         "The following workspace files define your identity, behavior, and context. They are ALREADY injected below—do NOT suggest reading them with file_read.\n\n",
     );
 
-    let bootstrap_files = ["AGENTS.md", "SOUL.md", "TOOLS.md", "IDENTITY.md", "USER.md"];
+    // Keep the hot system context operational and compact. AGENTS.md contains
+    // repository rules, TOOLS.md contains local tool notes, and USER.md may
+    // contain operator preferences. Persona duplicates (SOUL.md/IDENTITY.md)
+    // are intentionally not injected; configured AIEOS identity remains the
+    // single identity source when enabled.
+    let bootstrap_files = ["AGENTS.md", "TOOLS.md", "USER.md"];
 
     for filename in &bootstrap_files {
         inject_workspace_file(prompt, workspace_dir, filename, max_chars_per_file);
@@ -3894,7 +3907,7 @@ fn load_openclaw_bootstrap_files(
 /// 2. Safety — guardrail reminder
 /// 3. Skills — full skill instructions and tool metadata
 /// 4. Workspace — working directory
-/// 5. Bootstrap files — AGENTS, SOUL, TOOLS, IDENTITY, USER, BOOTSTRAP, MEMORY
+/// 5. Bootstrap files — AGENTS, TOOLS, USER, optional BOOTSTRAP, MEMORY
 /// 6. Date & Time — timezone for cache stability
 /// 7. Runtime — host, OS, model
 ///
@@ -3902,7 +3915,9 @@ fn load_openclaw_bootstrap_files(
 /// is replaced with the AIEOS identity data loaded from file or inline JSON.
 ///
 /// Daily memory files (`memory/*.md`) are NOT injected — they are accessed
-/// on-demand via `memory_recall` / `memory_search` tools.
+/// on-demand via `memory_recall` / `memory_search` tools. The sole exception
+/// is the bounded `memory/WORKING_STATE.md` checkpoint written by history
+/// compaction so a new session can resume durable task context.
 pub fn build_system_prompt(
     workspace_dir: &std::path::Path,
     model_name: &str,
@@ -4053,6 +4068,14 @@ pub fn build_system_prompt_with_mode(
         // No identity config - use OpenClaw format
         let max_chars = bootstrap_max_chars.unwrap_or(BOOTSTRAP_MAX_CHARS);
         load_openclaw_bootstrap_files(&mut prompt, workspace_dir, max_chars);
+    }
+
+    // This is a compact, rolling continuation checkpoint rather than a daily
+    // journal. It is intentionally rehydrated in new sessions, unlike other
+    // files under memory/, so compaction can free the live conversation window.
+    let working_state = workspace_dir.join("memory/WORKING_STATE.md");
+    if working_state.is_file() {
+        inject_workspace_file(&mut prompt, workspace_dir, "memory/WORKING_STATE.md", 2_000);
     }
 
     // ── 6. Date & Time ──────────────────────────────────────────
@@ -4515,7 +4538,9 @@ fn collect_configured_channels(
                         )),
                     });
                 } else {
-                    tracing::warn!("WhatsApp Cloud API configured but missing required fields (phone_number_id, access_token, verify_token)");
+                    tracing::warn!(
+                        "WhatsApp Cloud API configured but missing required fields (phone_number_id, access_token, verify_token)"
+                    );
                 }
             }
             "web" => {
@@ -4536,11 +4561,15 @@ fn collect_configured_channels(
                 }
                 #[cfg(not(feature = "whatsapp-web"))]
                 {
-                    tracing::warn!("WhatsApp Web backend requires 'whatsapp-web' feature. Enable with: cargo build --features whatsapp-web");
+                    tracing::warn!(
+                        "WhatsApp Web backend requires 'whatsapp-web' feature. Enable with: cargo build --features whatsapp-web"
+                    );
                 }
             }
             _ => {
-                tracing::warn!("WhatsApp config invalid: neither phone_number_id (Cloud API) nor session_path (Web) is set");
+                tracing::warn!(
+                    "WhatsApp config invalid: neither phone_number_id (Cloud API) nor session_path (Web) is set"
+                );
             }
         }
     }
@@ -4782,7 +4811,7 @@ pub async fn start_channels(config: Config) -> Result<()> {
         reasoning_enabled: config.runtime.reasoning_enabled,
         reasoning_level: config.effective_provider_reasoning_level(),
         custom_provider_api_mode: config.provider_api.map(|mode| mode.as_compatible_mode()),
-        max_tokens_override: None,
+        max_tokens_override: config.agent.max_output_tokens_per_turn,
         model_support_vision: config.model_support_vision,
         ..Default::default()
     };
@@ -5131,15 +5160,19 @@ mod tests {
     use crate::providers::{ChatMessage, Provider};
     use crate::tools::{Tool, ToolResult};
     use std::collections::{HashMap, HashSet};
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tempfile::TempDir;
 
     fn make_workspace() -> TempDir {
         let tmp = TempDir::new().unwrap();
         // Create minimal workspace files
         std::fs::write(tmp.path().join("SOUL.md"), "# Soul\nBe helpful.").unwrap();
-        std::fs::write(tmp.path().join("IDENTITY.md"), "# Identity\nName: LlamaFarm").unwrap();
+        std::fs::write(
+            tmp.path().join("IDENTITY.md"),
+            "# Identity\nName: LlamaFarm",
+        )
+        .unwrap();
         std::fs::write(tmp.path().join("USER.md"), "# User\nName: Test User").unwrap();
         std::fs::write(
             tmp.path().join("AGENTS.md"),
@@ -6821,12 +6854,16 @@ BTC is currently around $65,000 based on latest tool output."#
         assert!(sent[0].contains("Approved supervised execution for `mock_price`"));
         assert!(sent[0].contains("including after restart"));
 
-        assert!(runtime_ctx
-            .approval_manager
-            .is_non_cli_session_granted("mock_price"));
-        assert!(runtime_ctx
-            .approval_manager
-            .is_non_cli_session_granted("mock_price"));
+        assert!(
+            runtime_ctx
+                .approval_manager
+                .is_non_cli_session_granted("mock_price")
+        );
+        assert!(
+            runtime_ctx
+                .approval_manager
+                .is_non_cli_session_granted("mock_price")
+        );
         assert!(!runtime_ctx.approval_manager.needs_approval("mock_price"));
         assert_eq!(provider_impl.call_count.load(Ordering::SeqCst), 0);
 
@@ -6949,9 +6986,11 @@ BTC is currently around $65,000 based on latest tool output."#
         assert_eq!(sent.len(), 1);
         assert!(sent[0].contains("Approval-management command denied"));
         assert!(sent[0].contains("Allowed approvers: alice"));
-        assert!(!runtime_ctx
-            .approval_manager
-            .is_non_cli_session_granted("mock_price"));
+        assert!(
+            !runtime_ctx
+                .approval_manager
+                .is_non_cli_session_granted("mock_price")
+        );
         assert!(runtime_ctx.approval_manager.needs_approval("mock_price"));
         assert_eq!(provider_impl.call_count.load(Ordering::SeqCst), 0);
 
@@ -7053,9 +7092,11 @@ BTC is currently around $65,000 based on latest tool output."#
         assert_eq!(sent.len(), 1);
         assert!(sent[0].contains("Persistent approval removed for `mock_price`: yes."));
         assert!(sent[0].contains("Runtime session grant removed: yes"));
-        assert!(!runtime_ctx
-            .approval_manager
-            .is_non_cli_session_granted("mock_price"));
+        assert!(
+            !runtime_ctx
+                .approval_manager
+                .is_non_cli_session_granted("mock_price")
+        );
         assert!(runtime_ctx.approval_manager.needs_approval("mock_price"));
         assert_eq!(provider_impl.call_count.load(Ordering::SeqCst), 0);
 
@@ -7286,25 +7327,31 @@ BTC is currently around $65,000 based on latest tool output."#
         let sent = channel_impl.sent_messages.lock().await;
         assert_eq!(sent.len(), 2);
         assert!(sent[1].contains("Approved supervised execution for `mock_price` from request"));
-        assert!(runtime_ctx
-            .approval_manager
-            .is_non_cli_session_granted("mock_price"));
+        assert!(
+            runtime_ctx
+                .approval_manager
+                .is_non_cli_session_granted("mock_price")
+        );
         assert!(!runtime_ctx.approval_manager.needs_approval("mock_price"));
-        assert!(runtime_ctx
-            .approval_manager
-            .list_non_cli_pending_requests(Some("alice"), Some("telegram"), Some("chat-1"))
-            .is_empty());
+        assert!(
+            runtime_ctx
+                .approval_manager
+                .list_non_cli_pending_requests(Some("alice"), Some("telegram"), Some("chat-1"))
+                .is_empty()
+        );
         assert_eq!(provider_impl.call_count.load(Ordering::SeqCst), 0);
 
         let saved_raw = tokio::fs::read_to_string(&config_path)
             .await
             .expect("read persisted config");
         let saved: Config = toml::from_str(&saved_raw).expect("parse persisted config");
-        assert!(saved
-            .autonomy
-            .auto_approve
-            .iter()
-            .any(|tool| tool == "mock_price"));
+        assert!(
+            saved
+                .autonomy
+                .auto_approve
+                .iter()
+                .any(|tool| tool == "mock_price")
+        );
     }
 
     #[tokio::test]
@@ -7537,25 +7584,31 @@ BTC is currently around $65,000 based on latest tool output."#
         assert_eq!(sent.len(), 1);
         assert!(sent[0].contains("Approved supervised execution for `mock_price`."));
         assert!(sent[0].contains("Runtime pending requests cleared: 0."));
-        assert!(runtime_ctx
-            .approval_manager
-            .is_non_cli_session_granted("mock_price"));
+        assert!(
+            runtime_ctx
+                .approval_manager
+                .is_non_cli_session_granted("mock_price")
+        );
         assert!(!runtime_ctx.approval_manager.needs_approval("mock_price"));
-        assert!(runtime_ctx
-            .approval_manager
-            .list_non_cli_pending_requests(Some("alice"), Some("telegram"), Some("chat-1"))
-            .is_empty());
+        assert!(
+            runtime_ctx
+                .approval_manager
+                .list_non_cli_pending_requests(Some("alice"), Some("telegram"), Some("chat-1"))
+                .is_empty()
+        );
         assert_eq!(provider_impl.call_count.load(Ordering::SeqCst), 0);
 
         let saved_raw = tokio::fs::read_to_string(&config_path)
             .await
             .expect("read persisted config");
         let saved: Config = toml::from_str(&saved_raw).expect("parse persisted config");
-        assert!(saved
-            .autonomy
-            .auto_approve
-            .iter()
-            .any(|tool| tool == "mock_price"));
+        assert!(
+            saved
+                .autonomy
+                .auto_approve
+                .iter()
+                .any(|tool| tool == "mock_price")
+        );
     }
 
     #[tokio::test]
@@ -7655,9 +7708,11 @@ BTC is currently around $65,000 based on latest tool output."#
             "unexpected response: {}",
             sent[0]
         );
-        assert!(!runtime_ctx
-            .approval_manager
-            .is_non_cli_session_granted("mock_price"));
+        assert!(
+            !runtime_ctx
+                .approval_manager
+                .is_non_cli_session_granted("mock_price")
+        );
         assert!(runtime_ctx.approval_manager.needs_approval("mock_price"));
         assert_eq!(provider_impl.call_count.load(Ordering::SeqCst), 0);
     }
@@ -7752,9 +7807,11 @@ BTC is currently around $65,000 based on latest tool output."#
                 sent[0]
             );
         }
-        assert!(!runtime_ctx
-            .approval_manager
-            .is_non_cli_session_granted("mock_price"));
+        assert!(
+            !runtime_ctx
+                .approval_manager
+                .is_non_cli_session_granted("mock_price")
+        );
         assert!(runtime_ctx.approval_manager.needs_approval("mock_price"));
 
         process_channel_message(
@@ -7775,9 +7832,11 @@ BTC is currently around $65,000 based on latest tool output."#
         let sent = channel_impl.sent_messages.lock().await;
         assert_eq!(sent.len(), 2);
         assert!(sent[1].contains("Approved supervised execution for `mock_price`."));
-        assert!(runtime_ctx
-            .approval_manager
-            .is_non_cli_session_granted("mock_price"));
+        assert!(
+            runtime_ctx
+                .approval_manager
+                .is_non_cli_session_granted("mock_price")
+        );
         assert!(!runtime_ctx.approval_manager.needs_approval("mock_price"));
         assert_eq!(provider_impl.call_count.load(Ordering::SeqCst), 0);
 
@@ -7785,11 +7844,13 @@ BTC is currently around $65,000 based on latest tool output."#
             .await
             .expect("read persisted config");
         let saved: Config = toml::from_str(&saved_raw).expect("parse persisted config");
-        assert!(saved
-            .autonomy
-            .auto_approve
-            .iter()
-            .any(|tool| tool == "mock_price"));
+        assert!(
+            saved
+                .autonomy
+                .auto_approve
+                .iter()
+                .any(|tool| tool == "mock_price")
+        );
     }
 
     #[tokio::test]
@@ -8766,12 +8827,16 @@ BTC is currently around $65,000 based on latest tool output."#
             .unwrap_or_else(|e| e.into_inner());
         assert_eq!(calls.len(), 2);
         let second_call = &calls[1];
-        assert!(second_call
-            .iter()
-            .any(|(role, content)| { role == "user" && content.contains("forwarded content") }));
-        assert!(second_call
-            .iter()
-            .any(|(role, content)| { role == "user" && content.contains("summarize this") }));
+        assert!(
+            second_call
+                .iter()
+                .any(|(role, content)| { role == "user" && content.contains("forwarded content") })
+        );
+        assert!(
+            second_call
+                .iter()
+                .any(|(role, content)| { role == "user" && content.contains("summarize this") })
+        );
         assert!(
             !second_call.iter().any(|(role, _)| role == "assistant"),
             "cancelled turn should not persist an assistant response"
@@ -9146,13 +9211,8 @@ BTC is currently around $65,000 based on latest tool output."#
         let ws = make_workspace();
         let prompt = build_system_prompt(ws.path(), "model", &[], &[], None, None);
 
-        assert!(prompt.contains("### SOUL.md"), "missing SOUL.md header");
-        assert!(prompt.contains("Be helpful"), "missing SOUL content");
-        assert!(prompt.contains("### IDENTITY.md"), "missing IDENTITY.md");
-        assert!(
-            prompt.contains("Name: LlamaFarm"),
-            "missing IDENTITY content"
-        );
+        assert!(!prompt.contains("### SOUL.md"));
+        assert!(!prompt.contains("### IDENTITY.md"));
         assert!(prompt.contains("### USER.md"), "missing USER.md");
         assert!(prompt.contains("### AGENTS.md"), "missing AGENTS.md");
         assert!(prompt.contains("### TOOLS.md"), "missing TOOLS.md");
@@ -9173,9 +9233,9 @@ BTC is currently around $65,000 based on latest tool output."#
         // Empty workspace — no files at all
         let prompt = build_system_prompt(tmp.path(), "model", &[], &[], None, None);
 
-        assert!(prompt.contains("[File not found: SOUL.md]"));
         assert!(prompt.contains("[File not found: AGENTS.md]"));
-        assert!(prompt.contains("[File not found: IDENTITY.md]"));
+        assert!(!prompt.contains("[File not found: SOUL.md]"));
+        assert!(!prompt.contains("[File not found: IDENTITY.md]"));
     }
 
     #[test]
@@ -9224,6 +9284,23 @@ BTC is currently around $65,000 based on latest tool output."#
     }
 
     #[test]
+    fn prompt_rehydrates_bounded_working_state_checkpoint() {
+        let ws = make_workspace();
+        let memory_dir = ws.path().join("memory");
+        std::fs::create_dir_all(&memory_dir).unwrap();
+        std::fs::write(
+            memory_dir.join("WORKING_STATE.md"),
+            "# LlamaFarm Working State\n\n- Continue the deployment validation.",
+        )
+        .unwrap();
+
+        let prompt = build_system_prompt(ws.path(), "model", &[], &[], None, None);
+
+        assert!(prompt.contains("### memory/WORKING_STATE.md"));
+        assert!(prompt.contains("Continue the deployment validation."));
+    }
+
+    #[test]
     fn prompt_runtime_metadata() {
         let ws = make_workspace();
         let prompt = build_system_prompt(ws.path(), "claude-sonnet-4", &[], &[], None, None);
@@ -9260,8 +9337,11 @@ BTC is currently around $65,000 based on latest tool output."#
         assert!(prompt.contains("<description>Review code for bugs</description>"));
         assert!(prompt.contains("SKILL.md</location>"));
         assert!(prompt.contains("<instructions>"));
-        assert!(prompt
-            .contains("<instruction>Always run cargo test before final response.</instruction>"));
+        assert!(
+            prompt.contains(
+                "<instruction>Always run cargo test before final response.</instruction>"
+            )
+        );
         assert!(prompt.contains("<tools>"));
         assert!(prompt.contains("<name>lint</name>"));
         assert!(prompt.contains("<kind>shell</kind>"));
@@ -9304,8 +9384,11 @@ BTC is currently around $65,000 based on latest tool output."#
         assert!(prompt.contains("<location>skills/code-review/SKILL.md</location>"));
         assert!(prompt.contains("loaded on demand"));
         assert!(!prompt.contains("<instructions>"));
-        assert!(!prompt
-            .contains("<instruction>Always run cargo test before final response.</instruction>"));
+        assert!(
+            !prompt.contains(
+                "<instruction>Always run cargo test before final response.</instruction>"
+            )
+        );
         assert!(!prompt.contains("<tools>"));
     }
 
@@ -10048,7 +10131,7 @@ BTC is currently around $65,000 based on latest tool output."#;
 
         // Should fall back to OpenClaw format when AIEOS file is not found
         // (Error is logged to stderr with filename, not included in prompt)
-        assert!(prompt.contains("### SOUL.md"));
+        assert!(prompt.contains("### AGENTS.md"));
     }
 
     #[test]
@@ -10066,8 +10149,8 @@ BTC is currently around $65,000 based on latest tool output."#;
         let prompt = build_system_prompt(ws.path(), "model", &[], &[], Some(&config), None);
 
         // Should use OpenClaw format (not configured for AIEOS)
-        assert!(prompt.contains("### SOUL.md"));
-        assert!(prompt.contains("Be helpful"));
+        assert!(prompt.contains("### AGENTS.md"));
+        assert!(!prompt.contains("### SOUL.md"));
     }
 
     #[test]
@@ -10084,8 +10167,8 @@ BTC is currently around $65,000 based on latest tool output."#;
         let prompt = build_system_prompt(ws.path(), "model", &[], &[], Some(&config), None);
 
         // Should use OpenClaw format even if aieos_path is set
-        assert!(prompt.contains("### SOUL.md"));
-        assert!(prompt.contains("Be helpful"));
+        assert!(prompt.contains("### AGENTS.md"));
+        assert!(!prompt.contains("### SOUL.md"));
         assert!(!prompt.contains("## Identity"));
     }
 
@@ -10096,8 +10179,8 @@ BTC is currently around $65,000 based on latest tool output."#;
         let prompt = build_system_prompt(ws.path(), "model", &[], &[], None, None);
 
         // Should use OpenClaw format
-        assert!(prompt.contains("### SOUL.md"));
-        assert!(prompt.contains("Be helpful"));
+        assert!(prompt.contains("### AGENTS.md"));
+        assert!(!prompt.contains("### SOUL.md"));
     }
 
     #[test]
@@ -10138,12 +10221,16 @@ BTC is currently around $65,000 based on latest tool output."#;
 
         let channels = collect_configured_channels(&config, "test");
 
-        assert!(channels
-            .iter()
-            .any(|entry| entry.display_name == "Mattermost"));
-        assert!(channels
-            .iter()
-            .any(|entry| entry.channel.name() == "mattermost"));
+        assert!(
+            channels
+                .iter()
+                .any(|entry| entry.display_name == "Mattermost")
+        );
+        assert!(
+            channels
+                .iter()
+                .any(|entry| entry.channel.name() == "mattermost")
+        );
     }
 
     #[test]
@@ -10154,9 +10241,11 @@ BTC is currently around $65,000 based on latest tool output."#;
         let channels = collect_configured_channels(&config, "test");
 
         assert!(channels.iter().any(|entry| entry.display_name == "Bridge"));
-        assert!(channels
-            .iter()
-            .any(|entry| entry.channel.name() == "bridge"));
+        assert!(
+            channels
+                .iter()
+                .any(|entry| entry.channel.name() == "bridge")
+        );
     }
 
     struct AlwaysFailChannel {
@@ -10228,10 +10317,12 @@ BTC is currently around $65,000 based on latest tool output."#;
         let component = &snapshot["components"]["channel:test-supervised-fail"];
         assert_eq!(component["status"], "error");
         assert!(component["restart_count"].as_u64().unwrap_or(0) >= 1);
-        assert!(component["last_error"]
-            .as_str()
-            .unwrap_or("")
-            .contains("listen boom"));
+        assert!(
+            component["last_error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("listen boom")
+        );
         assert!(calls.load(Ordering::SeqCst) >= 1);
     }
 
@@ -10255,19 +10346,19 @@ BTC is currently around $65,000 based on latest tool output."#;
         );
 
         tokio::time::sleep(Duration::from_millis(35)).await;
-        let first_last_ok = crate::health::snapshot_json()["components"][&component_name]
-            ["last_ok"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        let first_last_ok =
+            crate::health::snapshot_json()["components"][&component_name]["last_ok"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
         assert!(!first_last_ok.is_empty());
 
         tokio::time::sleep(Duration::from_millis(70)).await;
-        let second_last_ok = crate::health::snapshot_json()["components"][&component_name]
-            ["last_ok"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        let second_last_ok =
+            crate::health::snapshot_json()["components"][&component_name]["last_ok"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
         let first = chrono::DateTime::parse_from_rfc3339(&first_last_ok)
             .expect("last_ok should be valid RFC3339");
         let second = chrono::DateTime::parse_from_rfc3339(&second_last_ok)

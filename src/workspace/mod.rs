@@ -3,7 +3,7 @@
 //! PR1 scope: local filesystem registry + CLI lifecycle commands.
 //! Gateway/agent routing integration is intentionally out of scope here.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

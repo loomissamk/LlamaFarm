@@ -87,7 +87,8 @@ impl SyscallAnomalyDetector {
     ) -> Self {
         let baseline = normalize_baseline(&config.baseline_syscalls);
         let anomaly_log_path = resolve_log_path(llamafarm_dir.as_ref(), config.log_path.as_str());
-        let audit_logger = AuditLogger::new(audit_config, llamafarm_dir.as_ref().to_path_buf()).ok();
+        let audit_logger =
+            AuditLogger::new(audit_config, llamafarm_dir.as_ref().to_path_buf()).ok();
 
         Self {
             config,
@@ -569,9 +570,11 @@ mod tests {
             "audit: type=1326 syscall=openat denied",
             Some(1),
         );
-        assert!(alerts
-            .iter()
-            .any(|alert| alert.kind == SyscallAnomalyKind::UnknownSyscall));
+        assert!(
+            alerts
+                .iter()
+                .any(|alert| alert.kind == SyscallAnomalyKind::UnknownSyscall)
+        );
     }
 
     #[test]
@@ -589,9 +592,11 @@ mod tests {
             "seccomp denied syscall=openat\nseccomp denied syscall=openat",
             Some(1),
         );
-        assert!(alerts
-            .iter()
-            .any(|alert| alert.kind == SyscallAnomalyKind::DeniedRateExceeded));
+        assert!(
+            alerts
+                .iter()
+                .any(|alert| alert.kind == SyscallAnomalyKind::DeniedRateExceeded)
+        );
     }
 
     #[test]
@@ -627,9 +632,11 @@ mod tests {
             "seccomp denied syscall=openat\nseccomp denied syscall=openat",
             Some(1),
         );
-        assert!(first
-            .iter()
-            .any(|alert| alert.kind == SyscallAnomalyKind::DeniedRateExceeded));
+        assert!(
+            first
+                .iter()
+                .any(|alert| alert.kind == SyscallAnomalyKind::DeniedRateExceeded)
+        );
 
         let second = detector.inspect_command_output(
             "echo hi",

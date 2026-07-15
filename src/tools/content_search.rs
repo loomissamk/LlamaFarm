@@ -97,7 +97,9 @@ impl Tool for ContentSearchTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
         // --- Parse parameters ---
@@ -704,10 +706,12 @@ mod tests {
         assert!(schema["properties"]["pattern"].is_object());
         assert!(schema["properties"]["path"].is_object());
         assert!(schema["properties"]["output_mode"].is_object());
-        assert!(schema["required"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("pattern")));
+        assert!(
+            schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("pattern"))
+        );
     }
 
     #[tokio::test]
@@ -854,11 +858,13 @@ mod tests {
             .unwrap();
 
         assert!(!result.success);
-        assert!(result
-            .error
-            .as_ref()
-            .unwrap()
-            .contains("Invalid output_mode"));
+        assert!(
+            result
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("Invalid output_mode")
+        );
     }
 
     #[tokio::test]

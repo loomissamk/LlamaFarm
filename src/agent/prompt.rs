@@ -96,11 +96,17 @@ impl PromptSection for IdentitySection {
 
         if !has_aieos {
             prompt.push_str(
-                "The following workspace files define your identity, behavior, and context.\n\n",
+                "Use the repository's AGENTS.md for project-specific operating rules. Avoid redundant persona files in the hot context.\n\n",
             );
+            inject_workspace_file(&mut prompt, ctx.workspace_dir, "AGENTS.md");
         }
-        for file in ["SOUL.md"] {
-            inject_workspace_file(&mut prompt, ctx.workspace_dir, file);
+
+        // A history compaction checkpoint is small and intentionally durable:
+        // rehydrate it when a fresh Agent instance starts so prior decisions
+        // survive without retaining the whole transcript in the prompt.
+        let working_state = ctx.workspace_dir.join("memory/WORKING_STATE.md");
+        if working_state.is_file() {
+            inject_workspace_file(&mut prompt, ctx.workspace_dir, "memory/WORKING_STATE.md");
         }
 
         Ok(prompt)
@@ -283,7 +289,7 @@ mod tests {
     }
 
     #[test]
-    fn identity_section_with_aieos_includes_workspace_files() {
+    fn identity_section_with_aieos_uses_single_identity_source() {
         let workspace =
             std::env::temp_dir().join(format!("llamafarm_prompt_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&workspace).unwrap();
@@ -317,10 +323,38 @@ mod tests {
             output.contains("Nova"),
             "AIEOS identity should be present in prompt"
         );
-        assert!(
-            output.contains("SOUL_MD_LOADED"),
-            "SOUL.md content should be present even when AIEOS is configured"
-        );
+        assert!(!output.contains("SOUL_MD_LOADED"));
+
+        let _ = std::fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn identity_section_rehydrates_working_state_checkpoint() {
+        let workspace =
+            std::env::temp_dir().join(format!("llamafarm_prompt_test_{}", uuid::Uuid::new_v4()));
+        let memory_dir = workspace.join("memory");
+        std::fs::create_dir_all(&memory_dir).unwrap();
+        std::fs::write(workspace.join("SOUL.md"), "Stay focused.").unwrap();
+        std::fs::write(
+            memory_dir.join("WORKING_STATE.md"),
+            "# LlamaFarm Working State\n\n- Resume the pending review.",
+        )
+        .unwrap();
+
+        let tools: Vec<Box<dyn Tool>> = vec![];
+        let ctx = PromptContext {
+            workspace_dir: &workspace,
+            model_name: "test-model",
+            tools: &tools,
+            skills: &[],
+            skills_prompt_mode: crate::config::SkillsPromptInjectionMode::Full,
+            identity_config: None,
+            dispatcher_instructions: "",
+        };
+
+        let output = IdentitySection.build(&ctx).unwrap();
+        assert!(output.contains("### memory/WORKING_STATE.md"));
+        assert!(output.contains("Resume the pending review."));
 
         let _ = std::fs::remove_dir_all(workspace);
     }

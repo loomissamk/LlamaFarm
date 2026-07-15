@@ -26,6 +26,12 @@ pub struct OllamaProvider {
     /// - `Some(n)` → use exactly n tokens (manual override or from `OLLAMA_NUM_CTX`).
     /// Pair with `OLLAMA_KV_CACHE_TYPE=q8_0` server env to halve KV cache VRAM usage.
     num_ctx: Option<u32>,
+    /// Maximum tokens produced by one `/api/chat` inference segment. Ollama
+    /// counts hidden thinking tokens here too, so this is the hard per-turn
+    /// reasoning/output budget used to prevent a single thought from pinning a
+    /// local GPU indefinitely. The agent loop continues a length-stopped
+    /// segment automatically with its checkpointed history.
+    max_output_tokens: Option<u32>,
     /// Cache of model-name → resolved num_ctx to avoid a `/api/show` round-trip on
     /// every request when operating in auto-detect mode.
     ctx_cache: Arc<RwLock<HashMap<String, u32>>>,
@@ -89,6 +95,10 @@ struct Options {
     /// Requires sufficient VRAM; pair with `OLLAMA_KV_CACHE_TYPE=q8_0` to stretch VRAM.
     #[serde(skip_serializing_if = "Option::is_none")]
     num_ctx: Option<u32>,
+    /// Maximum generated tokens for this inference segment. Ollama calls this
+    /// `num_predict`; it includes hidden thinking/reasoning tokens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    num_predict: Option<u32>,
 }
 
 // ─── Response Structures ──────────────────────────────────────────────────────
@@ -112,6 +122,9 @@ struct ApiChatResponse {
     /// Total nanoseconds for the full request.
     #[serde(default)]
     total_duration: Option<u64>,
+    /// Ollama reports `"length"` when `options.num_predict` ended generation.
+    #[serde(default)]
+    done_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -184,7 +197,15 @@ impl OllamaProvider {
         gpu_layers: Option<i32>,
         main_gpu: Option<u32>,
     ) -> Self {
-        Self::new_full(base_url, api_key, reasoning_enabled, gpu_layers, main_gpu, None)
+        Self::new_full(
+            base_url,
+            api_key,
+            reasoning_enabled,
+            gpu_layers,
+            main_gpu,
+            None,
+            None,
+        )
     }
 
     /// Full constructor with all inference options.
@@ -193,6 +214,9 @@ impl OllamaProvider {
     /// - `main_gpu`: GPU index for largest tensors.
     /// - `num_ctx`: Context window override. Pair with `OLLAMA_KV_CACHE_TYPE=q8_0`
     ///   to fit larger contexts in the same VRAM (turboquant-style KV compression).
+    /// - `max_output_tokens`: Per-request output/reasoning segment budget. For
+    ///   Ollama this becomes `options.num_predict` and applies to hidden thinking
+    ///   as well as visible output.
     pub fn new_full(
         base_url: Option<&str>,
         api_key: Option<&str>,
@@ -200,6 +224,7 @@ impl OllamaProvider {
         gpu_layers: Option<i32>,
         main_gpu: Option<u32>,
         num_ctx: Option<u32>,
+        max_output_tokens: Option<u32>,
     ) -> Self {
         let api_key = api_key.and_then(|value| {
             let trimmed = value.trim();
@@ -224,6 +249,13 @@ impl OllamaProvider {
                 .and_then(|v| v.trim().parse::<u32>().ok())
         });
 
+        let max_output_tokens = max_output_tokens.filter(|value| *value > 0).or_else(|| {
+            std::env::var("LLAMAFARM_AGENT_MAX_OUTPUT_TOKENS")
+                .ok()
+                .and_then(|v| v.trim().parse::<u32>().ok())
+                .filter(|value| *value > 0)
+        });
+
         Self {
             base_url: Self::normalize_base_url(base_url.unwrap_or("http://localhost:11434")),
             api_key,
@@ -231,6 +263,7 @@ impl OllamaProvider {
             gpu_layers,
             main_gpu,
             num_ctx,
+            max_output_tokens,
             ctx_cache: Arc::new(RwLock::new(HashMap::new())),
             caps_cache: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -245,6 +278,30 @@ impl OllamaProvider {
 
     fn http_client(&self) -> Client {
         crate::config::build_runtime_proxy_client_with_timeouts("provider.ollama", 300, 10)
+    }
+
+    /// Generation deliberately has no fixed wall-clock deadline. A local model
+    /// may be slow while it is CPU-spilling or pre-filling a large context; the
+    /// per-segment `num_predict` budget gives it regular safe continuation
+    /// boundaries instead. The agent's cancellation token can still abort the
+    /// request immediately when the operator presses Stop.
+    fn chat_client(&self) -> Client {
+        crate::config::build_runtime_proxy_client_with_optional_timeouts(
+            "provider.ollama.chat",
+            None,
+            Some(10),
+        )
+    }
+
+    fn output_budget_exhausted(done_reason: Option<&str>) -> bool {
+        matches!(
+            done_reason
+                .map(str::trim)
+                .filter(|reason| !reason.is_empty())
+                .map(|reason| reason.to_ascii_lowercase())
+                .as_deref(),
+            Some("length" | "max_tokens" | "max_output_tokens" | "num_predict")
+        )
     }
 
     fn resolve_request_details(&self, model: &str) -> anyhow::Result<(String, bool)> {
@@ -358,6 +415,7 @@ impl OllamaProvider {
                 num_gpu: self.gpu_layers,
                 main_gpu: self.main_gpu,
                 num_ctx: Some(num_ctx),
+                num_predict: self.max_output_tokens,
             },
             // Only send think:true when the model reports "thinking" capability.
             // Sending it to non-thinking models causes a 400 from llama-server.
@@ -527,16 +585,17 @@ impl OllamaProvider {
         let url = format!("{}/api/chat", self.base_url);
 
         tracing::debug!(
-            "Ollama request: url={} model={} message_count={} temperature={} think={:?} tool_count={}",
+            "Ollama request: url={} model={} message_count={} temperature={} think={:?} tool_count={} num_predict={:?}",
             url,
             model,
             request.messages.len(),
             temperature,
             request.think,
             request.tools.as_ref().map_or(0, |t| t.len()),
+            request.options.num_predict,
         );
 
-        let mut request_builder = self.http_client().post(&url).json(&request);
+        let mut request_builder = self.chat_client().post(&url).json(&request);
 
         if should_auth {
             if let Some(key) = self.api_key.as_ref() {
@@ -713,7 +772,10 @@ impl OllamaProvider {
 
         let url = format!("{}/api/embeddings", self.base_url);
         let client = self.http_client();
-        let body = EmbedRequest { model, prompt: text };
+        let body = EmbedRequest {
+            model,
+            prompt: text,
+        };
 
         let resp = client
             .post(&url)
@@ -747,7 +809,10 @@ impl OllamaProvider {
 
         let url = format!("{}/api/pull", self.base_url);
         let client = self.http_client();
-        let body = PullRequest { name: model, stream: true };
+        let body = PullRequest {
+            name: model,
+            stream: true,
+        };
 
         let mut response = client
             .post(&url)
@@ -808,10 +873,11 @@ impl OllamaProvider {
     /// `/api/show` call), `Some(false)` if it reported it doesn't, or `None` if we haven't
     /// queried this model yet.
     pub fn cached_model_supports_tools(&self, model: &str) -> Option<bool> {
-        self.caps_cache
-            .read()
-            .ok()
-            .and_then(|cache| cache.get(model).map(|caps| caps.iter().any(|c| c == "tools")))
+        self.caps_cache.read().ok().and_then(|cache| {
+            cache
+                .get(model)
+                .map(|caps| caps.iter().any(|c| c == "tools"))
+        })
     }
 
     /// List all locally installed models (`GET /api/tags`).
@@ -1050,10 +1116,14 @@ impl Provider for OllamaProvider {
             )
             .await?;
 
-        let usage = if response.prompt_eval_count.is_some() || response.eval_count.is_some() {
+        let usage = if response.prompt_eval_count.is_some()
+            || response.eval_count.is_some()
+            || response.done_reason.is_some()
+        {
             Some(TokenUsage {
                 input_tokens: response.prompt_eval_count,
                 output_tokens: response.eval_count,
+                output_truncated: Self::output_budget_exhausted(response.done_reason.as_deref()),
             })
         } else {
             None
@@ -1063,15 +1133,17 @@ impl Provider for OllamaProvider {
         // generation_tps (decode TPS) is the meaningful throughput number — it excludes
         // model load and prefill time, showing only the sustained generation rate.
         let metrics = {
-            let generation_tps = response.eval_count.zip(response.eval_duration).and_then(
-                |(tokens, ns)| {
-                    if ns > 0 {
-                        Some(tokens as f64 / (ns as f64 / 1_000_000_000.0))
-                    } else {
-                        None
-                    }
-                },
-            );
+            let generation_tps =
+                response
+                    .eval_count
+                    .zip(response.eval_duration)
+                    .and_then(|(tokens, ns)| {
+                        if ns > 0 {
+                            Some(tokens as f64 / (ns as f64 / 1_000_000_000.0))
+                        } else {
+                            None
+                        }
+                    });
             let prefill_tps = response
                 .prompt_eval_count
                 .zip(response.prompt_eval_duration)
@@ -1086,9 +1158,7 @@ impl Provider for OllamaProvider {
                 let load_ns = response.load_duration.unwrap_or(0);
                 (load_ns + prompt_ns) as f64 / 1_000_000.0
             });
-            let total_ms = response
-                .total_duration
-                .map(|ns| ns as f64 / 1_000_000.0);
+            let total_ms = response.total_duration.map(|ns| ns as f64 / 1_000_000.0);
             if generation_tps.is_some() || ttft_ms.is_some() {
                 Some(crate::providers::traits::InferenceMetrics {
                     ttft_ms,
@@ -1300,9 +1370,11 @@ mod tests {
         let error = p
             .resolve_request_details("qwen3:cloud")
             .expect_err("cloud suffix should require API key");
-        assert!(error
-            .to_string()
-            .contains("requested cloud routing, but no API key is configured"));
+        assert!(
+            error
+                .to_string()
+                .contains("requested cloud routing, but no API key is configured")
+        );
     }
 
     #[test]
@@ -1370,10 +1442,56 @@ mod tests {
     }
 
     #[test]
+    fn request_serializes_num_predict_for_a_bounded_reasoning_segment() {
+        let provider = OllamaProvider::new_full(
+            None,
+            None,
+            Some(true),
+            None,
+            None,
+            Some(32_768),
+            Some(2_048),
+        );
+        let request = provider.build_chat_request(
+            vec![Message {
+                role: "user".to_string(),
+                content: Some("reason about this task".to_string()),
+                images: None,
+                tool_calls: None,
+                tool_name: None,
+            }],
+            "qwen3.5:9b",
+            0.2,
+            None,
+            32_768,
+        );
+
+        let json = serde_json::to_value(request).unwrap();
+        assert_eq!(json["options"]["num_predict"], serde_json::json!(2_048));
+        // The cap must not silently turn off the model's reasoning mode.
+        assert!(provider.reasoning_enabled == Some(true));
+    }
+
+    #[test]
     fn response_deserializes() {
         let json = r#"{"message":{"role":"assistant","content":"Hello from Ollama!"}}"#;
         let resp: ApiChatResponse = serde_json::from_str(json).unwrap();
         assert_eq!(resp.message.content, "Hello from Ollama!");
+    }
+
+    #[test]
+    fn length_done_reason_is_a_normal_output_budget_checkpoint() {
+        let json = r#"{
+            "message":{"role":"assistant","content":"partial answer"},
+            "eval_count":2048,
+            "done_reason":"length"
+        }"#;
+        let response: ApiChatResponse = serde_json::from_str(json).unwrap();
+
+        assert!(OllamaProvider::output_budget_exhausted(
+            response.done_reason.as_deref()
+        ));
+        assert!(!OllamaProvider::output_budget_exhausted(Some("stop")));
     }
 
     #[test]

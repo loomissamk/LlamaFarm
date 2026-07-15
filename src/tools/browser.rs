@@ -10,7 +10,7 @@ use crate::security::SecurityPolicy;
 use anyhow::Context;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::ErrorKind;
 use std::net::ToSocketAddrs;
 use std::path::{Path, PathBuf};
@@ -1221,7 +1221,7 @@ mod native_backend {
     use fantoccini::error::CmdError;
     use fantoccini::key::Key;
     use fantoccini::{Client, ClientBuilder, Locator};
-    use serde_json::{json, Map, Value};
+    use serde_json::{Map, Value, json};
     use std::net::{TcpStream, ToSocketAddrs};
     use std::time::Duration;
 
@@ -2556,9 +2556,10 @@ mod tests {
         let tool = BrowserTool::new(security, vec!["*".into()], None);
         assert!(tool.validate_url("https://[::1]/").is_err());
         assert!(tool.validate_url("https://[::ffff:127.0.0.1]/").is_err());
-        assert!(tool
-            .validate_url("https://[::ffff:10.0.0.1]:8080/")
-            .is_err());
+        assert!(
+            tool.validate_url("https://[::ffff:10.0.0.1]:8080/")
+                .is_err()
+        );
     }
 
     #[test]
@@ -2713,15 +2714,18 @@ mod tests {
             },
         );
 
-        assert!(tool
-            .validate_coordinate("x", 50, tool.computer_use.max_coordinate_x)
-            .is_ok());
-        assert!(tool
-            .validate_coordinate("x", 101, tool.computer_use.max_coordinate_x)
-            .is_err());
-        assert!(tool
-            .validate_coordinate("y", -1, tool.computer_use.max_coordinate_y)
-            .is_err());
+        assert!(
+            tool.validate_coordinate("x", 50, tool.computer_use.max_coordinate_x)
+                .is_ok()
+        );
+        assert!(
+            tool.validate_coordinate("x", 101, tool.computer_use.max_coordinate_x)
+                .is_err()
+        );
+        assert!(
+            tool.validate_coordinate("y", -1, tool.computer_use.max_coordinate_y)
+                .is_err()
+        );
     }
 
     #[test]
@@ -2730,9 +2734,10 @@ mod tests {
         let tool = BrowserTool::new(security, vec!["example.com".into()], None);
         assert!(tool.validate_output_path("path", "/etc/passwd").is_err());
         assert!(tool.validate_output_path("path", "../outside.png").is_err());
-        assert!(tool
-            .validate_output_path("path", "captures/page.png")
-            .is_ok());
+        assert!(
+            tool.validate_output_path("path", "captures/page.png")
+                .is_ok()
+        );
     }
 
     #[test]
@@ -2750,22 +2755,26 @@ mod tests {
         );
 
         let key_type_args = serde_json::json!({"text": "hello"});
-        assert!(tool
-            .validate_computer_use_action("key_type", key_type_args.as_object().unwrap())
-            .is_ok());
+        assert!(
+            tool.validate_computer_use_action("key_type", key_type_args.as_object().unwrap())
+                .is_ok()
+        );
         let missing_key_type = serde_json::json!({});
-        assert!(tool
-            .validate_computer_use_action("key_type", missing_key_type.as_object().unwrap())
-            .is_err());
+        assert!(
+            tool.validate_computer_use_action("key_type", missing_key_type.as_object().unwrap())
+                .is_err()
+        );
 
         let key_press_args = serde_json::json!({"key": "Enter"});
-        assert!(tool
-            .validate_computer_use_action("key_press", key_press_args.as_object().unwrap())
-            .is_ok());
+        assert!(
+            tool.validate_computer_use_action("key_press", key_press_args.as_object().unwrap())
+                .is_ok()
+        );
         let bad_key_press_args = serde_json::json!({"key": "Ctrl+Shift+Enter!!"});
-        assert!(tool
-            .validate_computer_use_action("key_press", bad_key_press_args.as_object().unwrap())
-            .is_err());
+        assert!(
+            tool.validate_computer_use_action("key_press", bad_key_press_args.as_object().unwrap())
+                .is_err()
+        );
     }
 
     #[test]

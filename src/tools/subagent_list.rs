@@ -48,7 +48,9 @@ impl Tool for SubAgentListTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
         let status_filter = args.get("status").and_then(|v| v.as_str()).map(str::trim);

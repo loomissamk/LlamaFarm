@@ -162,6 +162,8 @@ RUN apt-get update && apt-get install -y \
     cmake \
     curl \
     default-jdk-headless \
+    docker.io \
+    docker-compose \
     file \
     git \
     golang-go \

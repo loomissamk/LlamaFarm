@@ -5,7 +5,7 @@
 //! memory (`Arc<RwLock<Vec<TaskItem>>>`) and is discarded when the session
 //! ends — it is intentionally not persisted via the Memory trait.
 
-use crate::security::{policy::ToolOperation, SecurityPolicy};
+use crate::security::{SecurityPolicy, policy::ToolOperation};
 use crate::tools::traits::{Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
@@ -19,6 +19,9 @@ enum TaskStatus {
     Pending,
     InProgress,
     Completed,
+    Failed,
+    Blocked,
+    Skipped,
 }
 
 impl fmt::Display for TaskStatus {
@@ -27,6 +30,9 @@ impl fmt::Display for TaskStatus {
             TaskStatus::Pending => write!(f, "pending"),
             TaskStatus::InProgress => write!(f, "in_progress"),
             TaskStatus::Completed => write!(f, "completed"),
+            TaskStatus::Failed => write!(f, "failed"),
+            TaskStatus::Blocked => write!(f, "blocked"),
+            TaskStatus::Skipped => write!(f, "skipped"),
         }
     }
 }
@@ -37,6 +43,9 @@ impl TaskStatus {
             "pending" => Some(TaskStatus::Pending),
             "in_progress" => Some(TaskStatus::InProgress),
             "completed" => Some(TaskStatus::Completed),
+            "failed" => Some(TaskStatus::Failed),
+            "blocked" => Some(TaskStatus::Blocked),
+            "skipped" => Some(TaskStatus::Skipped),
             _ => None,
         }
     }
@@ -82,9 +91,23 @@ impl TaskPlanTool {
             .iter()
             .filter(|task| task.status == TaskStatus::Completed)
             .count();
+        let resolved = tasks
+            .iter()
+            .filter(|task| {
+                matches!(
+                    task.status,
+                    TaskStatus::Completed
+                        | TaskStatus::Failed
+                        | TaskStatus::Blocked
+                        | TaskStatus::Skipped
+                )
+            })
+            .count();
         let total = tasks.len();
 
-        let mut lines = vec![format!("Tasks ({completed}/{total} completed):")];
+        let mut lines = vec![format!(
+            "Tasks ({completed}/{total} completed; {resolved}/{total} resolved):"
+        )];
         for task in tasks {
             lines.push(format!("- [{}] [{}] {}", task.id, task.status, task.title));
         }
@@ -179,7 +202,7 @@ impl TaskPlanTool {
                     success: false,
                     output: String::new(),
                     error: Some(format!(
-                        "Invalid status '{status_str}'. Must be: pending, in_progress, completed"
+                        "Invalid status '{status_str}'. Must be: pending, in_progress, completed, failed, blocked, skipped"
                     )),
                 };
             }
@@ -253,7 +276,9 @@ impl TaskPlanTool {
         }
     }
 
-    fn normalize_task_item(obj: &serde_json::Map<String, serde_json::Value>) -> Option<serde_json::Value> {
+    fn normalize_task_item(
+        obj: &serde_json::Map<String, serde_json::Value>,
+    ) -> Option<serde_json::Value> {
         // Accept title from any commonly-used field name so models that emit
         // {task_id, description}, {name, ...}, {step, ...}, etc. all work.
         let title = obj
@@ -292,9 +317,7 @@ impl TaskPlanTool {
 
         let tasks = items
             .iter()
-            .filter_map(|item| {
-                item.as_object().and_then(Self::normalize_task_item)
-            })
+            .filter_map(|item| item.as_object().and_then(Self::normalize_task_item))
             .collect::<Vec<_>>();
 
         serde_json::Value::Array(tasks)
@@ -309,7 +332,8 @@ impl Tool for TaskPlanTool {
 
     fn description(&self) -> &str {
         "Manage a task checklist for the current session. Use to break complex work into steps and track progress.\n\
-         Actions: create (batch), add (single), update (change status), list (view all), delete (clear all)."
+         Actions: create (batch), add (single), update (change status), list (view all), delete (clear all). \
+         Statuses: pending, in_progress, completed, failed, blocked, skipped. Mark completed only after a verifier or concrete successful result."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -329,7 +353,7 @@ impl Tool for TaskPlanTool {
                             "title": { "type": "string" },
                             "status": {
                                 "type": "string",
-                                "enum": ["pending", "in_progress", "completed"]
+                                "enum": ["pending", "in_progress", "completed", "failed", "blocked", "skipped"]
                             }
                         },
                         "required": ["title"]
@@ -346,7 +370,7 @@ impl Tool for TaskPlanTool {
                 },
                 "status": {
                     "type": "string",
-                    "enum": ["pending", "in_progress", "completed"],
+                    "enum": ["pending", "in_progress", "completed", "failed", "blocked", "skipped"],
                     "description": "For 'update': new status"
                 }
             },
@@ -468,7 +492,7 @@ mod tests {
             .unwrap();
         assert!(r.success);
         assert!(r.output.contains("3 task(s)"));
-        assert!(r.output.contains("Tasks (1/3 completed):"));
+        assert!(r.output.contains("Tasks (1/3 completed; 1/3 resolved):"));
         assert!(r.output.contains("[1] [pending] step one"));
         assert!(r.output.contains("[3] [completed] step three"));
 
@@ -497,7 +521,11 @@ mod tests {
             .await
             .unwrap();
         assert!(r.success, "failed: {}", r.output);
-        assert!(r.output.contains("2 task(s)"), "unexpected output: {}", r.output);
+        assert!(
+            r.output.contains("2 task(s)"),
+            "unexpected output: {}",
+            r.output
+        );
 
         let r = tool.execute(json!({ "action": "list" })).await.unwrap();
         assert!(r.output.contains("Run a shell command"));
@@ -573,6 +601,38 @@ mod tests {
 
         let r = tool.execute(json!({ "action": "list" })).await.unwrap();
         assert!(r.output.contains("[in_progress]"));
+    }
+
+    #[tokio::test]
+    async fn audit_terminal_statuses_remain_visible() {
+        let tool = default_tool();
+        tool.execute(json!({
+            "action": "create",
+            "tasks": [
+                { "title": "verified tool" },
+                { "title": "missing credential" },
+                { "title": "unsupported integration" }
+            ]
+        }))
+        .await
+        .unwrap();
+
+        for (id, status) in [(1, "completed"), (2, "blocked"), (3, "failed")] {
+            let result = tool
+                .execute(json!({ "action": "update", "id": id, "status": status }))
+                .await
+                .unwrap();
+            assert!(result.success, "status {status} should be accepted");
+        }
+
+        let result = tool.execute(json!({ "action": "list" })).await.unwrap();
+        assert!(
+            result
+                .output
+                .contains("Tasks (1/3 completed; 3/3 resolved):")
+        );
+        assert!(result.output.contains("[blocked] missing credential"));
+        assert!(result.output.contains("[failed] unsupported integration"));
     }
 
     #[tokio::test]

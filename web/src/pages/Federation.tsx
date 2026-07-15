@@ -339,6 +339,7 @@ export default function FederationPage() {
                   <label className="inline-flex items-center gap-2 text-xs text-gray-300">
                     <input
                       type="checkbox"
+                      data-testid={`federation-peer-${peer.peer_id}`}
                       checked={selected}
                       disabled={!selectable || !selectedSessionId}
                       onChange={(event) =>
@@ -637,6 +638,7 @@ allow_public_bind = true`}
                 Selected chat
               </label>
               <select
+                data-testid="federation-selected-chat"
                 value={selectedSessionId ?? ''}
                 onChange={(event) => setSelectedSessionId(event.target.value || null)}
                 disabled={chatSessions.length === 0}
@@ -720,6 +722,8 @@ allow_public_bind = true`}
                 {visibleTasks.map((task) => (
                   <div
                     key={task.taskId}
+                    data-testid={`federation-task-${task.status}`}
+                    data-federation-peer={task.peerId}
                     className="rounded-xl border border-gray-800 bg-gray-950/70 p-3"
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2">

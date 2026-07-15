@@ -19,8 +19,8 @@ pub mod vector;
 
 #[allow(unused_imports)]
 pub use backend::{
-    classify_memory_backend, default_memory_backend_key, memory_backend_profile,
-    selectable_memory_backends, MemoryBackendKind, MemoryBackendProfile,
+    MemoryBackendKind, MemoryBackendProfile, classify_memory_backend, default_memory_backend_key,
+    memory_backend_profile, selectable_memory_backends,
 };
 pub use lucid::LucidMemory;
 #[cfg(feature = "memory-mariadb")]

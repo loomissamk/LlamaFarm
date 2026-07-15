@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::Path;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use tracing::{info, warn};
 
 use super::condition::evaluate_condition;
@@ -781,9 +781,11 @@ mod tests {
                 .len(),
             1
         );
-        assert!(engine
-            .match_trigger(&mqtt_event("plant/pump_3/temperature", "50"))
-            .is_empty());
+        assert!(
+            engine
+                .match_trigger(&mqtt_event("plant/pump_3/temperature", "50"))
+                .is_empty()
+        );
     }
 
     #[test]

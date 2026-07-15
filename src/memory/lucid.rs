@@ -543,9 +543,11 @@ exit 1
 
         let entries = memory.recall("auth", 5, None).await.unwrap();
 
-        assert!(entries
-            .iter()
-            .any(|e| e.content.contains("Local sqlite auth fallback note")));
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.content.contains("Local sqlite auth fallback note"))
+        );
         assert!(entries.iter().any(|e| e.content.contains("token refresh")));
     }
 
@@ -567,12 +569,16 @@ exit 1
 
         let entries = memory.recall("auth", 5, None).await.unwrap();
 
-        assert!(entries
-            .iter()
-            .any(|e| e.content.contains("Local sqlite auth fallback note")));
-        assert!(entries
-            .iter()
-            .any(|e| e.content.contains("Delayed token refresh guidance")));
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.content.contains("Local sqlite auth fallback note"))
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.content.contains("Delayed token refresh guidance"))
+        );
     }
 
     #[tokio::test]
@@ -604,9 +610,11 @@ exit 1
             .unwrap();
 
         let entries = memory.recall("rust", 5, None).await.unwrap();
-        assert!(entries
-            .iter()
-            .any(|e| e.content.contains("Rust should stay local-first")));
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.content.contains("Rust should stay local-first"))
+        );
 
         let context_calls = tokio::fs::read_to_string(&marker).await.unwrap_or_default();
         assert!(

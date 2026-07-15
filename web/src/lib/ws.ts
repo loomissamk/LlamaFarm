@@ -129,6 +129,24 @@ export class WebSocketClient {
     );
   }
 
+  /**
+   * Request a clean cancellation of the active agent turn for one chat.
+   * The gateway keeps the socket open, interrupts model/tool execution, and
+   * returns a terminal `cancelled` event once the turn has stopped.
+   */
+  cancelSession(sessionId: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    this.ws.send(
+      JSON.stringify({
+        type: 'cancel',
+        session_id: sessionId,
+      }),
+    );
+  }
+
   /** Close the connection without auto-reconnecting. */
   disconnect(): void {
     this.intentionallyClosed = true;

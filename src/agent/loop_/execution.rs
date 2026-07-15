@@ -1,5 +1,5 @@
 use super::parsing::ParsedToolCall;
-use super::{scrub_credentials, ToolLoopCancelled, TOOL_CACHE};
+use super::{TOOL_CACHE, ToolLoopCancelled, scrub_credentials};
 use crate::agent::tool_cache::ToolResultCache;
 use crate::approval::ApprovalManager;
 use crate::observability::{Observer, ObserverEvent};
@@ -191,9 +191,9 @@ pub(super) fn should_execute_tools_in_parallel(
 
     // Parallel only when every tool in this batch is concurrency-safe.
     // Unknown tools (not in registry) are treated as unsafe.
-    tool_calls.iter().all(|call| {
-        find_tool(tools_registry, &call.name).is_some_and(|t| t.is_concurrency_safe())
-    })
+    tool_calls
+        .iter()
+        .all(|call| find_tool(tools_registry, &call.name).is_some_and(|t| t.is_concurrency_safe()))
 }
 
 pub(super) async fn execute_tools_parallel(

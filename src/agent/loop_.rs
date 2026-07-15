@@ -2,7 +2,7 @@ use crate::approval::{ApprovalManager, ApprovalRequest, ApprovalResponse};
 use crate::config::Config;
 use crate::memory::{self, Memory, MemoryCategory};
 use crate::multimodal;
-use crate::observability::{self, runtime_trace, Observer, ObserverEvent};
+use crate::observability::{self, Observer, ObserverEvent, runtime_trace};
 use crate::providers::{
     self, ChatMessage, ChatRequest, Provider, ProviderCapabilityError, ToolCall,
 };
@@ -29,8 +29,8 @@ pub(crate) mod parsing;
 
 use context::{build_context, build_hardware_context};
 use execution::{
-    execute_tools_parallel, execute_tools_sequential, should_execute_tools_in_parallel,
-    ToolExecutionOutcome,
+    ToolExecutionOutcome, execute_tools_parallel, execute_tools_sequential,
+    should_execute_tools_in_parallel,
 };
 #[cfg(test)]
 use history::{apply_compaction_summary, build_compaction_transcript};
@@ -51,16 +51,20 @@ pub(crate) async fn compact_history_with_focus(
 }
 #[allow(unused_imports)]
 use parsing::{
-    default_param_for_tool, detect_tool_call_parse_issue, extract_json_values, map_tool_name_alias,
-    parse_arguments_value, parse_glm_shortened_body, parse_glm_style_tool_calls,
-    parse_perl_style_tool_calls, parse_structured_tool_calls, parse_tool_call_value,
-    parse_tool_calls, parse_tool_calls_from_json_value, tool_call_signature, ParsedToolCall,
+    ParsedToolCall, default_param_for_tool, detect_tool_call_parse_issue, extract_json_values,
+    map_tool_name_alias, parse_arguments_value, parse_glm_shortened_body,
+    parse_glm_style_tool_calls, parse_perl_style_tool_calls, parse_structured_tool_calls,
+    parse_tool_call_value, parse_tool_calls, parse_tool_calls_from_json_value, tool_call_signature,
 };
 
 /// Minimum characters per chunk when relaying LLM text to a streaming draft.
 const STREAM_CHUNK_MIN_CHARS: usize = 80;
 /// Rolling window size for detecting streamed tool-call payload markers.
 const STREAM_TOOL_MARKER_WINDOW_CHARS: usize = 512;
+/// Keep an operator-visible heartbeat flowing while a local non-streaming
+/// inference segment is running. Native-tool Ollama calls intentionally use a
+/// non-streaming response so structured tool calls remain reliable.
+const MODEL_PROGRESS_HEARTBEAT_SECS: u64 = 10;
 
 /// Default maximum agentic tool-use iterations per user message to prevent runaway loops.
 /// Used as a safe fallback when `max_tool_iterations` is unset or configured as zero.
@@ -136,7 +140,10 @@ pub(crate) fn configured_native_tools_enabled(
 /// These were trained with structured function-call JSON and don't reliably emit the
 /// prompt-injected `[TOOL_CALLS]name[ARGS]{...}` XML format.
 fn model_prefers_native_tools(model: &str) -> bool {
-    let base = model.strip_suffix(":cloud").unwrap_or(model).to_ascii_lowercase();
+    let base = model
+        .strip_suffix(":cloud")
+        .unwrap_or(model)
+        .to_ascii_lowercase();
     let name = base.split(':').next().unwrap_or(&base);
     // qwen3 family: qwen3, qwen3.5, qwen3.6, qwen3-coder, etc.
     name.starts_with("qwen3")
@@ -608,11 +615,12 @@ fn build_assistant_history_with_tool_calls(text: &str, tool_calls: &[ToolCall]) 
 fn is_small_model_for_native_tools(model: &str) -> bool {
     // Strip optional `:cloud` suffix before checking the tag.
     let base = model.strip_suffix(":cloud").unwrap_or(model);
-    let tag = base.rsplit_once(':').map_or("", |(_, t)| t).to_ascii_lowercase();
+    let tag = base
+        .rsplit_once(':')
+        .map_or("", |(_, t)| t)
+        .to_ascii_lowercase();
     // Only match bare :1b / :2b or quantized variants like :1b-q4_0 — not :e2b / :e4b.
-    matches!(tag.as_str(), "1b" | "2b")
-        || tag.starts_with("1b-")
-        || tag.starts_with("2b-")
+    matches!(tag.as_str(), "1b" | "2b") || tag.starts_with("1b-") || tag.starts_with("2b-")
 }
 
 /// Returns false for provider/model combinations that currently advertise native
@@ -623,7 +631,10 @@ fn native_tool_transport_supported(provider_name: &str, model: &str) -> bool {
     }
 
     let provider = provider_name.trim().to_ascii_lowercase();
-    let normalized_model = model.strip_suffix(":cloud").unwrap_or(model).to_ascii_lowercase();
+    let normalized_model = model
+        .strip_suffix(":cloud")
+        .unwrap_or(model)
+        .to_ascii_lowercase();
 
     // Ollama currently rejects some gpt-oss tool calls server-side by trying to
     // parse raw shell text as JSON. Force compatibility tool mode up front so the
@@ -728,9 +739,7 @@ fn build_failed_tool_retry_prompt(records: &[FailedToolRecord]) -> String {
     };
 
     let output = truncate_with_ellipsis(record.output.trim(), 240);
-    if record.name == "task_plan"
-        && output.contains("execution has already started this turn")
-    {
+    if record.name == "task_plan" && output.contains("execution has already started this turn") {
         return "Internal correction: the task plan already exists and execution is already underway. Do NOT call `task_plan` again right now. Continue directly with the next incomplete step using a real work tool, or provide the final answer if the work is complete.".to_string();
     }
 
@@ -1079,6 +1088,56 @@ fn is_planning_only_request(text: &str) -> bool {
         || (asks_for_plan && !asks_for_execution)
 }
 
+/// Returns true when the user is asking for information about the agent rather
+/// than asking it to change the environment. These answers naturally mention
+/// available tools and often end with phrases such as "what do you need done?";
+/// they must not be mistaken for an unverified action-completion claim.
+fn is_informational_agent_request(text: &str) -> bool {
+    let lowered = text.trim().to_ascii_lowercase();
+    if lowered.is_empty() {
+        return false;
+    }
+
+    let asks_about_capabilities = [
+        "what capabilities",
+        "your capabilities",
+        "what can you do",
+        "what are you able to do",
+        "what tools do you have",
+        "which tools do you have",
+        "list your tools",
+        "what is available",
+    ]
+    .iter()
+    .any(|needle| lowered.contains(needle));
+    let asks_for_status = [
+        "are you working",
+        "are you online",
+        "are you functional",
+        "what is your status",
+        "are you ready",
+    ]
+    .iter()
+    .any(|needle| lowered.contains(needle));
+    let explicitly_requests_execution = [
+        "test ",
+        "verify ",
+        "execute ",
+        "run ",
+        "create ",
+        "write ",
+        "install ",
+        "configure ",
+        "deploy ",
+        "fix ",
+        "update ",
+    ]
+    .iter()
+    .any(|needle| lowered.contains(needle));
+
+    (asks_about_capabilities || asks_for_status) && !explicitly_requests_execution
+}
+
 fn has_high_value_task_plan_signal(text: &str) -> bool {
     static TASK_PLAN_SIGNAL_RE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(
@@ -1188,6 +1247,7 @@ fn build_auto_plan_retry_prompt() -> String {
 struct TaskPlanProgress {
     total: usize,
     completed: usize,
+    resolved: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1202,6 +1262,20 @@ struct TaskPlanSnapshot {
     items: Vec<TaskPlanItemSnapshot>,
 }
 
+fn task_plan_status_is_terminal(status: &str) -> bool {
+    matches!(status, "completed" | "failed" | "blocked" | "skipped")
+}
+
+fn task_plan_record_resolves_item(record: &SuccessfulToolRecord) -> bool {
+    record.name == "task_plan"
+        && record.arguments.get("action").and_then(|value| value.as_str()) == Some("update")
+        && record
+            .arguments
+            .get("status")
+            .and_then(|value| value.as_str())
+            .is_some_and(task_plan_status_is_terminal)
+}
+
 fn task_plan_items_from_create_arguments(
     arguments: &serde_json::Value,
 ) -> Vec<TaskPlanItemSnapshot> {
@@ -1210,17 +1284,25 @@ fn task_plan_items_from_create_arguments(
         .or_else(|| arguments.get("steps"))
         .and_then(|value| value.as_array())
         .map(|tasks| {
-            tasks.iter()
+            tasks
+                .iter()
                 .enumerate()
                 .filter_map(|(idx, task)| {
-                    let title = ["title", "description", "name", "task_name", "step", "command"]
-                        .iter()
-                        .find_map(|&key| {
-                            task.get(key)
-                                .and_then(|value| value.as_str())
-                                .map(str::trim)
-                                .filter(|title| !title.is_empty())
-                        })?;
+                    let title = [
+                        "title",
+                        "description",
+                        "name",
+                        "task_name",
+                        "step",
+                        "command",
+                    ]
+                    .iter()
+                    .find_map(|&key| {
+                        task.get(key)
+                            .and_then(|value| value.as_str())
+                            .map(str::trim)
+                            .filter(|title| !title.is_empty())
+                    })?;
                     let status = task
                         .get("status")
                         .and_then(|value| value.as_str())
@@ -1238,9 +1320,8 @@ fn task_plan_items_from_create_arguments(
 }
 
 fn parse_task_plan_items_from_output(output: &str) -> Vec<TaskPlanItemSnapshot> {
-    static TASK_PLAN_OUTPUT_ITEM_RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?m)^\s*-\s*\[(\d+)\]\s*\[([a-z_]+)\]\s+(.+?)\s*$").unwrap()
-    });
+    static TASK_PLAN_OUTPUT_ITEM_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?m)^\s*-\s*\[(\d+)\]\s*\[([a-z_]+)\]\s+(.+?)\s*$").unwrap());
 
     TASK_PLAN_OUTPUT_ITEM_RE
         .captures_iter(output)
@@ -1337,6 +1418,11 @@ fn task_plan_progress_snapshot(records: &[SuccessfulToolRecord]) -> Option<TaskP
             .items
             .iter()
             .filter(|item| item.status == "completed")
+            .count(),
+        resolved: snapshot
+            .items
+            .iter()
+            .filter(|item| task_plan_status_is_terminal(&item.status))
             .count(),
     })
 }
@@ -1471,10 +1557,7 @@ fn build_agentic_web_research_followup_prompt(
     }
 
     let needed = target_fetches.saturating_sub(fetched_count).max(1);
-    let next_urls = pending
-        .into_iter()
-        .take(needed.min(2))
-        .collect::<Vec<_>>();
+    let next_urls = pending.into_iter().take(needed.min(2)).collect::<Vec<_>>();
     if next_urls.is_empty() {
         return None;
     }
@@ -1501,7 +1584,7 @@ fn build_post_plan_create_start_prompt(records: &[SuccessfulToolRecord]) -> Opti
     let next = snapshot
         .items
         .iter()
-        .find(|item| item.status != "completed")?;
+        .find(|item| !task_plan_status_is_terminal(&item.status))?;
 
     let mut prompt = format!(
         "Internal continuation: task plan created ({total} steps). \
@@ -1511,10 +1594,16 @@ fn build_post_plan_create_start_prompt(records: &[SuccessfulToolRecord]) -> Opti
         total = snapshot.items.len(),
     );
     for item in snapshot.items.iter().take(20) {
-        prompt.push_str(&format!("  [{}] [{}] {}\n", item.id, item.status, item.title));
+        prompt.push_str(&format!(
+            "  [{}] [{}] {}\n",
+            item.id, item.status, item.title
+        ));
     }
     if snapshot.items.len() > 20 {
-        prompt.push_str(&format!("  ... ({} more steps)\n", snapshot.items.len() - 20));
+        prompt.push_str(&format!(
+            "  ... ({} more steps)\n",
+            snapshot.items.len() - 20
+        ));
     }
     prompt.push_str(&format!(
         "Execute step [{id}]: {title} — call the appropriate tool right now.",
@@ -1537,13 +1626,13 @@ fn task_plan_execution_started(records: &[SuccessfulToolRecord]) -> bool {
 fn build_task_plan_execution_followup_prompt(records: &[SuccessfulToolRecord]) -> Option<String> {
     let snapshot = task_plan_snapshot(records)?;
     let progress = task_plan_progress_snapshot(records)?;
-    if progress.completed >= progress.total {
+    if progress.resolved >= progress.total {
         return None;
     }
 
     let mut prompt = format!(
-        "Internal continuation: a task plan is active ({}/{} completed).",
-        progress.completed, progress.total
+        "Internal continuation: a task plan is active ({}/{} completed; {}/{} resolved).",
+        progress.completed, progress.total, progress.resolved, progress.total
     );
 
     prompt.push_str("\nActive task plan:");
@@ -1557,7 +1646,7 @@ fn build_task_plan_execution_followup_prompt(records: &[SuccessfulToolRecord]) -
     if let Some(next_step) = snapshot
         .items
         .iter()
-        .find(|item| item.status != "completed")
+        .find(|item| !task_plan_status_is_terminal(&item.status))
     {
         prompt.push_str(&format!(
             "\nNext incomplete step: [{}] {}",
@@ -1597,12 +1686,7 @@ fn build_file_write_continuation_prompt(
         .and_then(|v| v.as_str())
         .unwrap_or("the file");
     let user_task = latest_external_user_request(history)
-        .map(|t| {
-            format!(
-                "\nOriginal task: {}",
-                truncate_with_ellipsis(t.trim(), 200)
-            )
-        })
+        .map(|t| format!("\nOriginal task: {}", truncate_with_ellipsis(t.trim(), 200)))
         .unwrap_or_default();
     Some(format!(
         "Written: `{path}`.{user_task}\n\
@@ -1626,9 +1710,7 @@ fn build_retrospective_task_plan_prompt(
     }
 
     // Only fire for meaningful action tools, not metadata lookups
-    const MEANINGFUL: &[&str] = &[
-        "file_write", "shell", "web_fetch", "db_query", "file_read",
-    ];
+    const MEANINGFUL: &[&str] = &["file_write", "shell", "web_fetch", "db_query", "file_read"];
     let meaningful: Vec<&SuccessfulToolRecord> = records
         .iter()
         .filter(|r| MEANINGFUL.contains(&r.name.as_str()))
@@ -1648,10 +1730,7 @@ fn build_retrospective_task_plan_prompt(
                     .or_else(|| r.arguments.get("file_path"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("file");
-                format!(
-                    "Write {}",
-                    path.rsplit('/').next().unwrap_or(path)
-                )
+                format!("Write {}", path.rsplit('/').next().unwrap_or(path))
             }
             "shell" => {
                 let cmd = r
@@ -1723,7 +1802,7 @@ fn build_working_state_prompt(
         if let Some(next_step) = snapshot
             .items
             .iter()
-            .find(|item| item.status != "completed")
+            .find(|item| !task_plan_status_is_terminal(&item.status))
         {
             lines.push(format!(
                 "- Next incomplete step: [{}] {}",
@@ -2106,10 +2185,7 @@ fn synthesize_grounded_final_answer(
         }
     }
 
-    let last_db_query = records
-        .iter()
-        .rev()
-        .find(|r| r.name == "db_query");
+    let last_db_query = records.iter().rev().find(|r| r.name == "db_query");
     if let Some(record) = last_db_query {
         if record.output.starts_with("Query returned ")
             && !record.output.starts_with("Query returned no rows")
@@ -2259,6 +2335,7 @@ async fn call_provider_chat(
     model: &str,
     temperature: f64,
     cancellation_token: Option<&CancellationToken>,
+    on_delta: Option<&tokio::sync::mpsc::Sender<String>>,
 ) -> Result<crate::providers::ChatResponse> {
     let chat_future = provider.chat(
         ChatRequest {
@@ -2268,15 +2345,59 @@ async fn call_provider_chat(
         model,
         temperature,
     );
+    tokio::pin!(chat_future);
 
-    if let Some(token) = cancellation_token {
-        tokio::select! {
-            () = token.cancelled() => Err(ToolLoopCancelled.into()),
-            result = chat_future => result,
+    let started_at = Instant::now();
+    let mut heartbeat = tokio::time::interval(Duration::from_secs(MODEL_PROGRESS_HEARTBEAT_SECS));
+    // Skip interval's immediate first tick; the caller already emitted
+    // "Thinking..." before entering this function.
+    heartbeat.tick().await;
+
+    loop {
+        if let Some(token) = cancellation_token {
+            tokio::select! {
+                () = token.cancelled() => return Err(ToolLoopCancelled.into()),
+                result = &mut chat_future => return result,
+                _ = heartbeat.tick(), if on_delta.is_some() => {
+                    if let Some(tx) = on_delta {
+                        let elapsed = started_at.elapsed().as_secs();
+                        let _ = tx.send(format!(
+                            "{DRAFT_PROGRESS_SENTINEL}🧠 Still reasoning… {elapsed}s (this is a resumable local inference segment)\n"
+                        )).await;
+                    }
+                }
+            }
+        } else {
+            tokio::select! {
+                result = &mut chat_future => return result,
+                _ = heartbeat.tick(), if on_delta.is_some() => {
+                    if let Some(tx) = on_delta {
+                        let elapsed = started_at.elapsed().as_secs();
+                        let _ = tx.send(format!(
+                            "{DRAFT_PROGRESS_SENTINEL}🧠 Still reasoning… {elapsed}s (this is a resumable local inference segment)\n"
+                        )).await;
+                    }
+                }
+            }
         }
-    } else {
-        chat_future.await
     }
+}
+
+/// A provider reaching its output cap is a normal checkpoint boundary for a
+/// long local run, not a failed tool-followthrough retry. Keep this prompt
+/// short: the assistant's partial response is already in the history.
+fn build_output_budget_continuation_prompt(thinking_only: bool) -> String {
+    let boundary = if thinking_only {
+        "The prior segment used its reasoning budget before producing visible text."
+    } else {
+        "The prior segment used its output/reasoning budget and its partial response is already in the conversation."
+    };
+
+    format!(
+        "Internal continuation: {boundary} This is a normal checkpoint, not a failure. \
+         Continue the same task now. Do not repeat completed reasoning or already-emitted text. \
+         If work remains, emit the next real tool call or the remaining answer; if the task is genuinely complete, give a concise final answer."
+    )
 }
 
 async fn consume_provider_streaming_response(
@@ -2587,11 +2708,25 @@ pub(crate) async fn run_tool_call_loop(
     let mut prior_no_tool_response_texts: Vec<String> = Vec::new();
     // Cumulative retry counter for trace events.
     let mut retry_count: usize = 0;
+    // Number of normal checkpoint/continuations caused by a provider-side
+    // per-segment output limit. This is intentionally separate from retries:
+    // reaching a reasoning budget is progress, not an error.
+    let mut output_budget_continuation_count: usize = 0;
+    // Visible text produced before a length stop. We join it with the eventual
+    // final segment so a normal continuation never silently drops the first
+    // half of a long answer.
+    let mut checkpointed_output_segments: Vec<String> = Vec::new();
     // How many times we've asked the model to create a task_plan before executing.
     // After a few failed attempts, stop blocking and let the model execute directly.
     let mut auto_plan_retry_count: usize = 0;
     let mut recent_successful_tool_records: Vec<SuccessfulToolRecord> = Vec::new();
     let mut recent_failed_tool_records: Vec<FailedToolRecord> = Vec::new();
+    // Completing a plan item creates a semantic context boundary. On the next
+    // provider request, compact older messages into a focused checkpoint so
+    // the next subtask gets a fresh capsule instead of inheriting every raw
+    // tool log from the previous item.
+    let mut forced_history_budget: Option<usize> = None;
+    let mut final_plan_verification_requested = false;
     // Counts consecutive iterations where web_search ran but web_fetch did not.
     // Resets to 0 as soon as any web_fetch succeeds in an iteration.
     let mut consecutive_web_searches_without_fetch: usize = 0;
@@ -2626,9 +2761,12 @@ pub(crate) async fn run_tool_call_loop(
         );
     }
 
-    // When a task_plan has remaining steps, auto-extend beyond max_iterations so the
-    // agent runs to true completion. Hard cap: 5× configured limit to prevent runaway.
-    let plan_extend_hard_cap = max_iterations.saturating_mul(5).max(100);
+    // A task plan is a durable run-and-forget contract, so it may extend past
+    // its initial tool-iteration batch until all of its items reach a terminal
+    // state. Loop-stall guards and the operator cancellation token remain the
+    // termination controls; do not turn a large valid task into a 5× counter
+    // failure just because it needs more checkpoints.
+    let plan_extend_hard_cap = usize::MAX;
     let mut effective_limit = max_iterations;
 
     for iteration in 0..plan_extend_hard_cap {
@@ -2648,8 +2786,7 @@ pub(crate) async fn run_tool_call_loop(
         if let Some(continuation_prompt) = post_tool_execution_prompt.take() {
             // Track whether this is a plan-create start prompt so we can detect
             // when the model responds with plan-summary text instead of tool calls.
-            pending_post_plan_create_retry =
-                continuation_prompt.contains("Begin execution NOW");
+            pending_post_plan_create_retry = continuation_prompt.contains("Begin execution NOW");
             history.push(ChatMessage::user(continuation_prompt));
         } else {
             pending_post_plan_create_retry = false;
@@ -2668,7 +2805,8 @@ pub(crate) async fn run_tool_call_loop(
         }
 
         let history_len_before_compaction = history.len();
-        match auto_compact_history(history, provider, model, history_budget, None).await {
+        let request_history_budget = forced_history_budget.take().unwrap_or(history_budget);
+        match auto_compact_history(history, provider, model, request_history_budget, None).await {
             Ok(compacted) if compacted => {
                 runtime_trace::record_event(
                     "tool_loop_history_auto_compacted",
@@ -2680,7 +2818,7 @@ pub(crate) async fn run_tool_call_loop(
                     Some("compacted history before provider request"),
                     serde_json::json!({
                         "iteration": iteration + 1,
-                        "history_budget": history_budget,
+                        "history_budget": request_history_budget,
                         "messages_before": history_len_before_compaction,
                         "messages_after": history.len(),
                     }),
@@ -2693,7 +2831,7 @@ pub(crate) async fn run_tool_call_loop(
                     provider = provider_name,
                     model = model,
                     iteration = iteration + 1,
-                    history_budget,
+                    request_history_budget,
                     "failed to auto-compact tool loop history: {err}"
                 );
                 runtime_trace::record_event(
@@ -2706,7 +2844,7 @@ pub(crate) async fn run_tool_call_loop(
                     Some("history compaction failed; continuing with existing history"),
                     serde_json::json!({
                         "iteration": iteration + 1,
-                        "history_budget": history_budget,
+                        "history_budget": request_history_budget,
                         "messages_before": history_len_before_compaction,
                         "error": scrub_credentials(&err.to_string()),
                     }),
@@ -2824,6 +2962,7 @@ pub(crate) async fn run_tool_call_loop(
                         model,
                         temperature,
                         cancellation_token.as_ref(),
+                        on_delta.as_ref(),
                     )
                     .await
                 }
@@ -2836,6 +2975,7 @@ pub(crate) async fn run_tool_call_loop(
                 model,
                 temperature,
                 cancellation_token.as_ref(),
+                on_delta.as_ref(),
             )
             .await
         };
@@ -2849,6 +2989,7 @@ pub(crate) async fn run_tool_call_loop(
             parse_issue_detected,
             response_streamed_live,
             response_was_thinking_only,
+            response_output_budget_exhausted,
         ) = match chat_result {
             Ok(resp) => {
                 let (resp_input_tokens, resp_output_tokens) = resp
@@ -2868,6 +3009,10 @@ pub(crate) async fn run_tool_call_loop(
                 });
 
                 let response_text = resp.text_or_empty().to_string();
+                let response_output_budget_exhausted = resp
+                    .usage
+                    .as_ref()
+                    .is_some_and(|usage| usage.output_truncated);
                 // True when the model finished a thinking pass but emitted no output text
                 // and no tool calls — we must not treat this as a completed turn.
                 let response_was_thinking_only = resp.text.is_none()
@@ -2961,6 +3106,7 @@ pub(crate) async fn run_tool_call_loop(
                     parse_issue.is_some(),
                     streamed_live_deltas,
                     response_was_thinking_only,
+                    response_output_budget_exhausted,
                 )
             }
             Err(e) => {
@@ -3045,6 +3191,7 @@ pub(crate) async fn run_tool_call_loop(
                             false,
                             false,
                             false,
+                            false,
                         )
                     } else {
                         return Err(e);
@@ -3101,6 +3248,64 @@ pub(crate) async fn run_tool_call_loop(
         }
 
         if tool_calls.is_empty() {
+            // `num_predict` ended this model segment. Preserve its partial
+            // assistant state, visibly report the checkpoint, then continue in
+            // a fresh request. Do not route this through the missing-tool-call
+            // retry machinery: a thinking model hitting its per-turn budget is
+            // making bounded progress, not refusing the task.
+            if response_output_budget_exhausted {
+                output_budget_continuation_count =
+                    output_budget_continuation_count.saturating_add(1);
+
+                let checkpoint_text = display_text.trim();
+                if !checkpoint_text.is_empty() && !parse_issue_detected {
+                    checkpointed_output_segments.push(checkpoint_text.to_string());
+                }
+                if response_text.trim().is_empty() {
+                    history.push(ChatMessage::assistant(
+                        "[Local inference checkpoint: reasoning segment reached its output budget before visible text.]",
+                    ));
+                } else {
+                    // Keep raw provider text in history so the next model call
+                    // can continue from the exact partial answer or incomplete
+                    // tool-formulation boundary.
+                    history.push(ChatMessage::assistant(response_text.clone()));
+                }
+
+                missing_tool_call_retry_prompt = Some(build_output_budget_continuation_prompt(
+                    response_was_thinking_only,
+                ));
+                // A per-segment continuation must not consume the task's tool
+                // iteration budget. Task plans and output boundaries may keep
+                // extending this limit; cancellation and real terminal states
+                // end the run.
+                effective_limit = effective_limit.saturating_add(1).min(plan_extend_hard_cap);
+
+                runtime_trace::record_event(
+                    "llm_output_budget_checkpoint",
+                    Some(channel_name),
+                    Some(provider_name),
+                    Some(model),
+                    Some(&turn_id),
+                    Some(true),
+                    Some("provider output budget reached; checkpointed and continuing"),
+                    serde_json::json!({
+                        "iteration": iteration + 1,
+                        "continuation_count": output_budget_continuation_count,
+                        "checkpointed_visible_segments": checkpointed_output_segments.len(),
+                        "thinking_only": response_was_thinking_only,
+                    }),
+                );
+                if let Some(ref tx) = on_delta {
+                    let _ = tx
+                        .send(format!(
+                            "{DRAFT_PROGRESS_SENTINEL}↪ Reasoning segment checkpointed — continuing automatically (segment {output_budget_continuation_count})\n"
+                        ))
+                        .await;
+                }
+                continue;
+            }
+
             // ── Repeated-intent guard ──────────────────────────────────────────────────
             // If the model keeps emitting the same no-tool-call text after a retry, stop
             // spending tokens: return a grounded answer (when available) or bail fast.
@@ -3158,14 +3363,20 @@ pub(crate) async fn run_tool_call_loop(
                 );
             }
 
-            let completion_claim_signal =
-                looks_like_unverified_action_completion_without_tool_call(&display_text);
-            let deferred_tool_action_signal =
-                looks_like_deferred_tool_action_without_call(&display_text);
-            let tool_unavailable_signal =
-                looks_like_tool_unavailability_claim(&display_text, &tool_specs);
-            let action_oriented_request = latest_external_user_request(history)
-                .is_some_and(|request| !is_planning_only_request(request));
+            let action_oriented_request =
+                latest_external_user_request(history).is_some_and(|request| {
+                    !is_planning_only_request(request) && !is_informational_agent_request(request)
+                });
+            // Only enforce a missing tool call when the user actually asked for
+            // environment-changing work. Capability/status questions commonly
+            // contain words such as "execute" and "done" in an otherwise valid
+            // text answer, which previously caused a false-positive retry loop.
+            let completion_claim_signal = action_oriented_request
+                && looks_like_unverified_action_completion_without_tool_call(&display_text);
+            let deferred_tool_action_signal = action_oriented_request
+                && looks_like_deferred_tool_action_without_call(&display_text);
+            let tool_unavailable_signal = action_oriented_request
+                && looks_like_tool_unavailability_claim(&display_text, &tool_specs);
             let task_plan_followup_requires_execution = successful_tool_execution_seen
                 && action_oriented_request
                 && looks_like_task_plan_followup_question(
@@ -3229,7 +3440,9 @@ pub(crate) async fn run_tool_call_loop(
                             Some(model),
                             Some(&turn_id),
                             Some(true),
-                            Some("tools succeeded; skipping followthrough retry, returning grounded answer"),
+                            Some(
+                                "tools succeeded; skipping followthrough retry, returning grounded answer",
+                            ),
                             serde_json::json!({
                                 "iteration": iteration + 1,
                                 "retry_count": retry_count,
@@ -3254,7 +3467,9 @@ pub(crate) async fn run_tool_call_loop(
                             Some(model),
                             Some(&turn_id),
                             Some(true),
-                            Some("tool succeeded; accepting completion claim text without another retry"),
+                            Some(
+                                "tool succeeded; accepting completion claim text without another retry",
+                            ),
                             serde_json::json!({
                                 "iteration": iteration + 1,
                                 "retry_count": retry_count,
@@ -3287,34 +3502,41 @@ pub(crate) async fn run_tool_call_loop(
                 }
                 missing_tool_call_retry_used = true;
                 retry_count += 1;
-                missing_tool_call_retry_prompt = Some(if (bare_tool_name_response || parse_issue_detected) && !use_native_tools {
-                    // Model emitted a bare/malformed tool call instead of [TOOL_CALLS] format.
-                    // Remind it of the exact XML format expected. Do NOT include a live example
-                    // that would itself be parsed as a tool call — use a placeholder notation.
-                    let tname = display_text.trim().split('[').next().unwrap_or("tool_name").trim();
-                    format!(
-                        "Internal correction: the tool call format was wrong. \
+                missing_tool_call_retry_prompt = Some(
+                    if (bare_tool_name_response || parse_issue_detected) && !use_native_tools {
+                        // Model emitted a bare/malformed tool call instead of [TOOL_CALLS] format.
+                        // Remind it of the exact XML format expected. Do NOT include a live example
+                        // that would itself be parsed as a tool call — use a placeholder notation.
+                        let tname = display_text
+                            .trim()
+                            .split('[')
+                            .next()
+                            .unwrap_or("tool_name")
+                            .trim();
+                        format!(
+                            "Internal correction: the tool call format was wrong. \
                          Required format: [TOOL_CALLS]TOOL_NAME[ARGS]JSON_OBJECT — brackets and [ARGS] keyword are required. \
                          Do NOT use SQL for MongoDB connections — use JSON filter syntax. \
                          For db_query on arxiv: connection=arxiv, collection=Papers, \
                          filter={{\"categories\":{{\"$regex\":\"cs.AI\"}}}}, projection={{\"title\":1,\"_id\":0}}, limit=3. \
                          Emit the [TOOL_CALLS]{tname}[ARGS]{{...JSON...}} block now."
-                    )
-                } else if failed_tool_followthrough {
-                    build_failed_tool_retry_prompt(&recent_failed_tool_records)
-                } else if tool_unavailable_signal {
-                    build_tool_unavailable_retry_prompt(&tool_specs)
-                } else if task_plan_followup_requires_execution {
-                    build_post_plan_create_start_prompt(&recent_successful_tool_records)
-                        .or_else(|| {
-                            build_task_plan_execution_followup_prompt(
-                                &recent_successful_tool_records,
-                            )
-                        })
-                        .unwrap_or_else(|| build_missing_tool_call_retry_prompt(history))
-                } else {
-                    build_missing_tool_call_retry_prompt(history)
-                });
+                        )
+                    } else if failed_tool_followthrough {
+                        build_failed_tool_retry_prompt(&recent_failed_tool_records)
+                    } else if tool_unavailable_signal {
+                        build_tool_unavailable_retry_prompt(&tool_specs)
+                    } else if task_plan_followup_requires_execution {
+                        build_post_plan_create_start_prompt(&recent_successful_tool_records)
+                            .or_else(|| {
+                                build_task_plan_execution_followup_prompt(
+                                    &recent_successful_tool_records,
+                                )
+                            })
+                            .unwrap_or_else(|| build_missing_tool_call_retry_prompt(history))
+                    } else {
+                        build_missing_tool_call_retry_prompt(history)
+                    },
+                );
                 let retry_reason = if parse_issue_detected {
                     "parse_issue_detected"
                 } else if deferred_tool_action_signal {
@@ -3402,7 +3624,8 @@ pub(crate) async fn run_tool_call_loop(
                 pending_post_plan_create_retry = false;
                 missing_tool_call_retry_used = true;
                 retry_count += 1;
-                missing_tool_call_retry_prompt = Some(build_missing_tool_call_retry_prompt(history));
+                missing_tool_call_retry_prompt =
+                    Some(build_missing_tool_call_retry_prompt(history));
                 runtime_trace::record_event(
                     "post_plan_create_no_tool_call_retry",
                     Some(channel_name),
@@ -3410,7 +3633,9 @@ pub(crate) async fn run_tool_call_loop(
                     Some(model),
                     Some(&turn_id),
                     Some(false),
-                    Some("model described plan instead of executing; retrying with execute directive"),
+                    Some(
+                        "model described plan instead of executing; retrying with execute directive",
+                    ),
                     serde_json::json!({
                         "iteration": iteration + 1,
                         "response_excerpt": truncate_with_ellipsis(
@@ -3555,9 +3780,8 @@ pub(crate) async fn run_tool_call_loop(
         let mut individual_results: Vec<(Option<String>, String)> = Vec::new();
         let mut ordered_results: Vec<Option<(String, Option<String>, ToolExecutionOutcome)>> =
             (0..tool_calls.len()).map(|_| None).collect();
-        let allow_parallel_execution =
-            parallel_tools_enabled
-                && should_execute_tools_in_parallel(&tool_calls, tools_registry, approval);
+        let allow_parallel_execution = parallel_tools_enabled
+            && should_execute_tools_in_parallel(&tool_calls, tools_registry, approval);
         let mut executable_indices: Vec<usize> = Vec::new();
         let mut executable_calls: Vec<ParsedToolCall> = Vec::new();
         let mut duplicate_tool_call_count = 0usize;
@@ -3927,6 +4151,9 @@ pub(crate) async fn run_tool_call_loop(
         }
 
         let iteration_had_failed_tools = !current_failed_tool_records.is_empty();
+        let iteration_resolved_plan_item = current_successful_tool_records
+            .iter()
+            .any(task_plan_record_resolves_item);
         let iteration_executed_non_plan_tool =
             current_successful_tool_records.iter().any(|record| {
                 !matches!(
@@ -3934,18 +4161,21 @@ pub(crate) async fn run_tool_call_loop(
                     "task_plan" | "memory_store" | "memory_recall"
                 )
             });
-        let iteration_had_only_task_plan_create =
-            !iteration_executed_non_plan_tool
-                && current_successful_tool_records
-                    .iter()
-                    .any(task_plan_record_is_create);
+        let iteration_had_only_task_plan_create = !iteration_executed_non_plan_tool
+            && current_successful_tool_records
+                .iter()
+                .any(task_plan_record_is_create);
         // Track web_search_tool without web_fetch so we can prompt the model to
         // read the actual pages instead of just citing search snippets.
-        let iteration_had_web_search_without_fetch =
-            current_successful_tool_records.iter().any(|r| r.name == "web_search_tool")
-                && !current_successful_tool_records.iter().any(|r| r.name == "web_fetch");
-        let iteration_had_fetch =
-            current_successful_tool_records.iter().any(|r| r.name == "web_fetch");
+        let iteration_had_web_search_without_fetch = current_successful_tool_records
+            .iter()
+            .any(|r| r.name == "web_search_tool")
+            && !current_successful_tool_records
+                .iter()
+                .any(|r| r.name == "web_fetch");
+        let iteration_had_fetch = current_successful_tool_records
+            .iter()
+            .any(|r| r.name == "web_fetch");
         if iteration_had_web_search_without_fetch {
             consecutive_web_searches_without_fetch =
                 consecutive_web_searches_without_fetch.saturating_add(1);
@@ -3968,10 +4198,43 @@ pub(crate) async fn run_tool_call_loop(
 
         if !current_successful_tool_records.is_empty() {
             recent_successful_tool_records.extend(current_successful_tool_records);
-            let recent_len = recent_successful_tool_records.len();
-            if recent_len > 12 {
-                recent_successful_tool_records.drain(..recent_len - 12);
+            // Plan records are the durable execution contract for this turn.
+            // Retain every update since the most recent create while bounding
+            // ordinary action records to the latest 12. This prevents large
+            // autonomous plans from forgetting their own checklist halfway
+            // through execution.
+            if let Some(latest_create) = recent_successful_tool_records
+                .iter()
+                .rposition(|record| record.name == "task_plan" && task_plan_call_is_create(&record.arguments))
+            {
+                let mut non_plan_after_create = 0usize;
+                recent_successful_tool_records = recent_successful_tool_records
+                    .drain(..)
+                    .enumerate()
+                    .rev()
+                    .filter(|(index, record)| {
+                        if *index < latest_create {
+                            return false;
+                        }
+                        if record.name == "task_plan" {
+                            return true;
+                        }
+                        non_plan_after_create += 1;
+                        non_plan_after_create <= 12
+                    })
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .map(|(_, record)| record)
+                    .collect();
+            } else if recent_successful_tool_records.len() > 12 {
+                let drain_to = recent_successful_tool_records.len() - 12;
+                recent_successful_tool_records.drain(..drain_to);
             }
+        }
+
+        if iteration_resolved_plan_item {
+            forced_history_budget = Some(history_budget.min(12).max(6));
         }
 
         if !current_failed_tool_records.is_empty() {
@@ -4045,6 +4308,8 @@ pub(crate) async fn run_tool_call_loop(
         }
 
         if !iteration_had_failed_tools
+            && !task_plan_progress_snapshot(&recent_successful_tool_records)
+                .is_some_and(|progress| progress.total > 0 && progress.resolved == progress.total)
             && should_short_circuit_after_tool_execution(history, &recent_successful_tool_records)
         {
             if let Some(final_text) =
@@ -4092,8 +4357,7 @@ pub(crate) async fn run_tool_call_loop(
             if iteration_had_web_search_without_fetch {
                 // After a few consecutive searches without any fetch, emit a hard override
                 // prompt so the model cannot search again before fetching at least one URL.
-                if consecutive_web_searches_without_fetch >= WEB_SEARCH_WITHOUT_FETCH_STREAK_LIMIT
-                {
+                if consecutive_web_searches_without_fetch >= WEB_SEARCH_WITHOUT_FETCH_STREAK_LIMIT {
                     let force_urls = extract_candidate_urls_from_search_output(
                         recent_successful_tool_records
                             .iter()
@@ -4139,9 +4403,8 @@ pub(crate) async fn run_tool_call_loop(
                     consecutive_coordination_status_only_iterations
                 ))
             } else if iteration_executed_non_plan_tool {
-                let last_was_db_query_with_rows = recent_successful_tool_records
-                    .last()
-                    .is_some_and(|r| {
+                let last_was_db_query_with_rows =
+                    recent_successful_tool_records.last().is_some_and(|r| {
                         r.name == "db_query"
                             && r.output.starts_with("Query returned ")
                             && !r.output.starts_with("Query returned no rows")
@@ -4161,7 +4424,10 @@ pub(crate) async fn run_tool_call_loop(
                 } else if last_was_db_schema {
                     Some("Schema retrieved. Now call db_query with the correct connection, collection, filter, and projection for the user's request.".to_string())
                 } else {
-                build_agentic_web_research_followup_prompt(history, &recent_successful_tool_records)
+                    build_agentic_web_research_followup_prompt(
+                        history,
+                        &recent_successful_tool_records,
+                    )
                     .or_else(|| {
                         build_task_plan_execution_followup_prompt(&recent_successful_tool_records)
                     })
@@ -4199,7 +4465,9 @@ pub(crate) async fn run_tool_call_loop(
         {
             post_tool_execution_prompt =
                 build_task_plan_execution_followup_prompt(&recent_successful_tool_records)
-                    .or_else(|| build_post_plan_create_start_prompt(&recent_successful_tool_records))
+                    .or_else(|| {
+                        build_post_plan_create_start_prompt(&recent_successful_tool_records)
+                    })
                     .or_else(|| {
                         // Retrospective plan: after enough unplanned tool calls, ask the model
                         // to create a task_plan capturing what's done and what remains.
@@ -4220,6 +4488,17 @@ pub(crate) async fn run_tool_call_loop(
                             history,
                         )
                     });
+        }
+
+        if !final_plan_verification_requested
+            && task_plan_progress_snapshot(&recent_successful_tool_records)
+                .is_some_and(|progress| progress.total > 0 && progress.resolved == progress.total)
+        {
+            final_plan_verification_requested = true;
+            post_tool_execution_prompt = Some(
+                "Internal final acceptance pass: every task-plan item is now resolved. Re-read the original user request and the verified evidence in the current working state. Check that each acceptance criterion is actually supported by tool results. If a material criterion is still unverified, call the required verification tool now and update the plan truthfully. Otherwise return the final concise pass/fail/blocked summary with concrete evidence; do not merely say the plan is complete."
+                    .to_string(),
+            );
         }
 
         let all_tool_calls_were_duplicates = successful_tool_execution_seen
@@ -4300,13 +4579,16 @@ pub(crate) async fn run_tool_call_loop(
 
         // Auto-extend iteration limit when a task_plan has remaining steps so the
         // agent runs to true completion without user re-prompting. Each extension
-        // grants one more batch of max_iterations, capped at plan_extend_hard_cap.
+        // grants one more batch of max_iterations; terminal plan states and the
+        // cancellation token, not an arbitrary multiplier, end a valid long run.
         if iteration + 1 >= effective_limit && effective_limit < plan_extend_hard_cap {
             let plan_has_remaining = task_plan_progress_snapshot(&recent_successful_tool_records)
-                .map(|p| p.completed < p.total)
+                .map(|p| p.resolved < p.total)
                 .unwrap_or(false);
             if plan_has_remaining {
-                effective_limit = (effective_limit + max_iterations).min(plan_extend_hard_cap);
+                effective_limit = effective_limit
+                    .saturating_add(max_iterations)
+                    .min(plan_extend_hard_cap);
                 if let Some(ref tx) = on_delta {
                     let _ = tx
                         .send(format!(
@@ -4492,7 +4774,8 @@ pub(crate) fn build_runtime_tool_availability_notice(tools_registry: &[Box<dyn T
         "\n## Runtime Tool Availability (Authoritative)\n\n\
          Use only these runtime-available tools for this turn.\n\
          Tools: {names}\n\
-         Do not claim tools are unavailable when they are listed here.\n\
+         A tool being listed means it is registered for this runtime; it does not prove its host binary, credentials, remote service, or a particular operation has been verified.\n\
+         Do not claim a listed tool is unavailable without a concrete runtime error, and do not claim it is working without a concrete successful tool result from this run.\n\
          If the user asked for an action, keep using these tools until the action is complete or the runtime returns a blocking error.\n"
     )
 }
@@ -4523,11 +4806,19 @@ pub(crate) fn build_auto_plan_execute_instructions() -> String {
      When a request clearly needs a task plan, follow this exact pattern without stopping:\n\
      1. Call `task_plan` with action=create and a `tasks` array listing every step.\n\
      2. Immediately — in the same turn — start executing step 1 using real tools.\n\
-     3. After each step succeeds, call `task_plan` with action=update to mark it completed, then start the next step.\n\
+     3. After each step has concrete verification evidence, call `task_plan` with action=update to mark it completed, then start the next step. If recovery is exhausted, mark the item failed or blocked rather than falsely completing it, then continue independent work.\n\
      4. Never stop after creating the plan to summarize or wait for user input. Execute immediately.\n\
      5. Never stop mid-execution to describe what you are about to do. Use the tool and show the result.\n\
      6. Only pause to ask the user if a tool returns a hard blocking error or a required input is genuinely unknown.\n\
      7. When all steps are completed, provide a single grounded final answer backed by the actual tool results.\n\n\
+     ## Capability Audit Semantics\n\n\
+     When the user asks to test or audit all available tools, treat that as a real executable integration audit, not a capability claim or a reason to stop after creating a plan.\n\
+     - Create a finite task plan using only tools listed in the runtime availability section, and run one bounded probe per applicable tool.\n\
+     - Track every tool as exactly one of: verified (a successful result in this run), failed (a concrete error), blocked (missing configuration, credential, host dependency, or policy), or skipped (outside the requested scope).\n\
+     - Never describe an untested, blocked, or merely registered tool as functional. Do not retry the same blocked probe unless you made a specific repair that could change its outcome.\n\
+     - Prefer status, list, read-only, reversible, or isolated-workspace probes for side-effecting tools. If a meaningful probe would create lasting external state, say so and use the smallest permitted probe instead of inventing a pass.\n\
+     - When a tool has a harmless, missing fixture prerequisite (for example, a Git repository), create that fixture in an isolated workspace before probing it. A missing fixture is not evidence that the tool itself failed.\n\
+     - Finish the audit with a compact evidence matrix and the next repair action for each failed or blocked capability.\n\n\
      CRITICAL: When you do create a plan, creating the plan is step zero. The first real work tool call must happen in the same LLM turn as the plan creation.\n"
         .to_string()
 }
@@ -4668,7 +4959,7 @@ pub async fn run(
         reasoning_enabled: config.runtime.reasoning_enabled,
         reasoning_level: config.effective_provider_reasoning_level(),
         custom_provider_api_mode: config.provider_api.map(|mode| mode.as_compatible_mode()),
-        max_tokens_override: None,
+        max_tokens_override: config.agent.max_output_tokens_per_turn,
         model_support_vision: config.model_support_vision,
         ..Default::default()
     };
@@ -5059,7 +5350,10 @@ pub async fn run(
                         let pause_notice = format!(
                             "⚠️ Reached tool-iteration limit ({}). Context and progress are preserved. \
                             Reply \"continue\" to resume, or increase `agent.max_tool_iterations` in config.",
-                            config.agent.max_tool_iterations.max(DEFAULT_MAX_TOOL_ITERATIONS)
+                            config
+                                .agent
+                                .max_tool_iterations
+                                .max(DEFAULT_MAX_TOOL_ITERATIONS)
                         );
                         history.push(ChatMessage::assistant(&pause_notice));
                         eprintln!("\n{pause_notice}\n");
@@ -5170,7 +5464,7 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
         reasoning_enabled: config.runtime.reasoning_enabled,
         reasoning_level: config.effective_provider_reasoning_level(),
         custom_provider_api_mode: config.provider_api.map(|mode| mode.as_compatible_mode()),
-        max_tokens_override: None,
+        max_tokens_override: config.agent.max_output_tokens_per_turn,
         model_support_vision: config.model_support_vision,
         ..Default::default()
     };
@@ -5326,7 +5620,7 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -5496,8 +5790,8 @@ mod tests {
 
     use crate::memory::{Memory, MemoryCategory, SqliteMemory};
     use crate::observability::NoopObserver;
-    use crate::providers::traits::{ProviderCapabilities, StreamChunk, StreamOptions};
     use crate::providers::ChatResponse;
+    use crate::providers::traits::{ProviderCapabilities, StreamChunk, StreamOptions};
     use crate::runtime::NativeRuntime;
     use crate::security::{AutonomyLevel, SecurityPolicy, ShellRedirectPolicy};
     use tempfile::TempDir;
@@ -6232,9 +6526,10 @@ mod tests {
         .await
         .expect_err("oversized payload must fail");
 
-        assert!(err
-            .to_string()
-            .contains("multimodal image size limit exceeded"));
+        assert!(
+            err.to_string()
+                .contains("multimodal image size limit exceeded")
+        );
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
@@ -6342,8 +6637,8 @@ mod tests {
 
     #[test]
     fn should_execute_tools_in_parallel_returns_true_for_read_only_tools() {
-        use crate::tools::{FileReadTool, GlobSearchTool};
         use crate::security::SecurityPolicy;
+        use crate::tools::{FileReadTool, GlobSearchTool};
         use std::sync::Arc;
         let sec = Arc::new(SecurityPolicy::default());
         let registry: Vec<Box<dyn crate::tools::Tool>> = vec![
@@ -7077,6 +7372,52 @@ mod tests {
             invocations.load(Ordering::SeqCst),
             0,
             "tool should not execute when provider never emits a real tool call"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_tool_call_loop_allows_capability_answer_without_forcing_a_tool_call() {
+        let answer = "Here are my capabilities: I can run shell commands, read and write files, search the web, query local RAG, and delegate work. I don't just describe capabilities — I execute them. What do you need done?";
+        let provider = ScriptedProvider::from_text_responses(vec![answer]);
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(CountingTool::new(
+            "count_tool",
+            Arc::clone(&invocations),
+        ))];
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("what capabilities do you have in this environment?"),
+        ];
+        let observer = NoopObserver;
+
+        let result = run_tool_call_loop(
+            &provider,
+            &mut history,
+            &tools_registry,
+            &observer,
+            "mock-provider",
+            "mock-model",
+            0.0,
+            true,
+            None,
+            "cli",
+            &crate::config::MultimodalConfig::default(),
+            5,
+            None,
+            None,
+            None,
+            &[],
+        )
+        .await
+        .expect("capability question should accept a truthful text answer");
+
+        assert_eq!(result, answer);
+        assert_eq!(invocations.load(Ordering::SeqCst), 0);
+        assert!(
+            !history.iter().any(|message| {
+                message.role == "user" && message.content.starts_with("Internal correction:")
+            }),
+            "capability answer should not trigger a tool-followthrough retry"
         );
     }
 
@@ -8066,9 +8407,7 @@ mod tests {
 
         let mut history = vec![
             ChatMessage::system("test-system"),
-            ChatMessage::user(
-                "write a python fibonacci script to fib.py, inspect it, and answer",
-            ),
+            ChatMessage::user("write a python fibonacci script to fib.py, inspect it, and answer"),
         ];
         let observer = NoopObserver;
 
@@ -8099,7 +8438,9 @@ mod tests {
         assert!(
             history.iter().any(|msg| {
                 msg.role == "user"
-                    && msg.content.contains("The file `fib.py` has already been written 3 times")
+                    && msg
+                        .content
+                        .contains("The file `fib.py` has already been written 3 times")
                     && msg.content.contains("Do NOT call `file_write` again")
             }),
             "loop should inject a repeated file_write stall-breaker prompt"
@@ -8286,23 +8627,33 @@ mod tests {
             "provider request should include compaction summary"
         );
         assert!(
-            !first_request.iter().any(|msg| msg.content.contains("old 1")),
+            !first_request
+                .iter()
+                .any(|msg| msg.content.contains("old 1")),
             "oldest history should be compacted out of the provider request"
         );
         assert!(
-            !first_request.iter().any(|msg| msg.content.contains("old 2")),
+            !first_request
+                .iter()
+                .any(|msg| msg.content.contains("old 2")),
             "oldest history should be compacted out of the provider request"
         );
         assert!(
-            !first_request.iter().any(|msg| msg.content.contains("old 3")),
+            !first_request
+                .iter()
+                .any(|msg| msg.content.contains("old 3")),
             "oldest history should be compacted out of the provider request"
         );
         assert!(
-            first_request.iter().any(|msg| msg.content.contains("recent 1")),
+            first_request
+                .iter()
+                .any(|msg| msg.content.contains("recent 1")),
             "recent context should be preserved"
         );
         assert!(
-            first_request.iter().any(|msg| msg.content.contains("recent 2")),
+            first_request
+                .iter()
+                .any(|msg| msg.content.contains("recent 2")),
             "recent context should be preserved"
         );
     }
@@ -8421,12 +8772,16 @@ mod tests {
             .expect("second request should include an internal working state message");
 
         assert!(working_state.content.contains("Current user task"));
-        assert!(working_state
-            .content
-            .contains("[1] [pending] Inspect rust_kernel"));
-        assert!(working_state
-            .content
-            .contains("Next incomplete step: [1] Inspect rust_kernel"));
+        assert!(
+            working_state
+                .content
+                .contains("[1] [pending] Inspect rust_kernel")
+        );
+        assert!(
+            working_state
+                .content
+                .contains("Next incomplete step: [1] Inspect rust_kernel")
+        );
     }
 
     #[tokio::test]
@@ -8617,6 +8972,40 @@ mod tests {
         assert!(!looks_like_unverified_action_completion_without_tool_call(
             "We were previously discussing gmail integration. Goal 1 is done. Our next task is Goal 2 — Gmail API via OAuth."
         ));
+    }
+
+    #[test]
+    fn informational_agent_requests_are_not_treated_as_action_tasks() {
+        assert!(is_informational_agent_request(
+            "what capabilities do you have in this environment?"
+        ));
+        assert!(is_informational_agent_request("are you working?"));
+        assert!(!is_informational_agent_request(
+            "test all your capabilities and write the results to a file"
+        ));
+        assert!(!is_informational_agent_request(
+            "please create a capability report in the workspace"
+        ));
+    }
+
+    #[test]
+    fn runtime_tool_notice_distinguishes_registered_from_verified() {
+        let tools: Vec<Box<dyn Tool>> = Vec::new();
+        let notice = build_runtime_tool_availability_notice(&tools);
+
+        assert!(notice.contains("registered for this runtime"));
+        assert!(notice.contains("does not prove"));
+        assert!(notice.contains("concrete successful tool result from this run"));
+    }
+
+    #[test]
+    fn auto_plan_instructions_require_bounded_evidence_for_capability_audits() {
+        let instructions = build_auto_plan_execute_instructions();
+
+        assert!(instructions.contains("real executable integration audit"));
+        assert!(instructions.contains("one bounded probe per applicable tool"));
+        assert!(instructions.contains("verified (a successful result in this run)"));
+        assert!(instructions.contains("failed or blocked capability"));
     }
 
     #[test]
@@ -9247,13 +9636,15 @@ node smoke_js/add_two.mjs
         assert!(text.contains("Now let me run the script"));
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].name, "shell");
-        assert!(calls[0]
-            .arguments
-            .get("command")
-            .unwrap()
-            .as_str()
-            .unwrap()
-            .contains("mkdir -p smoke_js"));
+        assert!(
+            calls[0]
+                .arguments
+                .get("command")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .contains("mkdir -p smoke_js")
+        );
         assert_eq!(calls[1].name, "shell");
         assert_eq!(
             calls[1].arguments.get("command").unwrap().as_str().unwrap(),
@@ -9374,13 +9765,15 @@ echo "=== System Information ===" && uname -a && echo "" && echo "=== USB Device
         assert!(text.contains("Option 1"));
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "shell");
-        assert!(calls[0]
-            .arguments
-            .get("command")
-            .unwrap()
-            .as_str()
-            .unwrap()
-            .contains("uname -a"));
+        assert!(
+            calls[0]
+                .arguments
+                .get("command")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .contains("uname -a")
+        );
     }
 
     #[test]
@@ -9963,15 +10356,17 @@ Tail"#;
 
     #[test]
     fn parse_tool_calls_recovers_malformed_jsonish_named_tool_payload() {
-        let response =
-            r#"{"name": "file_read", "parameters": {"arguments": {"/llamafarm-data/workspace/tool_smoke_matrix.txt"}}}"#;
+        let response = r#"{"name": "file_read", "parameters": {"arguments": {"/llamafarm-data/workspace/tool_smoke_matrix.txt"}}}"#;
 
         let (text, calls) = parse_tool_calls(response);
         assert!(text.is_empty());
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "file_read");
         assert_eq!(
-            calls[0].arguments.get("path").and_then(|value| value.as_str()),
+            calls[0]
+                .arguments
+                .get("path")
+                .and_then(|value| value.as_str()),
             Some("/llamafarm-data/workspace/tool_smoke_matrix.txt")
         );
     }
@@ -10056,7 +10451,9 @@ Tail"#;
 
     #[test]
     fn should_auto_plan_current_request_keeps_exhaustive_tool_sweeps() {
-        let history = vec![ChatMessage::user("test all tool calls in the local environment")];
+        let history = vec![ChatMessage::user(
+            "test all tool calls in the local environment",
+        )];
 
         assert!(
             should_auto_plan_current_request(&history),
@@ -10129,6 +10526,52 @@ Tail"#;
         assert!(prompt.contains("[1] [completed] Write a file"));
         assert!(prompt.contains("[2] [pending] Run it"));
         assert!(prompt.contains("Next incomplete step: [2] Run it"));
+    }
+
+    #[test]
+    fn terminal_task_plan_statuses_finish_an_audit_without_retrying_blocked_steps() {
+        let records = vec![
+            SuccessfulToolRecord {
+                name: "task_plan".into(),
+                arguments: serde_json::json!({
+                    "action": "create",
+                    "tasks": [
+                        { "title": "Verified tool" },
+                        { "title": "Missing credential" },
+                        { "title": "Unavailable host service" }
+                    ]
+                }),
+                output: "Created 3 task(s).".into(),
+            },
+            SuccessfulToolRecord {
+                name: "task_plan".into(),
+                arguments: serde_json::json!({
+                    "action": "update", "id": 1, "status": "completed"
+                }),
+                output: "Task [1] updated to completed.".into(),
+            },
+            SuccessfulToolRecord {
+                name: "task_plan".into(),
+                arguments: serde_json::json!({
+                    "action": "update", "id": 2, "status": "blocked"
+                }),
+                output: "Task [2] updated to blocked.".into(),
+            },
+            SuccessfulToolRecord {
+                name: "task_plan".into(),
+                arguments: serde_json::json!({
+                    "action": "update", "id": 3, "status": "failed"
+                }),
+                output: "Task [3] updated to failed.".into(),
+            },
+        ];
+
+        let progress = task_plan_progress_snapshot(&records).expect("plan progress");
+        assert_eq!(progress.completed, 1);
+        assert_eq!(progress.resolved, 3);
+        assert_eq!(progress.total, 3);
+        assert!(build_task_plan_execution_followup_prompt(&records).is_none());
+        assert!(build_post_plan_create_start_prompt(&records).is_none());
     }
 
     #[test]
@@ -10431,8 +10874,8 @@ Tail"#;
     }
 
     #[test]
-    fn synthesize_grounded_final_answer_plan_first_then_execute_request_suppresses_plan_only_answer(
-    ) {
+    fn synthesize_grounded_final_answer_plan_first_then_execute_request_suppresses_plan_only_answer()
+     {
         let records = vec![SuccessfulToolRecord {
             name: "task_plan".into(),
             arguments: serde_json::json!({
@@ -10520,7 +10963,7 @@ Tail"#;
         assert_eq!(history[0].content, "system prompt");
         // Trimmed to limit
         assert_eq!(history.len(), DEFAULT_MAX_HISTORY_MESSAGES + 1); // +1 for system
-                                                                     // Most recent messages preserved
+        // Most recent messages preserved
         let last = &history[history.len() - 1];
         assert_eq!(
             last.content,
@@ -11036,10 +11479,12 @@ Done."#;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, "shell");
         assert!(calls[0].1["command"].as_str().unwrap().contains("curl"));
-        assert!(calls[0].1["command"]
-            .as_str()
-            .unwrap()
-            .contains("example.com"));
+        assert!(
+            calls[0].1["command"]
+                .as_str()
+                .unwrap()
+                .contains("example.com")
+        );
     }
 
     #[test]
@@ -11261,7 +11706,11 @@ browser_open/url>https://example.com"#;
 <web_search_tool query="official Rust language website">"#;
         let (text, calls) = parse_tool_calls(response);
 
-        assert_eq!(calls.len(), 1, "should recover attribute-style web tool call");
+        assert_eq!(
+            calls.len(),
+            1,
+            "should recover attribute-style web tool call"
+        );
         assert_eq!(calls[0].name, "web_search_tool");
         assert_eq!(
             calls[0].arguments["query"],

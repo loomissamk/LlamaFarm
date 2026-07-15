@@ -1369,7 +1369,9 @@ pub fn handle_command(command: crate::SkillCommands, config: &crate::config::Con
                 println!("No skills installed.");
                 println!();
                 println!("  Create one: mkdir -p ~/.llamafarm/workspace/skills/my-skill");
-                println!("              echo '# My Skill' > ~/.llamafarm/workspace/skills/my-skill/SKILL.md");
+                println!(
+                    "              echo '# My Skill' > ~/.llamafarm/workspace/skills/my-skill/SKILL.md"
+                );
                 println!();
                 println!("  Or install: llamafarm skills install <source>");
             } else {
@@ -1730,23 +1732,26 @@ prompts = ["Do not preload me"]
         let dir = tempfile::tempdir().unwrap();
         init_skills_dir(dir.path()).unwrap();
         assert!(dir.path().join("skills").join("README.md").exists());
-        assert!(dir
-            .path()
-            .join("skills")
-            .join("find-skills")
-            .join("SKILL.md")
-            .exists());
-        assert!(dir
-            .path()
-            .join("skills")
-            .join("skill-creator")
-            .join("SKILL.md")
-            .exists());
-        assert!(dir
-            .path()
-            .join("skills")
-            .join(".download-policy.toml")
-            .exists());
+        assert!(
+            dir.path()
+                .join("skills")
+                .join("find-skills")
+                .join("SKILL.md")
+                .exists()
+        );
+        assert!(
+            dir.path()
+                .join("skills")
+                .join("skill-creator")
+                .join("SKILL.md")
+                .exists()
+        );
+        assert!(
+            dir.path()
+                .join("skills")
+                .join(".download-policy.toml")
+                .exists()
+        );
     }
 
     #[test]
@@ -1755,18 +1760,20 @@ prompts = ["Do not preload me"]
         init_skills_dir(dir.path()).unwrap();
         init_skills_dir(dir.path()).unwrap(); // second call should not fail
         assert!(dir.path().join("skills").join("README.md").exists());
-        assert!(dir
-            .path()
-            .join("skills")
-            .join("find-skills")
-            .join("SKILL.md")
-            .exists());
-        assert!(dir
-            .path()
-            .join("skills")
-            .join("skill-creator")
-            .join("SKILL.md")
-            .exists());
+        assert!(
+            dir.path()
+                .join("skills")
+                .join("find-skills")
+                .join("SKILL.md")
+                .exists()
+        );
+        assert!(
+            dir.path()
+                .join("skills")
+                .join("skill-creator")
+                .join("SKILL.md")
+                .exists()
+        );
     }
 
     #[test]

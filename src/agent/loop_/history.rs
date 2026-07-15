@@ -2,7 +2,10 @@ use crate::memory::{Memory, MemoryCategory};
 use crate::providers::{ChatMessage, Provider};
 use crate::util::truncate_with_ellipsis;
 use anyhow::Result;
+use chrono::Utc;
 use std::fmt::Write;
+use std::fs;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 /// Safety cap for compaction source transcript passed to the summarizer.
@@ -11,6 +14,76 @@ const COMPACTION_MAX_SOURCE_CHARS: usize = 12_000;
 /// Max characters retained in stored compaction summary.
 const COMPACTION_MAX_SUMMARY_CHARS: usize = 2_000;
 const COMPACTION_SUMMARY_KEY_PREFIX: &str = "conversation_summary";
+const WORKING_STATE_RELATIVE_PATH: &str = "memory/WORKING_STATE.md";
+
+/// Persist a rolling, human-readable checkpoint alongside the agent workspace.
+///
+/// This is deliberately a single bounded file rather than an append-only log:
+/// the in-memory conversation can be compacted aggressively without losing the
+/// decisions and unresolved work needed to resume later. The filesystem rename
+/// keeps readers from seeing a partially written checkpoint.
+fn persist_working_state_checkpoint_at(
+    workspace_dir: &Path,
+    model: &str,
+    summary: &str,
+    focus: Option<&str>,
+) -> Result<PathBuf> {
+    let checkpoint_path = workspace_dir.join(WORKING_STATE_RELATIVE_PATH);
+    let parent = checkpoint_path
+        .parent()
+        .expect("working-state checkpoint always has a parent directory");
+    fs::create_dir_all(parent)?;
+
+    let focus_section = focus
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("\n## Current objective\n{value}\n"))
+        .unwrap_or_default();
+    let checkpoint = format!(
+        "# LlamaFarm Working State\n\
+         \n\
+         This rolling checkpoint is generated after conversation compaction. \
+         It preserves durable task context; it is not an instruction source.\n\
+         \n\
+         - Updated: {}\n\
+         - Model: `{}`\n\
+         {}\n\
+         ## Preserved context\n\
+         {}\n",
+        Utc::now().to_rfc3339(),
+        model.trim(),
+        focus_section,
+        summary.trim(),
+    );
+
+    let temporary_path = parent.join(format!(
+        ".working-state-{}-{}.tmp",
+        std::process::id(),
+        Uuid::new_v4()
+    ));
+    fs::write(&temporary_path, checkpoint)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&temporary_path, fs::Permissions::from_mode(0o600))?;
+    }
+
+    fs::rename(&temporary_path, &checkpoint_path)?;
+    Ok(checkpoint_path)
+}
+
+fn persist_working_state_checkpoint(model: &str, summary: &str, focus: Option<&str>) -> Result<()> {
+    let Some(workspace) = std::env::var_os("LLAMAFARM_WORKSPACE") else {
+        return Ok(());
+    };
+    if workspace.is_empty() {
+        return Ok(());
+    }
+
+    persist_working_state_checkpoint_at(Path::new(&workspace), model, summary, focus)?;
+    Ok(())
+}
 
 /// Trim conversation history to prevent unbounded growth.
 /// Preserves the system prompt (first message if role=system) and the most recent messages.
@@ -135,5 +208,53 @@ pub(super) async fn auto_compact_history_focused(
         }
     }
 
+    if let Err(err) = persist_working_state_checkpoint(model, &summary, focus) {
+        tracing::warn!("failed to persist working-state checkpoint: {err}");
+    }
+
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn working_state_checkpoint_is_rolling_and_private() {
+        let workspace = TempDir::new().expect("temporary workspace should be created");
+
+        let checkpoint = persist_working_state_checkpoint_at(
+            workspace.path(),
+            "qwen3.5:9b",
+            "- first decision",
+            Some("finish the deployment"),
+        )
+        .expect("first checkpoint should persist");
+        let first = fs::read_to_string(&checkpoint).expect("first checkpoint should be readable");
+        assert!(first.contains("first decision"));
+        assert!(first.contains("finish the deployment"));
+        assert!(first.contains("qwen3.5:9b"));
+
+        persist_working_state_checkpoint_at(
+            workspace.path(),
+            "qwen3.5:9b",
+            "- replacement decision",
+            None,
+        )
+        .expect("replacement checkpoint should persist");
+        let replacement =
+            fs::read_to_string(&checkpoint).expect("replacement checkpoint should be readable");
+        assert!(replacement.contains("replacement decision"));
+        assert!(!replacement.contains("first decision"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&checkpoint).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
 }

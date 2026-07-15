@@ -70,15 +70,16 @@ impl DbAdapter for SqliteAdapter {
             )?;
 
             let entries: Vec<(String, String)> = stmt
-                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
                 .filter_map(|r| r.ok())
                 .collect();
 
             let mut tables = Vec::new();
             for (tname, kind) in entries {
                 let safe = tname.replace('\'', "''");
-                let mut col_stmt =
-                    conn.prepare(&format!("PRAGMA table_info('{safe}')"))?;
+                let mut col_stmt = conn.prepare(&format!("PRAGMA table_info('{safe}')"))?;
                 let columns: Vec<ColumnInfo> = col_stmt
                     .query_map([], |row| {
                         Ok(ColumnInfo {
@@ -133,8 +134,9 @@ impl DbAdapter for SqliteAdapter {
                     truncated = true;
                     break;
                 }
-                let values: Vec<Value> =
-                    (0..col_count).map(|i| value_ref_to_json(row.get_ref_unwrap(i))).collect();
+                let values: Vec<Value> = (0..col_count)
+                    .map(|i| value_ref_to_json(row.get_ref_unwrap(i)))
+                    .collect();
                 rows.push(values);
             }
 

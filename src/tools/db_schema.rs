@@ -38,7 +38,10 @@ impl Tool for DbSchemaTool {
                     "{} ({:?}{})",
                     c.name,
                     c.driver,
-                    c.database.as_deref().map(|d| format!(" / {d}")).unwrap_or_default()
+                    c.database
+                        .as_deref()
+                        .map(|d| format!(" / {d}"))
+                        .unwrap_or_default()
                 )
             })
             .collect();
@@ -80,7 +83,11 @@ impl Tool for DbSchemaTool {
                     "=== {} ({}{}) ===\n",
                     conn_cfg.name,
                     conn_cfg.label.as_deref().unwrap_or(conn_cfg.name.as_str()),
-                    conn_cfg.database.as_deref().map(|d| format!(" / db:{d}")).unwrap_or_default(),
+                    conn_cfg
+                        .database
+                        .as_deref()
+                        .map(|d| format!(" / db:{d}"))
+                        .unwrap_or_default(),
                 ));
                 match build_adapter(conn_cfg) {
                     Err(e) => {
@@ -97,9 +104,13 @@ impl Tool for DbSchemaTool {
                                 all_out.push_str("  No tables or collections found.\n\n");
                             } else {
                                 for table in &schema.tables {
-                                    all_out.push_str(&format!("  {} ({}):\n", table.name, table.kind));
+                                    all_out
+                                        .push_str(&format!("  {} ({}):\n", table.name, table.kind));
                                     for col in &table.columns {
-                                        all_out.push_str(&format!("    {} {}\n", col.name, col.data_type));
+                                        all_out.push_str(&format!(
+                                            "    {} {}\n",
+                                            col.name, col.data_type
+                                        ));
                                     }
                                 }
                                 all_out.push('\n');
@@ -119,7 +130,8 @@ impl Tool for DbSchemaTool {
         let conn_cfg = match self.connections.iter().find(|c| c.name == conn_name) {
             Some(c) => c,
             None => {
-                let available: Vec<&str> = self.connections.iter().map(|c| c.name.as_str()).collect();
+                let available: Vec<&str> =
+                    self.connections.iter().map(|c| c.name.as_str()).collect();
                 return Ok(ToolResult {
                     success: false,
                     output: String::new(),
@@ -139,7 +151,7 @@ impl Tool for DbSchemaTool {
                     success: false,
                     output: String::new(),
                     error: Some(format!("Failed to connect to '{}': {e}", conn_cfg.name)),
-                })
+                });
             }
         };
 
@@ -149,7 +161,11 @@ impl Tool for DbSchemaTool {
                     "Schema for '{}' ({}){}:\n\n",
                     conn_name,
                     schema.driver,
-                    schema.database.as_deref().map(|d| format!(" / {d}")).unwrap_or_default()
+                    schema
+                        .database
+                        .as_deref()
+                        .map(|d| format!(" / {d}"))
+                        .unwrap_or_default()
                 );
 
                 if schema.tables.is_empty() {

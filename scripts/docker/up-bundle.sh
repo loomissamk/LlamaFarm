@@ -43,9 +43,11 @@ have_nvidia_gpu() {
 
 docker_nvidia_works() {
   have_nvidia_gpu || return 1
-  # Verify Docker can actually expose the GPU before committing to nvidia mode.
+  # Verify NVML, not merely a /dev/nvidia* node. The latter can pass after a
+  # legacy NVIDIA Container Toolkit cgroup failure while inference cannot use
+  # the GPU and `nvidia-smi` reports "Unknown Error" in the container.
   docker run --rm --gpus all --entrypoint /bin/sh ollama/ollama:latest \
-    -lc 'test -e /dev/nvidiactl' >/dev/null 2>&1
+    -lc 'nvidia-smi -L >/dev/null' >/dev/null 2>&1
 }
 
 resolve_backend() {

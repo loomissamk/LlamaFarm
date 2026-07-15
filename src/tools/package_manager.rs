@@ -21,8 +21,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 
-use crate::security::{NoopSandbox, Sandbox, SecurityPolicy};
 use super::traits::{Tool, ToolResult};
+use crate::security::{NoopSandbox, Sandbox, SecurityPolicy};
 
 /// Maximum output bytes per stream.
 const MAX_OUTPUT: usize = 524_288; // 512 KB
@@ -94,18 +94,9 @@ impl Tool for PackageManagerTool {
     }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
-        let manager = args
-            .get("manager")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let operation = args
-            .get("operation")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let yes = args
-            .get("yes")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
+        let manager = args.get("manager").and_then(|v| v.as_str()).unwrap_or("");
+        let operation = args.get("operation").and_then(|v| v.as_str()).unwrap_or("");
+        let yes = args.get("yes").and_then(|v| v.as_bool()).unwrap_or(true);
         let timeout_secs = args
             .get("timeout_secs")
             .and_then(|v| v.as_u64())
@@ -161,13 +152,17 @@ fn build_argv(
         // ── apt / apt-get ──────────────────────────────────────────
         ("apt" | "apt-get", "install") => {
             let mut v = vec![manager.to_string(), "install".to_string()];
-            if yes { v.push("-y".to_string()); }
+            if yes {
+                v.push("-y".to_string());
+            }
             v.extend_from_slice(packages);
             Ok(v)
         }
         ("apt" | "apt-get", "remove") => {
             let mut v = vec![manager.to_string(), "remove".to_string()];
-            if yes { v.push("-y".to_string()); }
+            if yes {
+                v.push("-y".to_string());
+            }
             v.extend_from_slice(packages);
             Ok(v)
         }
@@ -175,15 +170,23 @@ fn build_argv(
             let mut v = if packages.is_empty() {
                 vec![manager.to_string(), "upgrade".to_string()]
             } else {
-                vec![manager.to_string(), "install".to_string(), "--only-upgrade".to_string()]
+                vec![
+                    manager.to_string(),
+                    "install".to_string(),
+                    "--only-upgrade".to_string(),
+                ]
             };
-            if yes { v.push("-y".to_string()); }
+            if yes {
+                v.push("-y".to_string());
+            }
             v.extend_from_slice(packages);
             Ok(v)
         }
-        ("apt" | "apt-get", "list") => {
-            Ok(vec!["apt".to_string(), "list".to_string(), "--installed".to_string()])
-        }
+        ("apt" | "apt-get", "list") => Ok(vec![
+            "apt".to_string(),
+            "list".to_string(),
+            "--installed".to_string(),
+        ]),
         ("apt" | "apt-get", "search") => {
             let mut v = vec!["apt-cache".to_string(), "search".to_string()];
             v.extend_from_slice(packages);
@@ -199,25 +202,33 @@ fn build_argv(
         // ── dnf / yum ─────────────────────────────────────────────
         ("dnf" | "yum", "install") => {
             let mut v = vec![manager.to_string(), "install".to_string()];
-            if yes { v.push("-y".to_string()); }
+            if yes {
+                v.push("-y".to_string());
+            }
             v.extend_from_slice(packages);
             Ok(v)
         }
         ("dnf" | "yum", "remove") => {
             let mut v = vec![manager.to_string(), "remove".to_string()];
-            if yes { v.push("-y".to_string()); }
+            if yes {
+                v.push("-y".to_string());
+            }
             v.extend_from_slice(packages);
             Ok(v)
         }
         ("dnf" | "yum", "upgrade") => {
             let mut v = vec![manager.to_string(), "upgrade".to_string()];
-            if yes { v.push("-y".to_string()); }
+            if yes {
+                v.push("-y".to_string());
+            }
             v.extend_from_slice(packages);
             Ok(v)
         }
-        ("dnf" | "yum", "list") => {
-            Ok(vec![manager.to_string(), "list".to_string(), "installed".to_string()])
-        }
+        ("dnf" | "yum", "list") => Ok(vec![
+            manager.to_string(),
+            "list".to_string(),
+            "installed".to_string(),
+        ]),
         ("dnf" | "yum", "search") => {
             let mut v = vec![manager.to_string(), "search".to_string()];
             v.extend_from_slice(packages);
@@ -232,12 +243,18 @@ fn build_argv(
         }
         ("pip", "remove") => {
             let mut v = vec!["pip".to_string(), "uninstall".to_string()];
-            if yes { v.push("-y".to_string()); }
+            if yes {
+                v.push("-y".to_string());
+            }
             v.extend_from_slice(packages);
             Ok(v)
         }
         ("pip", "upgrade") => {
-            let mut v = vec!["pip".to_string(), "install".to_string(), "--upgrade".to_string()];
+            let mut v = vec![
+                "pip".to_string(),
+                "install".to_string(),
+                "--upgrade".to_string(),
+            ];
             v.extend_from_slice(packages);
             Ok(v)
         }
@@ -245,7 +262,12 @@ fn build_argv(
         ("pip", "search") => {
             // pip search is deprecated; fall back to pip index versions
             let pkg = packages.first().map(String::as_str).unwrap_or("");
-            Ok(vec!["pip".to_string(), "index".to_string(), "versions".to_string(), pkg.to_string()])
+            Ok(vec![
+                "pip".to_string(),
+                "index".to_string(),
+                "versions".to_string(),
+                pkg.to_string(),
+            ])
         }
 
         // ── uv ────────────────────────────────────────────────────
@@ -260,11 +282,20 @@ fn build_argv(
             Ok(v)
         }
         ("uv", "upgrade") => {
-            let mut v = vec!["uv".to_string(), "pip".to_string(), "install".to_string(), "--upgrade".to_string()];
+            let mut v = vec![
+                "uv".to_string(),
+                "pip".to_string(),
+                "install".to_string(),
+                "--upgrade".to_string(),
+            ];
             v.extend_from_slice(packages);
             Ok(v)
         }
-        ("uv", "list") => Ok(vec!["uv".to_string(), "pip".to_string(), "list".to_string()]),
+        ("uv", "list") => Ok(vec![
+            "uv".to_string(),
+            "pip".to_string(),
+            "list".to_string(),
+        ]),
 
         // ── cargo ─────────────────────────────────────────────────
         ("cargo", "install") => {
@@ -283,7 +314,11 @@ fn build_argv(
             v.extend_from_slice(packages);
             Ok(v)
         }
-        ("cargo", "list") => Ok(vec!["cargo".to_string(), "install".to_string(), "--list".to_string()]),
+        ("cargo", "list") => Ok(vec![
+            "cargo".to_string(),
+            "install".to_string(),
+            "--list".to_string(),
+        ]),
         ("cargo", "search") => {
             let mut v = vec!["cargo".to_string(), "search".to_string()];
             v.extend_from_slice(packages);
@@ -334,11 +369,7 @@ async fn run_command(
         read_capped(stderr_handle, MAX_OUTPUT),
     );
 
-    let result = tokio::time::timeout(
-        Duration::from_secs(timeout_secs),
-        child.wait(),
-    )
-    .await;
+    let result = tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait()).await;
 
     let exit_status = match result {
         Ok(Ok(s)) => s,
@@ -424,7 +455,10 @@ mod tests {
 
     #[test]
     fn tool_name() {
-        assert_eq!(PackageManagerTool::new(permissive()).name(), "package_manager");
+        assert_eq!(
+            PackageManagerTool::new(permissive()).name(),
+            "package_manager"
+        );
     }
 
     #[test]

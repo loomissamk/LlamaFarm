@@ -104,12 +104,24 @@ mod tests {
 
     #[async_trait]
     impl Tool for ReadOnlyTool {
-        fn name(&self) -> &str { "ro_tool" }
-        fn description(&self) -> &str { "read-only stub" }
-        fn parameters_schema(&self) -> serde_json::Value { serde_json::json!({}) }
-        fn is_read_only(&self) -> bool { true }
+        fn name(&self) -> &str {
+            "ro_tool"
+        }
+        fn description(&self) -> &str {
+            "read-only stub"
+        }
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        fn is_read_only(&self) -> bool {
+            true
+        }
         async fn execute(&self, _args: serde_json::Value) -> anyhow::Result<ToolResult> {
-            Ok(ToolResult { success: true, output: String::new(), error: None })
+            Ok(ToolResult {
+                success: true,
+                output: String::new(),
+                error: None,
+            })
         }
     }
 

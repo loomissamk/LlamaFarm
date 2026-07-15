@@ -29,7 +29,10 @@ fn pg_col_to_json(row: &tokio_postgres::Row, i: usize) -> Value {
     use tokio_postgres::types::Type;
     let col_type = row.columns()[i].type_().clone();
     match col_type {
-        Type::BOOL => row.try_get::<_, bool>(i).map(Value::Bool).unwrap_or(Value::Null),
+        Type::BOOL => row
+            .try_get::<_, bool>(i)
+            .map(Value::Bool)
+            .unwrap_or(Value::Null),
         Type::INT2 => row
             .try_get::<_, i16>(i)
             .map(|v| Value::Number(v.into()))
@@ -52,9 +55,10 @@ fn pg_col_to_json(row: &tokio_postgres::Row, i: usize) -> Value {
             .ok()
             .and_then(|v| serde_json::Number::from_f64(v).map(Value::Number))
             .unwrap_or(Value::Null),
-        Type::TEXT | Type::VARCHAR | Type::NAME | Type::BPCHAR => {
-            row.try_get::<_, String>(i).map(Value::String).unwrap_or(Value::Null)
-        }
+        Type::TEXT | Type::VARCHAR | Type::NAME | Type::BPCHAR => row
+            .try_get::<_, String>(i)
+            .map(Value::String)
+            .unwrap_or(Value::Null),
         _ => {
             // Fall back to string representation for all other types
             row.try_get::<_, String>(i)
@@ -159,8 +163,11 @@ impl DbAdapter for PostgresAdapter {
             });
         }
 
-        let columns: Vec<String> =
-            rows[0].columns().iter().map(|c| c.name().to_string()).collect();
+        let columns: Vec<String> = rows[0]
+            .columns()
+            .iter()
+            .map(|c| c.name().to_string())
+            .collect();
         let truncated = rows.len() > max_rows;
 
         let row_data: Vec<Vec<Value>> = rows

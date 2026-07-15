@@ -2,23 +2,23 @@
 //!
 //! All `/api/*` routes require bearer token authentication (PairingGuard).
 
-use super::{
-    build_gateway_runtime_snapshot_with_federation, client_key_from_request, AppState,
-};
+use super::{AppState, build_gateway_runtime_snapshot_with_federation, client_key_from_request};
 use crate::config::FederationRole;
 use crate::federation::peer_registry::{
     FederationCapabilities, FederationLocalNodeSummary, FederationPeersResponse,
 };
 use crate::federation::remote_subagent::{
-    FederationTaskAccepted, FederationTaskEvent, FederationTaskManager, FederationTaskRequest,
+    FEDERATION_AUTH_HEADER, FederationTaskAccepted, FederationTaskEvent, FederationTaskManager,
+    FederationTaskRequest,
 };
+use crate::security::pairing::constant_time_eq;
 use axum::{
     body::{Body, Bytes},
     extract::{ConnectInfo, Path, Query, State},
-    http::{header, HeaderMap, HeaderValue, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{
-        sse::{Event, KeepAlive, Sse},
         IntoResponse, Json, Response,
+        sse::{Event, KeepAlive, Sse},
     },
 };
 use chrono::{DateTime, Utc};
@@ -95,18 +95,36 @@ fn require_federation_peer_auth(
         return Err(federation_disabled_response());
     }
 
-    let client = client_key_from_request(
-        Some(peer_addr),
-        headers,
-        state.trust_forwarded_headers,
-    );
-    if crate::tools::url_validation::is_private_or_local_host(&client) {
-        Ok(())
-    } else {
-        Err((
+    let client = client_key_from_request(Some(peer_addr), headers, state.trust_forwarded_headers);
+    if !crate::tools::url_validation::is_private_or_local_host(&client) {
+        return Err((
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({
                 "error": "Federation peer API only accepts trusted local/LAN callers"
+            })),
+        )
+            .into_response());
+    }
+
+    let expected_token = std::env::var("LLAMAFARM_FEDERATION_TOKEN")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if expected_token.is_empty() {
+        return Ok(());
+    }
+
+    let provided_token = headers
+        .get(FEDERATION_AUTH_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    if constant_time_eq(&expected_token, provided_token.trim()) {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({
+                "error": "Federation peer authentication failed"
             })),
         )
             .into_response())
@@ -211,11 +229,9 @@ fn federation_event_is_terminal(event: &FederationTaskEvent) -> bool {
     matches!(event.event_type.as_str(), "done" | "error")
 }
 
-fn serialize_federation_sse_event(
-    event: &FederationTaskEvent,
-) -> Result<Event, Infallible> {
-    Ok(Event::default().data(serde_json::to_string(event).unwrap_or_else(
-        |_| {
+fn serialize_federation_sse_event(event: &FederationTaskEvent) -> Result<Event, Infallible> {
+    Ok(
+        Event::default().data(serde_json::to_string(event).unwrap_or_else(|_| {
             serde_json::json!({
                 "type": "error",
                 "task_id": event.task_id,
@@ -223,8 +239,8 @@ fn serialize_federation_sse_event(
                 "message": "Failed to serialize federation event",
             })
             .to_string()
-        },
-    )))
+        })),
+    )
 }
 
 fn build_federation_user_prompt(request: &FederationTaskRequest) -> String {
@@ -249,9 +265,9 @@ fn build_federation_user_prompt(request: &FederationTaskRequest) -> String {
         .unwrap_or("federation-peer");
 
     match context {
-        Some(context) => format!(
-            "[Requester]\n{requester}\n\n[Context]\n{context}\n\n[Task]\n{prompt}"
-        ),
+        Some(context) => {
+            format!("[Requester]\n{requester}\n\n[Context]\n{context}\n\n[Task]\n{prompt}")
+        }
         None => format!("[Requester]\n{requester}\n\n[Task]\n{prompt}"),
     }
 }
@@ -308,9 +324,7 @@ fn federation_event_from_delta(task_id: &str, delta: &str) -> Option<FederationT
 
         if let Some(rest) = progress.strip_prefix("✅ ") {
             let (header, output) = split_federation_tool_progress_payload(rest);
-            if let Some((name, duration_secs)) =
-                parse_federation_tool_completion_payload(header)
-            {
+            if let Some((name, duration_secs)) = parse_federation_tool_completion_payload(header) {
                 return Some(FederationTaskEvent {
                     event_type: "tool_result".to_string(),
                     task_id: task_id.to_string(),
@@ -329,9 +343,7 @@ fn federation_event_from_delta(task_id: &str, delta: &str) -> Option<FederationT
 
         if let Some(rest) = progress.strip_prefix("❌ ") {
             let (header, output) = split_federation_tool_progress_payload(rest);
-            if let Some((name, duration_secs)) =
-                parse_federation_tool_completion_payload(header)
-            {
+            if let Some((name, duration_secs)) = parse_federation_tool_completion_payload(header) {
                 return Some(FederationTaskEvent {
                     event_type: "tool_result".to_string(),
                     task_id: task_id.to_string(),
@@ -366,9 +378,7 @@ fn federation_event_from_delta(task_id: &str, delta: &str) -> Option<FederationT
     })
 }
 
-async fn build_federation_capabilities(
-    state: &AppState,
-) -> anyhow::Result<FederationCapabilities> {
+async fn build_federation_capabilities(state: &AppState) -> anyhow::Result<FederationCapabilities> {
     let federation = state
         .federation
         .as_ref()
@@ -498,55 +508,52 @@ async fn execute_federation_task(
     let loop_result = crate::agent::loop_::with_tool_loop_settings(
         parallel_tools,
         native_tools,
-        crate::agent::loop_::with_tool_loop_history_limit(
-            max_history_messages,
-            async {
-                let (delta_tx, mut delta_rx) = tokio::sync::mpsc::channel::<String>(128);
-                let mut loop_future = std::pin::pin!(crate::agent::loop_::run_tool_call_loop(
-                    runtime.provider.as_ref(),
-                    &mut history,
-                    runtime.tools_registry_exec.as_ref(),
-                    state.observer.as_ref(),
-                    &provider_label,
-                    &runtime.model,
-                    runtime.temperature,
-                    true,
-                    Some(&approval_manager),
-                    "federation",
-                    &state.multimodal,
-                    request.max_iterations.max(max_tool_iterations),
-                    Some(cancellation_token.clone()),
-                    Some(delta_tx),
-                    None,
-                    &[],
-                ));
+        crate::agent::loop_::with_tool_loop_history_limit(max_history_messages, async {
+            let (delta_tx, mut delta_rx) = tokio::sync::mpsc::channel::<String>(128);
+            let mut loop_future = std::pin::pin!(crate::agent::loop_::run_tool_call_loop(
+                runtime.provider.as_ref(),
+                &mut history,
+                runtime.tools_registry_exec.as_ref(),
+                state.observer.as_ref(),
+                &provider_label,
+                &runtime.model,
+                runtime.temperature,
+                true,
+                Some(&approval_manager),
+                "federation",
+                &state.multimodal,
+                request.max_iterations.max(max_tool_iterations),
+                Some(cancellation_token.clone()),
+                Some(delta_tx),
+                None,
+                &[],
+            ));
 
-                loop {
-                    tokio::select! {
-                        _ = cancellation_token.cancelled() => {
-                            anyhow::bail!("Federation task cancelled");
-                        }
-                        maybe_delta = delta_rx.recv() => {
-                            if let Some(delta) = maybe_delta {
-                                if let Some(event) = federation_event_from_delta(&task_id, &delta) {
-                                    task_manager.publish(&task_id, event);
-                                }
-                            } else {
-                                break loop_future.await;
+            loop {
+                tokio::select! {
+                    _ = cancellation_token.cancelled() => {
+                        anyhow::bail!("Federation task cancelled");
+                    }
+                    maybe_delta = delta_rx.recv() => {
+                        if let Some(delta) = maybe_delta {
+                            if let Some(event) = federation_event_from_delta(&task_id, &delta) {
+                                task_manager.publish(&task_id, event);
                             }
-                        }
-                        response = &mut loop_future => {
-                            while let Ok(delta) = delta_rx.try_recv() {
-                                if let Some(event) = federation_event_from_delta(&task_id, &delta) {
-                                    task_manager.publish(&task_id, event);
-                                }
-                            }
-                            break response;
+                        } else {
+                            break loop_future.await;
                         }
                     }
+                    response = &mut loop_future => {
+                        while let Ok(delta) = delta_rx.try_recv() {
+                            if let Some(event) = federation_event_from_delta(&task_id, &delta) {
+                                task_manager.publish(&task_id, event);
+                            }
+                        }
+                        break response;
+                    }
                 }
-            },
-        ),
+            }
+        }),
     )
     .await;
 
@@ -559,7 +566,10 @@ async fn execute_federation_task(
             } else {
                 rendered
             };
-            task_manager.publish(&task_id, FederationTaskEvent::done(&task_id, final_response));
+            task_manager.publish(
+                &task_id,
+                FederationTaskEvent::done(&task_id, final_response),
+            );
         }
         Err(error) => {
             task_manager.publish(
@@ -981,11 +991,7 @@ fn workspace_parent_path(relative: &str) -> Option<String> {
 }
 
 fn workspace_entry_kind(is_dir: bool) -> &'static str {
-    if is_dir {
-        "directory"
-    } else {
-        "file"
-    }
+    if is_dir { "directory" } else { "file" }
 }
 
 pub(super) async fn create_workspace_directory(
@@ -2317,7 +2323,10 @@ pub async fn handle_api_config_put(
 
     let runtime_snapshot = match build_gateway_runtime_snapshot_with_federation(
         &new_config,
-        state.federation.as_ref().map(|federation| federation.remote_adapter()),
+        state
+            .federation
+            .as_ref()
+            .map(|federation| federation.remote_adapter()),
     ) {
         Ok(snapshot) => snapshot,
         Err(error) => {
@@ -3143,7 +3152,10 @@ pub async fn handle_api_integration_credentials_put(
 
     let runtime_snapshot = match build_gateway_runtime_snapshot_with_federation(
         &updated,
-        state.federation.as_ref().map(|federation| federation.remote_adapter()),
+        state
+            .federation
+            .as_ref()
+            .map(|federation| federation.remote_adapter()),
     ) {
         Ok(snapshot) => snapshot,
         Err(error) => {
@@ -3844,7 +3856,8 @@ pub async fn handle_api_db_add_connection(
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": format!("Unknown driver '{other}'") })),
-            ).into_response();
+            )
+                .into_response();
         }
     };
 
@@ -3860,7 +3873,11 @@ pub async fn handle_api_db_add_connection(
 
     // Validate name is unique and non-empty
     if body.name.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "name is required" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "name is required" })),
+        )
+            .into_response();
     }
 
     let mut config = state.config.lock().clone();
@@ -3871,7 +3888,11 @@ pub async fn handle_api_db_add_connection(
     config.db_connections.push(new_conn);
 
     if let Err(e) = config.save().await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("Failed to persist: {e}") }))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Failed to persist: {e}") })),
+        )
+            .into_response();
     }
     *state.config.lock() = config.clone();
     if let Ok(snapshot) = build_gateway_runtime_snapshot_with_federation(
@@ -3896,34 +3917,57 @@ pub async fn handle_api_db_update_connection(
     }
 
     let driver = match body.driver.as_str() {
-        "sqlite"   => crate::config::DbDriver::Sqlite,
+        "sqlite" => crate::config::DbDriver::Sqlite,
         "postgres" => crate::config::DbDriver::Postgres,
-        "mongodb"  => crate::config::DbDriver::Mongodb,
-        "mysql"    => crate::config::DbDriver::Mysql,
-        other => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": format!("Unknown driver '{other}'") }))).into_response(),
+        "mongodb" => crate::config::DbDriver::Mongodb,
+        "mysql" => crate::config::DbDriver::Mysql,
+        other => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("Unknown driver '{other}'") })),
+            )
+                .into_response();
+        }
     };
 
     let mut config = state.config.lock().clone();
     let Some(conn) = config.db_connections.iter_mut().find(|c| c.name == name) else {
-        return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": format!("Connection '{name}' not found") }))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": format!("Connection '{name}' not found") })),
+        )
+            .into_response();
     };
 
-    conn.driver   = driver;
-    conn.uri      = body.uri;
+    conn.driver = driver;
+    conn.uri = body.uri;
     conn.database = body.database;
     conn.read_only = body.read_only.unwrap_or(conn.read_only);
-    conn.max_rows  = body.max_rows.unwrap_or(conn.max_rows);
-    conn.label     = body.label;
+    conn.max_rows = body.max_rows.unwrap_or(conn.max_rows);
+    conn.label = body.label;
     // Allow rename: if body.name differs and is not taken, rename
     if body.name != name && !body.name.trim().is_empty() {
         if config.db_connections.iter().any(|c| c.name == body.name) {
-            return (StatusCode::CONFLICT, Json(serde_json::json!({ "error": format!("Name '{}' already taken", body.name) }))).into_response();
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({ "error": format!("Name '{}' already taken", body.name) })),
+            )
+                .into_response();
         }
-        config.db_connections.iter_mut().find(|c| c.name == name).unwrap().name = body.name;
+        config
+            .db_connections
+            .iter_mut()
+            .find(|c| c.name == name)
+            .unwrap()
+            .name = body.name;
     }
 
     if let Err(e) = config.save().await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("Failed to persist: {e}") }))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Failed to persist: {e}") })),
+        )
+            .into_response();
     }
     *state.config.lock() = config.clone();
     if let Ok(snapshot) = build_gateway_runtime_snapshot_with_federation(
@@ -3951,11 +3995,19 @@ pub async fn handle_api_db_remove_connection(
     config.db_connections.retain(|c| c.name != name);
 
     if config.db_connections.len() == before {
-        return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": format!("Connection '{name}' not found") }))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": format!("Connection '{name}' not found") })),
+        )
+            .into_response();
     }
 
     if let Err(e) = config.save().await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": format!("Failed to persist: {e}") }))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Failed to persist: {e}") })),
+        )
+            .into_response();
     }
     *state.config.lock() = config.clone();
     if let Ok(snapshot) = build_gateway_runtime_snapshot_with_federation(
@@ -3979,11 +4031,17 @@ pub async fn handle_api_db_test_connection(
     }
 
     let driver = match body.driver.as_str() {
-        "sqlite"   => crate::config::DbDriver::Sqlite,
+        "sqlite" => crate::config::DbDriver::Sqlite,
         "postgres" => crate::config::DbDriver::Postgres,
-        "mongodb"  => crate::config::DbDriver::Mongodb,
-        "mysql"    => crate::config::DbDriver::Mysql,
-        other => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": format!("Unknown driver '{other}'") }))).into_response(),
+        "mongodb" => crate::config::DbDriver::Mongodb,
+        "mysql" => crate::config::DbDriver::Mysql,
+        other => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("Unknown driver '{other}'") })),
+            )
+                .into_response();
+        }
     };
 
     let conn_cfg = crate::config::DbConnectionConfig {
@@ -4034,17 +4092,19 @@ pub async fn handle_api_db_schema(
                 StatusCode::NOT_FOUND,
                 Json(serde_json::json!({ "error": format!("Unknown connection '{name}'") })),
             )
-                .into_response()
+                .into_response();
         }
     };
 
     let adapter: Box<dyn crate::db::DbAdapter> = match crate::db::build_adapter(&conn_cfg) {
         Ok(a) => a,
-        Err(e) => return (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({ "error": format!("Connection failed: {e}") })),
-        )
-            .into_response(),
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": format!("Connection failed: {e}") })),
+            )
+                .into_response();
+        }
     };
     match adapter.schema().await {
         Ok(schema) => Json(schema).into_response(),
@@ -4089,19 +4149,24 @@ pub async fn handle_api_db_query(
                 StatusCode::NOT_FOUND,
                 Json(serde_json::json!({ "error": format!("Unknown connection '{name}'") })),
             )
-                .into_response()
+                .into_response();
         }
     };
 
-    let max_rows = body.max_rows.unwrap_or(conn_cfg.max_rows).min(conn_cfg.max_rows);
+    let max_rows = body
+        .max_rows
+        .unwrap_or(conn_cfg.max_rows)
+        .min(conn_cfg.max_rows);
 
     let adapter: Box<dyn crate::db::DbAdapter> = match crate::db::build_adapter(&conn_cfg) {
         Ok(a) => a,
-        Err(e) => return (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({ "error": format!("Connection failed: {e}") })),
-        )
-            .into_response(),
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": format!("Connection failed: {e}") })),
+            )
+                .into_response();
+        }
     };
     match adapter.query(&body.query, max_rows).await {
         Ok(result) => Json(result).into_response(),

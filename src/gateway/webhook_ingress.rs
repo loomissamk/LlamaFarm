@@ -1,14 +1,14 @@
 use super::{
-    client_key_from_request, hash_webhook_secret, run_gateway_chat_simple,
-    sanitize_gateway_response, webhook_memory_key, AppState, WebhookBody, RATE_LIMIT_WINDOW_SECS,
+    AppState, RATE_LIMIT_WINDOW_SECS, WebhookBody, client_key_from_request, hash_webhook_secret,
+    run_gateway_chat_simple, sanitize_gateway_response, webhook_memory_key,
 };
 use crate::memory::MemoryCategory;
 use crate::providers;
 use crate::security::pairing::constant_time_eq;
 use axum::{
-    extract::rejection::JsonRejection,
-    http::{header, HeaderMap, StatusCode},
     Json,
+    extract::rejection::JsonRejection,
+    http::{HeaderMap, StatusCode, header},
 };
 use serde_json::Value;
 use std::net::SocketAddr;

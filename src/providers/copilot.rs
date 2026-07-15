@@ -353,6 +353,7 @@ impl CopilotProvider {
         let usage = api_response.usage.map(|u| TokenUsage {
             input_tokens: u.prompt_tokens,
             output_tokens: u.completion_tokens,
+            output_truncated: false,
         });
         let choice = api_response
             .choices
@@ -697,12 +698,16 @@ mod tests {
     #[test]
     fn copilot_headers_include_required_fields() {
         let headers = CopilotProvider::COPILOT_HEADERS;
-        assert!(headers
-            .iter()
-            .any(|(header, _)| *header == "Editor-Version"));
-        assert!(headers
-            .iter()
-            .any(|(header, _)| *header == "Editor-Plugin-Version"));
+        assert!(
+            headers
+                .iter()
+                .any(|(header, _)| *header == "Editor-Version")
+        );
+        assert!(
+            headers
+                .iter()
+                .any(|(header, _)| *header == "Editor-Plugin-Version")
+        );
         assert!(headers.iter().any(|(header, _)| *header == "User-Agent"));
     }
 

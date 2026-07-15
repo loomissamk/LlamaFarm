@@ -17,7 +17,7 @@
 #   docker compose -f docker-compose.bundle.yml up -d --build
 #   open http://127.0.0.1:42617
 #   open http://127.0.0.1:3000
-#   or set HOST_BIND_IP=0.0.0.0 for LAN access
+#   or set LLAMAFARM_HOST_BIND_IP=0.0.0.0 for LAN access
 
 name: llamafarm-bundle
 
@@ -32,13 +32,36 @@ services:
     container_name: LlamaFarm
     restart: unless-stopped
     init: true
-    shm_size: 2gb
+    shm_size: ${LLAMAFARM_SHM_SIZE:-2gb}
+    # Set resource ceilings when the container is created. Do not move these
+    # to a post-start `docker update`: older NVIDIA Container Toolkit hooks can
+    # lose GPU cgroup access after a running-container update.
+    mem_limit: ${LLAMAFARM_MEMORY_LIMIT:-0}
+    memswap_limit: ${LLAMAFARM_MEMORY_LIMIT:-0}
+    cpus: ${LLAMAFARM_CPU_LIMIT:-0}
+    pids_limit: ${LLAMAFARM_PIDS_LIMIT:-0}
 
     environment:
-      - LLAMAFARM_ALLOW_PUBLIC_BIND=true
-      - LLAMAFARM_GATEWAY_HOST=0.0.0.0
+      # The service listens on all container interfaces so Docker can publish
+      # it, while the host-side port mapping below defaults to loopback.
+      - LLAMAFARM_ALLOW_PUBLIC_BIND=${LLAMAFARM_ALLOW_PUBLIC_BIND:-true}
+      - LLAMAFARM_GATEWAY_HOST=${LLAMAFARM_GATEWAY_HOST:-0.0.0.0}
+      # The local bundle is direct-access by design. This fixed value also
+      # overrides stale persisted config from an older paired deployment.
       - LLAMAFARM_REQUIRE_PAIRING=false
       - LLAMAFARM_GATEWAY_PORT=${LLAMAFARM_GATEWAY_PORT:-42617}
+      - LLAMAFARM_MODEL=${LLAMAFARM_MODEL:-qwen3.5:9b}
+      - LLAMAFARM_AGENT_COMPACT_CONTEXT=${LLAMAFARM_AGENT_COMPACT_CONTEXT:-true}
+      - LLAMAFARM_AGENT_MAX_HISTORY_MESSAGES=${LLAMAFARM_AGENT_MAX_HISTORY_MESSAGES:-32}
+      - LLAMAFARM_AGENT_MAX_TOOL_ITERATIONS=${LLAMAFARM_AGENT_MAX_TOOL_ITERATIONS:-64}
+      - LLAMAFARM_AGENT_PARALLEL_TOOLS=${LLAMAFARM_AGENT_PARALLEL_TOOLS:-false}
+      - LLAMAFARM_AGENT_MAX_OUTPUT_TOKENS=${LLAMAFARM_AGENT_MAX_OUTPUT_TOKENS:-8192}
+      # Free local web search is useful for agents; keep it explicit and
+      # overrideable rather than relying on an old persisted config value.
+      - LLAMAFARM_WEB_SEARCH_ENABLED=${LLAMAFARM_WEB_SEARCH_ENABLED:-true}
+      - LLAMAFARM_WEB_SEARCH_PROVIDER=${LLAMAFARM_WEB_SEARCH_PROVIDER:-duckduckgo}
+      - LLAMAFARM_WEB_SEARCH_MAX_RESULTS=${LLAMAFARM_WEB_SEARCH_MAX_RESULTS:-5}
+      - LLAMAFARM_WEB_SEARCH_TIMEOUT_SECS=${LLAMAFARM_WEB_SEARCH_TIMEOUT_SECS:-15}
       - LLAMAFARM_FEDERATION_ENABLED=${LLAMAFARM_FEDERATION_ENABLED:-true}
       - LLAMAFARM_NODE_NAME=${LLAMAFARM_NODE_NAME:-llamafarm-node}
       - LLAMAFARM_API_PORT=${LLAMAFARM_API_PORT:-42617}
@@ -46,22 +69,29 @@ services:
       - LLAMAFARM_SERVICE_NAME=${LLAMAFARM_SERVICE_NAME:-_llamafarm._tcp}
       - LLAMAFARM_PEER_TIMEOUT_SECONDS=${LLAMAFARM_PEER_TIMEOUT_SECONDS:-30}
       - LLAMAFARM_MANUAL_PEERS=${LLAMAFARM_MANUAL_PEERS:-}
+      - LLAMAFARM_FEDERATION_TOKEN=${LLAMAFARM_FEDERATION_TOKEN:-}
       - LLAMAFARM_DEFAULT_ROLE=${LLAMAFARM_DEFAULT_ROLE:-both}
       - LLAMAFARM_ALLOW_REMOTE_SUBAGENTS=${LLAMAFARM_ALLOW_REMOTE_SUBAGENTS:-true}
       - LLAMAFARM_RUNTIME_UID=${LLAMAFARM_RUNTIME_UID:-65534}
       - LLAMAFARM_RUNTIME_GID=${LLAMAFARM_RUNTIME_GID:-65534}
       - OLLAMA_HOST=0.0.0.0:11434
+      # This platform is local-first: never route inference to an Ollama cloud
+      # model. Model pulls still use the registry, while generation stays on
+      # the GPU attached to this node.
+      - OLLAMA_NO_CLOUD=true
       - OLLAMA_PULL_MODELS=${OLLAMA_PULL_MODELS:-}
       # KV cache quantization: halves KV cache VRAM usage, allowing ~2x larger
       # context windows in the same VRAM budget (turboquant-style compression).
       - OLLAMA_KV_CACHE_TYPE=${OLLAMA_KV_CACHE_TYPE:-q8_0}
-      # Context window: 128K default — flash attention + q8 KV cache keeps VRAM
-      # usage manageable. Override per-machine in .env if needed.
-      - OLLAMA_NUM_CTX=${OLLAMA_NUM_CTX:-131072}
-      - OLLAMA_NUM_PARALLEL=${OLLAMA_NUM_PARALLEL:-2}
-      - OLLAMA_MAX_LOADED_MODELS=${OLLAMA_MAX_LOADED_MODELS:-2}
+      # Keep direct Ollama calls and LlamaFarm's explicit per-request num_ctx
+      # in agreement. Parallel requests multiply context/KV-cache memory.
+      - OLLAMA_CONTEXT_LENGTH=${OLLAMA_CONTEXT_LENGTH:-32768}
+      - OLLAMA_NUM_CTX=${OLLAMA_NUM_CTX:-32768}
+      - OLLAMA_NUM_PARALLEL=${OLLAMA_NUM_PARALLEL:-1}
+      - OLLAMA_MAX_LOADED_MODELS=${OLLAMA_MAX_LOADED_MODELS:-1}
       - OLLAMA_FLASH_ATTENTION=${OLLAMA_FLASH_ATTENTION:-1}
       - OLLAMA_GPU_OVERHEAD=${OLLAMA_GPU_OVERHEAD:-536870912}
+      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-10m}
       # VRAM cap: leave unset to let Ollama auto-detect. Override in .env:
       #   OLLAMA_MAX_VRAM=<bytes>  (e.g. 7516192768 for a 7 GB laptop GPU)
       - OLLAMA_MAX_VRAM=${OLLAMA_MAX_VRAM:-}
@@ -82,8 +112,11 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
 
     ports:
-      - "${HOST_BIND_IP:-0.0.0.0}:${HOST_PORT:-42617}:${LLAMAFARM_GATEWAY_PORT:-42617}"
-      - "${HOST_BIND_IP:-0.0.0.0}:11434:11434"
+      # Only the direct-access gateway is intended for optional LAN access. Keep raw
+      # inference and vector-store ports on loopback unless an operator has a
+      # deliberate, separately secured integration.
+      - "${LLAMAFARM_HOST_BIND_IP:-127.0.0.1}:${HOST_PORT:-42617}:${LLAMAFARM_GATEWAY_PORT:-42617}"
+      - "${OLLAMA_HOST_BIND_IP:-127.0.0.1}:${OLLAMA_PORT:-11434}:11434"
 
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:${LLAMAFARM_GATEWAY_PORT:-42617}/health >/dev/null && curl -fsS http://127.0.0.1:11434/api/tags >/dev/null && curl -fsS http://127.0.0.1:9515/status >/dev/null"]
@@ -96,14 +129,18 @@ services:
     image: qdrant/qdrant:latest
     container_name: Qdrant
     restart: unless-stopped
+    mem_limit: ${QDRANT_MEMORY_LIMIT:-0}
+    memswap_limit: ${QDRANT_MEMORY_LIMIT:-0}
+    cpus: ${QDRANT_CPU_LIMIT:-0}
+    pids_limit: ${QDRANT_PIDS_LIMIT:-0}
     environment:
       - QDRANT__SERVICE__GRPC_PORT=6334
     volumes:
       - qdrant-data:/qdrant/storage
-    # Expose REST port to LAN so the ingest script on the host can reach it.
-    # Change HOST_BIND_IP to 127.0.0.1 to lock it to localhost only.
+    # The REST endpoint is local-only by default. The host ingest script can
+    # still reach it at 127.0.0.1 without exposing the vector store to the LAN.
     ports:
-      - "${HOST_BIND_IP:-0.0.0.0}:${QDRANT_PORT:-6333}:6333"
+      - "${QDRANT_HOST_BIND_IP:-127.0.0.1}:${QDRANT_PORT:-6333}:6333"
     healthcheck:
       test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/6333' 2>/dev/null"]
       interval: 30s

@@ -59,7 +59,9 @@ impl Tool for PdfReadTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
         let path = args
@@ -299,11 +301,13 @@ mod tests {
         let tool = PdfReadTool::new(test_security(std::env::temp_dir()));
         let result = tool.execute(json!({"path": "/etc/passwd"})).await.unwrap();
         assert!(!result.success);
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap_or("")
-            .contains("not allowed"));
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("not allowed")
+        );
     }
 
     #[tokio::test]
@@ -315,11 +319,13 @@ mod tests {
             .await
             .unwrap();
         assert!(!result.success);
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap_or("")
-            .contains("not allowed"));
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("not allowed")
+        );
     }
 
     #[tokio::test]
@@ -331,11 +337,13 @@ mod tests {
             .await
             .unwrap();
         assert!(!result.success);
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap_or("")
-            .contains("Failed to resolve"));
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("Failed to resolve")
+        );
     }
 
     #[tokio::test]
@@ -355,19 +363,21 @@ mod tests {
 
         let r1 = tool.execute(json!({"path": "a.pdf"})).await.unwrap();
         assert!(!r1.success);
-        assert!(r1
-            .error
-            .as_deref()
-            .unwrap_or("")
-            .contains("Failed to resolve"));
+        assert!(
+            r1.error
+                .as_deref()
+                .unwrap_or("")
+                .contains("Failed to resolve")
+        );
 
         let r2 = tool.execute(json!({"path": "b.pdf"})).await.unwrap();
         assert!(!r2.success);
-        assert!(r2
-            .error
-            .as_deref()
-            .unwrap_or("")
-            .contains("Failed to resolve"));
+        assert!(
+            r2.error
+                .as_deref()
+                .unwrap_or("")
+                .contains("Failed to resolve")
+        );
 
         // Third attempt must hit rate limit.
         let r3 = tool.execute(json!({"path": "c.pdf"})).await.unwrap();
@@ -397,11 +407,13 @@ mod tests {
         let tool = PdfReadTool::new(test_security(workspace));
         let result = tool.execute(json!({"path": "link.pdf"})).await.unwrap();
         assert!(!result.success);
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap_or("")
-            .contains("escapes workspace"));
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("escapes workspace")
+        );
     }
 
     /// Extraction tests require the rag-pdf feature.

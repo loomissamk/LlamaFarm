@@ -3,8 +3,8 @@ use crate::security::SecurityPolicy;
 use async_trait::async_trait;
 use regex::Regex;
 use serde_json::json;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 /// Web search tool for searching the internet.
@@ -474,7 +474,9 @@ impl Tool for WebSearchTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
         if !self.security.can_act() {

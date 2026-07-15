@@ -364,13 +364,14 @@ mod tests {
 
         let snap = registry.get_status("s1").unwrap();
         assert_eq!(snap.status, SubAgentStatus::Killed);
-        assert!(snap
-            .result
-            .unwrap()
-            .error
-            .as_deref()
-            .unwrap()
-            .contains("killed"));
+        assert!(
+            snap.result
+                .unwrap()
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("killed")
+        );
     }
 
     #[test]

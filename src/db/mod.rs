@@ -78,9 +78,7 @@ fn build_postgres(conn: &crate::config::DbConnectionConfig) -> anyhow::Result<Bo
 }
 
 #[cfg(not(feature = "db-postgres"))]
-fn build_postgres(
-    _conn: &crate::config::DbConnectionConfig,
-) -> anyhow::Result<Box<dyn DbAdapter>> {
+fn build_postgres(_conn: &crate::config::DbConnectionConfig) -> anyhow::Result<Box<dyn DbAdapter>> {
     anyhow::bail!(
         "PostgreSQL support requires the 'db-postgres' Cargo feature \
          (add db-postgres to LLAMAFARM_CARGO_FEATURES)"
@@ -97,9 +95,7 @@ fn build_mongo(conn: &crate::config::DbConnectionConfig) -> anyhow::Result<Box<d
 }
 
 #[cfg(not(feature = "db-mongo"))]
-fn build_mongo(
-    _conn: &crate::config::DbConnectionConfig,
-) -> anyhow::Result<Box<dyn DbAdapter>> {
+fn build_mongo(_conn: &crate::config::DbConnectionConfig) -> anyhow::Result<Box<dyn DbAdapter>> {
     anyhow::bail!(
         "MongoDB support requires the 'db-mongo' Cargo feature \
          (add db-mongo to LLAMAFARM_CARGO_FEATURES)"

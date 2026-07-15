@@ -16,6 +16,24 @@ CHROMEDRIVER_PID=""
 APP_PID=""
 PULL_PID=""
 
+ensure_runtime_identity() {
+  local uid="$1"
+  local gid="$2"
+
+  # The bundle intentionally runs the gateway as the host operator's numeric
+  # UID so mounted workspaces remain writable.  Minimal base images do not
+  # necessarily contain that UID in /etc/passwd, which makes ordinary tools
+  # such as `whoami` fail despite a healthy process.  Create a local identity
+  # before privileges are dropped; this never changes the host account.
+  if ! getent group "$gid" >/dev/null 2>&1; then
+    printf 'llamafarm:x:%s:\n' "$gid" >> /etc/group
+  fi
+  if ! getent passwd "$uid" >/dev/null 2>&1; then
+    printf 'llamafarm:x:%s:%s:LlamaFarm runtime:%s:/bin/bash\n' \
+      "$uid" "$gid" "$DATA_DIR" >> /etc/passwd
+  fi
+}
+
 ensure_runtime_layout() {
   mkdir -p "$CONFIG_DIR" "$WORKSPACE_DIR" "$DATA_DIR/.ollama"
   mkdir -p "${OLLAMA_MODELS:-$DATA_DIR/.ollama/models}"
@@ -231,6 +249,7 @@ if [ "$(id -u)" = "0" ]; then
       ;;
   esac
 
+  ensure_runtime_identity "$target_uid" "$target_gid"
   ensure_runtime_layout
   chown -R "$target_uid:$target_gid" "$DATA_DIR"
   drop_args=(--reuid="$target_uid" --regid="$target_gid")

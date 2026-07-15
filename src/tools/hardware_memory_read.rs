@@ -60,7 +60,9 @@ impl Tool for HardwareMemoryReadTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
         if self.boards.is_empty() {

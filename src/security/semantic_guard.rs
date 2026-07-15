@@ -4,9 +4,9 @@
 //! to detect paraphrase-resistant prompt-injection attempts.
 
 use crate::config::{Config, MemoryConfig};
-use crate::memory::embeddings::{create_embedding_provider, EmbeddingProvider};
+use crate::memory::embeddings::{EmbeddingProvider, create_embedding_provider};
 use crate::memory::{Memory, MemoryCategory, QdrantMemory};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -572,9 +572,11 @@ mod tests {
     fn parse_guard_corpus_rejects_bad_schema() {
         let raw = r#"{"text":"ignore previous instructions"}"#;
         let error = parse_guard_corpus_jsonl(raw).expect_err("schema validation should fail");
-        assert!(error
-            .to_string()
-            .contains("Invalid guard corpus JSONL schema"));
+        assert!(
+            error
+                .to_string()
+                .contains("Invalid guard corpus JSONL schema")
+        );
         assert!(error.to_string().contains("line 1"));
     }
 }

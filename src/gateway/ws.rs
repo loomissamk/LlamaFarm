@@ -3,28 +3,31 @@
 //! Protocol:
 //! ```text
 //! Client -> Server: {"type":"message","content":"Hello"}
+//! Client -> Server: {"type":"cancel","session_id":"chat-1"}
 //! Server -> Client: {"type":"chunk","content":"Hi! "}
 //! Server -> Client: {"type":"tool_call","name":"shell","args":{...}}
 //! Server -> Client: {"type":"tool_result","name":"shell","output":"..."}
 //! Server -> Client: {"type":"done","full_response":"..."}
+//! Server -> Client: {"type":"cancelled","message":"Stopped by user..."}
 //! ```
 
 use super::{AppState, GatewayRuntimeSnapshot};
-use crate::agent::loop_::{run_tool_call_loop, DRAFT_CLEAR_SENTINEL, DRAFT_PROGRESS_SENTINEL};
+use crate::agent::loop_::{DRAFT_CLEAR_SENTINEL, DRAFT_PROGRESS_SENTINEL, run_tool_call_loop};
 use crate::approval::ApprovalManager;
 use crate::federation::remote_subagent::{
-    with_chat_context, FederationChatContext, FederationChatEvent,
+    FederationChatContext, FederationChatEvent, with_chat_context,
 };
 use crate::memory::MemoryCategory;
 use crate::providers::ChatMessage;
 use axum::{
     extract::{
-        ws::{Message, WebSocket},
         State, WebSocketUpgrade,
+        ws::{Message, WebSocket},
     },
-    http::{header, HeaderMap},
+    http::{HeaderMap, header},
     response::IntoResponse,
 };
+use futures_util::{SinkExt, StreamExt, stream::SplitSink};
 use parking_lot::Mutex;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -35,16 +38,23 @@ use std::{
     sync::LazyLock,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-const EMPTY_WS_RESPONSE_FALLBACK: &str =
-    "Tool execution completed, but the model returned no final text response. Please ask me to summarize the result.";
+const EMPTY_WS_RESPONSE_FALLBACK: &str = "Tool execution completed, but the model returned no final text response. Please ask me to summarize the result.";
 const WS_AUTOSAVE_MIN_MESSAGE_CHARS: usize = 20;
 const WS_CHAT_SUBPROTOCOL: &str = "llamafarm.v1";
 const WS_CHAT_STORE_REL_PATH: &str = "state/web-chat-sessions.json";
 const WS_PERSISTED_MAX_MESSAGES: usize = 800;
 const WS_PERSISTED_MAX_SESSIONS: usize = 64;
 const WS_RESTORED_CONTEXT_PREFIX: &str = "[Saved chat context restored]";
+const WS_CANCELLED_MESSAGE: &str =
+    "Stopped by user. Completed tool results remain in this chat; no final response was produced.";
+
+/// The write half of an upgraded chat socket. Splitting the WebSocket lets the
+/// active agent turn continue emitting deltas while the read half receives a
+/// `cancel` control frame from the browser.
+type WsSink = SplitSink<WebSocket, Message>;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct WsChatSession {
@@ -88,6 +98,39 @@ fn normalize_ws_session_id(raw: Option<&str>) -> Option<String> {
     raw.map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
+}
+
+/// Control frames that may arrive while an agent turn owns the write half of
+/// the socket. Keep parsing small and explicit so a malformed frame cannot
+/// accidentally be treated as a Stop request.
+#[derive(Debug, PartialEq, Eq)]
+enum InFlightWsControl {
+    Cancel { session_id: String },
+    SessionDelete { session_id: String },
+    Message { session_id: String },
+    Other,
+    InvalidJson,
+}
+
+fn parse_inflight_ws_control(text: &str) -> InFlightWsControl {
+    let parsed = match serde_json::from_str::<serde_json::Value>(text) {
+        Ok(value) => value,
+        Err(_) => return InFlightWsControl::InvalidJson,
+    };
+    let session_id =
+        normalize_ws_session_id(parsed.get("session_id").and_then(serde_json::Value::as_str))
+            .unwrap_or_else(|| "default".to_string());
+
+    match parsed
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+    {
+        "cancel" => InFlightWsControl::Cancel { session_id },
+        "session_delete" => InFlightWsControl::SessionDelete { session_id },
+        "message" => InFlightWsControl::Message { session_id },
+        _ => InFlightWsControl::Other,
+    }
 }
 
 fn parse_seed_history(value: Option<&serde_json::Value>) -> Vec<ChatMessage> {
@@ -725,10 +768,8 @@ fn looks_like_direct_shell_command(candidate: &str) -> bool {
 
 fn has_explanatory_suffix(command: &str) -> bool {
     static EXPLANATION_SUFFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r"(?i)\b(?:and|then)\s+(?:explain|describe|summari[sz]e|interpret|analy[sz]e)\b",
-        )
-        .unwrap()
+        Regex::new(r"(?i)\b(?:and|then)\s+(?:explain|describe|summari[sz]e|interpret|analy[sz]e)\b")
+            .unwrap()
     });
     EXPLANATION_SUFFIX_RE.is_match(command)
 }
@@ -1302,7 +1343,7 @@ fn parse_ws_delta_event(delta: &str) -> Option<WsDeltaEvent> {
     }
 }
 
-async fn emit_ws_delta_event(socket: &mut WebSocket, session_id: &str, event: WsDeltaEvent) {
+async fn emit_ws_delta_event(socket: &mut WsSink, session_id: &str, event: WsDeltaEvent) {
     let payload = match event {
         WsDeltaEvent::ContentChunk(content) => json!({
             "type": "chunk",
@@ -1335,7 +1376,7 @@ async fn emit_ws_delta_event(socket: &mut WebSocket, session_id: &str, event: Ws
     let _ = socket.send(Message::Text(payload.to_string().into())).await;
 }
 
-async fn emit_ws_federation_event(socket: &mut WebSocket, event: FederationChatEvent) {
+async fn emit_ws_federation_event(socket: &mut WsSink, event: FederationChatEvent) {
     let payload = json!({
         "type": event.event_type,
         "session_id": event.session_id,
@@ -1356,7 +1397,7 @@ async fn emit_ws_federation_event(socket: &mut WebSocket, event: FederationChatE
 }
 
 async fn execute_direct_shell_command(
-    socket: &mut WebSocket,
+    socket: &mut WsSink,
     session_id: &str,
     runtime: &GatewayRuntimeSnapshot,
     history: &mut Vec<ChatMessage>,
@@ -1468,7 +1509,7 @@ fn push_direct_tool_history(
 }
 
 async fn execute_direct_workspace_delete(
-    socket: &mut WebSocket,
+    socket: &mut WsSink,
     session_id: &str,
     config: &crate::config::Config,
     history: &mut Vec<ChatMessage>,
@@ -1523,7 +1564,7 @@ async fn execute_direct_workspace_delete(
 }
 
 async fn execute_direct_workspace_directory_create(
-    socket: &mut WebSocket,
+    socket: &mut WsSink,
     session_id: &str,
     config: &crate::config::Config,
     history: &mut Vec<ChatMessage>,
@@ -1578,7 +1619,7 @@ async fn execute_direct_workspace_directory_create(
 }
 
 async fn execute_direct_file_read(
-    socket: &mut WebSocket,
+    socket: &mut WsSink,
     session_id: &str,
     runtime: &GatewayRuntimeSnapshot,
     history: &mut Vec<ChatMessage>,
@@ -1660,7 +1701,7 @@ async fn execute_direct_file_read(
 }
 
 async fn execute_direct_ollama_model(
-    socket: &mut WebSocket,
+    socket: &mut WsSink,
     session_id: &str,
     runtime: &GatewayRuntimeSnapshot,
     history: &mut Vec<ChatMessage>,
@@ -1786,12 +1827,21 @@ pub async fn handle_ws_chat(
         .into_response()
 }
 
-async fn handle_socket(mut socket: WebSocket, state: AppState) {
-    while let Some(msg) = socket.recv().await {
-        let msg = match msg {
-            Ok(Message::Text(text)) => text,
-            Ok(Message::Close(_)) | Err(_) => break,
-            _ => continue,
+async fn handle_socket(socket: WebSocket, state: AppState) {
+    // Keep the halves separate so an in-flight agent turn can be interrupted
+    // without waiting for a model stream or tool call to return first.
+    let (mut socket, mut socket_rx) = socket.split();
+    let mut queued_inbound: Option<String> = None;
+
+    loop {
+        let msg = if let Some(queued) = queued_inbound.take() {
+            queued
+        } else {
+            match socket_rx.next().await {
+                Some(Ok(Message::Text(text))) => text.to_string(),
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                _ => continue,
+            }
         };
 
         // Parse incoming message
@@ -1813,11 +1863,14 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             parse_selected_federation_peer_ids(parsed.get("federation_peer_ids"));
         let (federation_event_tx, mut federation_event_rx) =
             tokio::sync::mpsc::unbounded_channel::<FederationChatEvent>();
+        let turn_cancellation = CancellationToken::new();
         let federation_context = state.federation.as_ref().map(|_| FederationChatContext {
             session_id: session_id.clone(),
             selected_peer_ids: selected_federation_peer_ids,
             event_tx: Some(federation_event_tx),
+            cancellation: Some(turn_cancellation.clone()),
         });
+        let mut followup_message: Option<String> = None;
 
         with_chat_context(federation_context, async {
             // Warm per-model capability cache before taking the config lock so the
@@ -1833,6 +1886,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                 native_tools,
                 approval_manager,
                 system_prompt,
+                max_history_messages,
                 ws_chat_store_path,
             ) = {
                 let config_guard = state.config.lock();
@@ -1905,12 +1959,26 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                     native_tools,
                     ApprovalManager::from_config(&config_guard.autonomy),
                     system_prompt,
+                    config_guard.agent.max_history_messages,
                     resolve_ws_chat_store_path(&config_guard),
                 )
             };
 
             if msg_type == "session_delete" {
                 delete_ws_chat_history(&session_id, &ws_chat_store_path).await;
+                return;
+            }
+
+            if msg_type == "cancel" {
+                // A cancellation frame is normally consumed by the in-flight
+                // turn's select loop. If it reached this idle path there is no
+                // run left to interrupt, but still acknowledge it explicitly.
+                let cancelled = json!({
+                    "type": "cancelled",
+                    "session_id": session_id,
+                    "message": "No active run to stop.",
+                });
+                let _ = socket.send(Message::Text(cancelled.to_string().into())).await;
                 return;
             }
 
@@ -2095,12 +2163,19 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                 _ => Vec::new(),
             };
 
+            let mut delete_session_after_cancel = false;
             let result = crate::agent::loop_::with_tool_loop_settings(
                 parallel_tools,
                 native_tools,
                 crate::agent::loop_::with_tool_loop_history_limit(
-                    crate::agent::loop_::DEFAULT_MAX_HISTORY_MESSAGES,
+                    max_history_messages,
                     async {
+                        // A fresh token is scoped to this browser turn. The read
+                        // half of the WebSocket remains live below, so a `cancel`
+                        // frame can interrupt provider streaming, tool execution,
+                        // and the next tool-loop iteration immediately.
+                        let cancellation_token = turn_cancellation.clone();
+                        let mut cancellation_requested = false;
                         let (delta_tx, mut delta_rx) = tokio::sync::mpsc::channel::<String>(128);
                         let mut loop_future = std::pin::pin!(run_tool_call_loop(
                             runtime.provider.as_ref(),
@@ -2115,7 +2190,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                             "webchat",
                             &state.multimodal,
                             state.max_tool_iterations,
-                            None,
+                            Some(cancellation_token.clone()),
                             Some(delta_tx),
                             None,
                             &excluded_tools,
@@ -2126,6 +2201,74 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                                 federation_event = federation_event_rx.recv() => {
                                     if let Some(federation_event) = federation_event {
                                         emit_ws_federation_event(&mut socket, federation_event).await;
+                                    }
+                                }
+                                inbound = socket_rx.next() => {
+                                    match inbound {
+                                        Some(Ok(Message::Text(text))) => {
+                                            match parse_inflight_ws_control(&text) {
+                                                InFlightWsControl::Cancel { session_id: control_session_id }
+                                                    if control_session_id == session_id => {
+                                                        if !cancellation_requested {
+                                                            cancellation_requested = true;
+                                                            cancellation_token.cancel();
+                                                            let payload = json!({
+                                                                "type": "cancelling",
+                                                                "session_id": session_id,
+                                                                "message": "Stopping the active run…",
+                                                            });
+                                                            let _ = socket.send(Message::Text(payload.to_string().into())).await;
+                                                        }
+                                                    }
+                                                InFlightWsControl::SessionDelete { session_id: control_session_id }
+                                                    if control_session_id == session_id => {
+                                                        // Deleting an active chat is also a stop request. The
+                                                        // deletion is completed after the cancelled turn reaches a
+                                                        // clean terminal state, so it cannot be re-persisted below.
+                                                        delete_session_after_cancel = true;
+                                                        if !cancellation_requested {
+                                                            cancellation_requested = true;
+                                                            cancellation_token.cancel();
+                                                        }
+                                                    }
+                                                InFlightWsControl::Message { session_id: control_session_id }
+                                                    if control_session_id == session_id => {
+                                                    // A mid-run message is an intentional follow-up. Queue the
+                                                    // exact frame, checkpoint completed evidence through normal
+                                                    // cancellation, then immediately start it as the next turn.
+                                                    // This lets operators redirect long autonomous work without
+                                                    // losing verified tool results or waiting for a generation
+                                                    // segment to finish.
+                                                    followup_message = Some(text.to_string());
+                                                    if !cancellation_requested {
+                                                        cancellation_requested = true;
+                                                        cancellation_token.cancel();
+                                                    }
+                                                    let payload = json!({
+                                                        "type": "followup_queued",
+                                                        "session_id": control_session_id,
+                                                        "message": "Follow-up queued; checkpointing the active run first.",
+                                                    });
+                                                    let _ = socket.send(Message::Text(payload.to_string().into())).await;
+                                                }
+                                                InFlightWsControl::InvalidJson => {
+                                                    let payload = json!({"type": "error", "message": "Invalid JSON"});
+                                                    let _ = socket.send(Message::Text(payload.to_string().into())).await;
+                                                }
+                                                InFlightWsControl::Cancel { .. }
+                                                | InFlightWsControl::SessionDelete { .. }
+                                                | InFlightWsControl::Message { .. }
+                                                | InFlightWsControl::Other => {}
+                                            }
+                                        }
+                                        Some(Ok(Message::Close(_))) | Some(Err(_)) | None => {
+                                            // The browser disconnected; dropping the active future would
+                                            // stop it eventually, but signal it first so model/tool futures
+                                            // take their own cancellation-aware paths.
+                                            cancellation_token.cancel();
+                                            break loop_future.await;
+                                        }
+                                        _ => {}
                                     }
                                 }
                                 maybe_delta = delta_rx.recv() => {
@@ -2188,6 +2331,37 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                         "model": runtime.model,
                     }));
                 }
+                Err(error) if crate::agent::loop_::is_tool_loop_cancelled(&error) => {
+                    // Keep the user's prompt plus any *completed* tool traces so a
+                    // follow-up can build on verified work. Do not manufacture an
+                    // assistant final response for a turn that was intentionally
+                    // stopped halfway through.
+                    if delete_session_after_cancel {
+                        delete_ws_chat_history(&session_id, &ws_chat_store_path).await;
+                    } else {
+                        store_ws_chat_history(
+                            &session_id,
+                            &history,
+                            temporary,
+                            &ws_chat_store_path,
+                        )
+                        .await;
+                    }
+
+                    let cancelled = serde_json::json!({
+                        "type": "cancelled",
+                        "session_id": session_id,
+                        "message": WS_CANCELLED_MESSAGE,
+                    });
+                    let _ = socket.send(Message::Text(cancelled.to_string().into())).await;
+
+                    let _ = state.event_tx.send(serde_json::json!({
+                        "type": "agent_cancelled",
+                        "provider": provider_label,
+                        "model": runtime.model,
+                        "session_id": session_id,
+                    }));
+                }
                 Err(error) => {
                     store_ws_chat_history(
                         &session_id,
@@ -2213,6 +2387,9 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             }
         })
         .await;
+        if let Some(followup) = followup_message.take() {
+            queued_inbound = Some(followup);
+        }
     }
 }
 
@@ -2267,6 +2444,46 @@ mod tests {
         assert_eq!(
             extract_ws_bearer_token(&headers).as_deref(),
             Some("from-auth-header")
+        );
+    }
+
+    #[test]
+    fn parse_inflight_ws_control_recognizes_scoped_stop_frames() {
+        assert_eq!(
+            parse_inflight_ws_control(r#"{"type":"cancel","session_id":"chat-a"}"#),
+            InFlightWsControl::Cancel {
+                session_id: "chat-a".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_inflight_ws_control(r#"{"type":"cancel","session_id":"   "}"#),
+            InFlightWsControl::Cancel {
+                session_id: "default".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_inflight_ws_control_does_not_turn_other_frames_into_stops() {
+        assert_eq!(
+            parse_inflight_ws_control(r#"{"type":"message","session_id":"chat-a"}"#),
+            InFlightWsControl::Message {
+                session_id: "chat-a".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_inflight_ws_control(r#"{"type":"session_delete","session_id":"chat-a"}"#),
+            InFlightWsControl::SessionDelete {
+                session_id: "chat-a".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_inflight_ws_control(r#"{"type":"ping"}"#),
+            InFlightWsControl::Other
+        );
+        assert_eq!(
+            parse_inflight_ws_control("not-json"),
+            InFlightWsControl::InvalidJson
         );
     }
 
@@ -2599,10 +2816,12 @@ Reminder set successfully."#;
         let persisted = read_persisted_ws_chat_sessions(&store_path).await;
         let session = persisted.sessions.get("session-a").unwrap();
         assert_eq!(session.history.len(), 2);
-        assert!(session
-            .history
-            .iter()
-            .all(|message| message.role != "system"));
+        assert!(
+            session
+                .history
+                .iter()
+                .all(|message| message.role != "system")
+        );
         assert_eq!(session.history[0].content, "write and run add.py");
         assert_eq!(session.history.last().unwrap().content, "2 + 2 = 4");
 
@@ -2628,9 +2847,11 @@ Reminder set successfully."#;
         assert_eq!(restored.len(), 1);
         assert_eq!(restored[0].role, "assistant");
         assert!(restored[0].content.starts_with(WS_RESTORED_CONTEXT_PREFIX));
-        assert!(restored[0]
-            .content
-            .contains("Previous completed command before this turn: `lsusb`"));
+        assert!(
+            restored[0]
+                .content
+                .contains("Previous completed command before this turn: `lsusb`")
+        );
         assert!(restored[0].content.contains("Bus 001 Device 001"));
     }
 
@@ -2646,9 +2867,11 @@ Reminder set successfully."#;
 
         let restored = build_restored_ws_chat_history(&history);
         assert_eq!(restored.len(), 1);
-        assert!(restored[0]
-            .content
-            .contains("Latest user request before this turn: continue the physics engine work"));
+        assert!(
+            restored[0]
+                .content
+                .contains("Latest user request before this turn: continue the physics engine work")
+        );
         assert!(!restored[0].content.contains("Internal correction:"));
     }
 
@@ -2686,10 +2909,7 @@ Reminder set successfully."#;
             extract_direct_shell_command("run lsusb and explain all the results"),
             None
         );
-        assert_eq!(
-            extract_direct_shell_command("lsblk then summarize"),
-            None
-        );
+        assert_eq!(extract_direct_shell_command("lsblk then summarize"), None);
     }
 
     #[test]

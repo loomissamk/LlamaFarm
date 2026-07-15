@@ -348,11 +348,13 @@ mod tests {
             .unwrap();
 
         assert!(!result.success);
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap_or("")
-            .contains("matches 2 times"));
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("matches 2 times")
+        );
 
         // File should be unchanged
         let content = tokio::fs::read_to_string(dir.join("test.txt"))
@@ -443,11 +445,13 @@ mod tests {
             .unwrap();
 
         assert!(!result.success);
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap_or("")
-            .contains("must not be empty"));
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("must not be empty")
+        );
 
         let content = tokio::fs::read_to_string(dir.join("test.txt"))
             .await
@@ -521,11 +525,13 @@ mod tests {
             .unwrap();
 
         assert!(!result.success);
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap_or("")
-            .contains("escapes workspace"));
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("escapes workspace")
+        );
 
         let _ = tokio::fs::remove_dir_all(&root).await;
     }
@@ -626,11 +632,13 @@ mod tests {
             .unwrap();
 
         assert!(!result.success);
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap_or("")
-            .contains("Rate limit exceeded"));
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("Rate limit exceeded")
+        );
 
         let content = tokio::fs::read_to_string(dir.join("test.txt"))
             .await
@@ -657,11 +665,13 @@ mod tests {
             .unwrap();
 
         assert!(!result.success);
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap_or("")
-            .contains("Failed to read file"));
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("Failed to read file")
+        );
 
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }

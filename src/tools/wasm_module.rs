@@ -307,9 +307,11 @@ mod tests {
 
         let result = tool.execute(json!({"action": "list"})).await.unwrap();
         assert!(!result.success);
-        assert!(result
-            .error
-            .unwrap_or_default()
-            .contains("runtime.kind = \"wasm\""));
+        assert!(
+            result
+                .error
+                .unwrap_or_default()
+                .contains("runtime.kind = \"wasm\"")
+        );
     }
 }

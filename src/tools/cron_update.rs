@@ -268,10 +268,12 @@ mod tests {
             .await
             .unwrap();
         assert!(!denied.success);
-        assert!(denied
-            .error
-            .unwrap_or_default()
-            .contains("explicit approval"));
+        assert!(
+            denied
+                .error
+                .unwrap_or_default()
+                .contains("explicit approval")
+        );
 
         let approved = tool
             .execute(json!({
@@ -307,10 +309,12 @@ mod tests {
             .await
             .unwrap();
         assert!(!result.success);
-        assert!(result
-            .error
-            .unwrap_or_default()
-            .contains("Rate limit exceeded"));
+        assert!(
+            result
+                .error
+                .unwrap_or_default()
+                .contains("Rate limit exceeded")
+        );
         assert!(cron::get_job(&cfg, &job.id).unwrap().enabled);
     }
 }

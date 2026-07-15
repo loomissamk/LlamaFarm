@@ -11,7 +11,7 @@ use crate::providers::traits::{
 };
 use crate::tools::ToolSpec;
 use async_trait::async_trait;
-use futures_util::{stream, StreamExt};
+use futures_util::{StreamExt, stream};
 use hmac::{Hmac, Mac};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -846,6 +846,7 @@ impl BedrockProvider {
         let usage = response.usage.map(|u| TokenUsage {
             input_tokens: u.input_tokens,
             output_tokens: u.output_tokens,
+            output_truncated: false,
         });
 
         if let Some(output) = response.output {

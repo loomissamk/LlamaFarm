@@ -2,8 +2,8 @@ use parking_lot::Mutex;
 use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::sync::LazyLock;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use std::time::Instant;
 
 /// How much autonomy the agent has
@@ -150,166 +150,443 @@ impl Default for SecurityPolicy {
                 // regardless of this list.
                 "*".into(),
                 // shells
-                "bash".into(), "sh".into(), "zsh".into(), "fish".into(), "dash".into(),
-                "powershell".into(), "pwsh".into(), "cmd".into(),
+                "bash".into(),
+                "sh".into(),
+                "zsh".into(),
+                "fish".into(),
+                "dash".into(),
+                "powershell".into(),
+                "pwsh".into(),
+                "cmd".into(),
                 // python
-                "python".into(), "python3".into(), "pip".into(), "pip3".into(),
-                "pipx".into(), "uv".into(), "uvx".into(),
-                "streamlit".into(), "uvicorn".into(), "gunicorn".into(),
-                "flask".into(), "fastapi".into(),
-                "pytest".into(), "black".into(), "ruff".into(), "mypy".into(), "pylint".into(), "flake8".into(),
-                "jupyter".into(), "ipython".into(),
+                "python".into(),
+                "python3".into(),
+                "pip".into(),
+                "pip3".into(),
+                "pipx".into(),
+                "uv".into(),
+                "uvx".into(),
+                "streamlit".into(),
+                "uvicorn".into(),
+                "gunicorn".into(),
+                "flask".into(),
+                "fastapi".into(),
+                "pytest".into(),
+                "black".into(),
+                "ruff".into(),
+                "mypy".into(),
+                "pylint".into(),
+                "flake8".into(),
+                "jupyter".into(),
+                "ipython".into(),
                 // node / js / ts
-                "node".into(), "nodejs".into(), "npm".into(), "npx".into(),
-                "pnpm".into(), "yarn".into(), "bun".into(), "bunx".into(),
-                "ts-node".into(), "tsx".into(), "tsc".into(), "deno".into(),
-                "jest".into(), "vitest".into(), "mocha".into(),
-                "eslint".into(), "prettier".into(), "webpack".into(),
-                "vite".into(), "esbuild".into(), "rollup".into(), "next".into(),
+                "node".into(),
+                "nodejs".into(),
+                "npm".into(),
+                "npx".into(),
+                "pnpm".into(),
+                "yarn".into(),
+                "bun".into(),
+                "bunx".into(),
+                "ts-node".into(),
+                "tsx".into(),
+                "tsc".into(),
+                "deno".into(),
+                "jest".into(),
+                "vitest".into(),
+                "mocha".into(),
+                "eslint".into(),
+                "prettier".into(),
+                "webpack".into(),
+                "vite".into(),
+                "esbuild".into(),
+                "rollup".into(),
+                "next".into(),
                 // rust
-                "cargo".into(), "rustc".into(), "rustfmt".into(), "clippy".into(),
+                "cargo".into(),
+                "rustc".into(),
+                "rustfmt".into(),
+                "clippy".into(),
                 // c / c++
-                "gcc".into(), "g++".into(), "cc".into(), "c++".into(),
-                "clang".into(), "clang++".into(), "clang-format".into(),
-                "make".into(), "cmake".into(), "ninja".into(), "meson".into(),
-                "ld".into(), "ar".into(), "objdump".into(), "nm".into(),
+                "gcc".into(),
+                "g++".into(),
+                "cc".into(),
+                "c++".into(),
+                "clang".into(),
+                "clang++".into(),
+                "clang-format".into(),
+                "make".into(),
+                "cmake".into(),
+                "ninja".into(),
+                "meson".into(),
+                "ld".into(),
+                "ar".into(),
+                "objdump".into(),
+                "nm".into(),
                 // java / jvm
-                "java".into(), "javac".into(), "jar".into(),
-                "mvn".into(), "gradle".into(), "kotlin".into(), "kotlinc".into(),
-                "scala".into(), "scalac".into(), "sbt".into(),
+                "java".into(),
+                "javac".into(),
+                "jar".into(),
+                "mvn".into(),
+                "gradle".into(),
+                "kotlin".into(),
+                "kotlinc".into(),
+                "scala".into(),
+                "scalac".into(),
+                "sbt".into(),
                 // go
-                "go".into(), "gofmt".into(), "golangci-lint".into(),
+                "go".into(),
+                "gofmt".into(),
+                "golangci-lint".into(),
                 // ruby
-                "ruby".into(), "gem".into(), "bundle".into(), "bundler".into(),
-                "rails".into(), "rake".into(), "rspec".into(),
+                "ruby".into(),
+                "gem".into(),
+                "bundle".into(),
+                "bundler".into(),
+                "rails".into(),
+                "rake".into(),
+                "rspec".into(),
                 // php
-                "php".into(), "composer".into(), "artisan".into(),
+                "php".into(),
+                "composer".into(),
+                "artisan".into(),
                 // dotnet
-                "dotnet".into(), "csc".into(), "msbuild".into(),
+                "dotnet".into(),
+                "csc".into(),
+                "msbuild".into(),
                 // lua
-                "lua".into(), "luajit".into(),
+                "lua".into(),
+                "luajit".into(),
                 // perl
-                "perl".into(), "cpan".into(),
+                "perl".into(),
+                "cpan".into(),
                 // file ops
-                "ls".into(), "ll".into(), "la".into(),
-                "cat".into(), "less".into(), "more".into(),
-                "cp".into(), "mv".into(), "rm".into(), "mkdir".into(), "rmdir".into(),
-                "touch".into(), "ln".into(), "readlink".into(),
-                "chmod".into(), "chown".into(), "stat".into(), "file".into(),
-                "head".into(), "tail".into(), "wc".into(),
-                "find".into(), "locate".into(), "which".into(), "whereis".into(),
+                "ls".into(),
+                "ll".into(),
+                "la".into(),
+                "cat".into(),
+                "less".into(),
+                "more".into(),
+                "cp".into(),
+                "mv".into(),
+                "rm".into(),
+                "mkdir".into(),
+                "rmdir".into(),
+                "touch".into(),
+                "ln".into(),
+                "readlink".into(),
+                "chmod".into(),
+                "chown".into(),
+                "stat".into(),
+                "file".into(),
+                "head".into(),
+                "tail".into(),
+                "wc".into(),
+                "find".into(),
+                "locate".into(),
+                "which".into(),
+                "whereis".into(),
                 // text processing
-                "grep".into(), "egrep".into(), "fgrep".into(), "rg".into(), "ag".into(),
-                "sed".into(), "awk".into(), "cut".into(), "tr".into(), "paste".into(),
-                "sort".into(), "uniq".into(), "diff".into(), "patch".into(),
-                "jq".into(), "yq".into(), "xargs".into(), "tee".into(),
-                "echo".into(), "printf".into(), "read".into(),
+                "grep".into(),
+                "egrep".into(),
+                "fgrep".into(),
+                "rg".into(),
+                "ag".into(),
+                "sed".into(),
+                "awk".into(),
+                "cut".into(),
+                "tr".into(),
+                "paste".into(),
+                "sort".into(),
+                "uniq".into(),
+                "diff".into(),
+                "patch".into(),
+                "jq".into(),
+                "yq".into(),
+                "xargs".into(),
+                "tee".into(),
+                "echo".into(),
+                "printf".into(),
+                "read".into(),
                 // archive
-                "tar".into(), "zip".into(), "unzip".into(),
-                "gzip".into(), "gunzip".into(), "bzip2".into(), "xz".into(),
-                "7z".into(), "zstd".into(),
+                "tar".into(),
+                "zip".into(),
+                "unzip".into(),
+                "gzip".into(),
+                "gunzip".into(),
+                "bzip2".into(),
+                "xz".into(),
+                "7z".into(),
+                "zstd".into(),
                 // system info
-                "pwd".into(), "date".into(), "env".into(), "printenv".into(),
-                "ps".into(), "top".into(), "htop".into(), "pgrep".into(), "pkill".into(), "kill".into(),
-                "df".into(), "du".into(), "free".into(), "lscpu".into(), "lsmem".into(),
-                "uname".into(), "hostname".into(), "whoami".into(), "id".into(),
-                "uptime".into(), "w".into(),
-                "lspci".into(), "lsusb".into(), "lsblk".into(),
-                "nvidia-smi".into(), "rocm-smi".into(),
+                "pwd".into(),
+                "date".into(),
+                "env".into(),
+                "printenv".into(),
+                "ps".into(),
+                "top".into(),
+                "htop".into(),
+                "pgrep".into(),
+                "pkill".into(),
+                "kill".into(),
+                "df".into(),
+                "du".into(),
+                "free".into(),
+                "lscpu".into(),
+                "lsmem".into(),
+                "uname".into(),
+                "hostname".into(),
+                "whoami".into(),
+                "id".into(),
+                "uptime".into(),
+                "w".into(),
+                "lspci".into(),
+                "lsusb".into(),
+                "lsblk".into(),
+                "nvidia-smi".into(),
+                "rocm-smi".into(),
                 // process control
-                "nohup".into(), "timeout".into(), "time".into(), "watch".into(), "sleep".into(),
-                "bg".into(), "fg".into(), "jobs".into(), "wait".into(),
+                "nohup".into(),
+                "timeout".into(),
+                "time".into(),
+                "watch".into(),
+                "sleep".into(),
+                "bg".into(),
+                "fg".into(),
+                "jobs".into(),
+                "wait".into(),
                 // network
-                "curl".into(), "wget".into(), "rsync".into(),
-                "ssh".into(), "scp".into(), "sftp".into(),
-                "ping".into(), "nc".into(), "netcat".into(), "ncat".into(),
-                "ss".into(), "netstat".into(), "ip".into(), "ifconfig".into(),
-                "dig".into(), "nslookup".into(), "host".into(), "traceroute".into(),
+                "curl".into(),
+                "wget".into(),
+                "rsync".into(),
+                "ssh".into(),
+                "scp".into(),
+                "sftp".into(),
+                "ping".into(),
+                "nc".into(),
+                "netcat".into(),
+                "ncat".into(),
+                "ss".into(),
+                "netstat".into(),
+                "ip".into(),
+                "ifconfig".into(),
+                "dig".into(),
+                "nslookup".into(),
+                "host".into(),
+                "traceroute".into(),
                 "openssl".into(),
                 // databases
-                "sqlite3".into(), "psql".into(), "mysql".into(), "mongosh".into(),
-                "redis-cli".into(), "clickhouse-client".into(),
+                "sqlite3".into(),
+                "psql".into(),
+                "mysql".into(),
+                "mongosh".into(),
+                "redis-cli".into(),
+                "clickhouse-client".into(),
                 // containers / infra
-                "docker".into(), "docker-compose".into(), "kubectl".into(),
-                "helm".into(), "terraform".into(), "ansible".into(),
+                "docker".into(),
+                "docker-compose".into(),
+                "kubectl".into(),
+                "helm".into(),
+                "terraform".into(),
+                "ansible".into(),
                 // vcs
-                "git".into(), "gh".into(), "hg".into(), "svn".into(),
+                "git".into(),
+                "gh".into(),
+                "hg".into(),
+                "svn".into(),
                 // misc dev
-                "make".into(), "just".into(), "task".into(),
-                "openssl".into(), "base64".into(), "xxd".into(),
-                "gdb".into(), "lldb".into(), "strace".into(), "ltrace".into(),
-                "valgrind".into(), "perf".into(),
-                "ffmpeg".into(), "convert".into(), "identify".into(),
+                "make".into(),
+                "just".into(),
+                "task".into(),
+                "openssl".into(),
+                "base64".into(),
+                "xxd".into(),
+                "gdb".into(),
+                "lldb".into(),
+                "strace".into(),
+                "ltrace".into(),
+                "valgrind".into(),
+                "perf".into(),
+                "ffmpeg".into(),
+                "convert".into(),
+                "identify".into(),
                 // ollama
                 "ollama".into(),
                 // data science / ml
-                "jupyter".into(), "ipython".into(), "nbconvert".into(),
-                "conda".into(), "mamba".into(), "micromamba".into(),
-                "poetry".into(), "pipenv".into(), "pdm".into(), "hatch".into(),
+                "jupyter".into(),
+                "ipython".into(),
+                "nbconvert".into(),
+                "conda".into(),
+                "mamba".into(),
+                "micromamba".into(),
+                "poetry".into(),
+                "pipenv".into(),
+                "pdm".into(),
+                "hatch".into(),
                 "virtualenv".into(),
-                "r".into(), "Rscript".into(), "radian".into(),
+                "r".into(),
+                "Rscript".into(),
+                "radian".into(),
                 "julia".into(),
                 // more modern languages
-                "zig".into(), "zls".into(),
-                "nim".into(), "nimble".into(),
-                "crystal".into(), "shards".into(),
-                "swift".into(), "swiftc".into(),
-                "dart".into(), "flutter".into(),
-                "elixir".into(), "iex".into(), "mix".into(),
-                "erl".into(), "erlc".into(), "rebar3".into(),
-                "ghc".into(), "ghci".into(), "cabal".into(), "stack".into(), "runhaskell".into(),
-                "ocaml".into(), "dune".into(), "opam".into(),
-                "racket".into(), "guile".into(), "sbcl".into(),
-                "clojure".into(), "clj".into(), "lein".into(),
+                "zig".into(),
+                "zls".into(),
+                "nim".into(),
+                "nimble".into(),
+                "crystal".into(),
+                "shards".into(),
+                "swift".into(),
+                "swiftc".into(),
+                "dart".into(),
+                "flutter".into(),
+                "elixir".into(),
+                "iex".into(),
+                "mix".into(),
+                "erl".into(),
+                "erlc".into(),
+                "rebar3".into(),
+                "ghc".into(),
+                "ghci".into(),
+                "cabal".into(),
+                "stack".into(),
+                "runhaskell".into(),
+                "ocaml".into(),
+                "dune".into(),
+                "opam".into(),
+                "racket".into(),
+                "guile".into(),
+                "sbcl".into(),
+                "clojure".into(),
+                "clj".into(),
+                "lein".into(),
                 "groovy".into(),
-                "mono".into(), "mcs".into(),
-                "tcl".into(), "tclsh".into(),
+                "mono".into(),
+                "mcs".into(),
+                "tcl".into(),
+                "tclsh".into(),
                 // version managers / toolchains
-                "rustup".into(), "pyenv".into(), "nvm".into(), "mise".into(), "asdf".into(),
-                "rbenv".into(), "rvm".into(), "sdkman".into(), "gvm".into(),
+                "rustup".into(),
+                "pyenv".into(),
+                "nvm".into(),
+                "mise".into(),
+                "asdf".into(),
+                "rbenv".into(),
+                "rvm".into(),
+                "sdkman".into(),
+                "gvm".into(),
                 "direnv".into(),
                 // package managers (system)
-                "apt".into(), "apt-get".into(), "dpkg".into(),
-                "dnf".into(), "yum".into(), "rpm".into(),
-                "pacman".into(), "yay".into(), "paru".into(),
-                "brew".into(), "nix".into(), "nix-env".into(), "nix-shell".into(),
+                "apt".into(),
+                "apt-get".into(),
+                "dpkg".into(),
+                "dnf".into(),
+                "yum".into(),
+                "rpm".into(),
+                "pacman".into(),
+                "yay".into(),
+                "paru".into(),
+                "brew".into(),
+                "nix".into(),
+                "nix-env".into(),
+                "nix-shell".into(),
                 // build systems
-                "bazel".into(), "buck".into(), "pants".into(),
-                "nx".into(), "turbo".into(), "just".into(), "task".into(),
-                "ant".into(), "mvn".into(),
+                "bazel".into(),
+                "buck".into(),
+                "pants".into(),
+                "nx".into(),
+                "turbo".into(),
+                "just".into(),
+                "task".into(),
+                "ant".into(),
+                "mvn".into(),
                 // better shell utils
-                "tree".into(), "fd".into(), "fzf".into(),
-                "bat".into(), "exa".into(), "eza".into(), "lsd".into(),
-                "rg".into(), "ag".into(), "ripgrep".into(),
-                "delta".into(), "difftastic".into(),
-                "sd".into(), "choose".into(), "tokei".into(),
-                "hyperfine".into(), "dust".into(), "duf".into(),
-                "procs".into(), "bottom".into(), "btm".into(), "bpytop".into(),
-                "lsof".into(), "fuser".into(),
-                "screen".into(), "tmux".into(),
-                "vim".into(), "vi".into(), "nano".into(), "emacs".into(), "nvim".into(),
+                "tree".into(),
+                "fd".into(),
+                "fzf".into(),
+                "bat".into(),
+                "exa".into(),
+                "eza".into(),
+                "lsd".into(),
+                "rg".into(),
+                "ag".into(),
+                "ripgrep".into(),
+                "delta".into(),
+                "difftastic".into(),
+                "sd".into(),
+                "choose".into(),
+                "tokei".into(),
+                "hyperfine".into(),
+                "dust".into(),
+                "duf".into(),
+                "procs".into(),
+                "bottom".into(),
+                "btm".into(),
+                "bpytop".into(),
+                "lsof".into(),
+                "fuser".into(),
+                "screen".into(),
+                "tmux".into(),
+                "vim".into(),
+                "vi".into(),
+                "nano".into(),
+                "emacs".into(),
+                "nvim".into(),
                 // shell linting / formatting
-                "shellcheck".into(), "shfmt".into(),
-                "hadolint".into(), "yamllint".into(),
+                "shellcheck".into(),
+                "shfmt".into(),
+                "hadolint".into(),
+                "yamllint".into(),
                 // infra / cloud
-                "vault".into(), "consul".into(), "nomad".into(), "packer".into(),
-                "vagrant".into(), "minikube".into(), "kind".into(), "k3d".into(),
-                "k9s".into(), "kubectx".into(), "kubens".into(), "stern".into(),
-                "aws".into(), "az".into(), "gcloud".into(), "doctl".into(),
-                "heroku".into(), "fly".into(), "railway".into(),
+                "vault".into(),
+                "consul".into(),
+                "nomad".into(),
+                "packer".into(),
+                "vagrant".into(),
+                "minikube".into(),
+                "kind".into(),
+                "k3d".into(),
+                "k9s".into(),
+                "kubectx".into(),
+                "kubens".into(),
+                "stern".into(),
+                "aws".into(),
+                "az".into(),
+                "gcloud".into(),
+                "doctl".into(),
+                "heroku".into(),
+                "fly".into(),
+                "railway".into(),
                 // more db tools
-                "mongodump".into(), "mongorestore".into(), "mongoexport".into(),
-                "pg_dump".into(), "pg_restore".into(), "psql".into(),
-                "mysqldump".into(), "mysqladmin".into(),
+                "mongodump".into(),
+                "mongorestore".into(),
+                "mongoexport".into(),
+                "pg_dump".into(),
+                "pg_restore".into(),
+                "psql".into(),
+                "mysqldump".into(),
+                "mysqladmin".into(),
                 // misc useful
-                "jless".into(), "fx".into(), "htmlq".into(),
-                "http".into(), "xh".into(), "httpie".into(),
-                "mkcert".into(), "cfssl".into(),
-                "gpg".into(), "age".into(), "sops".into(),
-                "entr".into(), "inotifywait".into(),
-                "parallel".into(), "pv".into(), "mbuffer".into(),
-                "iperf".into(), "iperf3".into(), "nmap".into(),
-                "socat".into(), "websocat".into(),
+                "jless".into(),
+                "fx".into(),
+                "htmlq".into(),
+                "http".into(),
+                "xh".into(),
+                "httpie".into(),
+                "mkcert".into(),
+                "cfssl".into(),
+                "gpg".into(),
+                "age".into(),
+                "sops".into(),
+                "entr".into(),
+                "inotifywait".into(),
+                "parallel".into(),
+                "pv".into(),
+                "mbuffer".into(),
+                "iperf".into(),
+                "iperf3".into(),
+                "nmap".into(),
+                "socat".into(),
+                "websocat".into(),
             ],
             forbidden_paths: vec![
                 // System directories (blocked even when workspace_only=false)
@@ -376,8 +653,13 @@ fn is_allowed_pseudo_device_path(path: &Path) -> bool {
 }
 
 const READ_ONLY_INSPECTION_ROOTS: &[&str] = &["/proc", "/sys"];
-const SAFE_DELETE_LONG_FLAGS: &[&str] =
-    &["--", "--force", "--interactive", "--interactive=never", "--verbose"];
+const SAFE_DELETE_LONG_FLAGS: &[&str] = &[
+    "--",
+    "--force",
+    "--interactive",
+    "--interactive=never",
+    "--verbose",
+];
 const HARD_DENIED_COMMANDS: &[&str] = &[
     "modprobe",
     "insmod",
@@ -670,12 +952,8 @@ fn contains_unquoted_single_ampersand(command: &str) -> bool {
                     '\'' => quote = QuoteState::Single,
                     '"' => quote = QuoteState::Double,
                     '&' => {
-                        let next_significant = chars
-                            .clone()
-                            .find(|next| !next.is_whitespace());
-                        if previous_significant == Some('>')
-                            || next_significant == Some('>')
-                        {
+                        let next_significant = chars.clone().find(|next| !next.is_whitespace());
+                        if previous_significant == Some('>') || next_significant == Some('>') {
                             previous_significant = Some('&');
                             continue;
                         }
@@ -754,7 +1032,8 @@ struct HeredocPolicySpec {
 
 fn parse_heredoc_policy_spec(line: &str) -> Option<HeredocPolicySpec> {
     static HEREDOC_RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r#"(?x)
+        Regex::new(
+            r#"(?x)
             <<(?P<strip>-)?\s*
             (?:
                 '(?P<single>[^'\n]+)'
@@ -763,7 +1042,8 @@ fn parse_heredoc_policy_spec(line: &str) -> Option<HeredocPolicySpec> {
                 |
                 (?P<bare>[A-Za-z0-9_./:-]+)
             )
-        "#)
+        "#,
+        )
         .expect("valid heredoc regex")
     });
 
@@ -1123,11 +1403,7 @@ fn attached_short_option_value(token: &str) -> Option<&str> {
         return None;
     }
     let value = body[1..].trim_start_matches('=').trim();
-    if value.is_empty() {
-        None
-    } else {
-        Some(value)
-    }
+    if value.is_empty() { None } else { Some(value) }
 }
 
 fn redirection_target(token: &str) -> Option<&str> {
@@ -1465,9 +1741,9 @@ impl SecurityPolicy {
             return false;
         };
 
-        self.allowed_commands.iter().any(|allowed| {
-            is_allowlist_entry_match(allowed, interpreter, interpreter)
-        })
+        self.allowed_commands
+            .iter()
+            .any(|allowed| is_allowlist_entry_match(allowed, interpreter, interpreter))
     }
 
     fn hard_denied_apt_reason(&self, args: &[String]) -> Option<String> {
@@ -1796,7 +2072,8 @@ impl SecurityPolicy {
             // High-risk commands
             if matches!(
                 parsed.base.as_str(),
-                "mkfs" | "dd"
+                "mkfs"
+                    | "dd"
                     | "shutdown"
                     | "reboot"
                     | "halt"
@@ -1963,7 +2240,8 @@ impl SecurityPolicy {
     /// Check if a shell command is allowed.
     ///
     /// Validates the **entire** command string, not just the first word:
-    /// - Blocks subshell operators (`` ` ``, `$(`) that hide arbitrary execution
+    /// - Blocks subshell operators (`` ` ``, `$(`) in constrained autonomy
+    ///   modes, where they can hide arbitrary execution from the allowlist
     /// - Splits on command separators (`|`, `&&`, `||`, `;`, newlines) and
     ///   validates each sub-command against the allowlist
     /// - Blocks single `&` background chaining (`&&` remains supported)
@@ -1974,15 +2252,18 @@ impl SecurityPolicy {
             return false;
         }
 
-        // Block subshell/expansion operators — these allow hiding arbitrary
-        // commands inside an allowed command (e.g. `echo $(rm -rf /)`) and
-        // bypassing path checks through variable indirection. The helper below
-        // ignores escapes and literals inside single quotes, so `$(` or `${`
-        // literals are permitted there.
-        if command.contains('`')
-            || contains_unquoted_shell_variable_expansion(command)
-            || command.contains("<(")
-            || command.contains(">(")
+        // In constrained modes, block subshell/expansion operators. They can
+        // hide arbitrary commands inside an allowed command (for example
+        // `echo $(rm -rf /)`) and bypass path checks through indirection. A
+        // full-autonomy operator profile already deliberately permits arbitrary
+        // shell execution, so it must also support ordinary shell constructs
+        // such as `$(date)` used by generated build, cron, and test commands.
+        // The helper ignores escapes and literals inside single quotes.
+        if self.autonomy != AutonomyLevel::Full
+            && (command.contains('`')
+                || contains_unquoted_shell_variable_expansion(command)
+                || command.contains("<(")
+                || command.contains(">("))
         {
             return false;
         }
@@ -1991,8 +2272,7 @@ impl SecurityPolicy {
         // arbitrary paths and bypass path checks.
         // Ignore quoted literals, e.g. `echo "a>b"` and `echo "a<b"`.
         if self.shell_redirect_policy != ShellRedirectPolicy::Allow
-            && (contains_unquoted_char(command, '>')
-                || contains_unquoted_char(command, '<'))
+            && (contains_unquoted_char(command, '>') || contains_unquoted_char(command, '<'))
         {
             return false;
         }
@@ -2466,9 +2746,10 @@ mod tests {
     #[test]
     fn enforce_tool_operation_read_allowed_in_readonly_mode() {
         let p = readonly_policy();
-        assert!(p
-            .enforce_tool_operation(ToolOperation::Read, "memory_recall")
-            .is_ok());
+        assert!(
+            p.enforce_tool_operation(ToolOperation::Read, "memory_recall")
+                .is_ok()
+        );
     }
 
     #[test]
@@ -2529,6 +2810,13 @@ mod tests {
         let p = full_policy();
         assert!(p.is_command_allowed("ls"));
         assert!(!p.is_command_allowed("rm -rf /"));
+    }
+
+    #[test]
+    fn full_autonomy_allows_normal_shell_expansion() {
+        let p = full_policy();
+        assert!(p.is_command_allowed("echo \"audit at $(date)\""));
+        assert!(p.is_command_allowed("echo \"$HOME\""));
     }
 
     #[test]
@@ -3262,9 +3550,10 @@ Inst fwupd [1.9.0] (1.9.1 Ubuntu:24.04/noble [amd64])\n";
         };
 
         assert!(p.validate_command_execution("python3>&1 -V", false).is_ok());
-        assert!(p
-            .validate_command_execution("python3>/dev/null -V", false)
-            .is_ok());
+        assert!(
+            p.validate_command_execution("python3>/dev/null -V", false)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -3275,12 +3564,14 @@ Inst fwupd [1.9.0] (1.9.1 Ubuntu:24.04/noble [amd64])\n";
             ..default_policy()
         };
 
-        assert!(p
-            .validate_command_execution("echo hello 2>&1", false)
-            .is_ok());
-        assert!(p
-            .validate_command_execution("echo hello 2>/dev/null", false)
-            .is_ok());
+        assert!(
+            p.validate_command_execution("echo hello 2>&1", false)
+                .is_ok()
+        );
+        assert!(
+            p.validate_command_execution("echo hello 2>/dev/null", false)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -3290,12 +3581,14 @@ Inst fwupd [1.9.0] (1.9.1 Ubuntu:24.04/noble [amd64])\n";
             ..default_policy()
         };
 
-        assert!(p
-            .validate_command_execution("echo hello > out.txt", false)
-            .is_err());
-        assert!(p
-            .validate_command_execution("cat </etc/passwd", false)
-            .is_err());
+        assert!(
+            p.validate_command_execution("echo hello > out.txt", false)
+                .is_err()
+        );
+        assert!(
+            p.validate_command_execution("cat </etc/passwd", false)
+                .is_err()
+        );
     }
 
     #[test]
@@ -3316,9 +3609,10 @@ Inst fwupd [1.9.0] (1.9.1 Ubuntu:24.04/noble [amd64])\n";
             ..default_policy()
         };
 
-        assert!(p
-            .validate_command_execution("echo hello > out.txt", false)
-            .is_ok());
+        assert!(
+            p.validate_command_execution("echo hello > out.txt", false)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -3328,12 +3622,13 @@ Inst fwupd [1.9.0] (1.9.1 Ubuntu:24.04/noble [amd64])\n";
             ..default_policy()
         };
 
-        assert!(p
-            .validate_command_execution(
+        assert!(
+            p.validate_command_execution(
                 "cat > smoke_js/add_two.mjs << 'EOF'\nconsole.log(2 + 3);\nEOF",
                 false
             )
-            .is_ok());
+            .is_ok()
+        );
     }
 
     #[test]
@@ -3344,10 +3639,14 @@ Inst fwupd [1.9.0] (1.9.1 Ubuntu:24.04/noble [amd64])\n";
             ..default_policy()
         };
 
-        assert!(p
-            .validate_command_execution("grep nope missing.txt >/dev/null 2>&1", false)
-            .is_ok());
-        assert!(p.validate_command_execution("cat </dev/null", false).is_ok());
+        assert!(
+            p.validate_command_execution("grep nope missing.txt >/dev/null 2>&1", false)
+                .is_ok()
+        );
+        assert!(
+            p.validate_command_execution("cat </dev/null", false)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -3358,10 +3657,7 @@ Inst fwupd [1.9.0] (1.9.1 Ubuntu:24.04/noble [amd64])\n";
         };
 
         let err = p
-            .validate_command_execution(
-                "cat > smoke_js/add_two.mjs <<EOF\n$(id)\nEOF",
-                false,
-            )
+            .validate_command_execution("cat > smoke_js/add_two.mjs <<EOF\n$(id)\nEOF", false)
             .unwrap_err();
         assert!(err.contains("unquoted heredoc body contains shell expansion"));
     }
@@ -3379,9 +3675,10 @@ Inst fwupd [1.9.0] (1.9.1 Ubuntu:24.04/noble [amd64])\n";
         };
 
         assert!(p.is_command_allowed("echo preparing && ./check.sh"));
-        assert!(p
-            .validate_command_execution("echo preparing && ./check.sh", false)
-            .is_ok());
+        assert!(
+            p.validate_command_execution("echo preparing && ./check.sh", false)
+                .is_ok()
+        );
     }
 
     #[test]

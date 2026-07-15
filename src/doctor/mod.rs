@@ -793,10 +793,7 @@ fn check_daemon_state(config: &Config, runtime_mode: RuntimeMode, items: &mut Ve
     let state_file = crate::daemon::state_file_path(config);
 
     if !state_file.exists() {
-        let message = format!(
-            "state file not found: {}",
-            state_file.display()
-        );
+        let message = format!("state file not found: {}", state_file.display());
         match runtime_mode {
             RuntimeMode::ExpectDaemonState => items.push(DiagItem::error(
                 cat,
@@ -1063,8 +1060,7 @@ mod tests {
         let invalid_custom = provider_validation_error("custom:", None).unwrap_or_default();
         assert!(invalid_custom.contains("requires a URL"));
 
-        let invalid_unknown =
-            provider_validation_error("totally-fake", None).unwrap_or_default();
+        let invalid_unknown = provider_validation_error("totally-fake", None).unwrap_or_default();
         assert!(invalid_unknown.contains("Unknown provider"));
     }
 
@@ -1309,10 +1305,12 @@ mod tests {
         let second = workspace_probe_path(tmp.path());
 
         assert_ne!(first, second);
-        assert!(first
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.starts_with(".llamafarm_doctor_probe_")));
+        assert!(
+            first
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(".llamafarm_doctor_probe_"))
+        );
     }
 
     #[test]
@@ -1372,9 +1370,11 @@ mod tests {
 
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].severity, Severity::Ok);
-        assert!(items[0]
-            .message
-            .contains("gateway-only mode does not use daemon state"));
+        assert!(
+            items[0]
+                .message
+                .contains("gateway-only mode does not use daemon state")
+        );
     }
 
     #[test]
@@ -1417,9 +1417,10 @@ mod tests {
         let mut items = Vec::new();
         check_daemon_state(&config, RuntimeMode::GatewayOnly, &mut items);
 
-        let channel_item = items
-            .iter()
-            .find(|item| item.message.contains("no external channel components tracked"));
+        let channel_item = items.iter().find(|item| {
+            item.message
+                .contains("no external channel components tracked")
+        });
         assert!(channel_item.is_some());
         assert_eq!(channel_item.unwrap().severity, Severity::Ok);
     }

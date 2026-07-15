@@ -1,7 +1,6 @@
 use crate::config::schema::{
-    default_nostr_relays, DingTalkConfig, IrcConfig, LarkReceiveMode, LinqConfig,
-    NextcloudTalkConfig, NostrConfig, QQConfig, QQReceiveMode, SignalConfig, StreamMode,
-    WhatsAppConfig,
+    DingTalkConfig, IrcConfig, LarkReceiveMode, LinqConfig, NextcloudTalkConfig, NostrConfig,
+    QQConfig, QQReceiveMode, SignalConfig, StreamMode, WhatsAppConfig, default_nostr_relays,
 };
 use crate::config::{
     AutonomyConfig, BrowserConfig, ChannelsConfig, ComposioConfig, Config, DiscordConfig,
@@ -18,7 +17,7 @@ use crate::providers::{
     is_moonshot_alias, is_qianfan_alias, is_qwen_alias, is_qwen_oauth_alias, is_zai_alias,
     is_zai_cn_alias,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use console::style;
 use dialoguer::{Confirm, Input, Select};
 use serde::{Deserialize, Serialize};
@@ -2271,7 +2270,9 @@ async fn setup_provider(workspace_dir: &Path) -> Result<(String, String, String,
             style("Custom Provider Setup").white().bold(),
             style("— any OpenAI-compatible API").dim()
         );
-        print_bullet("LlamaFarm works with ANY API that speaks the OpenAI chat completions format.");
+        print_bullet(
+            "LlamaFarm works with ANY API that speaks the OpenAI chat completions format.",
+        );
         print_bullet("Examples: LiteLLM, LocalAI, vLLM, text-generation-webui, LM Studio, etc.");
         println!();
 
@@ -5151,11 +5152,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                         .with_prompt("  Verification Token (optional, for Webhook mode)")
                         .allow_empty(true)
                         .interact_text()?;
-                    if token.is_empty() {
-                        None
-                    } else {
-                        Some(token)
-                    }
+                    if token.is_empty() { None } else { Some(token) }
                 } else {
                     None
                 };
@@ -7291,9 +7288,10 @@ mod tests {
         };
 
         let err = run_models_refresh(&config, None, true).await.unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("does not support live model discovery"));
+        assert!(
+            err.to_string()
+                .contains("does not support live model discovery")
+        );
     }
 
     // ── provider_env_var ────────────────────────────────────────

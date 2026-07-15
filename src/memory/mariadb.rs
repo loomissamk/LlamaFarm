@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
 use mysql::prelude::Queryable;
-use mysql::{params, Opts, OptsBuilder, Pool, SslOpts};
+use mysql::{Opts, OptsBuilder, Pool, SslOpts, params};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -490,7 +490,9 @@ mod tests {
             .ok()
             .filter(|value| !value.trim().is_empty())
         else {
-            eprintln!("Skipping MariaDB integration test: set LLAMAFARM_TEST_MARIADB_URL to enable");
+            eprintln!(
+                "Skipping MariaDB integration test: set LLAMAFARM_TEST_MARIADB_URL to enable"
+            );
             return;
         };
 

@@ -852,9 +852,10 @@ mod tests {
             .confirm_non_cli_pending_request(&req.request_id, "alice", "telegram", "chat-1")
             .expect("request should confirm");
         assert_eq!(confirmed.request_id, req.request_id);
-        assert!(mgr
-            .confirm_non_cli_pending_request(&req.request_id, "alice", "telegram", "chat-1")
-            .is_err());
+        assert!(
+            mgr.confirm_non_cli_pending_request(&req.request_id, "alice", "telegram", "chat-1")
+                .is_err()
+        );
     }
 
     #[test]

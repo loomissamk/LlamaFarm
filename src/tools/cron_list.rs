@@ -33,7 +33,9 @@ impl Tool for CronListTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     async fn execute(&self, _args: serde_json::Value) -> anyhow::Result<ToolResult> {
         if !self.config.cron.enabled {
@@ -97,9 +99,11 @@ mod tests {
 
         let result = tool.execute(json!({})).await.unwrap();
         assert!(!result.success);
-        assert!(result
-            .error
-            .unwrap_or_default()
-            .contains("cron is disabled"));
+        assert!(
+            result
+                .error
+                .unwrap_or_default()
+                .contains("cron is disabled")
+        );
     }
 }

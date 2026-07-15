@@ -15,6 +15,7 @@ import {
   PanelLeftOpen,
   Plus,
   Send,
+  Square,
   Trash2,
   User,
   X,
@@ -43,7 +44,7 @@ import type { AgentShellCall } from '@/components/ide/TerminalPanel';
 const IdePanel = lazy(() => import('@/components/ide/IdePanel'));
 
 type ChatRole = 'user' | 'agent';
-type ChatMessageKind = 'message' | 'tool_call' | 'tool_result' | 'error';
+type ChatMessageKind = 'message' | 'tool_call' | 'tool_result' | 'status' | 'error';
 
 interface ChatMessage {
   id: string;
@@ -296,7 +297,7 @@ function loadPersistedSessions(): ChatSession[] {
             if (
               typeof message.id !== 'string' ||
               (message.role !== 'user' && message.role !== 'agent') ||
-              !['message', 'tool_call', 'tool_result', 'error'].includes(message.kind) ||
+              !['message', 'tool_call', 'tool_result', 'status', 'error'].includes(message.kind) ||
               typeof message.content !== 'string' ||
               Number.isNaN(timestamp.getTime())
             ) {
@@ -583,6 +584,12 @@ function buildToolResultSeed(
 function buildHistorySeed(messages: ChatMessage[]): SeedChatMessage[] {
   return messages
     .flatMap((message) => {
+      // UI-only lifecycle notices (for example, a user-initiated Stop) should
+      // remain visible in the transcript without becoming model context on a
+      // later follow-up.
+      if (message.kind === 'status') {
+        return [];
+      }
       const role =
         message.seedRole ?? (message.role === 'agent' ? 'assistant' : 'user');
       const content = (message.seedContent ?? message.content).trim();
@@ -615,6 +622,13 @@ export default function AgentChat() {
   const [activeSessionId, setActiveSessionId] = useState(initialStateRef.current.activeSessionId);
   const [input, setInput] = useState('');
   const [typingSessionIds, setTypingSessionIds] = useState<string[]>([]);
+  const [stoppingSessionIds, setStoppingSessionIds] = useState<string[]>([]);
+  const [streamingContentBySession, setStreamingContentBySession] = useState<
+    Record<string, string>
+  >({});
+  const [streamingPreviewCollapsedBySession, setStreamingPreviewCollapsedBySession] = useState<
+    Record<string, boolean>
+  >({});
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => loadSidebarCollapsed());
   const [ideOpen, setIdeOpen] = useState(() => loadIdeOpen());
   const [ideWidth, setIdeWidth] = useState(() => loadIdeWidth());
@@ -643,6 +657,9 @@ export default function AgentChat() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const pendingContentRef = useRef<Record<string, string>>({});
   const pendingToolCallsRef = useRef<Record<string, PendingToolCallSeed[]>>({});
+  const completedResponseSessionIdsRef = useRef<Set<string>>(new Set());
+  const deletedSessionIdsRef = useRef<Set<string>>(new Set());
+  const queuedFollowupSessionIdsRef = useRef<Set<string>>(new Set());
   const responseStartRef = useRef<number | null>(null);
   const streamStartRef = useRef<number | null>(null);
   const charCountRef = useRef(0);
@@ -656,6 +673,15 @@ export default function AgentChat() {
   const activeMessages = activeSession?.messages ?? [];
   const activeSessionTyping = activeSession
     ? typingSessionIds.includes(activeSession.id)
+    : false;
+  const activeSessionStopping = activeSession
+    ? stoppingSessionIds.includes(activeSession.id)
+    : false;
+  const activeStreamingContent = activeSession
+    ? streamingContentBySession[activeSession.id]
+    : undefined;
+  const activeStreamingPreviewCollapsed = activeSession
+    ? streamingPreviewCollapsedBySession[activeSession.id] ?? false
     : false;
   const activeFederationTasks = activeSession
     ? federationTasksBySession[activeSession.id] ?? []
@@ -734,6 +760,11 @@ export default function AgentChat() {
       responseStartRef.current = null;
       streamStartRef.current = null;
       charCountRef.current = 0;
+      pendingContentRef.current = {};
+      setTypingSessionIds([]);
+      setStoppingSessionIds([]);
+      setStreamingContentBySession({});
+      setStreamingPreviewCollapsedBySession({});
       setStreaming(false);
     };
 
@@ -745,6 +776,12 @@ export default function AgentChat() {
     ws.onMessage = (msg: WsMessage) => {
       const sessionId = msg.session_id ?? activeSessionIdRef.current;
       if (!sessionId) {
+        return;
+      }
+      // A Stop acknowledgement can arrive after the user deleted the chat.
+      // Never recreate a just-deleted session merely to display that terminal
+      // event.
+      if (deletedSessionIdsRef.current.has(sessionId)) {
         return;
       }
 
@@ -790,6 +827,19 @@ export default function AgentChat() {
 
       const clearTypingForSession = () => {
         setTypingSessionIds((prev) => prev.filter((id) => id !== sessionId));
+        setStoppingSessionIds((prev) => prev.filter((id) => id !== sessionId));
+        setStreamingContentBySession((prev) => {
+          if (!(sessionId in prev)) return prev;
+          const next = { ...prev };
+          delete next[sessionId];
+          return next;
+        });
+        setStreamingPreviewCollapsedBySession((prev) => {
+          if (!(sessionId in prev)) return prev;
+          const next = { ...prev };
+          delete next[sessionId];
+          return next;
+        });
         delete pendingContentRef.current[sessionId];
       };
 
@@ -821,8 +871,13 @@ export default function AgentChat() {
           setTypingSessionIds((prev) =>
             prev.includes(sessionId) ? prev : [...prev, sessionId],
           );
-          pendingContentRef.current[sessionId] =
+          const streamedContent =
             (pendingContentRef.current[sessionId] ?? '') + (msg.content ?? '');
+          pendingContentRef.current[sessionId] = streamedContent;
+          setStreamingContentBySession((prev) => ({
+            ...prev,
+            [sessionId]: streamedContent,
+          }));
           setStreaming(true);
           // TPS tracking
           if (streamStartRef.current === null) {
@@ -854,12 +909,12 @@ export default function AgentChat() {
           if (estimatedTokensPerSecond > 0) {
             setTps(Math.max(1, Math.round(estimatedTokensPerSecond)));
           }
-          appendMessage(
-            'agent',
-            'message',
-            content || EMPTY_DONE_FALLBACK,
-            new Date(),
-            {
+          // Some backends emit both a legacy `message` event and the terminal
+          // `done` event. The stream preview is deliberately ephemeral, and
+          // only one completed assistant message should be retained per turn.
+          if (!completedResponseSessionIdsRef.current.has(sessionId)) {
+            const finalContent = content || EMPTY_DONE_FALLBACK;
+            appendMessage('agent', 'message', finalContent, new Date(), {
               stats:
                 completionSeconds > 0 &&
                 outputTokens > 0 &&
@@ -872,10 +927,11 @@ export default function AgentChat() {
                   : undefined,
               seed: {
                 seedRole: 'assistant',
-                seedContent: content || EMPTY_DONE_FALLBACK,
+                seedContent: finalContent,
               },
-            },
-          );
+            });
+            completedResponseSessionIdsRef.current.add(sessionId);
+          }
           clearTypingForSession();
           responseStartRef.current = null;
           streamStartRef.current = null;
@@ -1064,6 +1120,75 @@ export default function AgentChat() {
           break;
         }
 
+        case 'cancelling': {
+          setStoppingSessionIds((prev) =>
+            prev.includes(sessionId) ? prev : [...prev, sessionId],
+          );
+          break;
+        }
+
+        case 'followup_queued': {
+          queuedFollowupSessionIdsRef.current.add(sessionId);
+          appendMessage(
+            'agent',
+            'status',
+            msg.message ?? 'Follow-up queued; checkpointing the active run first.',
+            new Date(),
+          );
+          break;
+        }
+
+        case 'cancelled': {
+          const stoppedMessage = msg.message ?? 'Stopped by user.';
+          const transitioningToFollowup = queuedFollowupSessionIdsRef.current.delete(sessionId);
+          if (!transitioningToFollowup) {
+            appendMessage('agent', 'status', `[Stopped] ${stoppedMessage}`, new Date());
+          }
+          delete pendingToolCallsRef.current[sessionId];
+          setShellCallsBySession((prev) => {
+            const calls = prev[sessionId];
+            if (!calls?.some((call) => call.status === 'running')) return prev;
+            return {
+              ...prev,
+              [sessionId]: calls.map((call) =>
+                call.status === 'running'
+                  ? {
+                      ...call,
+                      status: 'error' as const,
+                      output: 'Stopped by user before a result was returned.',
+                      updatedAt: new Date(),
+                    }
+                  : call,
+              ),
+            };
+          });
+          setFederationTasksBySession((prev) => {
+            const tasks = prev[sessionId];
+            if (!tasks?.some((task) => task.status === 'status' || task.status === 'streaming')) {
+              return prev;
+            }
+            return {
+              ...prev,
+              [sessionId]: tasks.map((task) =>
+                task.status === 'status' || task.status === 'streaming'
+                  ? {
+                      ...task,
+                      status: 'error' as const,
+                      message: 'Stopped by user',
+                      updatedAt: new Date(),
+                    }
+                  : task,
+              ),
+            };
+          });
+          clearTypingForSession();
+          responseStartRef.current = null;
+          streamStartRef.current = null;
+          charCountRef.current = 0;
+          setStreaming(false);
+          break;
+        }
+
         case 'error':
           appendMessage(
             'agent',
@@ -1201,7 +1326,7 @@ export default function AgentChat() {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [activeMessages, activeSessionTyping]);
+  }, [activeMessages, activeSessionTyping, activeStreamingContent]);
 
   const createAndSelectSession = (temporary: boolean) => {
     const session = createChatSession(temporary);
@@ -1215,10 +1340,31 @@ export default function AgentChat() {
     const nextExisting = sessions.find((session) => session.id !== sessionId);
     const replacementSession = !nextExisting ? createChatSession(false) : null;
 
+    // If a run is live, ask the gateway to stop it before removing its
+    // transcript. The backend treats session_delete during a run as a clean
+    // cancellation and avoids re-persisting the partial turn.
+    if (typingSessionIds.includes(sessionId)) {
+      wsRef.current?.cancelSession(sessionId);
+    }
     wsRef.current?.deleteSession(sessionId);
+    deletedSessionIdsRef.current.add(sessionId);
     delete pendingContentRef.current[sessionId];
     delete pendingToolCallsRef.current[sessionId];
+    completedResponseSessionIdsRef.current.delete(sessionId);
+    setStreamingContentBySession((prev) => {
+      if (!(sessionId in prev)) return prev;
+      const next = { ...prev };
+      delete next[sessionId];
+      return next;
+    });
+    setStreamingPreviewCollapsedBySession((prev) => {
+      if (!(sessionId in prev)) return prev;
+      const next = { ...prev };
+      delete next[sessionId];
+      return next;
+    });
     setTypingSessionIds((prev) => prev.filter((id) => id !== sessionId));
+    setStoppingSessionIds((prev) => prev.filter((id) => id !== sessionId));
     setSelectedFederationPeerIdsBySession((prev) => {
       const next = { ...prev };
       delete next[sessionId];
@@ -1274,6 +1420,8 @@ export default function AgentChat() {
     );
 
     try {
+      deletedSessionIdsRef.current.delete(activeSession.id);
+      completedResponseSessionIdsRef.current.delete(activeSession.id);
       wsRef.current.sendMessage({
         content: trimmed,
         sessionId: activeSession.id,
@@ -1289,7 +1437,10 @@ export default function AgentChat() {
       setTypingSessionIds((prev) =>
         prev.includes(activeSession.id) ? prev : [...prev, activeSession.id],
       );
+      setStoppingSessionIds((prev) => prev.filter((id) => id !== activeSession.id));
       pendingContentRef.current[activeSession.id] = '';
+      setStreamingContentBySession((prev) => ({ ...prev, [activeSession.id]: '' }));
+      setStreamingPreviewCollapsedBySession((prev) => ({ ...prev, [activeSession.id]: false }));
     } catch {
       setError('Failed to send message. Please try again.');
     }
@@ -1299,6 +1450,17 @@ export default function AgentChat() {
       inputRef.current.style.height = 'auto';
       inputRef.current.focus();
     }
+  };
+
+  const handleStop = () => {
+    if (!activeSession || !activeSessionTyping || activeSessionStopping) {
+      return;
+    }
+
+    wsRef.current?.cancelSession(activeSession.id);
+    setStoppingSessionIds((prev) =>
+      prev.includes(activeSession.id) ? prev : [...prev, activeSession.id],
+    );
   };
 
   const handleKeyDown = (event: React.KeyboardEvent) => {
@@ -1558,7 +1720,7 @@ export default function AgentChat() {
         </div>
 
         <div className="flex-1 overflow-y-auto p-4">
-          {activeMessages.length === 0 ? (
+          {activeMessages.length === 0 && !activeSessionTyping ? (
             <div className="flex h-full flex-col items-center justify-center text-center text-gray-500">
               <Bot className="mb-3 h-12 w-12 text-gray-600" />
               <p className="text-lg font-medium text-gray-300">LlamaFarm Agent</p>
@@ -1572,6 +1734,9 @@ export default function AgentChat() {
               {activeMessages.map((message) => (
                 <div
                   key={message.id}
+                  data-testid={`agent-message-${message.kind}`}
+                  data-message-role={message.role}
+                  data-message-kind={message.kind}
                   className={`flex items-start gap-3 ${
                     message.role === 'user' ? 'flex-row-reverse' : ''
                   }`}
@@ -1607,27 +1772,64 @@ export default function AgentChat() {
                 </div>
               ))}
 
-              {activeSessionTyping && (
+              {activeSessionTyping && activeSession && (
                 <div className="flex items-start gap-3">
                   <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-gray-700">
                     <Bot className="h-4 w-4 text-white" />
                   </div>
-                  <div className="rounded-2xl border border-gray-700 bg-gray-800 px-4 py-3">
-                    <div className="flex items-center gap-1">
-                      <span
-                        className="h-2 w-2 animate-bounce rounded-full bg-gray-400"
-                        style={{ animationDelay: '0ms' }}
-                      />
-                      <span
-                        className="h-2 w-2 animate-bounce rounded-full bg-gray-400"
-                        style={{ animationDelay: '150ms' }}
-                      />
-                      <span
-                        className="h-2 w-2 animate-bounce rounded-full bg-gray-400"
-                        style={{ animationDelay: '300ms' }}
-                      />
+                  <div
+                    data-testid="agent-streaming-preview"
+                    className="max-w-[85%] rounded-2xl border border-emerald-500/30 bg-gray-800 px-4 py-3 text-gray-100"
+                  >
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="text-sm font-medium text-emerald-300">Working</span>
+                        <span className="truncate text-xs text-gray-500">Live model output</span>
+                      </div>
+                      <button
+                        type="button"
+                        aria-expanded={!activeStreamingPreviewCollapsed}
+                        onClick={() =>
+                          setStreamingPreviewCollapsedBySession((prev) => ({
+                            ...prev,
+                            [activeSession.id]: !(prev[activeSession.id] ?? false),
+                          }))
+                        }
+                        className="rounded p-1 text-gray-500 transition-colors hover:bg-gray-700 hover:text-gray-200"
+                        title={
+                          activeStreamingPreviewCollapsed
+                            ? 'Expand live model output'
+                            : 'Collapse live model output'
+                        }
+                      >
+                        {activeStreamingPreviewCollapsed ? (
+                          <ChevronDown className="h-4 w-4" />
+                        ) : (
+                          <ChevronUp className="h-4 w-4" />
+                        )}
+                      </button>
                     </div>
-                    <p className="mt-1 text-xs text-gray-500">Typing...</p>
+                    {!activeStreamingPreviewCollapsed &&
+                      (activeStreamingContent ? (
+                        <p aria-live="polite" className="mt-3 whitespace-pre-wrap break-words text-sm">
+                          {activeStreamingContent}
+                        </p>
+                      ) : (
+                        <div className="mt-3 flex items-center gap-1" aria-label="Waiting for model output">
+                          <span
+                            className="h-2 w-2 animate-bounce rounded-full bg-gray-400"
+                            style={{ animationDelay: '0ms' }}
+                          />
+                          <span
+                            className="h-2 w-2 animate-bounce rounded-full bg-gray-400"
+                            style={{ animationDelay: '150ms' }}
+                          />
+                          <span
+                            className="h-2 w-2 animate-bounce rounded-full bg-gray-400"
+                            style={{ animationDelay: '300ms' }}
+                          />
+                        </div>
+                      ))}
                   </div>
                 </div>
               )}
@@ -1642,6 +1844,7 @@ export default function AgentChat() {
             <div className="flex-1">
               <textarea
                 ref={inputRef}
+                data-testid="agent-chat-input"
                 rows={1}
                 value={input}
                 onChange={(event) => {
@@ -1651,13 +1854,37 @@ export default function AgentChat() {
                   el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
                 }}
                 onKeyDown={handleKeyDown}
-                placeholder={connected ? 'Type a message...' : 'Connecting...'}
+                placeholder={
+                  !connected
+                    ? 'Connecting...'
+                    : activeSessionStopping
+                      ? 'Stopping the active run...'
+                      : activeSessionTyping
+                        ? 'Add a follow-up to redirect the active run…'
+                        : 'Type a message...'
+                }
                 disabled={!connected || !activeSession}
                 className="w-full resize-none overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 px-4 py-3 text-sm text-white placeholder-gray-500 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
               />
             </div>
+            {activeSessionTyping && activeSession && (
+              <button
+                type="button"
+                onClick={handleStop}
+                data-testid="agent-chat-stop"
+                disabled={!connected || activeSessionStopping}
+                className="flex-shrink-0 rounded-xl border border-red-500/50 bg-red-950/40 px-3 py-3 text-sm font-medium text-red-200 transition-colors hover:bg-red-900/60 disabled:cursor-wait disabled:opacity-60"
+                title="Stop the active agent run"
+              >
+                <span className="inline-flex items-center gap-2">
+                  <Square className="h-4 w-4 fill-current" />
+                  {activeSessionStopping ? 'Stopping…' : 'Stop'}
+                </span>
+              </button>
+            )}
             <button
               onClick={handleSend}
+              data-testid="agent-chat-send"
               disabled={!connected || !input.trim() || !activeSession}
               className="flex-shrink-0 rounded-xl bg-blue-600 p-3 text-white transition-colors hover:bg-blue-700 disabled:bg-gray-700 disabled:text-gray-500"
             >

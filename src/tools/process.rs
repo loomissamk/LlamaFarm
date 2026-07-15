@@ -3,9 +3,9 @@ use super::shell::{
 };
 use super::traits::{Tool, ToolResult};
 use crate::runtime::RuntimeAdapter;
+use crate::security::SyscallAnomalyDetector;
 use crate::security::policy::ToolOperation;
 use crate::security::{NoopSandbox, Sandbox, SecurityPolicy};
-use crate::security::SyscallAnomalyDetector;
 use async_trait::async_trait;
 use serde_json::json;
 use std::collections::HashMap;
@@ -53,12 +53,7 @@ pub struct ProcessTool {
 
 impl ProcessTool {
     pub fn new(security: Arc<SecurityPolicy>, runtime: Arc<dyn RuntimeAdapter>) -> Self {
-        Self::new_with_syscall_detector_and_sandbox(
-            security,
-            runtime,
-            None,
-            Arc::new(NoopSandbox),
-        )
+        Self::new_with_syscall_detector_and_sandbox(security, runtime, None, Arc::new(NoopSandbox))
     }
 
     pub fn new_with_sandbox(
@@ -482,7 +477,9 @@ impl ProcessTool {
             Ok(Err(e)) => Ok(ToolResult {
                 success: false,
                 output: String::new(),
-                error: Some(format!("Failed waiting for process {id} (pid {pid}) to exit: {e}")),
+                error: Some(format!(
+                    "Failed waiting for process {id} (pid {pid}) to exit: {e}"
+                )),
             }),
             Err(_) => Ok(ToolResult {
                 success: false,
@@ -715,10 +712,12 @@ mod tests {
     fn process_tool_schema_has_action() {
         let schema = make_tool().parameters_schema();
         assert!(schema["properties"]["action"].is_object());
-        assert!(schema["required"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("action")));
+        assert!(
+            schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("action"))
+        );
     }
 
     #[test]

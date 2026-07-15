@@ -4,13 +4,13 @@ use crate::security::pairing::{constant_time_eq, is_public_bind};
 use anyhow::Context;
 use async_trait::async_trait;
 use axum::{
+    Router,
     extract::{
-        ws::{Message as WsMessage, WebSocket, WebSocketUpgrade},
         State,
+        ws::{Message as WsMessage, WebSocket, WebSocketUpgrade},
     },
     response::IntoResponse,
     routing::get,
-    Router,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -22,7 +22,7 @@ use std::{
 };
 use tokio::{
     net::TcpListener,
-    sync::{mpsc, RwLock, Semaphore},
+    sync::{RwLock, Semaphore, mpsc},
 };
 use uuid::Uuid;
 

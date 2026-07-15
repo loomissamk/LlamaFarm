@@ -19,14 +19,21 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 
-use crate::security::{NoopSandbox, Sandbox, SecurityPolicy};
 use super::traits::{Tool, ToolResult};
+use crate::security::{NoopSandbox, Sandbox, SecurityPolicy};
 
 const MAX_OUTPUT: usize = 524_288; // 512 KB
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
 /// Read-only operations that are always permitted.
-const READONLY_OPS: &[&str] = &["status", "logs", "is-active", "is-enabled", "is-failed", "list-units"];
+const READONLY_OPS: &[&str] = &[
+    "status",
+    "logs",
+    "is-active",
+    "is-enabled",
+    "is-failed",
+    "list-units",
+];
 
 pub struct ServiceControlTool {
     security: Arc<SecurityPolicy>,
@@ -94,13 +101,13 @@ impl Tool for ServiceControlTool {
     }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
-        let operation = args
-            .get("operation")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let operation = args.get("operation").and_then(|v| v.as_str()).unwrap_or("");
         let unit = args.get("unit").and_then(|v| v.as_str());
         let lines = args.get("lines").and_then(|v| v.as_u64()).unwrap_or(50);
-        let use_sysv = args.get("use_sysv").and_then(|v| v.as_bool()).unwrap_or(false);
+        let use_sysv = args
+            .get("use_sysv")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let timeout_secs = args
             .get("timeout_secs")
             .and_then(|v| v.as_u64())
@@ -154,10 +161,7 @@ impl Tool for ServiceControlTool {
 
         // daemon-reload doesn't need a unit name
         if operation == "daemon-reload" {
-            let argv = vec![
-                "systemctl".to_string(),
-                "daemon-reload".to_string(),
-            ];
+            let argv = vec!["systemctl".to_string(), "daemon-reload".to_string()];
             return run_argv(&argv, timeout_secs, self.sandbox.as_ref()).await;
         }
 
@@ -208,9 +212,7 @@ async fn run_argv(
     let rest = &argv[1..];
 
     let mut cmd = tokio::process::Command::new(program);
-    cmd.args(rest)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    cmd.args(rest).stdout(Stdio::piped()).stderr(Stdio::piped());
     if let Err(e) = sandbox.wrap_command(cmd.as_std_mut()) {
         return Ok(ToolResult {
             success: false,
@@ -238,11 +240,7 @@ async fn run_argv(
         read_capped(stderr_handle, MAX_OUTPUT),
     );
 
-    let result = tokio::time::timeout(
-        Duration::from_secs(timeout_secs),
-        child.wait(),
-    )
-    .await;
+    let result = tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait()).await;
 
     let exit_status = match result {
         Ok(Ok(s)) => s,
@@ -361,10 +359,7 @@ mod tests {
     #[tokio::test]
     async fn logs_requires_unit() {
         let tool = ServiceControlTool::new(permissive());
-        let result = tool
-            .execute(json!({"operation": "logs"}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"operation": "logs"})).await.unwrap();
         assert!(!result.success);
         assert!(result.error.as_deref().unwrap_or("").contains("unit"));
     }
@@ -372,10 +367,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_op_without_unit_returns_error() {
         let tool = ServiceControlTool::new(permissive());
-        let result = tool
-            .execute(json!({"operation": "start"}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"operation": "start"})).await.unwrap();
         assert!(!result.success);
     }
 

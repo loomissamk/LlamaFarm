@@ -166,7 +166,7 @@ impl Tool for ArxivSearchTool {
                     success: false,
                     output: String::new(),
                     error: Some("Missing or empty 'query' parameter".into()),
-                })
+                });
             }
         };
 
@@ -192,8 +192,10 @@ impl Tool for ArxivSearchTool {
                 return Ok(ToolResult {
                     success: false,
                     output: String::new(),
-                    error: Some(format!("Embedding failed (is Ollama running and nomic-embed-text pulled?): {e}")),
-                })
+                    error: Some(format!(
+                        "Embedding failed (is Ollama running and nomic-embed-text pulled?): {e}"
+                    )),
+                });
             }
         };
 
@@ -203,8 +205,10 @@ impl Tool for ArxivSearchTool {
                 return Ok(ToolResult {
                     success: false,
                     output: String::new(),
-                    error: Some(format!("Qdrant search failed (is the arxiv_papers collection populated?): {e}")),
-                })
+                    error: Some(format!(
+                        "Qdrant search failed (is the arxiv_papers collection populated?): {e}"
+                    )),
+                });
             }
         };
 

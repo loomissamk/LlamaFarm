@@ -357,7 +357,11 @@ impl RunTracer {
         };
         let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
         if let Ok(line) = serde_json::to_string(&event) {
-            if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&self.path) {
+            if let Ok(mut f) = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.path)
+            {
                 let _ = writeln!(f, "{line}");
             }
         }
@@ -434,7 +438,12 @@ pub fn format_run_trace(path: &Path) -> Result<String> {
         // For summary event, print the payload highlights.
         if event.event_type == "run_summary" {
             if let Some(obj) = event.payload.as_object() {
-                for key in &["outcome", "attempts", "elapsed_secs", "final_answer_snippet"] {
+                for key in &[
+                    "outcome",
+                    "attempts",
+                    "elapsed_secs",
+                    "final_answer_snippet",
+                ] {
                     if let Some(val) = obj.get(*key) {
                         out.push_str(&format!("    {key}: {val}\n"));
                     }

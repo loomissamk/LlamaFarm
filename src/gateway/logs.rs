@@ -1,17 +1,17 @@
 use super::AppState;
 use axum::{
-    extract::{Query, State},
-    http::{header, HeaderMap, StatusCode},
-    response::{
-        sse::{Event, KeepAlive, Sse},
-        IntoResponse,
-    },
     Json,
+    extract::{Query, State},
+    http::{HeaderMap, StatusCode, header},
+    response::{
+        IntoResponse,
+        sse::{Event, KeepAlive, Sse},
+    },
 };
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
-use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
+use tokio_stream::wrappers::BroadcastStream;
 
 const DEFAULT_LOG_LIMIT: usize = 200;
 const MAX_LOG_LIMIT: usize = 1_000;
@@ -77,7 +77,10 @@ pub async fn handle_log_stream(
         .into_response()
 }
 
-fn unauthorized_response(state: &AppState, headers: &HeaderMap) -> Option<axum::response::Response> {
+fn unauthorized_response(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Option<axum::response::Response> {
     if !state.pairing.require_pairing() {
         return None;
     }

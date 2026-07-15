@@ -29,12 +29,12 @@ use uuid::Uuid;
 
 use crate::agent::tool_cache::ToolResultCache;
 use crate::config::{AgentExecutionMode, MultimodalConfig};
-use crate::observability::{runtime_trace, Observer};
 use crate::observability::runtime_trace::RunTracer;
+use crate::observability::{Observer, runtime_trace};
 use crate::providers::{ChatMessage, Provider};
 use crate::tools::Tool;
 
-use super::loop_::{compact_history_with_focus, run_tool_call_loop, TOOL_CACHE};
+use super::loop_::{TOOL_CACHE, compact_history_with_focus, run_tool_call_loop};
 
 // ── Outcome ───────────────────────────────────────────────────────
 
@@ -46,7 +46,10 @@ pub enum LoopOutcome {
     /// Retry budget exhausted before the objective was confirmed complete.
     RetryBudgetExhausted { attempts: u32, last_answer: String },
     /// Optional wall-clock cap was reached.
-    WallClockCapReached { elapsed_secs: u64, last_answer: String },
+    WallClockCapReached {
+        elapsed_secs: u64,
+        last_answer: String,
+    },
     /// External cancellation token fired.
     Cancelled,
 }
@@ -229,7 +232,13 @@ impl<'a> AutonomousLoop<'a> {
                         }),
                     );
                     if let Some(ref t) = tracer {
-                        t.close(false, attempt, elapsed.as_secs(), "wall_clock_cap", &last_answer);
+                        t.close(
+                            false,
+                            attempt,
+                            elapsed.as_secs(),
+                            "wall_clock_cap",
+                            &last_answer,
+                        );
                     }
                     return Ok(LoopOutcome::WallClockCapReached {
                         elapsed_secs: elapsed.as_secs(),
@@ -308,7 +317,13 @@ impl<'a> AutonomousLoop<'a> {
                     }),
                 );
                 if let Some(ref t) = tracer {
-                    t.close(true, attempt + 1, start.elapsed().as_secs(), "completed", &answer);
+                    t.close(
+                        true,
+                        attempt + 1,
+                        start.elapsed().as_secs(),
+                        "completed",
+                        &answer,
+                    );
                 }
                 return Ok(LoopOutcome::Completed {
                     attempts: attempt + 1,
@@ -556,8 +571,12 @@ mod tests {
 
     #[test]
     fn failure_detection_basic() {
-        assert!(is_failure_response("Fatal error: could not complete the task."));
-        assert!(!is_failure_response("Fatal error occurred but successfully recovered."));
+        assert!(is_failure_response(
+            "Fatal error: could not complete the task."
+        ));
+        assert!(!is_failure_response(
+            "Fatal error occurred but successfully recovered."
+        ));
         assert!(!is_failure_response("All done, task completed."));
         assert!(!is_failure_response("The model returned a summary."));
     }

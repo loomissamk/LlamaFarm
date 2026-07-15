@@ -50,7 +50,9 @@ impl Tool for CronRunsTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
         if !self.config.cron.enabled {
@@ -171,9 +173,11 @@ mod tests {
         let tool = CronRunsTool::new(cfg);
         let result = tool.execute(json!({})).await.unwrap();
         assert!(!result.success);
-        assert!(result
-            .error
-            .unwrap_or_default()
-            .contains("Missing 'job_id'"));
+        assert!(
+            result
+                .error
+                .unwrap_or_default()
+                .contains("Missing 'job_id'")
+        );
     }
 }

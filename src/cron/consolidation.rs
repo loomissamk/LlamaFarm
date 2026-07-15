@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::cron::{add_agent_job, CronJob, Schedule, SessionTarget};
+use crate::cron::{CronJob, Schedule, SessionTarget, add_agent_job};
 use anyhow::Result;
 
 /// Default cron expression: 3:00 AM daily.

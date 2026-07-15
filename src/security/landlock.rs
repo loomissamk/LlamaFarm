@@ -87,7 +87,8 @@ impl LandlockSandbox {
             if !Path::new(path).exists() {
                 continue;
             }
-            let fd = PathFd::new(Path::new(path)).map_err(|e| std::io::Error::other(e.to_string()))?;
+            let fd =
+                PathFd::new(Path::new(path)).map_err(|e| std::io::Error::other(e.to_string()))?;
             let access = if path == "/tmp" {
                 AccessFs::ReadFile | AccessFs::WriteFile | AccessFs::ReadDir
             } else {

@@ -1,6 +1,6 @@
 use super::traits::{Tool, ToolResult};
 use super::url_validation::{
-    normalize_allowed_domains, validate_url, DomainPolicy, UrlSchemePolicy,
+    DomainPolicy, UrlSchemePolicy, normalize_allowed_domains, validate_url,
 };
 use crate::security::SecurityPolicy;
 use async_trait::async_trait;
@@ -59,7 +59,9 @@ impl HttpRequestTool {
             "PATCH" => Ok(reqwest::Method::PATCH),
             "HEAD" => Ok(reqwest::Method::HEAD),
             "OPTIONS" => Ok(reqwest::Method::OPTIONS),
-            _ => anyhow::bail!("Unsupported HTTP method: {method}. Supported: GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS"),
+            _ => anyhow::bail!(
+                "Unsupported HTTP method: {method}. Supported: GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS"
+            ),
         }
     }
 
@@ -213,7 +215,7 @@ impl Tool for HttpRequestTool {
                     success: false,
                     output: String::new(),
                     error: Some(e.to_string()),
-                })
+                });
             }
         };
 
@@ -224,7 +226,7 @@ impl Tool for HttpRequestTool {
                     success: false,
                     output: String::new(),
                     error: Some(e.to_string()),
-                })
+                });
             }
         };
 
@@ -601,15 +603,21 @@ mod tests {
         });
         let parsed = tool.parse_headers(&headers);
         assert_eq!(parsed.len(), 3);
-        assert!(parsed
-            .iter()
-            .any(|(k, v)| k == "Authorization" && v == "Bearer secret"));
-        assert!(parsed
-            .iter()
-            .any(|(k, v)| k == "X-API-Key" && v == "my-key"));
-        assert!(parsed
-            .iter()
-            .any(|(k, v)| k == "Content-Type" && v == "application/json"));
+        assert!(
+            parsed
+                .iter()
+                .any(|(k, v)| k == "Authorization" && v == "Bearer secret")
+        );
+        assert!(
+            parsed
+                .iter()
+                .any(|(k, v)| k == "X-API-Key" && v == "my-key")
+        );
+        assert!(
+            parsed
+                .iter()
+                .any(|(k, v)| k == "Content-Type" && v == "application/json")
+        );
     }
 
     #[test]
@@ -622,18 +630,26 @@ mod tests {
         ];
         let redacted = HttpRequestTool::redact_headers_for_display(&headers);
         assert_eq!(redacted.len(), 4);
-        assert!(redacted
-            .iter()
-            .any(|(k, v)| k == "Authorization" && v == "***REDACTED***"));
-        assert!(redacted
-            .iter()
-            .any(|(k, v)| k == "X-API-Key" && v == "***REDACTED***"));
-        assert!(redacted
-            .iter()
-            .any(|(k, v)| k == "X-Secret-Token" && v == "***REDACTED***"));
-        assert!(redacted
-            .iter()
-            .any(|(k, v)| k == "Content-Type" && v == "application/json"));
+        assert!(
+            redacted
+                .iter()
+                .any(|(k, v)| k == "Authorization" && v == "***REDACTED***")
+        );
+        assert!(
+            redacted
+                .iter()
+                .any(|(k, v)| k == "X-API-Key" && v == "***REDACTED***")
+        );
+        assert!(
+            redacted
+                .iter()
+                .any(|(k, v)| k == "X-Secret-Token" && v == "***REDACTED***")
+        );
+        assert!(
+            redacted
+                .iter()
+                .any(|(k, v)| k == "Content-Type" && v == "application/json")
+        );
     }
 
     #[test]

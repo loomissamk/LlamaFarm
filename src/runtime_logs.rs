@@ -3,8 +3,8 @@ use serde::Serialize;
 use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
     Arc, OnceLock,
+    atomic::{AtomicU64, Ordering},
 };
 use tokio::sync::broadcast;
 use tracing_subscriber::fmt::writer::MakeWriter;

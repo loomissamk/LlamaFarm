@@ -9,7 +9,7 @@ use crate::providers::traits::{ChatMessage, StreamOptions};
 use axum::{
     body::Body,
     extract::{ConnectInfo, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Json},
 };
 use futures_util::StreamExt;
@@ -273,7 +273,11 @@ async fn handle_non_streaming(
     provider_label: String,
     started_at: Instant,
 ) -> impl IntoResponse {
-    match runtime.provider.chat_with_history(&messages, &model, temperature).await {
+    match runtime
+        .provider
+        .chat_with_history(&messages, &model, temperature)
+        .await
+    {
         Ok(response_text) => {
             let duration = started_at.elapsed();
             record_success(&state, &provider_label, &model, duration);
@@ -347,7 +351,10 @@ fn handle_streaming(
         let provider = std::sync::Arc::clone(&runtime.provider);
 
         let stream = futures_util::stream::once(async move {
-            match provider.chat_with_history(&messages, &model_clone, temperature).await {
+            match provider
+                .chat_with_history(&messages, &model_clone, temperature)
+                .await
+            {
                 Ok(text) => {
                     let duration = started_at.elapsed();
                     record_success(&state, &provider_label, &model_clone, duration);

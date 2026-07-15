@@ -786,20 +786,18 @@ pub(super) fn normalize_shell_arguments(
                 }
 
                 [
-                "command",
-                "cmd",
-                "script",
-                "shell_command",
-                "command_line",
-                "bash",
-                "sh",
-                "input",
-                "hint",
-            ]
-            .iter()
-            .find_map(|key| {
-                map.get(*key).and_then(command_from_shell_json)
-            })
+                    "command",
+                    "cmd",
+                    "script",
+                    "shell_command",
+                    "command_line",
+                    "bash",
+                    "sh",
+                    "input",
+                    "hint",
+                ]
+                .iter()
+                .find_map(|key| map.get(*key).and_then(command_from_shell_json))
             }
             _ => None,
         }
@@ -1470,11 +1468,7 @@ pub(super) fn parse_xml_tool_calls(xml_content: &str) -> Option<Vec<ParsedToolCa
         });
     }
 
-    if calls.is_empty() {
-        None
-    } else {
-        Some(calls)
-    }
+    if calls.is_empty() { None } else { Some(calls) }
 }
 
 fn parse_xml_tool_arguments(tool_name: &str, inner_content: &str) -> serde_json::Value {
@@ -3500,9 +3494,8 @@ fn append_follow_on_tool_calls(mut text: String, calls: &mut Vec<ParsedToolCall>
 }
 
 fn extract_jsonish_positional_argument(input: &str) -> Option<String> {
-    static JSONISH_POSITIONAL_SET_RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r#"(?is)\{\s*["']([^"'{}\n][^"'{}\n]*)["']\s*\}"#).unwrap()
-    });
+    static JSONISH_POSITIONAL_SET_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"(?is)\{\s*["']([^"'{}\n][^"'{}\n]*)["']\s*\}"#).unwrap());
 
     JSONISH_POSITIONAL_SET_RE
         .captures_iter(input)
@@ -3556,8 +3549,7 @@ fn parse_jsonish_named_tool_calls(response: &str) -> Option<(String, Vec<ParsedT
         let key = key_match.as_str();
         if matches!(
             key,
-            "id"
-                | "type"
+            "id" | "type"
                 | "name"
                 | "tool"
                 | "tool_name"
@@ -5121,7 +5113,10 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "shell");
         assert_eq!(
-            calls[0].arguments.get("command").and_then(|value| value.as_str()),
+            calls[0]
+                .arguments
+                .get("command")
+                .and_then(|value| value.as_str()),
             Some("bash -lc 'mkdir rust_kernel'")
         );
     }

@@ -21,25 +21,23 @@ use crate::channels::{
 };
 use crate::config::Config;
 use crate::cost::CostTracker;
-use crate::federation::remote_subagent::{
-    FederationRemoteSubagentAdapter, FederationTaskManager,
-};
+use crate::federation::remote_subagent::{FederationRemoteSubagentAdapter, FederationTaskManager};
 use crate::memory::{self, Memory, MemoryCategory};
 use crate::providers::{self, ChatMessage, Provider};
 use crate::runtime;
-use crate::security::pairing::{constant_time_eq, is_public_bind, PairingGuard};
 use crate::security::SecurityPolicy;
+use crate::security::pairing::{PairingGuard, constant_time_eq, is_public_bind};
 use crate::tools::traits::ToolSpec;
 use crate::tools::{self, Tool};
 use crate::util::truncate_with_ellipsis;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use axum::{
+    Router,
     body::Bytes,
     extract::{ConnectInfo, Query, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Json},
     routing::{delete, get, post, put},
-    Router,
 };
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
@@ -315,7 +313,7 @@ fn build_provider_runtime_options(config: &Config) -> providers::ProviderRuntime
         reasoning_enabled: config.runtime.reasoning_enabled,
         reasoning_level: config.effective_provider_reasoning_level(),
         custom_provider_api_mode: config.provider_api.map(|mode| mode.as_compatible_mode()),
-        max_tokens_override: None,
+        max_tokens_override: config.agent.max_output_tokens_per_turn,
         model_support_vision: config.model_support_vision,
         ..Default::default()
     }
@@ -678,11 +676,10 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
             })
             .map(Arc::from);
 
-    // ── Pairing guard ──────────────────────────────────────
-    let pairing = Arc::new(PairingGuard::new(
-        config.gateway.require_pairing,
-        &config.gateway.paired_tokens,
-    ));
+    // Gateway/browser pairing is deliberately retired for the local-agent
+    // platform. Keep the legacy guard present only for compatibility with the
+    // existing state shape and tests; it is permanently disabled at runtime.
+    let pairing = Arc::new(PairingGuard::new(false, &[]));
     let rate_limit_max_keys = normalize_max_keys(
         config.gateway.rate_limit_max_keys,
         RATE_LIMIT_MAX_KEYS_DEFAULT,
@@ -725,7 +722,6 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         println!("  🌐 Public URL: {url}");
     }
     println!("  🌐 Web Dashboard: http://{display_addr}/");
-    println!("  POST /pair      — pair a new client (X-Pairing-Code header)");
     println!("  POST /webhook   — {{\"message\": \"your prompt\"}}");
     println!("  POST /agent     — tool-enabled agent chat {{\"message\": \"your prompt\"}}");
     if whatsapp_channel.is_some() {
@@ -750,7 +746,7 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
     }
     println!("  POST /v1/chat/completions — OpenAI-compatible chat");
     println!("  GET  /v1/models — list available models");
-    println!("  GET  /api/*     — REST API (bearer token required)");
+    println!("  GET  /api/*     — REST API");
     println!("  GET  /ws/chat   — WebSocket agent chat");
     if federation.is_some() {
         println!("  GET  /api/federation/peers — LAN federation peer registry");
@@ -758,18 +754,7 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
     }
     println!("  GET  /health    — health check");
     println!("  GET  /metrics   — Prometheus metrics");
-    if let Some(code) = pairing.pairing_code() {
-        println!();
-        println!("  🔐 PAIRING REQUIRED — use this one-time code:");
-        println!("     ┌──────────────┐");
-        println!("     │  {code}  │");
-        println!("     └──────────────┘");
-        println!("     Send: POST /pair with header X-Pairing-Code: {code}");
-    } else if pairing.require_pairing() {
-        println!("  🔒 Pairing: ACTIVE (bearer token required)");
-    } else {
-        println!("  ⚠️  Pairing: DISABLED (all requests accepted)");
-    }
+    println!("  Direct local gateway access enabled (browser pairing removed)");
     println!("  Press Ctrl+C to stop.\n");
 
     crate::health::mark_component_ok("gateway");
@@ -838,7 +823,10 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         ));
 
     let workspace_blob_routes = Router::new()
-        .route("/api/workspace/blob", put(api::handle_api_workspace_blob_put))
+        .route(
+            "/api/workspace/blob",
+            put(api::handle_api_workspace_blob_put),
+        )
         .layer(RequestBodyLimitLayer::new(52_428_800));
 
     // IDE terminal exec: merged after the global TimeoutLayer so long-running
@@ -852,9 +840,11 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         // ── Existing routes ──
         .route("/health", get(handle_health))
         .route("/metrics", get(handle_metrics))
-        .route("/pair", post(handle_pair))
         .route("/webhook", post(handle_webhook))
-        .route("/agent", get(static_files::handle_spa_fallback).post(handle_agent))
+        .route(
+            "/agent",
+            get(static_files::handle_spa_fallback).post(handle_agent),
+        )
         .route("/whatsapp", get(handle_whatsapp_verify))
         .route("/whatsapp", post(handle_whatsapp_message))
         .route("/linq", post(handle_linq_webhook))
@@ -870,10 +860,22 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .route("/api/config", get(api::handle_api_config_get))
         .route("/api/config/presets", get(api::handle_api_config_presets))
         .route("/api/tools", get(api::handle_api_tools))
-        .route("/api/workspace/browser", get(api::handle_api_workspace_browser))
-        .route("/api/workspace/download", get(api::handle_api_workspace_download))
-        .route("/api/workspace/directory", put(api::handle_api_workspace_directory_put))
-        .route("/api/workspace/path", delete(api::handle_api_workspace_path_delete))
+        .route(
+            "/api/workspace/browser",
+            get(api::handle_api_workspace_browser),
+        )
+        .route(
+            "/api/workspace/download",
+            get(api::handle_api_workspace_download),
+        )
+        .route(
+            "/api/workspace/directory",
+            put(api::handle_api_workspace_directory_put),
+        )
+        .route(
+            "/api/workspace/path",
+            delete(api::handle_api_workspace_path_delete),
+        )
         .route(
             "/api/workspace-files/{name}",
             get(api::handle_api_workspace_file_get).put(api::handle_api_workspace_file_put),
@@ -903,10 +905,14 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .route("/api/cost", get(api::handle_api_cost))
         .route("/api/cli-tools", get(api::handle_api_cli_tools))
         .route("/api/health", get(api::handle_api_health))
-        .route("/api/federation/peers", get(api::handle_api_federation_peers).post(api::handle_api_federation_peer_add))
+        .route(
+            "/api/federation/peers",
+            get(api::handle_api_federation_peers).post(api::handle_api_federation_peer_add),
+        )
         .route(
             "/api/federation/delegation",
-            get(api::handle_api_federation_delegation_get).put(api::handle_api_federation_delegation_put),
+            get(api::handle_api_federation_delegation_get)
+                .put(api::handle_api_federation_delegation_put),
         )
         .route(
             "/api/federation/peers/{peer_id}/role",
@@ -926,7 +932,10 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         )
         .route("/federation/models", get(api::handle_federation_models))
         .route("/federation/tools", get(api::handle_federation_tools))
-        .route("/federation/tasks", post(api::handle_federation_task_create))
+        .route(
+            "/federation/tasks",
+            post(api::handle_federation_task_create),
+        )
         .route(
             "/federation/tasks/{task_id}/stream",
             get(api::handle_federation_task_stream),
@@ -936,9 +945,18 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
             post(api::handle_federation_task_cancel),
         )
         // ── Database explorer ──
-        .route("/api/db/connections", get(api::handle_api_db_connections).post(api::handle_api_db_add_connection))
-        .route("/api/db/connections/test", post(api::handle_api_db_test_connection))
-        .route("/api/db/connections/{name}", delete(api::handle_api_db_remove_connection).put(api::handle_api_db_update_connection))
+        .route(
+            "/api/db/connections",
+            get(api::handle_api_db_connections).post(api::handle_api_db_add_connection),
+        )
+        .route(
+            "/api/db/connections/test",
+            post(api::handle_api_db_test_connection),
+        )
+        .route(
+            "/api/db/connections/{name}",
+            delete(api::handle_api_db_remove_connection).put(api::handle_api_db_update_connection),
+        )
         .route("/api/db/{name}/schema", get(api::handle_api_db_schema))
         .route("/api/db/{name}/query", post(api::handle_api_db_query))
         // ── SSE event stream ──
@@ -975,11 +993,11 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
 // ══════════════════════════════════════════════════════════════════════════════
 
 /// GET /health — always public (no secrets leaked)
-async fn handle_health(State(state): State<AppState>) -> impl IntoResponse {
+async fn handle_health() -> impl IntoResponse {
     let body = serde_json::json!({
         "status": "ok",
-        "paired": state.pairing.is_paired(),
-        "require_pairing": state.pairing.require_pairing(),
+        "paired": false,
+        "require_pairing": false,
         "runtime": crate::health::snapshot_json(),
     });
     Json(body)
@@ -1027,7 +1045,9 @@ async fn handle_metrics(
     {
         prom.encode()
     } else {
-        String::from("# Prometheus backend not enabled. Set [observability] backend = \"prometheus\" in config.\n")
+        String::from(
+            "# Prometheus backend not enabled. Set [observability] backend = \"prometheus\" in config.\n",
+        )
     };
 
     (
@@ -1035,85 +1055,6 @@ async fn handle_metrics(
         [(header::CONTENT_TYPE, PROMETHEUS_CONTENT_TYPE)],
         body,
     )
-}
-
-/// POST /pair — exchange one-time code for bearer token
-#[axum::debug_handler]
-async fn handle_pair(
-    State(state): State<AppState>,
-    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
-    let rate_key =
-        client_key_from_request(Some(peer_addr), &headers, state.trust_forwarded_headers);
-    if !state.rate_limiter.allow_pair(&rate_key) {
-        tracing::warn!("/pair rate limit exceeded");
-        let err = serde_json::json!({
-            "error": "Too many pairing requests. Please retry later.",
-            "retry_after": RATE_LIMIT_WINDOW_SECS,
-        });
-        return (StatusCode::TOO_MANY_REQUESTS, Json(err));
-    }
-
-    let code = headers
-        .get("X-Pairing-Code")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    match state.pairing.try_pair(code, &rate_key).await {
-        Ok(Some(token)) => {
-            tracing::info!("🔐 New client paired successfully");
-            if let Err(err) = persist_pairing_tokens(state.config.clone(), &state.pairing).await {
-                tracing::error!("🔐 Pairing succeeded but token persistence failed: {err:#}");
-                let body = serde_json::json!({
-                    "paired": true,
-                    "persisted": false,
-                    "token": token,
-                    "message": "Paired for this process, but failed to persist token to config.toml. Check config path and write permissions.",
-                });
-                return (StatusCode::OK, Json(body));
-            }
-
-            let body = serde_json::json!({
-                "paired": true,
-                "persisted": true,
-                "token": token,
-                "message": "Save this token — use it as Authorization: Bearer <token>"
-            });
-            (StatusCode::OK, Json(body))
-        }
-        Ok(None) => {
-            tracing::warn!("🔐 Pairing attempt with invalid code");
-            let err = serde_json::json!({"error": "Invalid pairing code"});
-            (StatusCode::FORBIDDEN, Json(err))
-        }
-        Err(lockout_secs) => {
-            tracing::warn!(
-                "🔐 Pairing locked out — too many failed attempts ({lockout_secs}s remaining)"
-            );
-            let err = serde_json::json!({
-                "error": format!("Too many failed attempts. Try again in {lockout_secs}s."),
-                "retry_after": lockout_secs
-            });
-            (StatusCode::TOO_MANY_REQUESTS, Json(err))
-        }
-    }
-}
-
-async fn persist_pairing_tokens(config: Arc<Mutex<Config>>, pairing: &PairingGuard) -> Result<()> {
-    let paired_tokens = pairing.tokens();
-    // This is needed because parking_lot's guard is not Send so we clone the inner
-    // this should be removed once async mutexes are used everywhere
-    let mut updated_cfg = { config.lock().clone() };
-    updated_cfg.gateway.paired_tokens = paired_tokens;
-    updated_cfg
-        .save()
-        .await
-        .context("Failed to persist paired tokens to config.toml")?;
-
-    // Keep shared runtime config in sync with persisted tokens.
-    *config.lock() = updated_cfg;
-    Ok(())
 }
 
 /// Simple chat for webhook endpoint (no tools, for backward compatibility and testing).
@@ -2107,11 +2048,11 @@ mod tests {
     use crate::memory::{Memory, MemoryCategory, MemoryEntry};
     use crate::providers::Provider;
     use async_trait::async_trait;
+    use axum::response::IntoResponse;
     use axum::{
         body::Body,
         http::{HeaderValue, Request},
     };
-    use axum::response::IntoResponse;
     use http_body_util::BodyExt;
     use parking_lot::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -2225,11 +2166,19 @@ mod tests {
         };
 
         let app = Router::new()
-            .route("/agent", get(static_files::handle_spa_fallback).post(handle_agent))
+            .route(
+                "/agent",
+                get(static_files::handle_spa_fallback).post(handle_agent),
+            )
             .with_state(state);
 
         let response = app
-            .oneshot(Request::builder().uri("/agent").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/agent")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
@@ -2581,42 +2530,6 @@ mod tests {
     fn normalize_max_keys_preserves_nonzero_values() {
         assert_eq!(normalize_max_keys(2_048, 10_000), 2_048);
         assert_eq!(normalize_max_keys(1, 10_000), 1);
-    }
-
-    #[tokio::test]
-    async fn persist_pairing_tokens_writes_config_tokens() {
-        let temp = tempfile::tempdir().unwrap();
-        let config_path = temp.path().join("config.toml");
-        let workspace_path = temp.path().join("workspace");
-
-        let mut config = Config::default();
-        config.config_path = config_path.clone();
-        config.workspace_dir = workspace_path;
-        config.save().await.unwrap();
-
-        let guard = PairingGuard::new(true, &[]);
-        let code = guard.pairing_code().unwrap();
-        let token = guard.try_pair(&code, "test_client").await.unwrap().unwrap();
-        assert!(guard.is_authenticated(&token));
-
-        let shared_config = Arc::new(Mutex::new(config));
-        persist_pairing_tokens(shared_config.clone(), &guard)
-            .await
-            .unwrap();
-
-        let saved = tokio::fs::read_to_string(config_path).await.unwrap();
-        let parsed: Config = toml::from_str(&saved).unwrap();
-        assert_eq!(parsed.gateway.paired_tokens.len(), 1);
-        let persisted = &parsed.gateway.paired_tokens[0];
-        assert!(crate::security::SecretStore::is_encrypted(persisted));
-        let store = crate::security::SecretStore::new(temp.path(), true);
-        let decrypted = store.decrypt(persisted).unwrap();
-        assert_eq!(decrypted.len(), 64);
-        assert!(decrypted.chars().all(|c| c.is_ascii_hexdigit()));
-
-        let in_memory = shared_config.lock();
-        assert_eq!(in_memory.gateway.paired_tokens.len(), 1);
-        assert_eq!(&in_memory.gateway.paired_tokens[0], &decrypted);
     }
 
     #[test]

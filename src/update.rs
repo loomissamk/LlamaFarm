@@ -2,7 +2,7 @@
 //!
 //! Downloads and installs the latest release from GitHub.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};

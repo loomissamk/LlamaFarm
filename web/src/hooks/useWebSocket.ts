@@ -78,7 +78,7 @@ export function useWebSocket(
           const tps = Math.round(charCountRef.current / 4 / elapsed);
           globalThis.dispatchEvent(new CustomEvent('lf:tps', { detail: { tps, streaming: true } }));
         }
-      } else if (msg.type === 'done') {
+      } else if (msg.type === 'done' || msg.type === 'cancelled') {
         if (streamStartRef.current !== null) {
           const elapsed = (performance.now() - streamStartRef.current) / 1000;
           const tps = elapsed > 0 ? Math.round(charCountRef.current / 4 / elapsed) : 0;

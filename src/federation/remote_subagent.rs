@@ -1,6 +1,4 @@
-use super::peer_registry::{
-    FederationCapabilities, FederationPeerRegistry, FederationPeerTarget,
-};
+use super::peer_registry::{FederationCapabilities, FederationPeerRegistry, FederationPeerTarget};
 use crate::tools::ToolResult;
 use chrono::Utc;
 use futures_util::StreamExt;
@@ -14,6 +12,19 @@ use tokio_util::sync::CancellationToken;
 
 const TASK_EVENT_HISTORY_LIMIT: usize = 256;
 const REMOTE_TASK_START_TIMEOUT_SECS: u64 = 10;
+pub const FEDERATION_AUTH_HEADER: &str = "x-llamafarm-federation-token";
+
+/// Attach the optional shared node token to peer-to-peer federation traffic.
+/// An unset token preserves standalone/local federation behavior, while the
+/// deployed two-node profiles require one at their gateway boundary.
+fn with_federation_auth(request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    match std::env::var("LLAMAFARM_FEDERATION_TOKEN") {
+        Ok(token) if !token.trim().is_empty() => {
+            request.header(FEDERATION_AUTH_HEADER, token.trim().to_string())
+        }
+        _ => request,
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FederationTaskRequest {
@@ -142,6 +153,10 @@ pub struct FederationChatContext {
     pub session_id: String,
     pub selected_peer_ids: Vec<String>,
     pub event_tx: Option<mpsc::UnboundedSender<FederationChatEvent>>,
+    /// Cancellation propagated from the originating interactive chat turn.
+    /// This lets a browser Stop request also cancel a remote federation task
+    /// after it has been accepted by the worker.
+    pub cancellation: Option<CancellationToken>,
 }
 
 tokio::task_local! {
@@ -156,7 +171,10 @@ where
 }
 
 pub fn current_chat_context() -> Option<FederationChatContext> {
-    FEDERATION_CHAT_CONTEXT.try_with(Clone::clone).ok().flatten()
+    FEDERATION_CHAT_CONTEXT
+        .try_with(Clone::clone)
+        .ok()
+        .flatten()
 }
 
 #[derive(Clone)]
@@ -174,7 +192,9 @@ impl FederationRemoteSubagentAdapter {
         local_node_name: Arc<RwLock<String>>,
     ) -> anyhow::Result<Self> {
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(REMOTE_TASK_START_TIMEOUT_SECS))
+            .timeout(std::time::Duration::from_secs(
+                REMOTE_TASK_START_TIMEOUT_SECS,
+            ))
             .build()?;
 
         Ok(Self {
@@ -236,9 +256,69 @@ impl FederationRemoteSubagentAdapter {
         };
 
         let accepted = self.start_remote_task(&peer, &request).await?;
-        self.emit_chat_event(&peer, &accepted.task_id, FederationTaskEvent::status(&accepted.task_id, format!("Delegated to {}", peer.display_name)));
+        self.emit_chat_event(
+            &peer,
+            &accepted.task_id,
+            FederationTaskEvent::status(
+                &accepted.task_id,
+                format!("Delegated to {}", peer.display_name),
+            ),
+        );
 
-        self.consume_remote_task(&peer, &accepted.task_id).await
+        let cancellation = current_chat_context().and_then(|context| context.cancellation);
+        if cancellation
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            self.cancel_remote_task(&peer, &accepted.task_id).await;
+            anyhow::bail!("Federated subtask cancelled by caller");
+        }
+
+        if let Some(cancellation) = cancellation {
+            // `execute_one_tool` also observes the turn token and may drop this
+            // future as soon as Stop is pressed. Keep a small forwarder alive so
+            // that race cannot strand a remote task after the local tool future is
+            // dropped. An explicit completion signal distinguishes normal return
+            // from a dropped/cancelled caller future.
+            let (finished_tx, mut finished_rx) = tokio::sync::oneshot::channel::<()>();
+            let cancellation_forwarder = self.clone();
+            let peer_for_cancellation = peer.clone();
+            let task_id_for_cancellation = accepted.task_id.clone();
+            let cancellation_for_forwarder = cancellation.clone();
+            tokio::spawn(async move {
+                tokio::select! {
+                    () = cancellation_for_forwarder.cancelled() => {
+                        cancellation_forwarder
+                            .cancel_remote_task(&peer_for_cancellation, &task_id_for_cancellation)
+                            .await;
+                    }
+                    completed = &mut finished_rx => {
+                        // Sender dropped means the caller was interrupted before it
+                        // could confirm normal completion; clean up defensively.
+                        if completed.is_err() {
+                            cancellation_forwarder
+                                .cancel_remote_task(&peer_for_cancellation, &task_id_for_cancellation)
+                                .await;
+                        }
+                    }
+                }
+            });
+
+            let result = tokio::select! {
+                result = self.consume_remote_task(&peer, &accepted.task_id) => result,
+                () = cancellation.cancelled() => {
+                    // The remote node owns the actual inference/tool task. Tell it to
+                    // stop before returning locally so Stop does not merely hide a
+                    // still-running federated workload.
+                    self.cancel_remote_task(&peer, &accepted.task_id).await;
+                    anyhow::bail!("Federated subtask cancelled by caller");
+                }
+            };
+            let _ = finished_tx.send(());
+            result
+        } else {
+            self.consume_remote_task(&peer, &accepted.task_id).await
+        }
     }
 
     pub async fn start_remote_task(
@@ -246,12 +326,13 @@ impl FederationRemoteSubagentAdapter {
         peer: &FederationPeerTarget,
         request: &FederationTaskRequest,
     ) -> anyhow::Result<FederationTaskAccepted> {
-        let response = self
-            .client
-            .post(format!("{}/federation/tasks", peer.base_url))
-            .json(request)
-            .send()
-            .await?;
+        let response = with_federation_auth(
+            self.client
+                .post(format!("{}/federation/tasks", peer.base_url)),
+        )
+        .json(request)
+        .send()
+        .await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -267,16 +348,20 @@ impl FederationRemoteSubagentAdapter {
         Ok(response.json::<FederationTaskAccepted>().await?)
     }
 
-    pub async fn fetch_capabilities(&self, base_url: &str) -> anyhow::Result<FederationCapabilities> {
+    pub async fn fetch_capabilities(
+        &self,
+        base_url: &str,
+    ) -> anyhow::Result<FederationCapabilities> {
         fetch_capabilities(&self.client, base_url).await
     }
 
     pub async fn cancel_remote_task(&self, peer: &FederationPeerTarget, task_id: &str) {
-        let _ = self
-            .client
-            .post(format!("{}/federation/tasks/{task_id}/cancel", peer.base_url))
-            .send()
-            .await;
+        let _ = with_federation_auth(self.client.post(format!(
+            "{}/federation/tasks/{task_id}/cancel",
+            peer.base_url
+        )))
+        .send()
+        .await;
     }
 
     pub async fn consume_remote_task(
@@ -307,14 +392,20 @@ impl FederationRemoteSubagentAdapter {
             return Ok(ToolResult {
                 success: false,
                 output: String::new(),
-                error: Some(format!("Remote worker '{}' failed: {message}", peer.display_name)),
+                error: Some(format!(
+                    "Remote worker '{}' failed: {message}",
+                    peer.display_name
+                )),
             });
         }
 
         let rendered = final_response.unwrap_or_else(|| "[Empty response]".to_string());
         Ok(ToolResult {
             success: true,
-            output: format!("[Remote worker '{}' ({})]\n{rendered}", peer.display_name, peer.base_url),
+            output: format!(
+                "[Remote worker '{}' ({})]\n{rendered}",
+                peer.display_name, peer.base_url
+            ),
             error: None,
         })
     }
@@ -359,7 +450,7 @@ impl FederationRemoteSubagentAdapter {
     where
         F: FnMut(FederationTaskEvent),
     {
-        let response = self.client.get(url).send().await?;
+        let response = with_federation_auth(self.client.get(url)).send().await?;
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
@@ -380,7 +471,8 @@ impl FederationRemoteSubagentAdapter {
 
                 if line.is_empty() {
                     if !data_buffer.trim().is_empty() {
-                        let event = serde_json::from_str::<FederationTaskEvent>(data_buffer.trim())?;
+                        let event =
+                            serde_json::from_str::<FederationTaskEvent>(data_buffer.trim())?;
                         on_event(event);
                         data_buffer.clear();
                     }
@@ -407,15 +499,17 @@ pub async fn fetch_capabilities(
     client: &reqwest::Client,
     base_url: &str,
 ) -> anyhow::Result<FederationCapabilities> {
-    let response = client
-        .get(format!("{base_url}/federation/capabilities"))
+    let response = with_federation_auth(client.get(format!("{base_url}/federation/capabilities")))
         .send()
         .await?;
 
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Federation capabilities request failed ({}): {body}", status);
+        anyhow::bail!(
+            "Federation capabilities request failed ({}): {body}",
+            status
+        );
     }
 
     Ok(response.json::<FederationCapabilities>().await?)
@@ -483,14 +577,20 @@ impl FederationTaskManager {
     ) {
         let mut tasks = self.tasks.write();
         if let Some(entry) = tasks.get_mut(task_id) {
-            entry.running = Some(FederationRunningTask { handle, cancellation });
+            entry.running = Some(FederationRunningTask {
+                handle,
+                cancellation,
+            });
         }
     }
 
     pub fn stream(
         &self,
         task_id: &str,
-    ) -> Option<(Vec<FederationTaskEvent>, broadcast::Receiver<FederationTaskEvent>)> {
+    ) -> Option<(
+        Vec<FederationTaskEvent>,
+        broadcast::Receiver<FederationTaskEvent>,
+    )> {
         let tasks = self.tasks.read();
         let entry = tasks.get(task_id)?;
         Some((entry.events.clone(), entry.sender.subscribe()))
