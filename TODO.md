@@ -153,6 +153,24 @@ Remaining to finish this pass, in order:
   length-stopped segment continues automatically until a real terminal state
   or an operator presses Stop. Adaptive allocation remains future work.
 
+## Deploy status (2026-07-16)
+
+Pushed to `v2` and code-complete, DEPLOYED & E2E-verified on the laptop:
+run ledger + inspector, cross-session memory, playbooks, workspace RAG inbox,
+semantic RAG (Ollama embeddings + hybrid fusion + embedding cache), live
+TTFT/TPS metrics, code_run, git_worktree, one-place history clear, UI
+consolidation (7 tabs), auto-rollback deploys.
+
+Pushed but NOT YET deployed (image rebuild blocked by intermittent network on
+the Dockerfile pip/apt layer — node stayed healthy on the previous image, no
+outage): the **MMR reranker** (63a4abf8). It will land on the next successful
+`up-node.sh rtx4070-laptop up -d --build`, or when back on the home LAN.
+The deploy script now reports this cleanly (exit 3 = container not swapped,
+previous image still healthy) instead of failing silently.
+
+gpu box (192.168.1.154): catch up with `git pull` + `up-node.sh
+rtx5070ti-16gb up -d --build` next time on the LAN — it inherits everything.
+
 ## Operator directive — UI consolidation + cutting-edge focus (2026-07-16)
 
 The web UI has too many redundant tabs. Operator mandate: do not stop until
