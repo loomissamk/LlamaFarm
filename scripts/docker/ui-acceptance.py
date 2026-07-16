@@ -195,6 +195,7 @@ class UiAcceptance:
         self.driver = WebDriver(DRIVER_URL)
         self.results: list[dict[str, Any]] = []
         self.artifact_dir = ARTIFACT_ROOT / f"{self.node}-{int(time.time())}"
+        self.isolated_chat_created = False
 
     def record(self, name: str, evidence: str) -> None:
         self.results.append({"test": name, "ok": True, "evidence": evidence})
@@ -235,6 +236,28 @@ class UiAcceptance:
             lambda: "Connected" in self.driver.body_text(),
             75,
         )
+        if not self.isolated_chat_created:
+            clicked = self.driver.execute(
+                """
+                const button = Array.from(document.querySelectorAll('button'))
+                  .find((candidate) => (candidate.textContent || '').trim() === 'Temporary');
+                if (!button) return false;
+                button.click();
+                return true;
+                """
+            )
+            if not clicked:
+                raise AcceptanceError("Could not create an isolated temporary acceptance chat")
+            wait_for(
+                "empty isolated temporary chat",
+                lambda: len(self.agent_messages()) == 0,
+                30,
+            )
+            self.isolated_chat_created = True
+            self.record(
+                "ui-isolated-chat",
+                "acceptance work uses a fresh temporary chat and cannot consume operator history",
+            )
 
     def agent_messages(self) -> list[dict[str, str]]:
         value = self.driver.execute(
