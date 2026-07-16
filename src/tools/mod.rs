@@ -76,6 +76,7 @@ pub mod traits;
 pub mod url_validation;
 pub mod wasm_module;
 pub mod web_fetch;
+pub mod workspace_rag;
 pub mod web_search_tool;
 
 pub use apply_patch::ApplyPatchTool;
@@ -138,6 +139,7 @@ pub use traits::Tool;
 pub use traits::{ToolResult, ToolSpec};
 pub use wasm_module::WasmModuleTool;
 pub use web_fetch::WebFetchTool;
+pub use workspace_rag::WorkspaceRagTool;
 pub use web_search_tool::WebSearchTool;
 
 use crate::config::{Config, DelegateAgentConfig};
@@ -410,6 +412,7 @@ pub fn all_tools_with_runtime_and_federation(
         tool_arcs.push(Arc::new(ApplyPatchTool::new()));
         tool_arcs.push(Arc::new(GlobSearchTool::new(security.clone())));
         tool_arcs.push(Arc::new(ContentSearchTool::new(security.clone())));
+        tool_arcs.push(Arc::new(WorkspaceRagTool::new(workspace_dir)));
     }
     if runtime.as_any().is::<crate::runtime::WasmRuntime>() {
         tool_arcs.push(Arc::new(WasmModuleTool::new(
