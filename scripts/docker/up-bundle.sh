@@ -223,7 +223,17 @@ if [ "$WILL_BUILD" = "1" ]; then
   OLLAMA_PULL_IMAGE="$OLLAMA_IMAGE_DEFAULT"
   [ "$BACKEND" = "rocm" ] && OLLAMA_PULL_IMAGE="$OLLAMA_IMAGE_ROCM"
   echo "Pulling Ollama base image: $OLLAMA_PULL_IMAGE"
-  docker pull "$OLLAMA_PULL_IMAGE"
+  # A registry hiccup (TLS timeout, offline LAN) must not abort the whole
+  # deploy: if the pull fails but the image is already cached locally, keep
+  # going with the cached copy. Only fail when there is no local image at all.
+  if ! docker pull "$OLLAMA_PULL_IMAGE"; then
+    if docker image inspect "$OLLAMA_PULL_IMAGE" >/dev/null 2>&1; then
+      echo "Pull failed; using cached $OLLAMA_PULL_IMAGE." >&2
+    else
+      echo "Pull failed and no cached $OLLAMA_PULL_IMAGE is available." >&2
+      exit 1
+    fi
+  fi
 fi
 
 # ── Health-gated deploy with automatic rollback ─────────────────────────────
