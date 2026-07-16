@@ -159,11 +159,15 @@ Storage decision: no MongoDB. Local-first stack stays files (source of truth)
 + Qdrant (vectors) + SQLite (metadata/sessions). Adding Mongo would add an
 extra always-on service with no capability the current stack lacks.
 
-- [ ] **Qdrant-backed chat memory.** Embed every chat turn and tool-result
-  summary into a per-workspace `conversation_memory` collection. On each new
-  user message, retrieve top-k relevant past exchanges across ALL sessions and
-  inject them as cited context ("you solved this on 2026-07-02 in session X").
-  Cross-session recall is the single biggest "feels next-gen" win for chat.
+- [x] **Cross-session chat memory** (delivered 2026-07-16, verified E2E:
+  a fact taught in one session was recalled in a brand-new session).
+  Webchat turns recall relevant memories across all sessions via the
+  configured backend and inject them as cited context; completed turns
+  persist compact Q/A exchange records. Currently keyword-based on the
+  node's sqlite backend — switch `[memory] backend = "qdrant"` in the node
+  config for semantic recall (same code path). Remaining upgrade: also
+  embed tool-result summaries and add "solved on <date> in session X"
+  citations.
 - [ ] **Drop-a-document RAG inbox.** Watched `rag/inbox/` directory in the
   workspace plus an upload button on the Files page: anything placed there is
   auto-parsed (pdf/md/txt/code), chunked, embedded via local Ollama
