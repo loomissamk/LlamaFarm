@@ -27,6 +27,18 @@ type InboxFingerprint = BTreeMap<PathBuf, (u64, SystemTime)>;
 struct IndexState {
     rag: DocRag,
     fingerprint: InboxFingerprint,
+    /// Embedding cache keyed by chunk content hash, so a reindex (triggered
+    /// by any inbox change) does not re-embed chunks whose text is unchanged.
+    embed_cache: std::collections::HashMap<u64, Vec<f32>>,
+}
+
+fn content_hash(content: &str) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in content.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x00000100000001b3);
+    }
+    h
 }
 
 pub struct WorkspaceRagTool {
@@ -43,6 +55,7 @@ impl WorkspaceRagTool {
             state: Mutex::new(IndexState {
                 rag: DocRag::new(),
                 fingerprint: InboxFingerprint::new(),
+                embed_cache: std::collections::HashMap::new(),
             }),
             embedder: None,
         }
@@ -96,6 +109,23 @@ impl WorkspaceRagTool {
                 // Non-UTF-8 or unreadable files are skipped, matching
                 // ingest_directory semantics.
                 let _ = rag.ingest_file(path);
+            }
+            // Restore embeddings for chunks whose content is unchanged, so a
+            // reindex only re-embeds genuinely new/edited text.
+            if self.embedder.is_some() {
+                let restore: Vec<(String, Vec<f32>)> = rag
+                    .unembedded_chunks()
+                    .iter()
+                    .filter_map(|c| {
+                        state
+                            .embed_cache
+                            .get(&content_hash(&c.content))
+                            .map(|v| (c.id.clone(), v.clone()))
+                    })
+                    .collect();
+                for (id, vector) in restore {
+                    rag.set_embedding(&id, vector);
+                }
             }
             state.rag = rag;
             state.fingerprint = current;
@@ -213,12 +243,12 @@ impl Tool for WorkspaceRagTool {
                 // Semantic lane: embed any new chunks plus the query with no
                 // lock held, then fuse BM25 + vector ranks under a fresh
                 // lock. Best-effort — embedding failures fall back to BM25.
-                let mut embedded: Vec<(String, Vec<f32>)> = Vec::new();
+                let mut embedded: Vec<(String, u64, Vec<f32>)> = Vec::new();
                 let mut query_embedding: Option<Vec<f32>> = None;
                 if let Some(embedder) = &self.embedder {
                     for (id, content) in &pending {
                         if let Ok(vector) = embedder.embed_one(content).await {
-                            embedded.push((id.clone(), vector));
+                            embedded.push((id.clone(), content_hash(content), vector));
                         }
                     }
                     query_embedding = embedder.embed_one(query).await.ok();
@@ -226,7 +256,8 @@ impl Tool for WorkspaceRagTool {
 
                 let (output, matched) = {
                     let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                    for (id, vector) in embedded {
+                    for (id, hash, vector) in embedded {
+                        state.embed_cache.insert(hash, vector.clone());
                         state.rag.set_embedding(&id, vector);
                     }
                     let results =
@@ -275,6 +306,63 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         std::fs::create_dir_all(tmp.path().join("rag").join("inbox")).unwrap();
         (WorkspaceRagTool::new(tmp.path()), tmp)
+    }
+
+    /// Embedder that counts how many texts it embedded, for cache tests.
+    struct CountingEmbedder {
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait]
+    impl crate::memory::embeddings::EmbeddingProvider for CountingEmbedder {
+        fn name(&self) -> &str {
+            "counting"
+        }
+        fn dimensions(&self) -> usize {
+            3
+        }
+        async fn embed(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+            self.calls
+                .fetch_add(texts.len(), std::sync::atomic::Ordering::SeqCst);
+            Ok(texts
+                .iter()
+                .map(|t| {
+                    let h = content_hash(t) as f32;
+                    vec![h % 7.0, h % 13.0, h % 3.0]
+                })
+                .collect())
+        }
+    }
+
+    #[tokio::test]
+    async fn embedding_cache_avoids_reembedding_unchanged_chunks() {
+        let tmp = TempDir::new().unwrap();
+        let inbox = tmp.path().join("rag").join("inbox");
+        std::fs::create_dir_all(&inbox).unwrap();
+        std::fs::write(inbox.join("a.md"), "alpha content about widgets").unwrap();
+
+        let counter = Arc::new(CountingEmbedder {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let tool = WorkspaceRagTool::new(tmp.path()).with_embedder(counter.clone());
+
+        // First search embeds the one chunk plus the query.
+        tool.execute(json!({"action": "search", "query": "widgets"}))
+            .await
+            .unwrap();
+        let after_first = counter.calls.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(after_first >= 2, "chunk + query embedded: {after_first}");
+
+        // Add a second file; the first chunk's embedding must be reused from
+        // cache after the reindex, so only the new chunk (+query) is embedded.
+        std::fs::write(inbox.join("b.md"), "beta content about gadgets").unwrap();
+        let before = counter.calls.load(std::sync::atomic::Ordering::SeqCst);
+        tool.execute(json!({"action": "search", "query": "gadgets"}))
+            .await
+            .unwrap();
+        let delta = counter.calls.load(std::sync::atomic::Ordering::SeqCst) - before;
+        // 1 new chunk + 1 query = 2; the unchanged chunk is NOT re-embedded.
+        assert_eq!(delta, 2, "only new chunk + query embedded, got {delta}");
     }
 
     #[tokio::test]
