@@ -20,7 +20,7 @@ import {
   User,
   X,
 } from 'lucide-react';
-import { getFederationPeers } from '@/lib/api';
+import { apiFetch, getFederationPeers } from '@/lib/api';
 import {
   loadFederationPeerSelections,
   loadFederationTasksBySession,
@@ -1542,6 +1542,25 @@ export default function AgentChat() {
               <p className="mt-3 text-xs text-gray-500">
                 Regular chats persist locally. Temporary chats stay in memory only.
               </p>
+              <button
+                onClick={async () => {
+                  if (!window.confirm('Clear ALL history? This deletes saved chats, memories, and run records on the node to free space.')) return;
+                  try {
+                    const res = await apiFetch<{ bytes_freed: number; memories_removed: number; runs_removed: number }>(
+                      '/api/history/clear',
+                      { method: 'POST' },
+                    );
+                    setSessions([]);
+                    setActiveSessionId('');
+                    window.alert(`Cleared: ${res.memories_removed} memories, ${res.runs_removed} run records, ${(res.bytes_freed / 1024).toFixed(0)} KB freed.`);
+                  } catch (err) {
+                    window.alert(err instanceof Error ? err.message : 'Clear failed');
+                  }
+                }}
+                className="mt-2 w-full rounded-lg border border-red-900/50 bg-red-950/20 px-3 py-1.5 text-xs text-red-400 transition-colors hover:border-red-700 hover:text-red-300"
+              >
+                Clear all history (frees space)
+              </button>
             </>
           )}
         </div>

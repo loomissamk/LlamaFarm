@@ -3460,6 +3460,79 @@ pub async fn handle_api_health(
     Json(serde_json::json!({"health": snapshot})).into_response()
 }
 
+/// POST /api/history/clear — one-stop space reclaim: clears all memory
+/// entries, non-live run ledgers and traces, and persisted chat sessions.
+/// This is the "forget everything" button; live runs keep their in-process
+/// state until they finish.
+pub async fn handle_api_history_clear(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+    let runtime = state.runtime_snapshot();
+
+    // 1. Memory entries (all categories).
+    let mut memories_removed = 0usize;
+    if let Ok(entries) = runtime.mem.list(None, None).await {
+        for entry in entries {
+            if matches!(runtime.mem.forget(&entry.key).await, Ok(true)) {
+                memories_removed += 1;
+            }
+        }
+    }
+
+    // 2. Run ledgers + per-run traces (skip live runs).
+    let (workspace_dir, store_path) = {
+        let config = state.config.lock();
+        (
+            config.workspace_dir.clone(),
+            crate::gateway::ws::resolve_ws_chat_store_path(&config),
+        )
+    };
+    let mut runs_removed = 0usize;
+    let mut bytes_freed = 0u64;
+    let live = crate::agent::run_ledger::live_run_ids();
+    if let Ok(dir_entries) = std::fs::read_dir(crate::agent::run_ledger::runs_dir(&workspace_dir))
+    {
+        for entry in dir_entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let is_run_artifact = name.ends_with(".ledger.json") || name.ends_with(".jsonl");
+            let is_live = live.iter().any(|id| name.starts_with(id.as_str()));
+            if is_run_artifact && !is_live {
+                bytes_freed += entry.metadata().map(|m| m.len()).unwrap_or(0);
+                if std::fs::remove_file(entry.path()).is_ok() {
+                    runs_removed += 1;
+                }
+            }
+        }
+    }
+
+    // 3. Global runtime trace file.
+    let trace_path = workspace_dir.join("state").join("runtime-trace.jsonl");
+    if let Ok(meta) = std::fs::metadata(&trace_path) {
+        bytes_freed += meta.len();
+        let _ = std::fs::remove_file(&trace_path);
+    }
+
+    // 4. Persisted chat sessions.
+    let mut sessions_cleared = false;
+    if let Ok(meta) = std::fs::metadata(&store_path) {
+        bytes_freed += meta.len();
+        sessions_cleared = std::fs::remove_file(&store_path).is_ok();
+    }
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "memories_removed": memories_removed,
+        "runs_removed": runs_removed,
+        "sessions_cleared": sessions_cleared,
+        "bytes_freed": bytes_freed,
+    }))
+    .into_response()
+}
+
 /// GET /api/runs — run inspector index: live + historical run ledgers.
 pub async fn handle_api_runs_list(
     State(state): State<AppState>,

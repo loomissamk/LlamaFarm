@@ -21,6 +21,7 @@ pub mod arxiv_search;
 pub mod browser;
 pub mod browser_open;
 pub mod cli_discovery;
+pub mod code_run;
 pub mod composio;
 pub mod content_search;
 pub mod cron_add;
@@ -83,6 +84,7 @@ pub use apply_patch::ApplyPatchTool;
 pub use arxiv_search::ArxivSearchTool;
 pub use browser::{BrowserTool, ComputerUseConfig};
 pub use browser_open::BrowserOpenTool;
+pub use code_run::CodeRunTool;
 pub use composio::ComposioTool;
 pub use content_search::ContentSearchTool;
 pub use cron_add::CronAddTool;
@@ -413,6 +415,7 @@ pub fn all_tools_with_runtime_and_federation(
         tool_arcs.push(Arc::new(GlobSearchTool::new(security.clone())));
         tool_arcs.push(Arc::new(ContentSearchTool::new(security.clone())));
         tool_arcs.push(Arc::new(WorkspaceRagTool::new(workspace_dir)));
+        tool_arcs.push(Arc::new(CodeRunTool::new(security.clone(), workspace_dir)));
     }
     if runtime.as_any().is::<crate::runtime::WasmRuntime>() {
         tool_arcs.push(Arc::new(WasmModuleTool::new(

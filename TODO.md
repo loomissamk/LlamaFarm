@@ -172,6 +172,32 @@ memory clear scope=all also purges non-live run ledgers/traces. Continue:
 - [ ] Merge **Config** and **Integrations** into one Settings page; move the
   common knobs (model, provider, autonomy) onto the Dashboard.
 - Battery-aware scheduling is dropped — the platform targets big boxes.
+- [x] One-place history clearing (2026-07-16): POST /api/history/clear +
+  "Clear all history" button in the chat sessions pane — deletes all memory
+  entries, non-live run ledgers/traces, the global runtime trace, and
+  persisted chat sessions, reporting bytes freed. Run records and chat
+  history are managed together, as requested.
+- [ ] Resizable, improved workspace terminal (operator request): drag-to-
+  resize the IDE terminal panel, larger scrollback, and better font/theme.
+
+Execution environments (operator request, 2026-07-16): the bundle image
+ALREADY ships python3+pip, nodejs, gcc/g++ (build-essential), cmake, go,
+java (headless JDK), cargo/rustc, git, docker CLI, jq, chromium — Node and
+C++ basics are covered. What was missing is structured use of them:
+
+- [x] **code_run tool** (2026-07-16): write→compile→run for python,
+  javascript, typescript, c, cpp, go, rust, bash in a disposable
+  `<workspace>/.code_run/` dir with timeout, stdin support, and captured
+  stdout/stderr/exit. Registered with the filesystem tool set.
+- [ ] Per-workspace persistent environments: a `.venv` exists for Python —
+  add the equivalent for Node (workspace `package.json` + node_modules) and
+  a build cache dir for C++/Rust so repeated compiles are fast.
+- [ ] Toolchain capability report: extend the tools registry/doctor so the
+  agent knows which compilers and versions are actually present (evidence,
+  not assumption) before promising builds.
+- [ ] Consider adding: sqlite3 CLI, ripgrep, shellcheck, valgrind, gdb to
+  the image for debugging-grade power (small, high leverage). GPU CUDA
+  toolkit stays out — too heavy for the bundle.
 
 Cutting-edge agentic/throughput priorities (operator request):
 

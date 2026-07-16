@@ -1,0 +1,392 @@
+//! Polyglot code execution tool.
+//!
+//! Gives the agent a structured write → compile → run path for short
+//! programs across the toolchains shipped in the bundle image (python3,
+//! node, gcc/g++, go, rustc, bash) instead of hand-rolling shell pipelines.
+//! Each run executes in a disposable directory under
+//! `<workspace>/.code_run/` with a wall-clock timeout and captured
+//! stdout/stderr/exit status.
+
+use super::traits::{Tool, ToolResult};
+use crate::security::{SecurityPolicy, policy::ToolOperation};
+use async_trait::async_trait;
+use serde_json::json;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+const DEFAULT_TIMEOUT_SECS: u64 = 30;
+const MAX_TIMEOUT_SECS: u64 = 300;
+const MAX_CAPTURED_BYTES: usize = 64 * 1024;
+
+struct LanguageSpec {
+    /// Source file name inside the scratch dir.
+    source: &'static str,
+    /// Compile command; empty means interpreted.
+    compile: &'static [&'static str],
+    /// Run command; `{bin}` and `{src}` are substituted.
+    run: &'static [&'static str],
+    /// Binary that must exist on PATH for this language to be available.
+    requires: &'static str,
+}
+
+fn language_spec(language: &str) -> Option<LanguageSpec> {
+    match language {
+        "python" => Some(LanguageSpec {
+            source: "main.py",
+            compile: &[],
+            run: &["python3", "{src}"],
+            requires: "python3",
+        }),
+        "javascript" | "node" => Some(LanguageSpec {
+            source: "main.js",
+            compile: &[],
+            run: &["node", "{src}"],
+            requires: "node",
+        }),
+        "typescript" => Some(LanguageSpec {
+            source: "main.ts",
+            compile: &[],
+            run: &["node", "--experimental-strip-types", "{src}"],
+            requires: "node",
+        }),
+        "c" => Some(LanguageSpec {
+            source: "main.c",
+            compile: &["gcc", "{src}", "-O2", "-o", "{bin}"],
+            run: &["{bin}"],
+            requires: "gcc",
+        }),
+        "cpp" | "c++" => Some(LanguageSpec {
+            source: "main.cpp",
+            compile: &["g++", "{src}", "-O2", "-std=c++20", "-o", "{bin}"],
+            run: &["{bin}"],
+            requires: "g++",
+        }),
+        "go" => Some(LanguageSpec {
+            source: "main.go",
+            compile: &[],
+            run: &["go", "run", "{src}"],
+            requires: "go",
+        }),
+        "rust" => Some(LanguageSpec {
+            source: "main.rs",
+            compile: &["rustc", "{src}", "-O", "-o", "{bin}"],
+            run: &["{bin}"],
+            requires: "rustc",
+        }),
+        "bash" | "sh" => Some(LanguageSpec {
+            source: "main.sh",
+            compile: &[],
+            run: &["bash", "{src}"],
+            requires: "bash",
+        }),
+        _ => None,
+    }
+}
+
+pub struct CodeRunTool {
+    security: Arc<SecurityPolicy>,
+    scratch_root: PathBuf,
+}
+
+impl CodeRunTool {
+    pub fn new(security: Arc<SecurityPolicy>, workspace_dir: &Path) -> Self {
+        Self {
+            security,
+            scratch_root: workspace_dir.join(".code_run"),
+        }
+    }
+}
+
+fn substitute(template: &[&str], src: &Path, bin: &Path) -> Vec<String> {
+    template
+        .iter()
+        .map(|part| {
+            part.replace("{src}", &src.to_string_lossy())
+                .replace("{bin}", &bin.to_string_lossy())
+        })
+        .collect()
+}
+
+fn truncate_bytes(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    if text.len() <= MAX_CAPTURED_BYTES {
+        text.into_owned()
+    } else {
+        format!("{}…[truncated]", &text[..MAX_CAPTURED_BYTES])
+    }
+}
+
+async fn run_command(
+    argv: &[String],
+    cwd: &Path,
+    stdin_data: Option<&str>,
+    timeout: Duration,
+) -> anyhow::Result<(bool, String, String, Option<i32>)> {
+    use tokio::io::AsyncWriteExt;
+    let mut cmd = tokio::process::Command::new(&argv[0]);
+    cmd.args(&argv[1..])
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = cmd.spawn()?;
+    if let Some(data) = stdin_data {
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(data.as_bytes()).await;
+        }
+    } else {
+        drop(child.stdin.take());
+    }
+    match tokio::time::timeout(timeout, child.wait_with_output()).await {
+        Ok(output) => {
+            let output = output?;
+            Ok((
+                output.status.success(),
+                truncate_bytes(&output.stdout),
+                truncate_bytes(&output.stderr),
+                output.status.code(),
+            ))
+        }
+        Err(_) => Ok((
+            false,
+            String::new(),
+            format!("timed out after {}s", timeout.as_secs()),
+            None,
+        )),
+    }
+}
+
+#[async_trait]
+impl Tool for CodeRunTool {
+    fn name(&self) -> &str {
+        "code_run"
+    }
+
+    fn description(&self) -> &str {
+        "Write, compile, and execute a short program in a disposable \
+         directory with a timeout. Languages: python, javascript, \
+         typescript, c, cpp, go, rust, bash. Returns stdout, stderr, and \
+         exit status. Prefer this over hand-written shell pipelines for \
+         running code snippets; use file_write + shell for full projects."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "language": {
+                    "type": "string",
+                    "enum": ["python", "javascript", "typescript", "c", "cpp", "go", "rust", "bash"],
+                    "description": "Language / toolchain to use"
+                },
+                "code": {
+                    "type": "string",
+                    "description": "Complete source of the program to run"
+                },
+                "stdin": {
+                    "type": "string",
+                    "description": "Optional data piped to the program's stdin"
+                },
+                "timeout_secs": {
+                    "type": "integer",
+                    "description": "Wall-clock limit (default 30, max 300)"
+                }
+            },
+            "required": ["language", "code"]
+        })
+    }
+
+    async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
+        if let Err(msg) = self
+            .security
+            .enforce_tool_operation(ToolOperation::Act, "code_run")
+        {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(msg),
+            });
+        }
+
+        let language = args
+            .get("language")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let Some(spec) = language_spec(&language) else {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!(
+                    "Unsupported language '{language}'. Supported: python, javascript, \
+                     typescript, c, cpp, go, rust, bash"
+                )),
+            });
+        };
+        let Some(code) = args.get("code").and_then(|v| v.as_str()).filter(|c| !c.trim().is_empty())
+        else {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some("Parameter 'code' is required".into()),
+            });
+        };
+        if which::which(spec.requires).is_err() {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!(
+                    "Toolchain '{}' is not installed in this runtime",
+                    spec.requires
+                )),
+            });
+        }
+
+        let timeout = Duration::from_secs(
+            args.get("timeout_secs")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(DEFAULT_TIMEOUT_SECS)
+                .clamp(1, MAX_TIMEOUT_SECS),
+        );
+        let stdin_data = args.get("stdin").and_then(|v| v.as_str());
+
+        let run_dir = self
+            .scratch_root
+            .join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&run_dir)?;
+        let src = run_dir.join(spec.source);
+        std::fs::write(&src, code)?;
+        let bin = run_dir.join("program");
+
+        // Compile step (compiled languages only).
+        if !spec.compile.is_empty() {
+            let argv = substitute(spec.compile, &src, &bin);
+            let (ok, out, err, code_num) =
+                run_command(&argv, &run_dir, None, Duration::from_secs(120)).await?;
+            if !ok {
+                let _ = std::fs::remove_dir_all(&run_dir);
+                return Ok(ToolResult {
+                    success: false,
+                    output: out,
+                    error: Some(format!(
+                        "compilation failed (exit {:?}):\n{err}",
+                        code_num
+                    )),
+                });
+            }
+        }
+
+        let argv = substitute(spec.run, &src, &bin);
+        let (ok, stdout, stderr, exit_code) =
+            run_command(&argv, &run_dir, stdin_data, timeout).await?;
+        let _ = std::fs::remove_dir_all(&run_dir);
+
+        let mut output = format!(
+            "exit: {}\n",
+            exit_code.map_or_else(|| "killed".to_string(), |c| c.to_string())
+        );
+        if !stdout.is_empty() {
+            output.push_str(&format!("stdout:\n{stdout}\n"));
+        }
+        if !stderr.is_empty() {
+            output.push_str(&format!("stderr:\n{stderr}\n"));
+        }
+        Ok(ToolResult {
+            success: ok,
+            output,
+            error: if ok { None } else { Some("program exited non-zero".into()) },
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn tool() -> (CodeRunTool, TempDir) {
+        let tmp = TempDir::new().unwrap();
+        let mut policy = SecurityPolicy::default();
+        policy.autonomy = crate::security::AutonomyLevel::Full;
+        (CodeRunTool::new(Arc::new(policy), tmp.path()), tmp)
+    }
+
+    #[tokio::test]
+    async fn python_snippet_runs_and_cleans_up() {
+        if which::which("python3").is_err() {
+            return;
+        }
+        let (tool, tmp) = tool();
+        let result = tool
+            .execute(json!({"language": "python", "code": "print(6*7)"}))
+            .await
+            .unwrap();
+        assert!(result.success, "{:?}", result.error);
+        assert!(result.output.contains("42"));
+        let leftovers = std::fs::read_dir(tmp.path().join(".code_run"))
+            .map(|d| d.count())
+            .unwrap_or(0);
+        assert_eq!(leftovers, 0, "scratch dir must be cleaned up");
+    }
+
+    #[tokio::test]
+    async fn c_snippet_compiles_and_runs() {
+        if which::which("gcc").is_err() {
+            return;
+        }
+        let (tool, _tmp) = tool();
+        let result = tool
+            .execute(json!({
+                "language": "c",
+                "code": "#include <stdio.h>\nint main(){printf(\"c-ok %d\\n\", 7*3);return 0;}"
+            }))
+            .await
+            .unwrap();
+        assert!(result.success, "{:?}", result.error);
+        assert!(result.output.contains("c-ok 21"));
+    }
+
+    #[tokio::test]
+    async fn node_snippet_runs_with_stdin() {
+        if which::which("node").is_err() {
+            return;
+        }
+        let (tool, _tmp) = tool();
+        let result = tool
+            .execute(json!({
+                "language": "javascript",
+                "code": "process.stdin.on('data', d => console.log('got:' + d.toString().trim()));",
+                "stdin": "hello",
+                "timeout_secs": 10
+            }))
+            .await
+            .unwrap();
+        assert!(result.output.contains("got:hello"), "{}", result.output);
+    }
+
+    #[tokio::test]
+    async fn unsupported_language_is_rejected() {
+        let (tool, _tmp) = tool();
+        let result = tool
+            .execute(json!({"language": "cobol", "code": "x"}))
+            .await
+            .unwrap();
+        assert!(!result.success);
+    }
+
+    #[tokio::test]
+    async fn compile_error_is_reported() {
+        if which::which("gcc").is_err() {
+            return;
+        }
+        let (tool, _tmp) = tool();
+        let result = tool
+            .execute(json!({"language": "c", "code": "int main( { broken"}))
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(result.error.as_deref().unwrap_or("").contains("compilation failed"));
+    }
+}

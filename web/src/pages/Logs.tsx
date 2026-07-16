@@ -72,7 +72,7 @@ const LEVEL_ACTIVE_COLORS: Record<LevelFilter, string> = {
   trace: 'bg-indigo-900/60 text-indigo-200 border-indigo-700',
 };
 
-export default function Logs() {
+export function LogsPanel() {
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const [paused, setPaused] = useState(false);
   const [connected, setConnected] = useState(false);
@@ -326,4 +326,8 @@ export default function Logs() {
       </div>
     </div>
   );
+}
+
+export default function Logs() {
+  return <LogsPanel />;
 }

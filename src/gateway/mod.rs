@@ -905,6 +905,7 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .route("/api/cost", get(api::handle_api_cost))
         .route("/api/cli-tools", get(api::handle_api_cli_tools))
         .route("/api/health", get(api::handle_api_health))
+        .route("/api/history/clear", post(api::handle_api_history_clear))
         .route("/api/runs", get(api::handle_api_runs_list))
         .route("/api/runs/{run_id}", get(api::handle_api_run_get))
         .route(

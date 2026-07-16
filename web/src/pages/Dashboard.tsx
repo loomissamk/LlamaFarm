@@ -1,4 +1,5 @@
 import { DiagnosticsPanel } from './Doctor';
+import { LogsPanel } from './Logs';
 import { useEffect, useState } from 'react';
 import { Activity, Cpu, Database, Radio, RefreshCw, Server } from 'lucide-react';
 import type { StatusResponse } from '@/types/api';
@@ -224,6 +225,9 @@ export default function Dashboard() {
       </div>
       <div className="mt-6">
         <DiagnosticsPanel />
+      </div>
+      <div className="mt-6 overflow-hidden rounded-lg border border-gray-800 [&>div]:!h-[28rem]">
+        <LogsPanel />
       </div>
     </div>
   );

@@ -745,16 +745,21 @@ mod tests {
     #[tokio::test]
     async fn list_shows_spawned_process() {
         let tool = make_tool();
-        tool.execute(json!({
-            "action": "spawn",
-            "command": "echo list_test"
-        }))
-        .await
-        .unwrap();
+        // Use a long-lived command: an instant-exit process (echo) can be
+        // reaped before the list call under parallel test load, which made
+        // this test flaky.
+        let spawned = tool
+            .execute(json!({
+                "action": "spawn",
+                "command": "sleep 7.77"
+            }))
+            .await
+            .unwrap();
+        assert!(spawned.success, "spawn should succeed: {:?}", spawned.error);
 
         let result = tool.execute(json!({"action": "list"})).await.unwrap();
         assert!(result.success);
-        assert!(result.output.contains("list_test"));
+        assert!(result.output.contains("7.77"), "{}", result.output);
     }
 
     #[tokio::test]

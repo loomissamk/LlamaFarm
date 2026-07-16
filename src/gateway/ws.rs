@@ -184,7 +184,7 @@ fn parse_selected_federation_peer_ids(value: Option<&serde_json::Value>) -> Vec<
     peers
 }
 
-fn resolve_ws_chat_store_path(config: &crate::config::Config) -> PathBuf {
+pub(crate) fn resolve_ws_chat_store_path(config: &crate::config::Config) -> PathBuf {
     config
         .config_path
         .parent()
