@@ -754,7 +754,7 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
     }
     println!("  GET  /health    — health check");
     println!("  GET  /metrics   — Prometheus metrics");
-    println!("  Direct local gateway access enabled (browser pairing removed)");
+    println!("  Direct local gateway access enabled");
     println!("  Press Ctrl+C to stop.\n");
 
     crate::health::mark_component_ok("gateway");
@@ -998,8 +998,6 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
 async fn handle_health() -> impl IntoResponse {
     let body = serde_json::json!({
         "status": "ok",
-        "paired": false,
-        "require_pairing": false,
         "runtime": crate::health::snapshot_json(),
     });
     Json(body)

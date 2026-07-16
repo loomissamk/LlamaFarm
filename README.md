@@ -84,6 +84,34 @@ Error`. Change limits with a normal recreate instead:
 using NVIDIA's official instructions, restart Docker, then recreate the
 bundle; do not delete its named model or Qdrant volumes.
 
+## Next-gen agent core
+
+The current pass adds an evidence-first execution core:
+
+- **Durable run ledger** — every run persists planner → executor → verifier
+  records to `<workspace>/state/runs/<run_id>.ledger.json`: plan steps with
+  allowed tools, dependencies, and expected-evidence patterns, plus every
+  executed tool call (scrubbed args, output digest + excerpt, duration,
+  artifacts).
+- **Evidence-gated completion** — a deterministic verifier marks a plan step
+  verified only when it is completed *and* backed by successful tool
+  evidence with its dependencies verified. Autonomous runs cannot report
+  success on model prose alone; unverified claims end as
+  `completed_unverified`, never as success.
+- **Run inspector** — the **Runs** page (and `GET /api/runs`,
+  `GET /api/runs/{id}`) shows live and historical runs: plan state with
+  per-step verifier results, the tool timeline, artifacts, attempts, and
+  retry reasons, auto-refreshing while a run is live.
+- **Hardened command policy** — argument-level guards back the wildcard
+  allowlist: unsafe `rm` deletes, `find -exec`, and `git config`/alias
+  injection are rejected at every autonomy level; `sudo` requires the
+  full-autonomy profile; single-`&` chains validate both sides.
+
+Next on the roadmap (tracked in `TODO.md`): Qdrant-backed cross-session chat
+memory, a drop-a-document RAG inbox, run-ledger RAG for evidence-grounded
+planning, real TTFT/TPS metrics in the chat UI, self-authored skills, and a
+durable federation queue.
+
 ## Unattended agent runs
 
 Long jobs use an executable task plan: each item is marked **completed** only

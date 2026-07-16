@@ -19,7 +19,6 @@ services:
     environment:
       - LLAMAFARM_ALLOW_PUBLIC_BIND=true
       - LLAMAFARM_GATEWAY_HOST=0.0.0.0
-      - LLAMAFARM_REQUIRE_PAIRING=false
       - SHELL=/bin/bash
       # Default gateway port inside container
       - LLAMAFARM_GATEWAY_PORT=${LLAMAFARM_GATEWAY_PORT:-42617}

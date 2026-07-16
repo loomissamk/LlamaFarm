@@ -7108,15 +7108,6 @@ impl Config {
             }
         }
 
-        // Gateway pairing is intentionally retired. Keep the legacy field
-        // false even if an old config or environment file still contains it.
-        if std::env::var_os("LLAMAFARM_REQUIRE_PAIRING").is_some() {
-            tracing::warn!(
-                "LLAMAFARM_REQUIRE_PAIRING is ignored; gateway pairing has been removed"
-            );
-        }
-        self.gateway.require_pairing = false;
-
         // Allow public bind: LLAMAFARM_ALLOW_PUBLIC_BIND
         if let Ok(val) = std::env::var("LLAMAFARM_ALLOW_PUBLIC_BIND") {
             self.gateway.allow_public_bind = val == "1" || val.eq_ignore_ascii_case("true");

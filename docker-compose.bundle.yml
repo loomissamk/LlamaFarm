@@ -48,7 +48,6 @@ services:
       - LLAMAFARM_GATEWAY_HOST=${LLAMAFARM_GATEWAY_HOST:-0.0.0.0}
       # The local bundle is direct-access by design. This fixed value also
       # overrides stale persisted config from an older paired deployment.
-      - LLAMAFARM_REQUIRE_PAIRING=false
       - LLAMAFARM_GATEWAY_PORT=${LLAMAFARM_GATEWAY_PORT:-42617}
       - LLAMAFARM_MODEL=${LLAMAFARM_MODEL:-qwen3.5:9b}
       - LLAMAFARM_AGENT_COMPACT_CONTEXT=${LLAMAFARM_AGENT_COMPACT_CONTEXT:-true}

@@ -42,6 +42,20 @@ redeploy queued until back on the LAN.
 
 Also fixed in this pass:
 
+- Gateway pairing is now hard dead: removed the `LLAMAFARM_REQUIRE_PAIRING`
+  env shim and its startup warning, the compose env vars that triggered it,
+  the "(browser pairing removed)" banner text, and the `paired`/
+  `require_pairing` fields from `/health`. Remaining internal cleanup is
+  cosmetic and queued below: rename `PairingGuard` (still used for Telegram
+  channel device auth — a different feature), drop the ignored
+  `gateway.require_pairing` serde field, and prune unused `auth.pairing_*`
+  web i18n strings.
+- Removed SOUL.md (repo + workspace). Proof it was dead weight: the prompt
+  builder injects only workspace `AGENTS.md` (`src/agent/prompt.rs`) and its
+  tests assert SOUL.md content is NOT loaded. The runtime workspace
+  `AGENTS.md` (6.5 KB ≈ 1.6k tokens/request) remains the single persona/
+  operating-rules file; keep it lean.
+
 - Restored the argument-level command guard the wildcard allowlist comment
   promises: `is_args_safe` now blocks unsafe `rm`/`trash` deletes (via
   `is_safe_delete_command`) at every autonomy level, `find -exec/-ok/-delete`,
