@@ -260,10 +260,14 @@ impl Tool for WorkspaceRagTool {
                         state.embed_cache.insert(hash, vector.clone());
                         state.rag.set_embedding(&id, vector);
                     }
-                    let results =
-                        state
-                            .rag
-                            .retrieve_hybrid(query, query_embedding.as_deref(), limit);
+                    // Over-fetch, then MMR-rerank down to `limit` so the
+                    // returned passages are relevant AND non-redundant.
+                    let fetched = state.rag.retrieve_hybrid(
+                        query,
+                        query_embedding.as_deref(),
+                        (limit * 3).max(limit),
+                    );
+                    let results = DocRag::rerank_mmr(fetched, 0.7, limit);
                     if results.is_empty() {
                         (String::new(), false)
                     } else {

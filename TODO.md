@@ -206,12 +206,12 @@ Cutting-edge agentic/throughput priorities (operator request):
   `memory.embedding_provider` is configured (verified E2E: a paraphrase
   query with no shared keywords retrieved the right doc). Content-hash
   embedding cache added so reindex reuses vectors for unchanged chunks.
-  Remaining: optional local reranker; persist the cache across restarts.
+  Local reranker added (2026-07-16): lexical MMR (Maximal Marginal Relevance, Jaccard diversity) reranks over-fetched results down to the requested limit so passages are relevant AND non-redundant. Remaining: persist the embedding cache across restarts; optional cross-encoder rerank.
 - [~] Better coding/execution: disposable worktrees delivered (2026-07-16) —
   `git_worktree` tool (create/list/adopt/discard) gives isolated
   adopt-or-discard scratch space under `<workspace>/.worktrees/` so risky
   refactors never leave the operator's checkout broken. Paired with
-  `code_run` and the run ledger. Remaining: wire the existing
+  `code_run` and the run ledger. The workspace must be a git repo for worktrees to apply (unit tests cover the git mechanics; deployed tool is registered and invocable). Remaining: an operator workspace-repo-init affordance, and wire the existing
   `RepoWorkflowAgent` (explore→patch→build→verify) to a chat entry point so
   the full loop runs end-to-end from a single request.
 - [ ] More autonomy: default plan-execute-verify for multi-step webchat

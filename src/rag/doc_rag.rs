@@ -91,6 +91,23 @@ fn tokenize(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Jaccard similarity between two token sets (|∩| / |∪|), for MMR diversity.
+fn jaccard(
+    a: &std::collections::HashSet<String>,
+    b: &std::collections::HashSet<String>,
+) -> f32 {
+    if a.is_empty() && b.is_empty() {
+        return 0.0;
+    }
+    let inter = a.intersection(b).count() as f32;
+    let union = a.union(b).count() as f32;
+    if union == 0.0 {
+        0.0
+    } else {
+        inter / union
+    }
+}
+
 /// Compute term-frequency map for a list of tokens.
 fn compute_tf(tokens: &[String]) -> HashMap<String, f32> {
     let mut tf = HashMap::new();
@@ -488,6 +505,56 @@ impl DocRag {
         out
     }
 
+    /// Rerank results with lexical Maximal Marginal Relevance to trade a little
+    /// pure relevance for diversity, so the returned passages don't repeat the
+    /// same content. `lambda` in [0,1]: 1.0 = relevance only (no-op), lower =
+    /// more diversity. Similarity is token-set Jaccard between chunk contents.
+    /// Deterministic and model-free.
+    pub fn rerank_mmr(results: Vec<RetrievalResult>, lambda: f32, top_k: usize) -> Vec<RetrievalResult> {
+        if results.len() <= 1 {
+            return results;
+        }
+        let lambda = lambda.clamp(0.0, 1.0);
+        let token_sets: Vec<std::collections::HashSet<String>> = results
+            .iter()
+            .map(|r| tokenize(&r.chunk.content).into_iter().collect())
+            .collect();
+
+        let max_score = results
+            .iter()
+            .map(|r| r.score)
+            .fold(f32::MIN, f32::max)
+            .max(1e-6);
+
+        let mut remaining: Vec<usize> = (0..results.len()).collect();
+        let mut selected: Vec<usize> = Vec::new();
+        let target = top_k.min(results.len());
+
+        while selected.len() < target && !remaining.is_empty() {
+            let mut best_pos = 0usize;
+            let mut best_mmr = f32::MIN;
+            for (pos, &idx) in remaining.iter().enumerate() {
+                let relevance = results[idx].score / max_score;
+                let max_sim = selected
+                    .iter()
+                    .map(|&s| jaccard(&token_sets[idx], &token_sets[s]))
+                    .fold(0.0_f32, f32::max);
+                let mmr = lambda * relevance - (1.0 - lambda) * max_sim;
+                if mmr > best_mmr {
+                    best_mmr = mmr;
+                    best_pos = pos;
+                }
+            }
+            selected.push(remaining.remove(best_pos));
+        }
+
+        let mut by_index: Vec<Option<RetrievalResult>> = results.into_iter().map(Some).collect();
+        selected
+            .into_iter()
+            .filter_map(|i| by_index[i].take())
+            .collect()
+    }
+
     // ── Internal ──────────────────────────────────────────────────
 
     /// Rebuild the IDF table and average document length from current chunks.
@@ -556,6 +623,53 @@ use tracing::info;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn result(source: &str, content: &str, score: f32) -> RetrievalResult {
+        RetrievalResult {
+            chunk: DocChunk {
+                id: source.to_string(),
+                source: source.to_string(),
+                heading: None,
+                chunk_index: 0,
+                content: content.to_string(),
+                embedding: None,
+                tf: HashMap::new(),
+            },
+            score,
+            score_type: "test".into(),
+        }
+    }
+
+    #[test]
+    fn mmr_rerank_demotes_near_duplicate() {
+        // Two near-identical top hits and one distinct hit. MMR should keep
+        // the best duplicate and promote the distinct passage over the second
+        // duplicate for the second slot.
+        let results = vec![
+            result("a", "the cat sat on the warm mat by the fire", 1.0),
+            result("b", "the cat sat on the warm mat by the fire today", 0.95),
+            result("c", "quantum entanglement links distant particles", 0.6),
+        ];
+        let reranked = DocRag::rerank_mmr(results, 0.6, 2);
+        assert_eq!(reranked.len(), 2);
+        assert_eq!(reranked[0].chunk.source, "a", "most relevant stays first");
+        assert_eq!(
+            reranked[1].chunk.source, "c",
+            "distinct passage beats near-duplicate for diversity"
+        );
+    }
+
+    #[test]
+    fn mmr_lambda_one_preserves_relevance_order() {
+        let results = vec![
+            result("a", "alpha", 0.9),
+            result("b", "beta", 0.8),
+            result("c", "gamma", 0.7),
+        ];
+        let reranked = DocRag::rerank_mmr(results, 1.0, 3);
+        let order: Vec<&str> = reranked.iter().map(|r| r.chunk.source.as_str()).collect();
+        assert_eq!(order, vec!["a", "b", "c"]);
+    }
 
     #[test]
     fn ingest_and_bm25_retrieval() {
