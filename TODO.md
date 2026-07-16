@@ -218,9 +218,12 @@ extra always-on service with no capability the current stack lacks.
 - [ ] **Patch review lane.** Proposed diffs surfaced in the Workspace IDE
   with apply/rollback buttons, executed in disposable git worktrees per run
   so the operator can adopt or discard agent changes atomically.
-- [ ] **Auto-rollback deploys.** Keep the last green image tag; a watchdog
-  reverts the bundle if `/api/health` fails after a redeploy. Makes
-  agent-driven self-updates safe.
+- [x] **Auto-rollback deploys** (2026-07-16). `up-bundle.sh` now snapshots
+  the running image as `llamafarm-local:last-green` before any healthy-node
+  `up`, health-gates the new deploy (`LLAMAFARM_HEALTH_TIMEOUT`, default
+  180s), and automatically retags + recreates from last-green when the new
+  build never becomes healthy (exit 2 = rolled back, exit 1 = manual).
+  Applies to both nodes since they share the deploy scripts.
 - [ ] **Run cost accounting.** Per-run token counts, GPU seconds, TTFT and
   generation TPS aggregated into the run inspector (extends the existing
   `InferenceMetrics`), so routing decisions can be justified with data.

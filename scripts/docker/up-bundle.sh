@@ -226,4 +226,57 @@ if [ "$WILL_BUILD" = "1" ]; then
   docker pull "$OLLAMA_PULL_IMAGE"
 fi
 
-exec docker compose -f "$BASE_COMPOSE" -f "$TMP_OVERRIDE" "$@"
+# ── Health-gated deploy with automatic rollback ─────────────────────────────
+# For `up` commands: snapshot the current image as last-green when the running
+# container is healthy, deploy, then require /health to come back within
+# LLAMAFARM_HEALTH_TIMEOUT seconds. On failure, retag last-green and recreate
+# so a bad build never leaves the node down. Non-up commands exec as before.
+
+IS_UP=0
+[ "${1:-}" = "up" ] && IS_UP=1
+
+if [ "$IS_UP" != "1" ]; then
+  exec docker compose -f "$BASE_COMPOSE" -f "$TMP_OVERRIDE" "$@"
+fi
+
+BUNDLE_IMAGE="llamafarm-local:bundle"
+GREEN_IMAGE="llamafarm-local:last-green"
+HEALTH_URL="http://localhost:${LLAMAFARM_PORT:-42617}/health"
+HEALTH_TIMEOUT="${LLAMAFARM_HEALTH_TIMEOUT:-180}"
+
+wait_healthy() {
+  local deadline=$(( $(date +%s) + HEALTH_TIMEOUT ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    if curl -sf -m 3 "$HEALTH_URL" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 3
+  done
+  return 1
+}
+
+if docker image inspect "$BUNDLE_IMAGE" >/dev/null 2>&1 \
+  && docker inspect -f '{{.State.Health.Status}}' LlamaFarm 2>/dev/null | grep -q healthy; then
+  docker tag "$BUNDLE_IMAGE" "$GREEN_IMAGE"
+  echo "Rollback point saved: $GREEN_IMAGE"
+fi
+
+docker compose -f "$BASE_COMPOSE" -f "$TMP_OVERRIDE" "$@"
+
+if wait_healthy; then
+  echo "Deploy healthy: $HEALTH_URL"
+  exit 0
+fi
+
+echo "Deploy FAILED health check after ${HEALTH_TIMEOUT}s." >&2
+if docker image inspect "$GREEN_IMAGE" >/dev/null 2>&1; then
+  echo "Rolling back to $GREEN_IMAGE…" >&2
+  docker tag "$GREEN_IMAGE" "$BUNDLE_IMAGE"
+  docker compose -f "$BASE_COMPOSE" -f "$TMP_OVERRIDE" up -d --no-build --force-recreate llamafarm
+  if wait_healthy; then
+    echo "Rollback succeeded — node is on the last green image." >&2
+    exit 2
+  fi
+  echo "Rollback did NOT become healthy — manual intervention required." >&2
+fi
+exit 1
