@@ -227,6 +227,29 @@ extra always-on service with no capability the current stack lacks.
 - [ ] **Run cost accounting.** Per-run token counts, GPU seconds, TTFT and
   generation TPS aggregated into the run inspector (extends the existing
   `InferenceMetrics`), so routing decisions can be justified with data.
+- [ ] **Cross-node knowledge sync.** Replicate `rag/inbox` documents,
+  playbook memories, and long-term facts between the two nodes over the
+  existing federation channel (idempotency-keyed, newest-wins), so a fact
+  taught to the laptop is recallable on the 5070 Ti box and vice versa.
+  Highest-value two-node feature on this list.
+- [ ] **Local SRE watch mode.** A cron-driven watcher tails journald/docker
+  events for crashloops, OOM kills, and disk pressure, and opens an agent
+  session with the evidence attached — the operator wakes up to a diagnosed
+  incident, not a dead service. Uses existing service_control/process tools.
+- [ ] **Battery/thermal-aware scheduling.** On the laptop node, detect AC vs
+  battery and GPU temperature; defer batch jobs (bakeoffs, reindexing,
+  nightly evals) while on battery or hot, and report power draw per run in
+  the cost accounting.
+- [ ] **Model auto-promotion.** Nightly check for newer tags of installed
+  Ollama models, run the eval suite against the deployed baseline in a
+  disposable workspace, and promote only on measured wins — with the
+  last-green rollback pattern applied to model routing.
+- [ ] **Voice lane.** Local whisper.cpp STT + Piper TTS behind the gateway
+  for hands-free operator chat on LAN devices; push-to-talk in the web UI.
+- [ ] **Fork/replay in the run inspector.** `AutonomousLoop::fork()` exists;
+  expose fork-from-checkpoint and step replay in the Runs page so chaos
+  experiments can branch A/B recovery strategies visually.
+
 - [ ] **Local browser automation lane.** CDP/Playwright-driven browser tool
   with screenshots streamed into the chat work panel — real web operation,
   not just fetch-and-parse.
