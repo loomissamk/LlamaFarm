@@ -62,6 +62,14 @@ impl RuntimeLogStore {
         let _ = self.tx.send(entry);
     }
 
+    /// Drop all buffered log entries (operator "clear history" support).
+    pub fn clear(&self) -> usize {
+        let mut entries = self.entries.lock();
+        let removed = entries.len();
+        entries.clear();
+        removed
+    }
+
     pub fn tail(&self, limit: usize) -> Vec<RuntimeLogEntry> {
         let limit = limit.max(1).min(self.capacity);
         let entries = self.entries.lock();

@@ -160,25 +160,24 @@ the UI is streamlined, best-in-class UX, only what needs to exist. v1 done:
 sidebar slimmed 13→8 tabs (Runs/Memory/Logs/Doctor now Dashboard chips),
 memory clear scope=all also purges non-live run ledgers/traces. Continue:
 
-- [ ] Fold **Doctor** into the Dashboard (diagnostics panel with a run
-  button); delete the Doctor tab.
-- [ ] Fold **Logs** into the Dashboard (collapsible live tail); delete the
-  Logs tab.
-- [ ] Fold **Memory** into the Database page (they are both data stores);
-  delete the Memory tab.
+- [x] Doctor folded into the Dashboard (DiagnosticsPanel, 2026-07-16).
+- [x] Logs live on the Dashboard (LogsPanel embedded, 2026-07-16).
+- [x] Memory folded into the Database page (2026-07-16).
 - [ ] Replace the **Runs** tab with a compact "recent runs + live badge"
   card on the Dashboard linking to run detail, and surface the active run's
   plan/evidence inline in Agent Chat where it belongs.
-- [ ] Merge **Config** and **Integrations** into one Settings page; move the
-  common knobs (model, provider, autonomy) onto the Dashboard.
+- [x] Integrations merged into the Config page; Integrations tab removed
+  (2026-07-16). Moving common knobs onto the Dashboard remains open.
 - Battery-aware scheduling is dropped — the platform targets big boxes.
 - [x] One-place history clearing (2026-07-16): POST /api/history/clear +
   "Clear all history" button in the chat sessions pane — deletes all memory
   entries, non-live run ledgers/traces, the global runtime trace, and
-  persisted chat sessions, reporting bytes freed. Run records and chat
-  history are managed together, as requested.
-- [ ] Resizable, improved workspace terminal (operator request): drag-to-
-  resize the IDE terminal panel, larger scrollback, and better font/theme.
+  persisted chat sessions, AND the in-memory runtime log buffer,
+  reporting bytes freed. Run records, chat history, and logs are managed
+  together, as requested.
+- [x] Resizable workspace terminal (2026-07-16): drag handle on the IDE
+  terminal panel, height persisted per browser. Scrollback/theme polish
+  remains open.
 
 Execution environments (operator request, 2026-07-16): the bundle image
 ALREADY ships python3+pip, nodejs, gcc/g++ (build-essential), cmake, go,

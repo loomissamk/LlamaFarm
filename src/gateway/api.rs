@@ -3523,11 +3523,15 @@ pub async fn handle_api_history_clear(
         sessions_cleared = std::fs::remove_file(&store_path).is_ok();
     }
 
+    // 5. In-memory runtime log buffer (the Logs panel's backing store).
+    let log_lines_cleared = crate::runtime_logs::global_runtime_log_store().clear();
+
     Json(serde_json::json!({
         "status": "ok",
         "memories_removed": memories_removed,
         "runs_removed": runs_removed,
         "sessions_cleared": sessions_cleared,
+        "log_lines_cleared": log_lines_cleared,
         "bytes_freed": bytes_freed,
     }))
     .into_response()

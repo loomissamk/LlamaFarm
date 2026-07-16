@@ -33,7 +33,7 @@ function normalizeTemperatureInput(raw: string): { value: string | null; error: 
   return { value: parsed.toString(), error: null };
 }
 
-export default function Integrations() {
+export function IntegrationsPanel() {
   const [integration, setIntegration] = useState<IntegrationSettingsEntry | null>(null);
   const [revision, setRevision] = useState('');
   const [status, setStatus] = useState<StatusResponse | null>(null);
@@ -575,4 +575,9 @@ export default function Integrations() {
       )}
     </div>
   );
+}
+
+
+export default function Integrations() {
+  return <IntegrationsPanel />;
 }

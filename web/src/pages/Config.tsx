@@ -1,3 +1,4 @@
+import { IntegrationsPanel } from './Integrations';
 import { useEffect, useState } from 'react';
 import {
   AlertTriangle,
@@ -294,6 +295,9 @@ export default function Config() {
           className="min-h-[560px] w-full resize-y bg-gray-950 p-4 font-mono text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-inset"
           style={{ tabSize: 4 }}
         />
+      </div>
+      <div className="mt-8 border-t border-gray-800 pt-2">
+        <IntegrationsPanel />
       </div>
     </div>
   );

@@ -30,6 +30,34 @@ export default function IdePanel({ agentTouch, shellCalls = [] }: Readonly<IdePa
   const [tabs, setTabs] = useState<OpenTab[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalHeight, setTerminalHeight] = useState(() => {
+    const saved = Number(localStorage.getItem('llamafarm.terminal_height.v1'));
+    return Number.isFinite(saved) && saved >= 120 ? saved : 224;
+  });
+
+  const startTerminalResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = terminalHeight;
+    const onMove = (ev: MouseEvent) => {
+      const next = Math.min(
+        Math.max(startHeight + (startY - ev.clientY), 120),
+        Math.max(window.innerHeight - 200, 160),
+      );
+      setTerminalHeight(next);
+      try {
+        localStorage.setItem('llamafarm.terminal_height.v1', String(next));
+      } catch {
+        // localStorage unavailable — height just won't persist
+      }
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
   const [flashPath, setFlashPath] = useState<string | null>(null);
   const [revealSignal, setRevealSignal] = useState<{ path: string; nonce: number } | null>(null);
   const [lastAgentTool, setLastAgentTool] = useState<string | null>(null);
@@ -266,7 +294,15 @@ export default function IdePanel({ agentTouch, shellCalls = [] }: Readonly<IdePa
         </div>
 
         {terminalOpen && (
-          <div className="flex h-56 flex-shrink-0 flex-col border-t border-gray-800">
+          <div
+            className="flex flex-shrink-0 flex-col border-t border-gray-800"
+            style={{ height: terminalHeight }}
+          >
+            <div
+              onMouseDown={startTerminalResize}
+              className="h-1.5 w-full flex-shrink-0 cursor-row-resize bg-gray-800/60 transition-colors hover:bg-blue-600/60"
+              title="Drag to resize terminal"
+            />
             <div className="flex flex-shrink-0 items-center justify-between border-b border-gray-800 bg-gray-950 px-2 py-1">
               <span className="flex items-center gap-1.5 text-xs font-semibold text-gray-300">
                 <SquareTerminal className="h-3.5 w-3.5" />

@@ -21,7 +21,7 @@ function formatDate(iso: string): string {
   return d.toLocaleString();
 }
 
-export default function Memory() {
+export function MemoryPanel() {
   const [entries, setEntries] = useState<MemoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -394,4 +394,9 @@ export default function Memory() {
       )}
     </div>
   );
+}
+
+
+export default function Memory() {
+  return <MemoryPanel />;
 }

@@ -1,3 +1,4 @@
+import { MemoryPanel } from './Memory';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Database,
@@ -737,6 +738,9 @@ export default function DatabasePage() {
             </div>
           )}
         </div>
+      </div>
+      <div className="mt-8 border-t border-gray-800 pt-2">
+        <MemoryPanel />
       </div>
     </div>
   );
