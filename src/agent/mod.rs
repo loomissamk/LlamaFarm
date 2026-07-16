@@ -8,6 +8,7 @@ pub mod memory_loader;
 pub mod prompt;
 pub mod repo_workflow;
 pub mod research;
+pub mod run_ledger;
 pub mod tool_cache;
 
 #[cfg(test)]

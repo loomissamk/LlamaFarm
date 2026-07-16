@@ -5965,7 +5965,11 @@ BTC is currently around $65,000 based on latest tool output."#
                     "Completed after {completed_iterations} tool iterations."
                 ))
             } else {
-                Ok(tool_call_payload())
+                // Vary the arguments per iteration so the loop's duplicate
+                // detection sees real progress instead of a repeated call.
+                Ok(format!(
+                    "<tool_call>\n{{\"name\":\"mock_price\",\"arguments\":{{\"symbol\":\"SYM{completed_iterations}\"}}}}\n</tool_call>"
+                ))
             }
         }
     }

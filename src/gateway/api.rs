@@ -3438,6 +3438,44 @@ pub async fn handle_api_health(
     Json(serde_json::json!({"health": snapshot})).into_response()
 }
 
+/// GET /api/runs — run inspector index: live + historical run ledgers.
+pub async fn handle_api_runs_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+    let workspace_dir = state.config.lock().workspace_dir.clone();
+    let runs = crate::agent::run_ledger::list_runs(&workspace_dir, 100);
+    let live = crate::agent::run_ledger::live_run_ids();
+    Json(serde_json::json!({"runs": runs, "live": live})).into_response()
+}
+
+/// GET /api/runs/{run_id} — full run ledger: plan, evidence, tool timeline.
+pub async fn handle_api_run_get(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(run_id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+    let workspace_dir = state.config.lock().workspace_dir.clone();
+    match crate::agent::run_ledger::load_snapshot(&workspace_dir, &run_id) {
+        Some(snapshot) => Json(serde_json::json!({
+            "run": snapshot,
+            "live": crate::agent::run_ledger::live_run_ids().contains(&run_id),
+        }))
+        .into_response(),
+        None => (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("run '{run_id}' not found")})),
+        )
+            .into_response(),
+    }
+}
+
 // ── Helpers ─────────────────────────────────────────────────────
 
 fn normalize_dashboard_config_toml(root: &mut toml::Value) {

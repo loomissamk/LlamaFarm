@@ -2163,6 +2163,23 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 _ => Vec::new(),
             };
 
+            // Durable run ledger for the inspector: one ledger per chat
+            // session, appended across turns, keyed by the session id.
+            let turn_run_ledger = {
+                let workspace_dir = state.config.lock().workspace_dir.clone();
+                crate::agent::run_ledger::RunLedger::open_or_create(
+                    &workspace_dir,
+                    &format!("session-{session_id}"),
+                    Some(&session_id),
+                    "webchat",
+                    &provider_label,
+                    &runtime.model,
+                    "chat",
+                )
+                .map_err(|e| tracing::warn!("Could not open session run ledger: {e}"))
+                .ok()
+            };
+
             let mut delete_session_after_cancel = false;
             let result = crate::agent::loop_::with_tool_loop_settings(
                 parallel_tools,
@@ -2177,24 +2194,28 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                         let cancellation_token = turn_cancellation.clone();
                         let mut cancellation_requested = false;
                         let (delta_tx, mut delta_rx) = tokio::sync::mpsc::channel::<String>(128);
-                        let mut loop_future = std::pin::pin!(run_tool_call_loop(
-                            runtime.provider.as_ref(),
-                            &mut history,
-                            runtime.tools_registry_exec.as_ref(),
-                            state.observer.as_ref(),
-                            &provider_label,
-                            &runtime.model,
-                            runtime.temperature,
-                            true,
-                            Some(&approval_manager),
-                            "webchat",
-                            &state.multimodal,
-                            state.max_tool_iterations,
-                            Some(cancellation_token.clone()),
-                            Some(delta_tx),
-                            None,
-                            &excluded_tools,
-                        ));
+                        let mut loop_future =
+                            std::pin::pin!(crate::agent::run_ledger::RUN_LEDGER.scope(
+                                turn_run_ledger.clone(),
+                                run_tool_call_loop(
+                                    runtime.provider.as_ref(),
+                                    &mut history,
+                                    runtime.tools_registry_exec.as_ref(),
+                                    state.observer.as_ref(),
+                                    &provider_label,
+                                    &runtime.model,
+                                    runtime.temperature,
+                                    true,
+                                    Some(&approval_manager),
+                                    "webchat",
+                                    &state.multimodal,
+                                    state.max_tool_iterations,
+                                    Some(cancellation_token.clone()),
+                                    Some(delta_tx),
+                                    None,
+                                    &excluded_tools,
+                                )
+                            ));
 
                         loop {
                             tokio::select! {
@@ -2300,6 +2321,17 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
 
             while let Ok(federation_event) = federation_event_rx.try_recv() {
                 emit_ws_federation_event(&mut socket, federation_event).await;
+            }
+
+            if let Some(ref ledger) = turn_run_ledger {
+                let status = match &result {
+                    Ok(_) => crate::agent::run_ledger::RunStatus::Completed,
+                    Err(e) if crate::agent::loop_::is_tool_loop_cancelled(e) => {
+                        crate::agent::run_ledger::RunStatus::Cancelled
+                    }
+                    Err(_) => crate::agent::run_ledger::RunStatus::Failed,
+                };
+                ledger.finalize(status);
             }
 
             match result {

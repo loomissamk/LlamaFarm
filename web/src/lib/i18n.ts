@@ -22,6 +22,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'nav.prompts': 'Prompt Files',
     'nav.config': 'Configuration',
     'nav.cost': 'Models',
+    'nav.runs': 'Runs',
     'nav.logs': 'Logs',
     'nav.doctor': 'Doctor',
 

@@ -35,6 +35,7 @@ use crate::providers::{ChatMessage, Provider};
 use crate::tools::Tool;
 
 use super::loop_::{TOOL_CACHE, compact_history_with_focus, run_tool_call_loop};
+use super::run_ledger::{self, RunStatus};
 
 // ── Outcome ───────────────────────────────────────────────────────
 
@@ -193,6 +194,24 @@ impl<'a> AutonomousLoop<'a> {
                 })
                 .ok()
         });
+
+        // ── durable run ledger (plan + evidence + verifier) ─────
+        let ledger = self.workspace_dir.as_deref().and_then(|dir| {
+            run_ledger::RunLedger::open_or_create(
+                dir,
+                &self.run_id,
+                None,
+                self.channel_name,
+                self.provider_name,
+                self.model,
+                &self.mode.to_string(),
+            )
+            .map_err(|e| {
+                tracing::warn!("Could not open run ledger for {}: {e}", self.run_id);
+                e
+            })
+            .ok()
+        });
         if let Some(ref t) = tracer {
             t.record(
                 "run_start",
@@ -211,6 +230,7 @@ impl<'a> AutonomousLoop<'a> {
         self.inject_system_context(history);
 
         let mut last_answer = String::new();
+        let mut last_evidence_blockers: Option<String> = None;
 
         for attempt in 0..self.retry_budget {
             // ── wall-clock cap ──────────────────────────────────
@@ -240,6 +260,10 @@ impl<'a> AutonomousLoop<'a> {
                             &last_answer,
                         );
                     }
+                    if let Some(ref l) = ledger {
+                        l.set_attempt(attempt, Some("wall_clock_cap".into()));
+                        l.finalize(RunStatus::Failed);
+                    }
                     return Ok(LoopOutcome::WallClockCapReached {
                         elapsed_secs: elapsed.as_secs(),
                         last_answer,
@@ -253,6 +277,9 @@ impl<'a> AutonomousLoop<'a> {
                 .as_ref()
                 .is_some_and(CancellationToken::is_cancelled)
             {
+                if let Some(ref l) = ledger {
+                    l.finalize(RunStatus::Cancelled);
+                }
                 return Ok(LoopOutcome::Cancelled);
             }
 
@@ -274,23 +301,26 @@ impl<'a> AutonomousLoop<'a> {
             let answer = TOOL_CACHE
                 .scope(
                     Some(self.tool_cache.clone()),
-                    run_tool_call_loop(
-                        self.provider,
-                        history,
-                        self.tools_registry,
-                        self.observer,
-                        self.provider_name,
-                        self.model,
-                        self.temperature,
-                        /* silent */ false,
-                        /* approval */ None,
-                        self.channel_name,
-                        self.multimodal_config,
-                        self.max_tool_iterations,
-                        self.cancellation_token.clone(),
-                        /* on_delta */ None,
-                        /* hooks */ None,
-                        self.excluded_tools,
+                    run_ledger::RUN_LEDGER.scope(
+                        ledger.clone(),
+                        run_tool_call_loop(
+                            self.provider,
+                            history,
+                            self.tools_registry,
+                            self.observer,
+                            self.provider_name,
+                            self.model,
+                            self.temperature,
+                            /* silent */ false,
+                            /* approval */ None,
+                            self.channel_name,
+                            self.multimodal_config,
+                            self.max_tool_iterations,
+                            self.cancellation_token.clone(),
+                            /* on_delta */ None,
+                            /* hooks */ None,
+                            self.excluded_tools,
+                        ),
                     ),
                 )
                 .await?;
@@ -302,7 +332,18 @@ impl<'a> AutonomousLoop<'a> {
             last_answer = answer.clone();
 
             // ── completion detection ─────────────────────────────
-            if !is_failure_response(&answer) {
+            // Prose is necessary but not sufficient: when the run has a plan
+            // in the ledger, every step must also be resolved with verified
+            // tool evidence before the run may report Completed.
+            let prose_complete = !is_failure_response(&answer);
+            let evidence_blockers = if prose_complete {
+                ledger.as_ref().and_then(|l| l.unverified_plan_summary())
+            } else {
+                None
+            };
+            last_evidence_blockers = evidence_blockers.clone();
+
+            if prose_complete && evidence_blockers.is_none() {
                 runtime_trace::record_event(
                     "autonomous_loop_completed",
                     Some(self.channel_name),
@@ -324,6 +365,10 @@ impl<'a> AutonomousLoop<'a> {
                         "completed",
                         &answer,
                     );
+                }
+                if let Some(ref l) = ledger {
+                    l.set_attempt(attempt + 1, None);
+                    l.finalize(RunStatus::Completed);
                 }
                 return Ok(LoopOutcome::Completed {
                     attempts: attempt + 1,
@@ -351,7 +396,19 @@ impl<'a> AutonomousLoop<'a> {
                 )
                 .await;
 
-                let recovery_prompt = self.build_recovery_prompt(attempt, &answer);
+                let (recovery_prompt, retry_reason) = match &last_evidence_blockers {
+                    Some(blockers) => (
+                        build_evidence_recovery_prompt(blockers),
+                        "unverified plan steps",
+                    ),
+                    None => (
+                        self.build_recovery_prompt(attempt, &answer),
+                        "failure signals in answer",
+                    ),
+                };
+                if let Some(ref l) = ledger {
+                    l.set_attempt(attempt + 1, Some(retry_reason.to_string()));
+                }
                 runtime_trace::record_event(
                     "autonomous_loop_retry",
                     Some(self.channel_name),
@@ -363,6 +420,7 @@ impl<'a> AutonomousLoop<'a> {
                     serde_json::json!({
                         "attempt": attempt,
                         "remaining": self.retry_budget - attempt - 1,
+                        "reason": retry_reason,
                     }),
                 );
                 history.push(ChatMessage::user(recovery_prompt));
@@ -391,6 +449,17 @@ impl<'a> AutonomousLoop<'a> {
                 "retry_budget_exhausted",
                 &last_answer,
             );
+        }
+        if let Some(ref l) = ledger {
+            // Distinguish "model claimed done but evidence never verified"
+            // from a plain failure so the capability record stays truthful.
+            let status = if last_evidence_blockers.is_some() {
+                RunStatus::CompletedUnverified
+            } else {
+                RunStatus::Failed
+            };
+            l.set_attempt(self.retry_budget, Some("retry_budget_exhausted".into()));
+            l.finalize(status);
         }
         Ok(LoopOutcome::RetryBudgetExhausted {
             attempts: self.retry_budget,
@@ -502,6 +571,23 @@ You are running in chaos_lab mode on a fully disposable target environment.
 - Log every action, observation, hypothesis, and outcome in your response.
 - Continue until the objective is confirmed complete or the retry budget is spent.
 ";
+
+/// Retry prompt for the case where the model claims completion but the run
+/// ledger's deterministic verifier found plan steps without evidence.
+fn build_evidence_recovery_prompt(blockers: &str) -> String {
+    format!(
+        "## Verification Required — plan steps lack evidence\n\n\
+         Your answer claims completion, but these plan steps are not \
+         verifiably complete in the run ledger:\n{blockers}\n\n\
+         For each step above, either:\n\
+         1. Execute the tools needed to actually complete it, then mark it \
+         completed via `task_plan`, or\n\
+         2. Truthfully mark it failed, blocked, or skipped via `task_plan` \
+         with the real reason.\n\n\
+         Do not restate that the work is done — completion is recorded from \
+         tool evidence, not prose. Continue autonomously."
+    )
+}
 
 // ── Failure detection ─────────────────────────────────────────────
 

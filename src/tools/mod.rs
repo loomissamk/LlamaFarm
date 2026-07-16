@@ -945,7 +945,8 @@ mod tests {
 
         let browser = BrowserConfig::default();
         let http = crate::config::HttpRequestConfig::default();
-        let cfg = test_config(&tmp);
+        let mut cfg = test_config(&tmp);
+        cfg.federation.enable_delegation = true;
 
         let mut agents = HashMap::new();
         agents.insert(
@@ -1031,6 +1032,7 @@ mod tests {
         let http = crate::config::HttpRequestConfig::default();
         let mut cfg = test_config(&tmp);
         cfg.coordination.enabled = false;
+        cfg.federation.enable_delegation = true;
 
         let mut agents = HashMap::new();
         agents.insert(

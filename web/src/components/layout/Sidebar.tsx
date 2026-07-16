@@ -11,6 +11,7 @@ import {
   Brain,
   Settings,
   Activity,
+  ClipboardList,
   Stethoscope,
   Database,
   PanelLeftClose,
@@ -30,6 +31,7 @@ const navItems = [
   { to: '/workspace', icon: FolderOpen, labelKey: 'nav.workspace' },
   { to: '/workspace/prompts', icon: BookText, labelKey: 'nav.prompts' },
   { to: '/config', icon: Settings, labelKey: 'nav.config' },
+  { to: '/runs', icon: ClipboardList, labelKey: 'nav.runs' },
   { to: '/logs', icon: Activity, labelKey: 'nav.logs' },
   { to: '/doctor', icon: Stethoscope, labelKey: 'nav.doctor' },
 ];

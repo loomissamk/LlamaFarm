@@ -34,6 +34,71 @@ requested work.
   agent runs finish: chat, tool registry, file write/read, code execution,
   web search, local Qdrant RAG, and federation delegation.
 
+## In progress — evidence-gated run ledger pass (2026-07-16)
+
+State: full `cargo test --lib` suite passes (4187/4187, was 18 failing), web
+production build passes. Remaining: laptop redeploy + browser verify; gpu box
+redeploy queued until back on the LAN.
+
+Also fixed in this pass:
+
+- Restored the argument-level command guard the wildcard allowlist comment
+  promises: `is_args_safe` now blocks unsafe `rm`/`trash` deletes (via
+  `is_safe_delete_command`) at every autonomy level, `find -exec/-ok/-delete`,
+  and `git config`/`-c`/alias command injection; `sudo` requires the
+  full-autonomy profile (its non-interactive hard-denial gate still applies).
+  A single unquoted `&` now splits validation segments so `ls & rm -rf /`
+  cannot hide behind `ls` while background jobs stay allowed; `2>&1` redirect
+  syntax is preserved.
+- Updated stale tests to the v2 wildcard-default contract (curl/python/node
+  are operator tools; custom allowlists still exclude them), the delegate
+  gating flag (`federation.enable_delegation`), the duplicate-call nudge
+  streak, the malformed-payload format-correction prompt, and per-iteration
+  argument variation in the channel max-iterations test.
+
+Delivered (all tests green):
+
+- `src/agent/run_ledger.rs` — durable planner→executor→verifier records:
+  per-run JSON ledger at `<workspace>/state/runs/<run_id>.ledger.json` with
+  plan steps (allowed_tools, depends_on, expected_evidence), scrubbed tool
+  events (args summary, output digest+excerpt, duration, artifacts), a
+  deterministic verifier (completed steps need ≥1 successful evidence event,
+  matched expected-evidence patterns, verified dependencies), task-local
+  `RUN_LEDGER` scope, live-run registry, and unit tests (written, not run).
+- `src/agent/loop_.rs` — every executed tool call is recorded into the
+  in-scope ledger; `task_plan` create/add/update/delete calls are mirrored
+  into durable plan records.
+- `src/agent/autonomous.rs` — completion is now evidence-gated: model prose
+  alone cannot complete a run whose ledger has unresolved/unverified plan
+  steps; targeted "Verification Required" retry prompt; ledger finalized on
+  every terminal path (Completed / CompletedUnverified / Failed / Cancelled)
+  with attempts + retry reason.
+- `src/gateway/ws.rs` — webchat turns scope a per-session ledger
+  (`session-<id>`), finalized from the turn result.
+- `src/gateway/api.rs` + `mod.rs` — run inspector API:
+  `GET /api/runs` (live + historical index), `GET /api/runs/{run_id}`
+  (full plan/evidence/timeline snapshot).
+
+Remaining to finish this pass, in order:
+
+- [x] Full `cargo test --lib` green (4187 passed; fixed 18 failures).
+- [x] Run inspector UI: `web/src/pages/Runs.tsx` + `/runs` route + sidebar
+  nav item (plan table with verified/verifier_note, tool timeline with
+  duration + excerpt + artifacts, status/attempts/retry reason, live badge,
+  5s auto-refresh).
+- [x] `npm run build` in `web/` passes.
+- [ ] Redeploy THIS laptop via `scripts/docker/up-node.sh rtx4070-laptop up -d
+  --build`; verify `/api/health` and `/api/runs` locally, then E2E: create a
+  plan via chat, watch evidence attach in the Runs page. The gpu box
+  (192.168.1.154) is unreachable off-WLAN — redeploy it next time the laptop
+  is back on the LAN (`git pull` + same script with `rtx5070ti-16gb`).
+- [ ] Then continue the backlog below (context capsules + final acceptance
+  pass are partially covered by the evidence gate; run inspector resume
+  controls, token-budget allocator, federation durable queue, workspace RAG,
+  eval suite/router, credential broker UI remain). Next Rust pass should also
+  send real `InferenceMetrics` (generation_tps/ttft_ms) over the chat
+  websocket for the UI TPS indicator (10.3).
+
 ## Next-generation agent workflow
 
 - [x] Add first-class **follow-ups**.  A user message can attach to, amend,
@@ -73,6 +138,73 @@ requested work.
   node. Local Ollama inference has no response wall-clock deadline and a
   length-stopped segment continues automatically until a real terminal state
   or an operator presses Stop. Adaptive allocation remains future work.
+
+## Next-gen RAG and speed ideas (operator request, 2026-07-16)
+
+Storage decision: no MongoDB. Local-first stack stays files (source of truth)
++ Qdrant (vectors) + SQLite (metadata/sessions). Adding Mongo would add an
+extra always-on service with no capability the current stack lacks.
+
+- [ ] **Qdrant-backed chat memory.** Embed every chat turn and tool-result
+  summary into a per-workspace `conversation_memory` collection. On each new
+  user message, retrieve top-k relevant past exchanges across ALL sessions and
+  inject them as cited context ("you solved this on 2026-07-02 in session X").
+  Cross-session recall is the single biggest "feels next-gen" win for chat.
+- [ ] **Drop-a-document RAG inbox.** Watched `rag/inbox/` directory in the
+  workspace plus an upload button on the Files page: anything placed there is
+  auto-parsed (pdf/md/txt/code), chunked, embedded via local Ollama
+  embeddings, and upserted to the workspace Qdrant collection with file/line
+  citation metadata. Deleting the file removes its vectors (content-hash
+  keyed). No new database needed.
+- [ ] **Run-ledger RAG.** Index finalized run ledgers (plan steps + evidence
+  excerpts) so the planner can retrieve "how did I accomplish this last time"
+  as evidence-grounded few-shot examples instead of replanning from scratch.
+- [ ] **Embedding cache.** Key embeddings by content SHA-256; never re-embed
+  unchanged chunks on reindex. Makes the inbox/reindex path near-instant.
+- [ ] **Semantic tool-result reuse.** Before expensive read-only tools
+  (web_fetch, large file_read), check Qdrant for a semantically-equivalent
+  cached result within TTL — complements the exact-hash tool cache.
+- [ ] **Prefix-cache-friendly prompts.** Keep the system prompt byte-stable
+  across turns (stable tool ordering, no timestamps) so Ollama's prefix cache
+  hits; pin the chat model with `keep_alive=-1`. Measure TTFT before/after
+  with the existing `InferenceMetrics` and surface `generation_tps`/`ttft_ms`
+  in the chat UI (already a 10.3 TODO).
+- [ ] **Small-model fast lane.** Route trivial turns (greetings, status
+  questions, plan updates) to a small always-loaded model on the 4070 and
+  escalate to the big model only when the router says so — perceived latency
+  drops without losing depth.
+
+### More next-gen agent ideas (2026-07-16)
+
+- [ ] **Self-authored skills (procedural memory).** After a successful novel
+  multi-step run, have the agent distill the workflow into a workspace skill
+  markdown file (same loader as SOUL.md/AGENT.md) with a link back to the
+  source run ledger as evidence. The agent literally gets better at tasks it
+  has done once — the most "next-gen" capability on this list.
+- [ ] **Memory distillation.** Periodic job that summarizes chat + tool
+  history into durable long-term facts (markdown in the workspace, embedded
+  into Qdrant), each fact carrying provenance links to run ledgers. Old raw
+  history can then be aggressively compacted without losing knowledge.
+- [ ] **Nightly self-maintenance cron.** Refresh RAG indexes, re-run the
+  model bakeoff, run the eval suite in a disposable repo, and post a morning
+  report to the dashboard and conversation memory. The platform maintains
+  itself while idle.
+- [ ] **Independent verifier model.** A small local model cross-examines the
+  executor's completion claims against ledger evidence before a run may
+  complete — an LLM judge layered on top of the deterministic evidence gate,
+  cheap to run on the 4070.
+- [ ] **Patch review lane.** Proposed diffs surfaced in the Workspace IDE
+  with apply/rollback buttons, executed in disposable git worktrees per run
+  so the operator can adopt or discard agent changes atomically.
+- [ ] **Auto-rollback deploys.** Keep the last green image tag; a watchdog
+  reverts the bundle if `/api/health` fails after a redeploy. Makes
+  agent-driven self-updates safe.
+- [ ] **Run cost accounting.** Per-run token counts, GPU seconds, TTFT and
+  generation TPS aggregated into the run inspector (extends the existing
+  `InferenceMetrics`), so routing decisions can be justified with data.
+- [ ] **Local browser automation lane.** CDP/Playwright-driven browser tool
+  with screenshots streamed into the chat work panel — real web operation,
+  not just fetch-and-parse.
 
 ## Local IDE, data, and model capabilities
 

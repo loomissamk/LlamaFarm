@@ -4098,6 +4098,15 @@ pub(crate) async fn run_tool_call_loop(
                     output: outcome.output.clone(),
                 });
             }
+            if let Some(ledger) = crate::agent::run_ledger::current() {
+                ledger.record_tool_event(
+                    &call.name,
+                    &call.arguments,
+                    outcome.success,
+                    outcome.duration.as_millis() as u64,
+                    &outcome.output,
+                );
+            }
             runtime_trace::record_event(
                 "tool_call_result",
                 Some(channel_name),
@@ -7081,6 +7090,9 @@ mod tests {
         let provider = ScriptedProvider::from_text_responses(vec![
             r#"{"content":"opening browser","tool_calls":[{"id":"call_1","name":"browser","arguments":"{\"action\":\"open\",\"url\":\"https://example.com\"}"}]}"#,
             r#"{"content":"opening browser again","tool_calls":[{"id":"call_2","name":"browser","arguments":"{\"url\":\"https://example.com\",\"backend\":\"rust_native\",\"command\":\"curl -s 'https://example.com'\"}"}]}"#,
+            // A second consecutive duplicate-only round is required to reach
+            // DUPLICATE_TOOL_CALL_STREAK_PER_NUDGE before a nudge is injected.
+            r#"{"content":"opening browser yet again","tool_calls":[{"id":"call_3","name":"browser","arguments":"{\"url\":\"https://example.com\",\"backend\":\"rust_native\",\"command\":\"curl -s 'https://example.com'\"}"}]}"#,
             "done after prior browser result",
         ])
         .with_native_tool_support();
@@ -7187,7 +7199,9 @@ mod tests {
         );
         assert!(
             history.iter().any(|msg| {
-                msg.role == "user" && msg.content.starts_with(MISSING_TOOL_CALL_RETRY_PROMPT)
+                msg.role == "user"
+                    && (msg.content.contains("the tool call format was wrong")
+                        || msg.content.starts_with(MISSING_TOOL_CALL_RETRY_PROMPT))
             }),
             "loop should inject corrective retry guidance after malformed tool payloads"
         );
