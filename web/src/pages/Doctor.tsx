@@ -43,7 +43,7 @@ function severityBg(severity: DiagResult['severity']): string {
   }
 }
 
-export default function Doctor() {
+export function DiagnosticsPanel() {
   const [results, setResults] = useState<DiagResult[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -214,4 +214,9 @@ export default function Doctor() {
       )}
     </div>
   );
+}
+
+
+export default function Doctor() {
+  return <DiagnosticsPanel />;
 }
