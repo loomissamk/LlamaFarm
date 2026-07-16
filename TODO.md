@@ -203,8 +203,10 @@ Cutting-edge agentic/throughput priorities (operator request):
 - [x] Better RAG v1 (2026-07-16): OllamaEmbedding provider (`/api/embeddings`)
   added to the embedding factory ("ollama" / "ollama:URL"); workspace_rag
   embeds chunks lazily and fuses BM25 + vector ranks (RRF) when
-  `memory.embedding_provider = "ollama"` is configured. Remaining: content-
-  hash embedding cache and optional local reranker.
+  `memory.embedding_provider` is configured (verified E2E: a paraphrase
+  query with no shared keywords retrieved the right doc). Content-hash
+  embedding cache added so reindex reuses vectors for unchanged chunks.
+  Remaining: optional local reranker; persist the cache across restarts.
 - [ ] Better coding/execution: repo-aware patch loop in webchat (explore →
   patch → test → verify with ledger evidence), disposable worktrees per run.
 - [ ] More autonomy: default plan-execute-verify for multi-step webchat
