@@ -885,7 +885,7 @@ Ollama does not yet route to NPU for inference. Actions:
 - Report NPU presence in hardware introspection output
 - Add NPU entry to capability registry (model routing: small models on NPU if available)
 - Watch Ollama releases for NPU backend support; add routing when available
-- Status: TODO (detection only; inference routing blocked on Ollama NPU support)
+- Status: detection ✓ (doctor reports /dev/accel nodes + amdxdna/intel_vpu modules, 2026-07-16); inference routing still blocked on Ollama NPU support
 
 ## Final Standard
 

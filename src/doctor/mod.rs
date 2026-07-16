@@ -98,6 +98,7 @@ fn diagnose_with_mode(config: &Config, runtime_mode: RuntimeMode) -> Vec<DiagRes
     check_workspace(config, &mut items);
     check_daemon_state(config, runtime_mode, &mut items);
     check_environment(&mut items);
+    check_npu(&mut items);
     check_cli_tools(&mut items);
 
     items.into_iter().map(DiagItem::into_result).collect()
@@ -932,6 +933,41 @@ fn check_daemon_state(config: &Config, runtime_mode: RuntimeMode, items: &mut Ve
 }
 
 // ── Environment checks ───────────────────────────────────────────
+
+/// NPU presence detection (TODO 10.4): AMD XDNA landed in kernel 6.14 and
+/// Intel NPUs expose /dev/accel nodes. Detection only — Ollama cannot route
+/// inference to an NPU yet, so this is reported as informational state.
+fn check_npu(items: &mut Vec<DiagItem>) {
+    let accel_nodes = std::fs::read_dir("/dev/accel")
+        .map(|entries| entries.flatten().count())
+        .unwrap_or(0);
+    let modules = std::fs::read_to_string("/proc/modules").unwrap_or_default();
+    let amd_xdna = modules.lines().any(|l| l.starts_with("amdxdna"));
+    let intel_vpu = modules.lines().any(|l| l.starts_with("intel_vpu"))
+        || std::path::Path::new("/dev/intel_npu").exists();
+
+    if accel_nodes > 0 || amd_xdna || intel_vpu {
+        let driver = if amd_xdna {
+            "amdxdna (AMD XDNA)"
+        } else if intel_vpu {
+            "intel_vpu (Intel NPU)"
+        } else {
+            "unknown driver"
+        };
+        items.push(DiagItem::ok(
+            "hardware",
+            format!(
+                "NPU detected: {driver}, {accel_nodes} /dev/accel node(s). \
+                 Ollama cannot target NPUs yet — inference stays on GPU/CPU."
+            ),
+        ));
+    } else {
+        items.push(DiagItem::ok(
+            "hardware",
+            "No NPU detected (no /dev/accel nodes, no amdxdna/intel_vpu module)",
+        ));
+    }
+}
 
 fn check_environment(items: &mut Vec<DiagItem>) {
     let cat = "environment";
