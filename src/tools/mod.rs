@@ -414,7 +414,17 @@ pub fn all_tools_with_runtime_and_federation(
         tool_arcs.push(Arc::new(ApplyPatchTool::new()));
         tool_arcs.push(Arc::new(GlobSearchTool::new(security.clone())));
         tool_arcs.push(Arc::new(ContentSearchTool::new(security.clone())));
-        tool_arcs.push(Arc::new(WorkspaceRagTool::new(workspace_dir)));
+        let mut workspace_rag = WorkspaceRagTool::new(workspace_dir);
+        if root_config.memory.embedding_provider != "none" {
+            let embedder = crate::memory::embeddings::create_embedding_provider(
+                &root_config.memory.embedding_provider,
+                root_config.api_key.as_deref(),
+                &root_config.memory.embedding_model,
+                root_config.memory.embedding_dimensions,
+            );
+            workspace_rag = workspace_rag.with_embedder(Arc::from(embedder));
+        }
+        tool_arcs.push(Arc::new(workspace_rag));
         tool_arcs.push(Arc::new(CodeRunTool::new(security.clone(), workspace_dir)));
     }
     if runtime.as_any().is::<crate::runtime::WasmRuntime>() {

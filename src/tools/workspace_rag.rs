@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 const MAX_INBOX_FILES: usize = 500;
@@ -32,6 +32,8 @@ struct IndexState {
 pub struct WorkspaceRagTool {
     inbox_dir: PathBuf,
     state: Mutex<IndexState>,
+    /// Optional local embedder enabling vector+BM25 hybrid retrieval.
+    embedder: Option<Arc<dyn crate::memory::embeddings::EmbeddingProvider>>,
 }
 
 impl WorkspaceRagTool {
@@ -42,7 +44,18 @@ impl WorkspaceRagTool {
                 rag: DocRag::new(),
                 fingerprint: InboxFingerprint::new(),
             }),
+            embedder: None,
         }
+    }
+
+    /// Enable semantic retrieval: chunks are embedded on index rebuild and
+    /// queries use hybrid RRF fusion of BM25 + vector similarity.
+    pub fn with_embedder(
+        mut self,
+        embedder: Arc<dyn crate::memory::embeddings::EmbeddingProvider>,
+    ) -> Self {
+        self.embedder = Some(embedder);
+        self
     }
 
     fn scan_fingerprint(&self) -> InboxFingerprint {
@@ -134,8 +147,23 @@ impl Tool for WorkspaceRagTool {
             .and_then(|v| v.as_str())
             .unwrap_or("search");
 
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        let (docs, chunks) = self.refresh(&mut state);
+        // Refresh under a tightly scoped lock: the guard must never live
+        // across an await (embedding happens between lock scopes below).
+        let (docs, chunks, pending) = {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let (docs, chunks) = self.refresh(&mut state);
+            let pending: Vec<(String, String)> = if self.embedder.is_some() {
+                state
+                    .rag
+                    .unembedded_chunks()
+                    .iter()
+                    .map(|c| (c.id.clone(), c.content.clone()))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            (docs, chunks, pending)
+        };
 
         match action {
             "status" => Ok(ToolResult {
@@ -181,8 +209,40 @@ impl Tool for WorkspaceRagTool {
                     .map(|v| v as usize)
                     .unwrap_or(DEFAULT_RESULT_LIMIT)
                     .clamp(1, MAX_RESULT_LIMIT);
-                let results = state.rag.retrieve_bm25(query, limit);
-                if results.is_empty() {
+
+                // Semantic lane: embed any new chunks plus the query with no
+                // lock held, then fuse BM25 + vector ranks under a fresh
+                // lock. Best-effort — embedding failures fall back to BM25.
+                let mut embedded: Vec<(String, Vec<f32>)> = Vec::new();
+                let mut query_embedding: Option<Vec<f32>> = None;
+                if let Some(embedder) = &self.embedder {
+                    for (id, content) in &pending {
+                        if let Ok(vector) = embedder.embed_one(content).await {
+                            embedded.push((id.clone(), vector));
+                        }
+                    }
+                    query_embedding = embedder.embed_one(query).await.ok();
+                }
+
+                let (output, matched) = {
+                    let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                    for (id, vector) in embedded {
+                        state.rag.set_embedding(&id, vector);
+                    }
+                    let results =
+                        state
+                            .rag
+                            .retrieve_hybrid(query, query_embedding.as_deref(), limit);
+                    if results.is_empty() {
+                        (String::new(), false)
+                    } else {
+                        let context = DocRag::build_context(&results, MAX_CONTEXT_CHARS);
+                        let citations = DocRag::build_citation_list(&results);
+                        (format!("{context}{citations}"), true)
+                    }
+                };
+
+                if !matched {
                     return Ok(ToolResult {
                         success: true,
                         output: format!(
@@ -191,11 +251,9 @@ impl Tool for WorkspaceRagTool {
                         error: None,
                     });
                 }
-                let context = DocRag::build_context(&results, MAX_CONTEXT_CHARS);
-                let citations = DocRag::build_citation_list(&results);
                 Ok(ToolResult {
                     success: true,
-                    output: format!("{context}{citations}"),
+                    output,
                     error: None,
                 })
             }

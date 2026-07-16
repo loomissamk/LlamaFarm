@@ -200,9 +200,11 @@ C++ basics are covered. What was missing is structured use of them:
 
 Cutting-edge agentic/throughput priorities (operator request):
 
-- [ ] Better RAG: wire Ollama embeddings into workspace_rag (vector+BM25
-  fusion already implemented in doc_rag), content-hash embedding cache,
-  optional local reranker.
+- [x] Better RAG v1 (2026-07-16): OllamaEmbedding provider (`/api/embeddings`)
+  added to the embedding factory ("ollama" / "ollama:URL"); workspace_rag
+  embeds chunks lazily and fuses BM25 + vector ranks (RRF) when
+  `memory.embedding_provider = "ollama"` is configured. Remaining: content-
+  hash embedding cache and optional local reranker.
 - [ ] Better coding/execution: repo-aware patch loop in webchat (explore →
   patch → test → verify with ledger evidence), disposable worktrees per run.
 - [ ] More autonomy: default plan-execute-verify for multi-step webchat

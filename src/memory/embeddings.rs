@@ -21,6 +21,68 @@ pub trait EmbeddingProvider: Send + Sync {
     }
 }
 
+// ── Ollama provider (local, free) ────────────────────────────
+
+/// Local Ollama embeddings via `POST /api/embeddings`.
+pub struct OllamaEmbedding {
+    base_url: String,
+    model: String,
+    dims: usize,
+    client: reqwest::Client,
+}
+
+impl OllamaEmbedding {
+    pub fn new(base_url: &str, model: &str, dims: usize) -> Self {
+        Self {
+            base_url: base_url.trim_end_matches('/').to_string(),
+            model: model.to_string(),
+            dims,
+            client: reqwest::Client::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl EmbeddingProvider for OllamaEmbedding {
+    fn name(&self) -> &str {
+        "ollama"
+    }
+
+    fn dimensions(&self) -> usize {
+        self.dims
+    }
+
+    async fn embed(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+        #[derive(serde::Serialize)]
+        struct EmbedRequest<'a> {
+            model: &'a str,
+            prompt: &'a str,
+        }
+        #[derive(serde::Deserialize)]
+        struct EmbedResponse {
+            embedding: Vec<f32>,
+        }
+        let url = format!("{}/api/embeddings", self.base_url);
+        let mut out = Vec::with_capacity(texts.len());
+        for text in texts {
+            let resp = self
+                .client
+                .post(&url)
+                .json(&EmbedRequest {
+                    model: &self.model,
+                    prompt: text,
+                })
+                .send()
+                .await?
+                .error_for_status()?
+                .json::<EmbedResponse>()
+                .await?;
+            out.push(resp.embedding);
+        }
+        Ok(out)
+    }
+}
+
 // ── Noop provider (keyword-only fallback) ────────────────────
 
 pub struct NoopEmbedding;
@@ -180,6 +242,15 @@ pub fn create_embedding_provider(
                 model,
                 dims,
             ))
+        }
+        "ollama" => Box::new(OllamaEmbedding::new(
+            &std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://localhost:11434".into()),
+            model,
+            dims,
+        )),
+        name if name.starts_with("ollama:") => {
+            let base_url = name.strip_prefix("ollama:").unwrap_or("");
+            Box::new(OllamaEmbedding::new(base_url, model, dims))
         }
         name if name.starts_with("custom:") => {
             let base_url = name.strip_prefix("custom:").unwrap_or("");
