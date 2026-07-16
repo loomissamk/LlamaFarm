@@ -207,8 +207,13 @@ Cutting-edge agentic/throughput priorities (operator request):
   query with no shared keywords retrieved the right doc). Content-hash
   embedding cache added so reindex reuses vectors for unchanged chunks.
   Remaining: optional local reranker; persist the cache across restarts.
-- [ ] Better coding/execution: repo-aware patch loop in webchat (explore →
-  patch → test → verify with ledger evidence), disposable worktrees per run.
+- [~] Better coding/execution: disposable worktrees delivered (2026-07-16) —
+  `git_worktree` tool (create/list/adopt/discard) gives isolated
+  adopt-or-discard scratch space under `<workspace>/.worktrees/` so risky
+  refactors never leave the operator's checkout broken. Paired with
+  `code_run` and the run ledger. Remaining: wire the existing
+  `RepoWorkflowAgent` (explore→patch→build→verify) to a chat entry point so
+  the full loop runs end-to-end from a single request.
 - [ ] More autonomy: default plan-execute-verify for multi-step webchat
   tasks, auto-continue across segments, chaos-style recovery on tool errors.
 - [ ] Throughput: keep_alive=-1 pinned chat model, byte-stable system-prompt

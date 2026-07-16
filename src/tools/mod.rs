@@ -39,6 +39,7 @@ pub mod file_edit;
 pub mod file_read;
 pub mod file_write;
 pub mod git_operations;
+pub mod git_worktree;
 pub mod glob_search;
 #[cfg(feature = "hardware")]
 pub mod hardware_board_info;
@@ -101,6 +102,7 @@ pub use file_edit::FileEditTool;
 pub use file_read::FileReadTool;
 pub use file_write::FileWriteTool;
 pub use git_operations::GitOperationsTool;
+pub use git_worktree::GitWorktreeTool;
 pub use glob_search::GlobSearchTool;
 #[cfg(feature = "hardware")]
 pub use hardware_board_info::HardwareBoardInfoTool;
@@ -426,6 +428,7 @@ pub fn all_tools_with_runtime_and_federation(
         }
         tool_arcs.push(Arc::new(workspace_rag));
         tool_arcs.push(Arc::new(CodeRunTool::new(security.clone(), workspace_dir)));
+        tool_arcs.push(Arc::new(GitWorktreeTool::new(security.clone(), workspace_dir.to_path_buf())));
     }
     if runtime.as_any().is::<crate::runtime::WasmRuntime>() {
         tool_arcs.push(Arc::new(WasmModuleTool::new(
