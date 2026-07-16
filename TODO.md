@@ -155,7 +155,10 @@ Remaining to finish this pass, in order:
 
 ## Operator directive — UI consolidation + cutting-edge focus (2026-07-16)
 
-The web UI has too many redundant tabs. Consolidate:
+The web UI has too many redundant tabs. Operator mandate: do not stop until
+the UI is streamlined, best-in-class UX, only what needs to exist. v1 done:
+sidebar slimmed 13→8 tabs (Runs/Memory/Logs/Doctor now Dashboard chips),
+memory clear scope=all also purges non-live run ledgers/traces. Continue:
 
 - [ ] Fold **Doctor** into the Dashboard (diagnostics panel with a run
   button); delete the Doctor tab.

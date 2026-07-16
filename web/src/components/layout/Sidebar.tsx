@@ -8,11 +8,7 @@ import {
   Wrench,
   Clock,
   Puzzle,
-  Brain,
   Settings,
-  Activity,
-  ClipboardList,
-  Stethoscope,
   Database,
   PanelLeftClose,
   PanelLeftOpen,
@@ -26,14 +22,10 @@ const navItems = [
   { to: '/tools', icon: Wrench, labelKey: 'nav.tools' },
   { to: '/cron', icon: Clock, labelKey: 'nav.cron' },
   { to: '/integrations', icon: Puzzle, labelKey: 'nav.integrations' },
-  { to: '/memory', icon: Brain, labelKey: 'nav.memory' },
   { to: '/database', icon: Database, labelKey: 'nav.database' },
   { to: '/workspace', icon: FolderOpen, labelKey: 'nav.workspace' },
   { to: '/workspace/prompts', icon: BookText, labelKey: 'nav.prompts' },
   { to: '/config', icon: Settings, labelKey: 'nav.config' },
-  { to: '/runs', icon: ClipboardList, labelKey: 'nav.runs' },
-  { to: '/logs', icon: Activity, labelKey: 'nav.logs' },
-  { to: '/doctor', icon: Stethoscope, labelKey: 'nav.doctor' },
 ];
 
 interface SidebarProps {

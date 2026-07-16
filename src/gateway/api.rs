@@ -3370,8 +3370,30 @@ pub async fn handle_api_memory_clear(
         }
     }
 
+    // Clearing all memory also cleans up run ledgers and per-run traces —
+    // the operator's clear means "forget the history", not just key/value
+    // entries. Live (registered) runs keep their in-process ledgers.
+    let mut runs_removed = 0usize;
+    if normalized_scope == "all" {
+        let workspace_dir = state.config.lock().workspace_dir.clone();
+        let runs_dir = crate::agent::run_ledger::runs_dir(&workspace_dir);
+        let live = crate::agent::run_ledger::live_run_ids();
+        if let Ok(dir_entries) = std::fs::read_dir(&runs_dir) {
+            for entry in dir_entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                let is_run_artifact =
+                    name.ends_with(".ledger.json") || name.ends_with(".jsonl");
+                let is_live = live.iter().any(|id| name.starts_with(id.as_str()));
+                if is_run_artifact && !is_live && std::fs::remove_file(entry.path()).is_ok() {
+                    runs_removed += 1;
+                }
+            }
+        }
+    }
+
     Json(serde_json::json!({
         "status": "ok",
+        "runs_removed": runs_removed,
         "scope": normalized_scope,
         "deleted": deleted,
     }))

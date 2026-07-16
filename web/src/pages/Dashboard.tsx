@@ -81,6 +81,11 @@ export default function Dashboard() {
 
   return (
     <div className="p-6 space-y-6">
+      <div className="mb-4 flex flex-wrap gap-2 text-xs">
+        {[['/runs','Runs'],['/memory','Memory'],['/logs','Logs'],['/doctor','Doctor']].map(([to,label]) => (
+          <a key={to} href={to} className="rounded-full border border-gray-800 px-3 py-1 text-gray-400 hover:text-white hover:border-gray-600">{label}</a>
+        ))}
+      </div>
       <div className="flex items-center justify-between">
         <h2 className="text-base font-semibold text-white">Dashboard</h2>
         <button
