@@ -2365,6 +2365,30 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     }
                     Err(_) => crate::agent::run_ledger::RunStatus::Failed,
                 };
+                // Run-ledger RAG: a verified completed plan becomes a durable
+                // playbook memory so future sessions can recall how this kind
+                // of task was actually accomplished (steps + tools used).
+                if matches!(status, crate::agent::run_ledger::RunStatus::Completed)
+                    && state.auto_save
+                    && !temporary
+                {
+                    if let Some(playbook) = ledger.playbook_summary() {
+                        let record = format!(
+                            "Task: {}\n{}",
+                            crate::util::truncate_with_ellipsis(&content, 200),
+                            playbook,
+                        );
+                        let _ = runtime
+                            .mem
+                            .store(
+                                &format!("playbook-{}", ledger.run_id()),
+                                &record,
+                                MemoryCategory::Core,
+                                None,
+                            )
+                            .await;
+                    }
+                }
                 ledger.finalize(status);
             }
 

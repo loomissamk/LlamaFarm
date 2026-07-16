@@ -175,9 +175,12 @@ extra always-on service with no capability the current stack lacks.
   drop out), BM25 retrieval with `[Source N]` citations. Follow-ups: Files
   page upload button targeting the inbox, PDF parsing, and vector fusion via
   local Ollama embeddings for semantic matching.
-- [ ] **Run-ledger RAG.** Index finalized run ledgers (plan steps + evidence
-  excerpts) so the planner can retrieve "how did I accomplish this last time"
-  as evidence-grounded few-shot examples instead of replanning from scratch.
+- [x] **Run-ledger RAG** (initial, 2026-07-16). When a webchat run finishes
+  with a fully verified plan, a compact playbook record (task, steps, tools
+  used per step) is stored to long-term memory and surfaces through
+  cross-session recall on similar future tasks. Follow-up: same hook for
+  autonomous (non-webchat) runs, and semantic matching once the memory
+  backend is switched to Qdrant.
 - [ ] **Embedding cache.** Key embeddings by content SHA-256; never re-embed
   unchanged chunks on reindex. Makes the inbox/reindex path near-instant.
 - [ ] **Semantic tool-result reuse.** Before expensive read-only tools

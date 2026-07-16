@@ -448,6 +448,54 @@ impl RunLedger {
         unregister(&self.run_id());
     }
 
+    /// Compact "how it was done" record for a verified completed plan,
+    /// suitable for long-term memory so future planning can recall it.
+    /// Returns `None` when the run has no plan or any step is unverified.
+    pub fn playbook_summary(&self) -> Option<String> {
+        let mut data = self.data.lock().unwrap();
+        Self::verify_steps(&mut data);
+        if data.plan.is_empty() || !data.plan.iter().all(|s| s.verified || s.status.is_resolved())
+        {
+            return None;
+        }
+        if !data.plan.iter().any(|s| s.verified) {
+            return None;
+        }
+        let mut out = String::from("Verified playbook (evidence-backed steps):\n");
+        for step in &data.plan {
+            let tools: Vec<&str> = step
+                .evidence
+                .iter()
+                .filter_map(|seq| data.events.iter().find(|e| e.seq == *seq))
+                .filter(|e| e.success)
+                .map(|e| e.tool.as_str())
+                .collect();
+            let mut uniq: Vec<&str> = Vec::new();
+            for t in tools {
+                if !uniq.contains(&t) {
+                    uniq.push(t);
+                }
+            }
+            out.push_str(&format!(
+                "{}. [{}] {}{}\n",
+                step.id,
+                if step.verified {
+                    "verified"
+                } else {
+                    // Resolved but not verified (failed/blocked/skipped).
+                    "unresolved"
+                },
+                truncate_chars(&step.title, 120),
+                if uniq.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (tools: {})", uniq.join(", "))
+                },
+            ));
+        }
+        Some(truncate_chars(&out, 1200))
+    }
+
     pub fn snapshot(&self) -> RunLedgerData {
         let mut data = self.data.lock().unwrap();
         Self::verify_steps(&mut data);
@@ -813,6 +861,41 @@ mod tests {
             "updated",
         );
         assert!(ledger.unverified_plan_summary().is_none());
+        ledger.finalize(RunStatus::Completed);
+        std::fs::remove_dir_all(&ws).ok();
+    }
+
+    #[tokio::test]
+    async fn playbook_summary_requires_verified_plan() {
+        let ws = temp_ws("playbook");
+        let ledger =
+            RunLedger::open_or_create(&ws, "run-pb", None, "t", "o", "m", "chat").unwrap();
+        // No plan → no playbook.
+        assert!(ledger.playbook_summary().is_none());
+
+        ledger.record_tool_event(
+            "task_plan",
+            &json!({"action": "create", "tasks": [
+                {"title": "write config", "status": "in_progress"}
+            ]}),
+            true,
+            1,
+            "created",
+        );
+        // Unresolved plan → no playbook yet.
+        assert!(ledger.playbook_summary().is_none());
+
+        ledger.record_tool_event("file_write", &json!({"path": "/tmp/c.toml"}), true, 5, "ok");
+        ledger.record_tool_event(
+            "task_plan",
+            &json!({"action": "update", "id": 1, "status": "completed"}),
+            true,
+            1,
+            "updated",
+        );
+        let playbook = ledger.playbook_summary().expect("verified plan");
+        assert!(playbook.contains("write config"), "{playbook}");
+        assert!(playbook.contains("tools: file_write"), "{playbook}");
         ledger.finalize(RunStatus::Completed);
         std::fs::remove_dir_all(&ws).ok();
     }
