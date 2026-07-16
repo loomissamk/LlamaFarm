@@ -153,6 +153,36 @@ Remaining to finish this pass, in order:
   length-stopped segment continues automatically until a real terminal state
   or an operator presses Stop. Adaptive allocation remains future work.
 
+## Operator directive — UI consolidation + cutting-edge focus (2026-07-16)
+
+The web UI has too many redundant tabs. Consolidate:
+
+- [ ] Fold **Doctor** into the Dashboard (diagnostics panel with a run
+  button); delete the Doctor tab.
+- [ ] Fold **Logs** into the Dashboard (collapsible live tail); delete the
+  Logs tab.
+- [ ] Fold **Memory** into the Database page (they are both data stores);
+  delete the Memory tab.
+- [ ] Replace the **Runs** tab with a compact "recent runs + live badge"
+  card on the Dashboard linking to run detail, and surface the active run's
+  plan/evidence inline in Agent Chat where it belongs.
+- [ ] Merge **Config** and **Integrations** into one Settings page; move the
+  common knobs (model, provider, autonomy) onto the Dashboard.
+- Battery-aware scheduling is dropped — the platform targets big boxes.
+
+Cutting-edge agentic/throughput priorities (operator request):
+
+- [ ] Better RAG: wire Ollama embeddings into workspace_rag (vector+BM25
+  fusion already implemented in doc_rag), content-hash embedding cache,
+  optional local reranker.
+- [ ] Better coding/execution: repo-aware patch loop in webchat (explore →
+  patch → test → verify with ledger evidence), disposable worktrees per run.
+- [ ] More autonomy: default plan-execute-verify for multi-step webchat
+  tasks, auto-continue across segments, chaos-style recovery on tool errors.
+- [ ] Throughput: keep_alive=-1 pinned chat model, byte-stable system-prompt
+  prefix for Ollama prefix-cache hits, measure with the live ttft/tps
+  metrics now in the UI.
+
 ## Next-gen RAG and speed ideas (operator request, 2026-07-16)
 
 Storage decision: no MongoDB. Local-first stack stays files (source of truth)
@@ -236,10 +266,6 @@ extra always-on service with no capability the current stack lacks.
   events for crashloops, OOM kills, and disk pressure, and opens an agent
   session with the evidence attached — the operator wakes up to a diagnosed
   incident, not a dead service. Uses existing service_control/process tools.
-- [ ] **Battery/thermal-aware scheduling.** On the laptop node, detect AC vs
-  battery and GPU temperature; defer batch jobs (bakeoffs, reindexing,
-  nightly evals) while on battery or hot, and report power draw per run in
-  the cost accounting.
 - [ ] **Model auto-promotion.** Nightly check for newer tags of installed
   Ollama models, run the eval suite against the deployed baseline in a
   disposable workspace, and promote only on measured wins — with the

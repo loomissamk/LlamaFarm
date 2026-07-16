@@ -261,7 +261,18 @@ if docker image inspect "$BUNDLE_IMAGE" >/dev/null 2>&1 \
   echo "Rollback point saved: $GREEN_IMAGE"
 fi
 
-docker compose -f "$BASE_COMPOSE" -f "$TMP_OVERRIDE" "$@"
+# A failed build/up must not abort before we can report state: a build
+# failure never swaps the container, so the node keeps running the previous
+# image and no rollback is needed — say so explicitly instead of dying on
+# set -e mid-script.
+if ! docker compose -f "$BASE_COMPOSE" -f "$TMP_OVERRIDE" "$@"; then
+  echo "Deploy command failed (likely image build error, e.g. no network for package downloads)." >&2
+  if docker inspect -f '{{.State.Health.Status}}' LlamaFarm 2>/dev/null | grep -q healthy; then
+    echo "Container was NOT swapped — node is still healthy on the previous image." >&2
+    exit 3
+  fi
+  echo "Container is not healthy — attempting rollback path…" >&2
+fi
 
 if wait_healthy; then
   echo "Deploy healthy: $HEALTH_URL"
