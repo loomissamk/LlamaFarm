@@ -2495,7 +2495,7 @@ async fn handle_runtime_command_if_needed(
     true
 }
 
-async fn build_memory_context(
+pub(crate) async fn build_memory_context(
     mem: &dyn Memory,
     user_msg: &str,
     min_relevance_score: f64,

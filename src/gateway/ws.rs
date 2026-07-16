@@ -2001,12 +2001,34 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 &ws_chat_store_path,
             )
             .await;
-            let effective_system_prompt = match direct_intent.as_ref() {
+            let mut effective_system_prompt = match direct_intent.as_ref() {
                 Some(DirectIntent::ForceTool(DirectForcedToolIntent::FileWrite(request))) => {
                     build_forced_file_write_prompt(&system_prompt, request)
                 }
                 _ => system_prompt.clone(),
             };
+
+            // Cross-session recall: retrieve memories relevant to this message
+            // from ALL prior sessions (semantic when the Qdrant backend is
+            // configured) and inject them as cited context for this turn.
+            if direct_intent.is_none() {
+                let min_relevance = { state.config.lock().memory.min_relevance_score };
+                let memory_context = crate::channels::build_memory_context(
+                    runtime.mem.as_ref(),
+                    &content,
+                    min_relevance,
+                )
+                .await;
+                if !memory_context.is_empty() {
+                    effective_system_prompt.push_str(
+                        "\n\n## Recalled memory (prior sessions)\n\
+                         Relevant records from earlier conversations on this node. \
+                         Treat them as real history, cite them when used, and prefer \
+                         current-turn tool evidence when they conflict:\n",
+                    );
+                    effective_system_prompt.push_str(&memory_context);
+                }
+            }
 
             if let Some(first) = history.first_mut() {
                 if first.role == "system" {
@@ -2342,6 +2364,28 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                         runtime.tools_registry_exec.as_ref(),
                     );
                     history.push(ChatMessage::assistant(&safe_response));
+
+                    // Persist a compact exchange record so future sessions can
+                    // recall what was asked and answered, not just the prompt.
+                    if state.auto_save
+                        && !temporary
+                        && content.chars().count() >= WS_AUTOSAVE_MIN_MESSAGE_CHARS
+                    {
+                        let exchange = format!(
+                            "Q: {}\nA: {}",
+                            crate::util::truncate_with_ellipsis(&content, 300),
+                            crate::util::truncate_with_ellipsis(&safe_response, 600),
+                        );
+                        let _ = runtime
+                            .mem
+                            .store(
+                                &format!("{}-exchange", websocket_memory_key()),
+                                &exchange,
+                                MemoryCategory::Conversation,
+                                Some(session_id.as_str()),
+                            )
+                            .await;
+                    }
                     store_ws_chat_history(
                         &session_id,
                         &history,
