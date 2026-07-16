@@ -218,6 +218,10 @@ pub(crate) const DRAFT_CLEAR_SENTINEL: &str = "\x00CLEAR\x00";
 /// when the user explicitly asks for command/tool execution details.
 pub(crate) const DRAFT_PROGRESS_SENTINEL: &str = "\x00PROGRESS\x00";
 
+/// Sentinel prefix for per-segment inference metrics forwarded on the delta
+/// channel as JSON (ttft_ms, generation_tps, prefill_tps, total_ms).
+pub(crate) const DRAFT_METRICS_SENTINEL: &str = "\x00METRICS\x00";
+
 tokio::task_local! {
     static TOOL_LOOP_REPLY_TARGET: Option<String>;
 }
@@ -2997,6 +3001,19 @@ pub(crate) async fn run_tool_call_loop(
                     .as_ref()
                     .map(|u| (u.input_tokens, u.output_tokens))
                     .unwrap_or((None, None));
+
+                // Forward real inference timing (Ollama nanosecond fields)
+                // to the UI so its throughput display reflects decode TPS
+                // and time-to-first-token instead of wall-clock estimates.
+                if let (Some(metrics), Some(tx)) = (resp.metrics.as_ref(), on_delta.as_ref()) {
+                    let payload = serde_json::json!({
+                        "ttft_ms": metrics.ttft_ms,
+                        "generation_tps": metrics.generation_tps,
+                        "prefill_tps": metrics.prefill_tps,
+                        "total_ms": metrics.total_ms,
+                    });
+                    let _ = tx.send(format!("{DRAFT_METRICS_SENTINEL}{payload}")).await;
+                }
 
                 observer.record_event(&ObserverEvent::LlmResponse {
                     provider: provider_name.to_string(),

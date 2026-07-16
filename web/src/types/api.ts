@@ -278,6 +278,7 @@ export interface WsMessage {
   type:
     | 'message'
     | 'chunk'
+    | 'metrics'
     | 'tool_call'
     | 'tool_result'
     | 'done'
@@ -304,6 +305,12 @@ export interface WsMessage {
   peer_name?: string;
   delegate_agent?: string;
   task_id?: string;
+  metrics?: {
+    ttft_ms?: number | null;
+    generation_tps?: number | null;
+    prefill_tps?: number | null;
+    total_ms?: number | null;
+  };
 }
 
 // ── Database Explorer ─────────────────────────────────────────────────────────

@@ -640,6 +640,10 @@ export default function AgentChat() {
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tps, setTps] = useState(0);
+  const [realMetrics, setRealMetrics] = useState<{
+    generationTps: number;
+    ttftMs: number | null;
+  } | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [federation, setFederation] = useState<FederationPeersResponse | null>(null);
   const [federationLoading, setFederationLoading] = useState(true);
@@ -888,6 +892,19 @@ export default function AgentChat() {
           const elapsed = (performance.now() - streamStartRef.current) / 1000;
           if (elapsed > 0.2) {
             setTps(Math.max(1, Math.round(charCountRef.current / 4 / elapsed)));
+          }
+          break;
+        }
+
+        case 'metrics': {
+          // Real per-segment inference timing from the provider (Ollama):
+          // decode TPS and time-to-first-token, replacing wall-clock guesses.
+          const m = msg.metrics ?? {};
+          if (typeof m.generation_tps === 'number') {
+            setRealMetrics({
+              generationTps: m.generation_tps,
+              ttftMs: typeof m.ttft_ms === 'number' ? m.ttft_ms : null,
+            });
           }
           break;
         }
@@ -1433,6 +1450,7 @@ export default function AgentChat() {
       streamStartRef.current = null;
       charCountRef.current = 0;
       setTps(0);
+      setRealMetrics(null);
       setStreaming(true);
       setTypingSessionIds((prev) =>
         prev.includes(activeSession.id) ? prev : [...prev, activeSession.id],
@@ -1612,13 +1630,25 @@ export default function AgentChat() {
               </h2>
             </div>
             <div className="flex items-center gap-2">
-              {streaming && tps > 0 && (
+              {realMetrics ? (
                 <span
                   className="font-mono text-xs tabular-nums text-green-400"
-                  title="Estimated tokens per second while the current reply is streaming"
+                  title="Measured decode throughput and time-to-first-token from the model runtime"
                 >
-                  ~{tps} t/s live
+                  {realMetrics.generationTps.toFixed(1)} t/s
+                  {realMetrics.ttftMs !== null &&
+                    ` · ttft ${(realMetrics.ttftMs / 1000).toFixed(2)}s`}
                 </span>
+              ) : (
+                streaming &&
+                tps > 0 && (
+                  <span
+                    className="font-mono text-xs tabular-nums text-green-400"
+                    title="Estimated tokens per second while the current reply is streaming"
+                  >
+                    ~{tps} t/s live
+                  </span>
+                )
               )}
               <div className="rounded-full border border-gray-800 px-3 py-1 text-xs text-gray-400">
                 {activeMessages.length} messages

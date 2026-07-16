@@ -168,12 +168,13 @@ extra always-on service with no capability the current stack lacks.
   config for semantic recall (same code path). Remaining upgrade: also
   embed tool-result summaries and add "solved on <date> in session X"
   citations.
-- [ ] **Drop-a-document RAG inbox.** Watched `rag/inbox/` directory in the
-  workspace plus an upload button on the Files page: anything placed there is
-  auto-parsed (pdf/md/txt/code), chunked, embedded via local Ollama
-  embeddings, and upserted to the workspace Qdrant collection with file/line
-  citation metadata. Deleting the file removes its vectors (content-hash
-  keyed). No new database needed.
+- [x] **Drop-a-document RAG inbox** (delivered 2026-07-16, verified E2E: a
+  fact from a dropped file was retrieved and cited by source+section).
+  `workspace_rag` tool over `<workspace>/rag/inbox/`: text/markdown/code/log
+  files are indexed automatically (lazy fingerprint-based rebuild; deletions
+  drop out), BM25 retrieval with `[Source N]` citations. Follow-ups: Files
+  page upload button targeting the inbox, PDF parsing, and vector fusion via
+  local Ollama embeddings for semantic matching.
 - [ ] **Run-ledger RAG.** Index finalized run ledgers (plan steps + evidence
   excerpts) so the planner can retrieve "how did I accomplish this last time"
   as evidence-grounded few-shot examples instead of replanning from scratch.
@@ -868,7 +869,7 @@ New metrics from Ollama's nanosecond timing fields:
 - `total_ms`: total_duration / 1e6 — full wall-clock request time
 - Exposed as `InferenceMetrics` in `ChatResponse.metrics` (Ollama only; other providers = None)
 - Status: ✓ implemented in `src/providers/traits.rs` + `src/providers/ollama.rs`
-- TODO: surface `generation_tps` and `ttft_ms` in the web UI's chat TPS indicator
+- [x] `generation_tps` + `ttft_ms` now stream over the chat websocket as `metrics` events and replace the wall-clock TPS estimate in the UI (2026-07-16)
 
 ### 10.4 NPU hardware detection
 AMD XDNA NPU driver landed in Linux kernel 6.14. Intel NPU driver also available.

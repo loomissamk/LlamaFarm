@@ -82,6 +82,7 @@ struct PersistedWsChatSession {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum WsDeltaEvent {
     ContentChunk(String),
+    Metrics(serde_json::Value),
     ToolCall {
         name: String,
         hint: Option<String>,
@@ -1285,6 +1286,12 @@ fn parse_ws_delta_event(delta: &str) -> Option<WsDeltaEvent> {
         return None;
     }
 
+    if let Some(metrics) = delta.strip_prefix(crate::agent::loop_::DRAFT_METRICS_SENTINEL) {
+        return serde_json::from_str::<serde_json::Value>(metrics)
+            .ok()
+            .map(WsDeltaEvent::Metrics);
+    }
+
     if let Some(progress) = delta.strip_prefix(DRAFT_PROGRESS_SENTINEL) {
         let progress = progress.trim();
         if let Some(rest) = progress.strip_prefix("⏳ ") {
@@ -1349,6 +1356,11 @@ async fn emit_ws_delta_event(socket: &mut WsSink, session_id: &str, event: WsDel
             "type": "chunk",
             "session_id": session_id,
             "content": content,
+        }),
+        WsDeltaEvent::Metrics(metrics) => json!({
+            "type": "metrics",
+            "session_id": session_id,
+            "metrics": metrics,
         }),
         WsDeltaEvent::ToolCall { name, hint } => json!({
             "type": "tool_call",
