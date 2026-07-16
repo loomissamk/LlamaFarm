@@ -161,8 +161,9 @@ semantic RAG (Ollama embeddings + hybrid fusion + embedding cache), live
 TTFT/TPS metrics, code_run, git_worktree, one-place history clear, UI
 consolidation (7 tabs), auto-rollback deploys.
 
-Pushed but NOT YET deployed (image rebuild blocked by intermittent network on
-the Dockerfile pip/apt layer — node stayed healthy on the previous image, no
+Pushed but NOT YET deployed (image rebuild blocked by a Docker Hub outage —
+`DeadlineExceeded` pulling the `node:22-bookworm-slim` base image, which is not
+cached locally — node stayed healthy on the previous image, no
 outage): the **MMR reranker** (63a4abf8). It will land on the next successful
 `up-node.sh rtx4070-laptop up -d --build`, or when back on the home LAN.
 The deploy script now reports this cleanly (exit 3 = container not swapped,
