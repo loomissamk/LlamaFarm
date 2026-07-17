@@ -1954,6 +1954,27 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 );
                 system_prompt.push_str(&crate::agent::loop_::build_auto_plan_execute_instructions());
 
+                // Tell the agent it has an authenticated GitHub identity so it
+                // uses git_operations clone/pull/push instead of scraping HTML.
+                {
+                    let config_dir = config_guard
+                        .config_path
+                        .parent()
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or_else(|| config_guard.workspace_dir.clone());
+                    if let Some(conn) = crate::auth::github_device::connection_status(&config_dir) {
+                        system_prompt.push_str(&format!(
+                            "\n## GitHub (connected)\n\
+                             This node is authenticated to GitHub as `{}`. To work with \
+                             repositories, use the `git_operations` tool's clone / pull / \
+                             fetch / push operations — they authenticate automatically. Do \
+                             NOT use web_fetch to read repositories or claim you lack \
+                             credentials.\n",
+                            conn.login
+                        ));
+                    }
+                }
+
                 if let Some(federation) = &state.federation {
                     let remote_agents = federation.remote_adapter().available_remote_agents_info();
                     if !remote_agents.is_empty() {
@@ -2294,17 +2315,24 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                                     // This lets operators redirect long autonomous work without
                                                     // losing verified tool results or waiting for a generation
                                                     // segment to finish.
+                                                    //
+                                                    // If a follow-up is already queued (operator sent it twice
+                                                    // while the run was still winding down), keep the latest and
+                                                    // do not re-notify — cancellation is already in flight.
+                                                    let already_queued = followup_message.is_some();
                                                     followup_message = Some(text.to_string());
                                                     if !cancellation_requested {
                                                         cancellation_requested = true;
                                                         cancellation_token.cancel();
                                                     }
-                                                    let payload = json!({
-                                                        "type": "followup_queued",
-                                                        "session_id": control_session_id,
-                                                        "message": "Follow-up queued; checkpointing the active run first.",
-                                                    });
-                                                    let _ = socket.send(Message::Text(payload.to_string().into())).await;
+                                                    if !already_queued {
+                                                        let payload = json!({
+                                                            "type": "followup_queued",
+                                                            "session_id": control_session_id,
+                                                            "message": "Got it — finishing the current step, then starting your follow-up.",
+                                                        });
+                                                        let _ = socket.send(Message::Text(payload.to_string().into())).await;
+                                                    }
                                                 }
                                                 InFlightWsControl::InvalidJson => {
                                                     let payload = json!({"type": "error", "message": "Invalid JSON"});

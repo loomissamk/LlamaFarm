@@ -9,6 +9,8 @@ use std::sync::Arc;
 pub struct GitOperationsTool {
     security: Arc<SecurityPolicy>,
     workspace_dir: std::path::PathBuf,
+    /// Node config dir holding the brokered GitHub token, if connected.
+    config_dir: Option<std::path::PathBuf>,
 }
 
 impl GitOperationsTool {
@@ -16,7 +18,23 @@ impl GitOperationsTool {
         Self {
             security,
             workspace_dir,
+            config_dir: None,
         }
+    }
+
+    /// Provide the config dir so github.com operations can use the token that
+    /// was connected on the Settings page (device flow).
+    pub fn with_config_dir(mut self, config_dir: std::path::PathBuf) -> Self {
+        self.config_dir = Some(config_dir);
+        self
+    }
+
+    /// True when a GitHub token is available for authenticated operations.
+    fn github_connected(&self) -> bool {
+        self.config_dir
+            .as_deref()
+            .and_then(crate::auth::github_device::brokered_token)
+            .is_some()
     }
 
     /// Sanitize git arguments to prevent injection attacks
@@ -53,7 +71,16 @@ impl GitOperationsTool {
     fn requires_write_access(&self, operation: &str) -> bool {
         matches!(
             operation,
-            "commit" | "add" | "checkout" | "stash" | "reset" | "revert"
+            "commit"
+                | "add"
+                | "checkout"
+                | "stash"
+                | "reset"
+                | "revert"
+                | "clone"
+                | "pull"
+                | "fetch"
+                | "push"
         )
     }
 
@@ -78,6 +105,129 @@ impl GitOperationsTool {
         }
 
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
+    /// Run a git command in `cwd` with the brokered GitHub token applied via
+    /// `url.insteadOf`, which transparently authenticates clone, pull, fetch,
+    /// and push against any github.com HTTPS remote. Scrubs the token from any
+    /// error text so it never surfaces in tool output.
+    async fn run_git_authenticated(
+        &self,
+        cwd: &std::path::Path,
+        args: &[&str],
+    ) -> anyhow::Result<String> {
+        let token = self
+            .config_dir
+            .as_deref()
+            .and_then(crate::auth::github_device::brokered_token);
+
+        let mut full: Vec<String> = Vec::new();
+        if let Some(ref t) = token {
+            // Rewrite github.com HTTPS URLs to include the token on the fly.
+            full.push("-c".into());
+            full.push(format!(
+                "url.https://x-access-token:{t}@github.com/.insteadOf=https://github.com/"
+            ));
+        }
+        full.extend(args.iter().map(|s| s.to_string()));
+
+        let output = tokio::process::Command::new("git")
+            .args(&full)
+            .current_dir(cwd)
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            let mut stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            if let Some(ref t) = token {
+                stderr = stderr.replace(t.as_str(), "***");
+            }
+            anyhow::bail!("Git command failed: {stderr}");
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
+    /// clone/pull/fetch/push handler. `url` is required for clone.
+    async fn git_remote_op(
+        &self,
+        operation: &str,
+        args: serde_json::Value,
+    ) -> anyhow::Result<ToolResult> {
+        let result = match operation {
+            "clone" => {
+                let Some(url) = args.get("url").and_then(|v| v.as_str()) else {
+                    return Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some("'url' is required for clone".into()),
+                    });
+                };
+                // Reject option-injection and non-http(s)/git schemes.
+                if url.starts_with('-')
+                    || !(url.starts_with("https://")
+                        || url.starts_with("http://")
+                        || url.starts_with("git@")
+                        || url.starts_with("git://"))
+                {
+                    return Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(format!("Refusing to clone unsafe URL: {url}")),
+                    });
+                }
+                // Clone into the workspace; optional 'directory' names the target.
+                let mut git_args = vec!["clone".to_string(), url.to_string()];
+                if let Some(dir) = args.get("directory").and_then(|v| v.as_str()) {
+                    git_args.push(dir.to_string());
+                }
+                let refs: Vec<&str> = git_args.iter().map(String::as_str).collect();
+                self.run_git_authenticated(&self.workspace_dir, &refs).await
+            }
+            "pull" => {
+                self.run_git_authenticated(&self.workspace_dir, &["pull", "--ff-only"])
+                    .await
+            }
+            "fetch" => {
+                self.run_git_authenticated(&self.workspace_dir, &["fetch", "--all", "--prune"])
+                    .await
+            }
+            "push" => {
+                let mut git_args = vec!["push"];
+                if let Some(branch) = args.get("branch").and_then(|v| v.as_str()) {
+                    git_args.push("origin");
+                    git_args.push(branch);
+                }
+                self.run_git_authenticated(&self.workspace_dir, &git_args)
+                    .await
+            }
+            _ => unreachable!(),
+        };
+
+        match result {
+            Ok(output) => Ok(ToolResult {
+                success: true,
+                output: if output.trim().is_empty() {
+                    format!("{operation} completed")
+                } else {
+                    output
+                },
+                error: None,
+            }),
+            Err(e) => {
+                let hint = if !self.github_connected()
+                    && e.to_string().contains("Authentication")
+                {
+                    " (no GitHub token connected — connect GitHub on the Settings page)"
+                } else {
+                    ""
+                };
+                Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!("{e}{hint}")),
+                })
+            }
+        }
     }
 
     async fn git_status(&self, _args: serde_json::Value) -> anyhow::Result<ToolResult> {
@@ -430,7 +580,7 @@ impl Tool for GitOperationsTool {
     }
 
     fn description(&self) -> &str {
-        "Perform structured Git operations (status, diff, log, branch, commit, add, checkout, stash). Provides parsed JSON output and integrates with security policy for autonomy controls."
+        "Perform Git operations: status, diff, log, branch, commit, add, checkout, stash, and remote operations clone/pull/fetch/push. Clone/pull/fetch/push against github.com authenticate automatically with the GitHub account connected on the Settings page — use these instead of web_fetch to work with repositories. 'clone' needs a 'url' (and optional 'directory'); 'push' takes an optional 'branch'."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -439,7 +589,7 @@ impl Tool for GitOperationsTool {
             "properties": {
                 "operation": {
                     "type": "string",
-                    "enum": ["status", "diff", "log", "branch", "commit", "add", "checkout", "stash"],
+                    "enum": ["status", "diff", "log", "branch", "commit", "add", "checkout", "stash", "clone", "pull", "fetch", "push"],
                     "description": "Git operation to perform"
                 },
                 "message": {
@@ -452,7 +602,15 @@ impl Tool for GitOperationsTool {
                 },
                 "branch": {
                     "type": "string",
-                    "description": "Branch name (for 'checkout' operation)"
+                    "description": "Branch name (for 'checkout' and 'push' operations)"
+                },
+                "url": {
+                    "type": "string",
+                    "description": "Repository URL (required for 'clone'), e.g. https://github.com/owner/repo"
+                },
+                "directory": {
+                    "type": "string",
+                    "description": "Target directory name for 'clone' (optional)"
                 },
                 "files": {
                     "type": "string",
@@ -557,6 +715,10 @@ impl Tool for GitOperationsTool {
             "add" => self.git_add(args).await,
             "checkout" => self.git_checkout(args).await,
             "stash" => self.git_stash(args).await,
+            "clone" | "pull" | "fetch" | "push" => {
+                let op = operation.to_string();
+                self.git_remote_op(&op, args).await
+            }
             _ => Ok(ToolResult {
                 success: false,
                 output: String::new(),
@@ -798,7 +960,10 @@ mod tests {
 
         let tool = test_tool(tmp.path());
 
-        let result = tool.execute(json!({"operation": "push"})).await.unwrap();
+        let result = tool
+            .execute(json!({"operation": "frobnicate"}))
+            .await
+            .unwrap();
         assert!(!result.success);
         assert!(
             result
@@ -807,6 +972,23 @@ mod tests {
                 .unwrap_or("")
                 .contains("Unknown operation")
         );
+    }
+
+    #[tokio::test]
+    async fn clone_rejects_option_injection_url() {
+        let tmp = TempDir::new().unwrap();
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        let tool = test_tool(tmp.path());
+        let result = tool
+            .execute(json!({"operation": "clone", "url": "--upload-pack=touch /tmp/x"}))
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(result.error.as_deref().unwrap_or("").contains("unsafe URL"));
     }
 
     #[test]

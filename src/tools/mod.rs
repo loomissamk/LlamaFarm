@@ -391,10 +391,16 @@ pub fn all_tools_with_runtime_and_federation(
                 command_sandbox.clone(),
             ),
         ));
-        tool_arcs.push(Arc::new(GitOperationsTool::new(
-            security.clone(),
-            workspace_dir.to_path_buf(),
-        )));
+        tool_arcs.push(Arc::new(
+            GitOperationsTool::new(security.clone(), workspace_dir.to_path_buf())
+                .with_config_dir(
+                    root_config
+                        .config_path
+                        .parent()
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or_else(|| workspace_dir.to_path_buf()),
+                ),
+        ));
         tool_arcs.push(Arc::new(docker::DockerTool::new_with_sandbox(
             security.clone(),
             command_sandbox.clone(),
