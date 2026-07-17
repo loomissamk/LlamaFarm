@@ -8,6 +8,7 @@
 //! - Header sanitization (handled by axum/hyper)
 
 pub mod api;
+pub mod db_discovery;
 pub mod logs;
 mod openai_compat;
 pub mod sse;
@@ -907,6 +908,7 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .route("/api/health", get(api::handle_api_health))
         .route("/api/history/clear", post(api::handle_api_history_clear))
         .route("/api/connections", get(api::handle_api_connections))
+        .route("/api/db/discover", post(api::handle_api_db_discover))
         .route(
             "/api/connections/github/start",
             post(api::handle_api_github_connect_start),

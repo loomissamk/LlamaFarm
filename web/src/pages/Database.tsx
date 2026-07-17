@@ -18,9 +18,11 @@ import {
   X,
   Pencil,
   CheckCircle,
+  Radar,
 } from 'lucide-react';
 import type { DbConnection, DbSchema, DbTableInfo, DbQueryResult } from '@/types/api';
 import {
+  apiFetch,
   getDbConnections,
   getDbSchema,
   runDbQuery,
@@ -32,12 +34,17 @@ import {
 
 // ── Driver badge ──────────────────────────────────────────────────────────────
 
+/// Agent memory is browsable like any other datastore, so it appears as a
+/// first-class connection in the sidebar rather than a bolted-on panel.
+const MEMORY_CONN = '__agent_memory__';
+
 function DriverBadge({ driver }: { driver: string }) {
   const colors: Record<string, string> = {
     sqlite: 'bg-blue-900 text-blue-200',
     postgres: 'bg-indigo-900 text-indigo-200',
     mysql: 'bg-orange-900 text-orange-200',
     mongodb: 'bg-green-900 text-green-200',
+    memory: 'bg-violet-900 text-violet-200',
   };
   return (
     <span className={`text-xs px-1.5 py-0.5 rounded font-mono flex-shrink-0 ${colors[driver] ?? 'bg-gray-700 text-gray-300'}`}>
@@ -426,6 +433,10 @@ export default function DatabasePage() {
   const [loadingConns, setLoadingConns] = useState(true);
   const [connsError, setConnsError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [discovered, setDiscovered] = useState<
+    { host: string; port: number; driver: string; suggested_dsn: string }[] | null
+  >(null);
   const [editConn, setEditConn] = useState<DbConnection | null>(null);
 
   const [activeConn, setActiveConn] = useState<string | null>(null);
@@ -534,6 +545,20 @@ export default function DatabasePage() {
   const activeCfg = connections.find((c) => c.name === activeConn);
   const isMongo = activeCfg?.driver === 'mongodb';
 
+  const handleScan = async () => {
+    setScanning(true);
+    try {
+      const res = await apiFetch<{
+        discovered: { host: string; port: number; driver: string; suggested_dsn: string }[];
+      }>('/api/db/discover', { method: 'POST', body: JSON.stringify({ hosts: [] }) });
+      setDiscovered(res.discovered);
+    } catch (e) {
+      setConnsError(e instanceof Error ? e.message : 'Network scan failed');
+    } finally {
+      setScanning(false);
+    }
+  };
+
   if (loadingConns) return (
     <div className="flex items-center justify-center h-64 text-gray-400">
       <Loader2 className="h-6 w-6 animate-spin mr-2" /> Loading…
@@ -567,6 +592,14 @@ export default function DatabasePage() {
           <Database className="h-3.5 w-3.5 text-gray-500" />
           <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider flex-1">Connections</span>
           <button
+            onClick={handleScan}
+            disabled={scanning}
+            className="p-0.5 text-gray-600 hover:text-blue-400 rounded disabled:opacity-40"
+            title="Scan the local network for databases"
+          >
+            {scanning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Radar className="h-3.5 w-3.5" />}
+          </button>
+          <button
             onClick={() => setShowAddModal(true)}
             className="p-0.5 text-gray-600 hover:text-blue-400 rounded"
             title="Add connection"
@@ -579,6 +612,14 @@ export default function DatabasePage() {
 
         {/* Connection list */}
         <div className="border-b border-gray-800 flex-shrink-0">
+          {/* Agent memory: always present, browsable and clearable like a DB */}
+          <div
+            className={`flex items-center gap-1.5 px-2 py-1.5 cursor-pointer ${activeConn === MEMORY_CONN ? 'bg-blue-600/20 border-l-2 border-blue-500' : 'hover:bg-gray-800 border-l-2 border-transparent'}`}
+            onClick={() => setActiveConn(MEMORY_CONN)}
+          >
+            <span className="text-gray-200 text-xs font-medium truncate flex-1">Agent Memory</span>
+            <DriverBadge driver="memory" />
+          </div>
           {connections.length === 0 ? (
             <button
               onClick={() => setShowAddModal(true)}
@@ -613,7 +654,49 @@ export default function DatabasePage() {
           ))}
         </div>
 
-        {/* Schema tree */}
+        {/* Discovered on the network */}
+        {discovered && (
+          <div className="border-b border-gray-800 flex-shrink-0">
+            <div className="flex items-center gap-1.5 px-2 py-1.5">
+              <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider flex-1">
+                Found on network ({discovered.length})
+              </span>
+              <button
+                onClick={() => setDiscovered(null)}
+                className="text-gray-600 hover:text-gray-300 text-xs"
+                title="Dismiss"
+              >
+                ✕
+              </button>
+            </div>
+            {discovered.length === 0 ? (
+              <p className="px-3 pb-2 text-xs text-gray-600">
+                No databases found on this network.
+              </p>
+            ) : (
+              discovered.map((d) => (
+                <button
+                  key={`${d.host}:${d.port}`}
+                  onClick={() => {
+                    navigator.clipboard?.writeText(d.suggested_dsn);
+                    setShowAddModal(true);
+                  }}
+                  className="w-full flex items-center gap-1.5 px-2 py-1.5 hover:bg-gray-800 text-left"
+                  title={`${d.suggested_dsn} — click to copy the DSN and add it`}
+                >
+                  <span className="text-gray-300 text-xs font-mono truncate flex-1">
+                    {d.host}:{d.port}
+                  </span>
+                  <DriverBadge driver={d.driver} />
+                </button>
+              ))
+            )}
+          </div>
+        )}
+
+        {/* Schema tree — not applicable to the memory store */}
+        {activeConn !== MEMORY_CONN && (
+        <>
         <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-gray-800 flex-shrink-0">
           <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider flex-1">Schema</span>
           <button onClick={() => { if (activeConn) { setLoadingSchema(true); getDbSchema(activeConn).then(setSchema).catch((e) => setSchemaError(String(e))).finally(() => setLoadingSchema(false)); } }} disabled={!activeConn || loadingSchema} className="text-gray-600 hover:text-gray-400 disabled:opacity-30">
@@ -631,9 +714,16 @@ export default function DatabasePage() {
             <p className="text-gray-600 text-xs px-3 py-3">Select a connection</p>
           )}
         </div>
+        </>
+        )}
       </div>
 
-      {/* Main panel */}
+      {/* Main panel: agent memory browser, or the SQL/Mongo explorer */}
+      {activeConn === MEMORY_CONN ? (
+        <div className="flex-1 overflow-y-auto p-6">
+          <MemoryPanel />
+        </div>
+      ) : (
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Query bar */}
         <div className="border-b border-gray-800 flex-shrink-0">
@@ -739,9 +829,7 @@ export default function DatabasePage() {
           )}
         </div>
       </div>
-      <div className="mt-8 border-t border-gray-800 pt-2">
-        <MemoryPanel />
-      </div>
+      )}
     </div>
   );
 }

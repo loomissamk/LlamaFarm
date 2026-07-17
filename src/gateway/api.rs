@@ -3639,6 +3639,28 @@ pub async fn handle_api_github_disconnect(
     Json(serde_json::json!({"status": "ok", "disconnected": removed})).into_response()
 }
 
+#[derive(serde::Deserialize, Default)]
+pub struct DbScanBody {
+    /// Optional explicit hosts; empty sweeps the node's private subnets.
+    #[serde(default)]
+    pub hosts: Vec<String>,
+}
+
+/// POST /api/db/discover — scan the local network for reachable databases.
+/// TCP-connect probe only, confined to private subnets; never authenticates.
+pub async fn handle_api_db_discover(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Option<Json<DbScanBody>>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+    let hosts = body.map(|Json(b)| b.hosts).unwrap_or_default();
+    let found = crate::gateway::db_discovery::scan(&hosts).await;
+    Json(serde_json::json!({"discovered": found})).into_response()
+}
+
 /// GET /api/runs — run inspector index: live + historical run ledgers.
 pub async fn handle_api_runs_list(
     State(state): State<AppState>,
