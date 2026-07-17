@@ -113,6 +113,37 @@ Remaining to finish this pass, in order:
   send real `InferenceMetrics` (generation_tps/ttft_ms) over the chat
   websocket for the UI TPS indicator (10.3).
 
+## Next-gen "dangerously good" batch (operator request, 2026-07-17)
+
+My honest thoughts on each idea, with a plan:
+
+- [~] **Authorized-lab security toolkit** (started): opt-in Docker build arg
+  `LLAMAFARM_LAB_TOOLS=1` adds nmap, tshark/tcpdump, sqlmap, hydra, nikto,
+  john, hashcat, etc. — off by default to keep the image lean. Verdict:
+  YES, but framed for the operator's OWN authorized lab (this repo's stated
+  chaos_lab / ethical-hacking / disposable-target mission). Keep it a build
+  flag, never default; document the "own systems / permission only" boundary.
+  Do NOT add mass-targeting, DoS, or self-propagating capabilities.
+- [ ] **Wireshark/packet capture in the agent**: expose tshark via a
+  `packet_capture` tool (bounded duration + packet count, capture to a
+  workspace artifact) so the agent can do real network analysis on the lab.
+- [ ] **Discord channel**: LlamaFarm already has telegram/matrix/whatsapp/
+  etc. channels; add Discord (bot gateway) as another remote-control surface.
+  Verdict: YES, straightforward and genuinely useful for driving the node
+  from your phone. Medium effort (new channel impl + config).
+- [ ] **Friendly Tailscale setup**: a Connections card that takes the auth
+  key, brings the `vpn` profile up, and shows the node's tailnet IP + status
+  — turns the compose profile into one-click. Verdict: YES, small.
+- [ ] **DroneDetect one-click**: now that authenticated `git clone` works, a
+  "workspace project" flow that clones loomissamk/DroneDetect, sets up its
+  venv (code_run/python), and runs inference on a sample. Verdict: GREAT
+  showcase of the whole platform (git + code_run + RAG + run ledger) on your
+  own real repo. Generalize to "bootstrap any of my repos as a project."
+- [ ] **Auto-connect passwordless DBs on scan** (earlier request): when the
+  network scan finds an unauthenticated redis/mongo/pg/etc., offer one-click
+  add with schema auto-import. Keep it opt-in per host (never silent), since
+  auto-connecting to found services is powerful.
+
 ## Next-generation agent workflow
 
 - [x] Add first-class **follow-ups**.  A user message can attach to, amend,

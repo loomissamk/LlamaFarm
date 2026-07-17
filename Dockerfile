@@ -192,6 +192,20 @@ RUN apt-get update && apt-get install -y \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
+# Optional authorized-lab toolkit (opt-in, off by default to keep the image
+# lean). Enable with:  --build-arg LLAMAFARM_LAB_TOOLS=1
+# Standard network/security analysis tools for the operator's own authorized
+# testing on their disposable lab. Serves the chaos_lab / ethical-hacking
+# mission in TODO.md — not for use against systems you do not own or lack
+# permission to test.
+ARG LLAMAFARM_LAB_TOOLS=0
+RUN if [ "$LLAMAFARM_LAB_TOOLS" = "1" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends \
+        nmap tshark tcpdump netcat-openbsd dnsutils whois traceroute \
+        openssh-client sshpass hydra nikto sqlmap john hashcat \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
+
 COPY --from=builder /llamafarm-data /llamafarm-data
 COPY --from=builder /app/llamafarm /usr/local/bin/llamafarm
 COPY --from=ollama_base /usr/bin/ollama /usr/bin/ollama
