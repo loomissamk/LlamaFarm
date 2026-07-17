@@ -3566,6 +3566,20 @@ pub async fn handle_api_connections(
             config.memory.backend.clone(),
         )
     };
+    let discord_connected = {
+        let config = state.config.lock();
+        config
+            .channels_config
+            .discord
+            .as_ref()
+            .is_some_and(|d| !d.bot_token.trim().is_empty())
+    };
+    // Tailscale runs as an opt-in sidecar; the gateway can't see the tailnet
+    // from inside its container, so report configuration readiness honestly.
+    let tailscale_key_present = std::env::var("TS_AUTHKEY")
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
+
     Json(serde_json::json!({
         "github": match github {
             Some(conn) => serde_json::json!({
@@ -3578,6 +3592,8 @@ pub async fn handle_api_connections(
         },
         "ollama": {"status": "configured", "model": model, "provider": provider},
         "memory": {"status": "configured", "backend": memory_backend},
+        "discord": {"status": if discord_connected { "connected" } else { "not_connected" }},
+        "tailscale": {"status": if tailscale_key_present { "configured" } else { "not_configured" }},
     }))
     .into_response()
 }

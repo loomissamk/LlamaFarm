@@ -17,6 +17,8 @@ interface ConnectionsResponse {
     | { status: 'not_connected' };
   ollama: { status: string; model: string; provider: string };
   memory: { status: string; backend: string };
+  discord?: { status: string };
+  tailscale?: { status: string };
 }
 
 interface DeviceStart {
@@ -239,6 +241,28 @@ export function ConnectionsPanel() {
             <StatusDot connected />
           </div>
           <p className="mt-1 text-sm text-gray-400 capitalize">{data?.memory.backend || '—'}</p>
+        </div>
+        <div className="rounded-xl border border-gray-800 bg-gray-900 p-5">
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-white">Discord</span>
+            <StatusDot connected={data?.discord?.status === 'connected'} />
+          </div>
+          <p className="mt-1 text-sm text-gray-500">
+            {data?.discord?.status === 'connected'
+              ? 'Bot connected — drive the node from Discord.'
+              : 'Add a bot token under [channels.discord] in config to enable.'}
+          </p>
+        </div>
+        <div className="rounded-xl border border-gray-800 bg-gray-900 p-5">
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-white">Tailscale VPN</span>
+            <StatusDot connected={data?.tailscale?.status === 'configured'} />
+          </div>
+          <p className="mt-1 text-sm text-gray-500">
+            {data?.tailscale?.status === 'configured'
+              ? 'Auth key set — deploy with --profile vpn for worldwide access.'
+              : 'Set TS_AUTHKEY and deploy with --profile vpn to reach this node anywhere.'}
+          </p>
         </div>
       </div>
     </div>

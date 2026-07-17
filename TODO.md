@@ -127,13 +127,14 @@ My honest thoughts on each idea, with a plan:
 - [x] **packet_capture tool** (2026-07-17): bounded tshark/tcpdump capture
   (max packets + duration, artifact to workspace/captures, 40-line preview),
   BPF filter sanitized, clean error when the lab image isn't built.
-- [ ] **Discord channel**: LlamaFarm already has telegram/matrix/whatsapp/
-  etc. channels; add Discord (bot gateway) as another remote-control surface.
-  Verdict: YES, straightforward and genuinely useful for driving the node
-  from your phone. Medium effort (new channel impl + config).
-- [ ] **Friendly Tailscale setup**: a Connections card that takes the auth
-  key, brings the `vpn` profile up, and shows the node's tailnet IP + status
-  — turns the compose profile into one-click. Verdict: YES, small.
+- [x] **Discord channel** — ALREADY fully implemented (src/channels/discord.rs,
+  2048 lines: gateway websocket, send/files/typing, tests) and wired into
+  config + registration. Activate by adding a bot_token under
+  [channels.discord]. Surfaced as a Connections card (2026-07-17).
+- [~] **Friendly Tailscale setup**: Connections card added (2026-07-17)
+  showing auth-key/profile readiness with the deploy command. Remaining:
+  in-UI auth-key entry + live tailnet-IP display (needs host-level action the
+  gateway container can't take directly).
 - [ ] **DroneDetect one-click**: now that authenticated `git clone` works, a
   "workspace project" flow that clones loomissamk/DroneDetect, sets up its
   venv (code_run/python), and runs inference on a sample. Verdict: GREAT
