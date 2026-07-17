@@ -238,9 +238,9 @@ C++ basics are covered. What was missing is structured use of them:
 - [ ] Per-workspace persistent environments: a `.venv` exists for Python —
   add the equivalent for Node (workspace `package.json` + node_modules) and
   a build cache dir for C++/Rust so repeated compiles are fast.
-- [ ] Toolchain capability report: extend the tools registry/doctor so the
-  agent knows which compilers and versions are actually present (evidence,
-  not assumption) before promising builds.
+- [x] Toolchain capability report (2026-07-17): Doctor now probes and reports
+  which code_run toolchains (python/node/gcc/g++/go/rustc/bash) are actually
+  installed with versions, so the agent knows what it can build from evidence.
 - [ ] Consider adding: sqlite3 CLI, ripgrep, shellcheck, valgrind, gdb to
   the image for debugging-grade power (small, high leverage). GPU CUDA
   toolkit stays out — too heavy for the bundle.

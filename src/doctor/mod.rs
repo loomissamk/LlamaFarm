@@ -99,6 +99,7 @@ fn diagnose_with_mode(config: &Config, runtime_mode: RuntimeMode) -> Vec<DiagRes
     check_daemon_state(config, runtime_mode, &mut items);
     check_environment(&mut items);
     check_npu(&mut items);
+    check_code_run_toolchains(&mut items);
     check_cli_tools(&mut items);
 
     items.into_iter().map(DiagItem::into_result).collect()
@@ -1020,6 +1021,43 @@ fn check_cli_tools(items: &mut Vec<DiagItem>) {
             cat,
             format!("{} CLI tools discovered", discovered.len()),
         ));
+    }
+}
+
+/// Report which `code_run` toolchains are actually installed, so the agent
+/// (and operator) can see what it can genuinely compile/run before promising a
+/// build. Mirrors the languages the code_run tool supports.
+fn check_code_run_toolchains(items: &mut Vec<DiagItem>) {
+    let toolchains: &[(&str, &str, &[&str])] = &[
+        ("python", "python3", &["--version"]),
+        ("javascript/typescript", "node", &["--version"]),
+        ("c", "gcc", &["--version"]),
+        ("c++", "g++", &["--version"]),
+        ("go", "go", &["version"]),
+        ("rust", "rustc", &["--version"]),
+        ("bash", "bash", &["--version"]),
+    ];
+    for (lang, bin, args) in toolchains {
+        match std::process::Command::new(bin)
+            .args(*args)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                let ver = String::from_utf8_lossy(&output.stdout);
+                let first = ver.lines().next().unwrap_or("").trim();
+                let display = truncate_for_display(first, COMMAND_VERSION_PREVIEW_CHARS);
+                items.push(DiagItem::ok(
+                    "code_run",
+                    format!("{lang} ({bin}): {display}"),
+                ));
+            }
+            _ => items.push(DiagItem::warn(
+                "code_run",
+                format!("{lang} ({bin}) not available"),
+            )),
+        }
     }
 }
 
