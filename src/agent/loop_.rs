@@ -2706,7 +2706,6 @@ pub(crate) async fn run_tool_call_loop(
     let mut retrospective_plan_injected = false;
     // True for the iteration immediately following a plan-create continuation injection.
     // Lets us detect when the model responds with a plan-summary text instead of calling tools.
-    let mut pending_post_plan_create_retry = false;
     let mut successful_tool_execution_seen = false;
     // Rolling window of previous no-tool-call response texts for detecting repeated intent.
     let mut prior_no_tool_response_texts: Vec<String> = Vec::new();
@@ -2787,13 +2786,14 @@ pub(crate) async fn run_tool_call_loop(
         if let Some(retry_prompt) = missing_tool_call_retry_prompt.take() {
             history.push(ChatMessage::user(retry_prompt));
         }
+        // Scoped per iteration: it is set from this turn's continuation prompt
+        // and read later in the same iteration, never across iterations.
+        let mut pending_post_plan_create_retry = false;
         if let Some(continuation_prompt) = post_tool_execution_prompt.take() {
             // Track whether this is a plan-create start prompt so we can detect
             // when the model responds with plan-summary text instead of tool calls.
             pending_post_plan_create_retry = continuation_prompt.contains("Begin execution NOW");
             history.push(ChatMessage::user(continuation_prompt));
-        } else {
-            pending_post_plan_create_retry = false;
         }
 
         let image_marker_count = multimodal::count_image_markers(history);
@@ -3638,7 +3638,6 @@ pub(crate) async fn run_tool_call_loop(
                 && !missing_tool_call_retry_used
                 && iteration + 1 < effective_limit
             {
-                pending_post_plan_create_retry = false;
                 missing_tool_call_retry_used = true;
                 retry_count += 1;
                 missing_tool_call_retry_prompt =

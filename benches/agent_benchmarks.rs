@@ -40,6 +40,7 @@ impl BenchProvider {
                 text: Some(text.into()),
                 tool_calls: vec![],
                 usage: None,
+                metrics: None,
                 reasoning_content: None,
             }]),
         }
@@ -56,12 +57,14 @@ impl BenchProvider {
                         arguments: "{}".into(),
                     }],
                     usage: None,
+                    metrics: None,
                     reasoning_content: None,
                 },
                 ChatResponse {
                     text: Some("done".into()),
                     tool_calls: vec![],
                     usage: None,
+                    metrics: None,
                     reasoning_content: None,
                 },
             ]),
@@ -93,6 +96,7 @@ impl Provider for BenchProvider {
                 text: Some("done".into()),
                 tool_calls: vec![],
                 usage: None,
+                metrics: None,
                 reasoning_content: None,
             });
         }
@@ -160,6 +164,7 @@ Let me know if you need more."#
         ),
         tool_calls: vec![],
         usage: None,
+        metrics: None,
         reasoning_content: None,
     };
 
@@ -178,6 +183,7 @@ Let me know if you need more."#
         ),
         tool_calls: vec![],
         usage: None,
+        metrics: None,
         reasoning_content: None,
     };
 
@@ -212,6 +218,7 @@ fn bench_native_parsing(c: &mut Criterion) {
             },
         ],
         usage: None,
+        metrics: None,
         reasoning_content: None,
     };
 

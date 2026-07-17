@@ -731,7 +731,6 @@ async fn e2e_live_research_phase() {
     use llamafarm::config::{ResearchPhaseConfig, ResearchTrigger};
     use llamafarm::observability::NoopObserver;
     use llamafarm::providers::openai_codex::OpenAiCodexProvider;
-    use llamafarm::providers::traits::Provider;
     use llamafarm::tools::{Tool, ToolResult};
 
     // ── Test should_trigger ──

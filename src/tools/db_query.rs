@@ -21,7 +21,7 @@ impl DbQueryTool {
 
     fn build_description(connections: &[DbConnectionConfig]) -> String {
         use crate::config::DbDriver;
-        let mut parts: Vec<String> = connections.iter().map(|c| {
+        let parts: Vec<String> = connections.iter().map(|c| {
             match c.driver {
                 DbDriver::Mongodb => format!(
                     "'{}' (MongoDB/{label}): Use this tool — NOT shell/curl — for any ArXiv paper queries. \

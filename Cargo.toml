@@ -209,6 +209,10 @@ observability-otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentel
 web-fetch-html2md = ["dep:fast_html2md"]
 web-fetch-plaintext = ["dep:nanohtml2text"]
 firecrawl = []
+# Optional persona/approval gates in the SOP engine (referenced by
+# cfg(feature = "ampersona-gates") in src/sop/*). Declared so the cfg is
+# known to the compiler; off by default.
+ampersona-gates = []
 peripheral-rpi = ["rppal"]
 # Browser backend feature alias used by cfg(feature = "browser-native")
 browser-native = ["dep:fantoccini"]
