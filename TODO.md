@@ -239,6 +239,50 @@ Cutting-edge agentic/throughput priorities (operator request):
   prefix for Ollama prefix-cache hits, measure with the live ttft/tps
   metrics now in the UI.
 
+## Global access + friendly settings (operator request, 2026-07-16)
+
+### Internal VPN — connect to your nodes from anywhere
+
+Recommended: **Tailscale sidecar** (WireGuard under the hood, free for
+personal use, NAT/CGNAT traversal with no port-forwarding, no public
+exposure). LlamaFarm already has a `[tunnel] provider = "tailscale"` config
+hook and refuses public bind without one, so this fits the existing design.
+
+- [ ] Add an optional `tailscale` service to `docker-compose.bundle.yml`
+  (image `tailscale/tailscale`, `TS_AUTHKEY` from the node env file,
+  `TS_STATE_DIR` on a persistent volume, `--advertise-tags`), with the
+  LlamaFarm container joining it via `network_mode: service:tailscale`.
+  Gated behind a compose profile so it stays strictly opt-in.
+- [ ] Both nodes then get stable `100.x` tailnet IPs reachable worldwide:
+  federation peers use tailnet IPs instead of `192.168.1.x`, so the two-node
+  setup keeps working off-LAN (this also unblocks the gpu box redeploy from
+  anywhere).
+- [ ] Enable Tailscale Serve/Funnel optionally for HTTPS access from a phone
+  without exposing the LAN; keep `allow_public_bind = false`.
+- [ ] Alternative documented for reference: a self-hosted WireGuard
+  container (full control, but requires a port-forward + static endpoint —
+  worse for laptops that roam). Do NOT expose 42617 to the internet directly.
+- [ ] Security: tailnet ACLs restricting who can reach 42617; keep the
+  federation shared token as defence-in-depth.
+
+### Friendly settings UI (Copilot-style connections)
+
+- [ ] Rebuild the Settings page around **Connections** cards, each showing
+  live state (connected / not configured / error) instead of raw TOML:
+  GitHub, Ollama, Qdrant, Federation peers, Tailscale.
+- [ ] GitHub connection card: a real "Connect GitHub" button running the
+  **OAuth device flow** — the UI shows a user code and an
+  `https://github.com/login/device` link to click, polls for completion, then
+  stores the token owner-only in the node volume and shows the connected
+  account + scopes. No token pasting.  (`src/auth/` already implements this
+  pattern for other providers — reuse `oauth_common`.)
+- [ ] Broker the token only to git operations; never expose it in model
+  context, tool output, traces, memory, or browser storage.
+- [ ] Surface repo capability state (can clone / push / open PRs) as
+  evidence, so the agent never claims git powers it lacks.
+- [ ] Move the common knobs (model, provider, autonomy level) onto the
+  Dashboard as inline controls; keep advanced TOML behind a disclosure.
+
 ## Next-gen RAG and speed ideas (operator request, 2026-07-16)
 
 Storage decision: no MongoDB. Local-first stack stays files (source of truth)
