@@ -52,6 +52,11 @@ struct ChatRequest {
     think: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<serde_json::Value>>,
+    /// How long Ollama keeps the model loaded after the request. "-1" pins it
+    /// in VRAM so subsequent turns skip the multi-second reload that shows up
+    /// as a huge time-to-first-token. Configurable; defaults to keeping it hot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    keep_alive: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -152,6 +157,17 @@ struct OllamaFunction {
 }
 
 // ─── Implementation ───────────────────────────────────────────────────────────
+
+/// Keep-alive for the loaded model. Defaults to "-1" (pin in VRAM) so back-to-
+/// back chat turns skip the reload that otherwise shows as a large TTFT. Set
+/// `OLLAMA_KEEP_ALIVE` (e.g. "5m", "0", "-1") to override.
+fn resolve_keep_alive() -> String {
+    std::env::var("OLLAMA_KEEP_ALIVE")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "-1".to_string())
+}
 
 impl OllamaProvider {
     fn normalize_base_url(raw_url: &str) -> String {
@@ -417,6 +433,7 @@ impl OllamaProvider {
                 num_ctx: Some(num_ctx),
                 num_predict: self.max_output_tokens,
             },
+            keep_alive: Some(resolve_keep_alive()),
             // Only send think:true when the model reports "thinking" capability.
             // Sending it to non-thinking models causes a 400 from llama-server.
             think: if self.reasoning_enabled == Some(true) {

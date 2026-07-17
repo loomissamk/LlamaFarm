@@ -19,12 +19,8 @@ requested work.
 
 ## Delivered in the two-node foundation pass
 
-- [ ] Make run-and-forget `test all tools` jobs durable and evidence-based:
-  retain the autonomous executable plan, checkpoint every result, classify
-  prerequisites/side effects, use disposable fixtures where appropriate, and
-  end with a truthful capability matrix rather than model claims.  A quick
-  non-destructive preflight is complementary, never a substitute for the
-  operator-requested integration run.
+- [x] (dropped) "test all tools" was the operator's informal way of probing
+  the agent's capability, not a feature to build (confirmed 2026-07-17).
 - [x] Show live operational progress in the Agent UI, with an expanded by
   default, collapsible live-output panel.  Do not expose hidden reasoning;
   show useful execution state, tools, artifacts, and final answer instead.
@@ -267,9 +263,10 @@ Cutting-edge agentic/throughput priorities (operator request):
   the full loop runs end-to-end from a single request.
 - [ ] More autonomy: default plan-execute-verify for multi-step webchat
   tasks, auto-continue across segments, chaos-style recovery on tool errors.
-- [ ] Throughput: keep_alive=-1 pinned chat model, byte-stable system-prompt
-  prefix for Ollama prefix-cache hits, measure with the live ttft/tps
-  metrics now in the UI.
+- [~] Throughput: keep_alive default "-1" pins the chat model in VRAM
+  (2026-07-17, env OLLAMA_KEEP_ALIVE overrides) — kills the multi-second
+  reload that showed as ~38s TTFT. Remaining: byte-stable system-prompt
+  prefix for Ollama prefix-cache hits.
 
 ## Global access + friendly settings (operator request, 2026-07-16)
 
