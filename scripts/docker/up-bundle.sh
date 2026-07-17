@@ -242,6 +242,16 @@ fi
 # LLAMAFARM_HEALTH_TIMEOUT seconds. On failure, retag last-green and recreate
 # so a bad build never leaves the node down. Non-up commands exec as before.
 
+# Fail fast with a clear message if the opt-in VPN profile is requested
+# without an auth key, rather than letting the sidecar crash-loop.
+for arg in "$@"; do
+  if [ "$arg" = "vpn" ] && [ -z "${TS_AUTHKEY:-}" ]; then
+    echo "The vpn profile needs a Tailscale auth key:" >&2
+    echo "  export TS_AUTHKEY=tskey-auth-...   # Tailscale admin console > Settings > Keys" >&2
+    exit 2
+  fi
+done
+
 IS_UP=0
 [ "${1:-}" = "up" ] && IS_UP=1
 

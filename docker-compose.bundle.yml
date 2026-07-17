@@ -147,8 +147,48 @@ services:
       retries: 3
       start_period: 15s
 
+  # ── Optional internal VPN (opt-in) ──────────────────────────────────────
+  # Joins this node to your private Tailscale tailnet (WireGuard), giving it a
+  # stable 100.x address reachable from anywhere without port-forwarding and
+  # without exposing 42617 to the internet. Strictly opt-in via profile:
+  #
+  #   export TS_AUTHKEY=tskey-auth-...           # from the Tailscale admin console
+  #   ./scripts/docker/up-node.sh rtx4070-laptop --profile vpn up -d
+  #
+  # Then reach the node at http://<node>.<your-tailnet>.ts.net:42617 or its
+  # 100.x IP. Use tailnet ACLs to restrict who may reach the port; keep the
+  # federation token as defence-in-depth. Leave allow_public_bind = false.
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: LlamaFarm-VPN
+    profiles: ["vpn"]
+    restart: unless-stopped
+    hostname: ${LLAMAFARM_NODE_NAME:-llamafarm-node}
+    environment:
+      # Empty default keeps non-VPN deploys valid; the vpn profile requires it.
+      - TS_AUTHKEY=${TS_AUTHKEY:-}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=false
+      # Advertise nothing by default; opt into subnet routes explicitly.
+      - TS_EXTRA_ARGS=${TS_EXTRA_ARGS:---accept-dns=false}
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    healthcheck:
+      test: ["CMD", "tailscale", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
 volumes:
   llamafarm-bundle-data:
     name: llamafarm-bundle-data
   qdrant-data:
     name: qdrant-data
+  tailscale-state:
+    name: tailscale-state
