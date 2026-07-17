@@ -248,7 +248,8 @@ personal use, NAT/CGNAT traversal with no port-forwarding, no public
 exposure). LlamaFarm already has a `[tunnel] provider = "tailscale"` config
 hook and refuses public bind without one, so this fits the existing design.
 
-- [ ] Add an optional `tailscale` service to `docker-compose.bundle.yml`
+- [x] Optional `tailscale` service in `docker-compose.bundle.yml`
+  (2026-07-16, `--profile vpn`, verified absent from default deploys)
   (image `tailscale/tailscale`, `TS_AUTHKEY` from the node env file,
   `TS_STATE_DIR` on a persistent volume, `--advertise-tags`), with the
   LlamaFarm container joining it via `network_mode: service:tailscale`.
@@ -267,17 +268,19 @@ hook and refuses public bind without one, so this fits the existing design.
 
 ### Friendly settings UI (Copilot-style connections)
 
-- [ ] Rebuild the Settings page around **Connections** cards, each showing
-  live state (connected / not configured / error) instead of raw TOML:
-  GitHub, Ollama, Qdrant, Federation peers, Tailscale.
-- [ ] GitHub connection card: a real "Connect GitHub" button running the
+- [x] Connections cards on the Settings page (2026-07-16): live state for
+  GitHub / Ollama / Memory above the raw TOML. Remaining cards: Qdrant,
+  Federation peers, Tailscale.
+- [x] GitHub connection card (2026-07-16): "Connect GitHub" runs the
   **OAuth device flow** — the UI shows a user code and an
   `https://github.com/login/device` link to click, polls for completion, then
   stores the token owner-only in the node volume and shows the connected
   account + scopes. No token pasting.  (`src/auth/` already implements this
   pattern for other providers — reuse `oauth_common`.)
-- [ ] Broker the token only to git operations; never expose it in model
-  context, tool output, traces, memory, or browser storage.
+- [x] Token stored owner-only (0600) and brokered via
+  `github_device::brokered_token`; never in model context, tool output,
+  traces, memory, or browser storage (unit-tested). Remaining: wire the
+  broker into the git_operations/git_worktree push paths.
 - [ ] Surface repo capability state (can clone / push / open PRs) as
   evidence, so the agent never claims git powers it lacks.
 - [ ] Move the common knobs (model, provider, autonomy level) onto the

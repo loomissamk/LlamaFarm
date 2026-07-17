@@ -1,3 +1,4 @@
+import { ConnectionsPanel } from './Connections';
 import { IntegrationsPanel } from './Integrations';
 import { useEffect, useState } from 'react';
 import {
@@ -112,6 +113,7 @@ export default function Config() {
 
   return (
     <div className="space-y-6 p-6">
+      <ConnectionsPanel />
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="space-y-2">
           <div className="flex items-center gap-2">

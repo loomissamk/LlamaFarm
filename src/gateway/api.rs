@@ -3537,6 +3537,108 @@ pub async fn handle_api_history_clear(
     .into_response()
 }
 
+/// Resolve the node's persistent config directory (where credentials live).
+fn node_config_dir(state: &AppState) -> std::path::PathBuf {
+    let config = state.config.lock();
+    config
+        .config_path
+        .parent()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| config.workspace_dir.clone())
+}
+
+/// GET /api/connections — friendly settings state for the Connections UI.
+/// Reports live status per integration; never returns secrets.
+pub async fn handle_api_connections(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+    let config_dir = node_config_dir(&state);
+    let github = crate::auth::github_device::connection_status(&config_dir);
+    let (model, provider, memory_backend) = {
+        let config = state.config.lock();
+        (
+            config.default_model.clone().unwrap_or_default(),
+            config.default_provider.clone().unwrap_or_default(),
+            config.memory.backend.clone(),
+        )
+    };
+    Json(serde_json::json!({
+        "github": match github {
+            Some(conn) => serde_json::json!({
+                "status": "connected",
+                "login": conn.login,
+                "scopes": conn.scopes,
+                "connected_at": conn.connected_at,
+            }),
+            None => serde_json::json!({"status": "not_connected"}),
+        },
+        "ollama": {"status": "configured", "model": model, "provider": provider},
+        "memory": {"status": "configured", "backend": memory_backend},
+    }))
+    .into_response()
+}
+
+/// POST /api/connections/github/start — begin the GitHub device flow.
+/// Returns the user code + verification URL for the operator to click.
+pub async fn handle_api_github_connect_start(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+    match crate::auth::github_device::start(None).await {
+        Ok(start) => Json(serde_json::json!(start)).into_response(),
+        Err(error) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": format!("GitHub device flow failed: {error}")})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct GithubPollBody {
+    pub device_code: String,
+}
+
+/// POST /api/connections/github/poll — one poll of the device flow.
+/// The UI calls this on the interval until status != pending.
+pub async fn handle_api_github_connect_poll(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<GithubPollBody>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+    let config_dir = node_config_dir(&state);
+    match crate::auth::github_device::poll_once(&body.device_code, &config_dir).await {
+        Ok(outcome) => Json(serde_json::json!(outcome)).into_response(),
+        Err(error) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": format!("GitHub poll failed: {error}")})),
+        )
+            .into_response(),
+    }
+}
+
+/// POST /api/connections/github/disconnect — remove the stored credential.
+pub async fn handle_api_github_disconnect(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+    let removed = crate::auth::github_device::disconnect(&node_config_dir(&state));
+    Json(serde_json::json!({"status": "ok", "disconnected": removed})).into_response()
+}
+
 /// GET /api/runs — run inspector index: live + historical run ledgers.
 pub async fn handle_api_runs_list(
     State(state): State<AppState>,

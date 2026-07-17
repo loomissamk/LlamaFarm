@@ -906,6 +906,19 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .route("/api/cli-tools", get(api::handle_api_cli_tools))
         .route("/api/health", get(api::handle_api_health))
         .route("/api/history/clear", post(api::handle_api_history_clear))
+        .route("/api/connections", get(api::handle_api_connections))
+        .route(
+            "/api/connections/github/start",
+            post(api::handle_api_github_connect_start),
+        )
+        .route(
+            "/api/connections/github/poll",
+            post(api::handle_api_github_connect_poll),
+        )
+        .route(
+            "/api/connections/github/disconnect",
+            post(api::handle_api_github_disconnect),
+        )
         .route("/api/runs", get(api::handle_api_runs_list))
         .route("/api/runs/{run_id}", get(api::handle_api_run_get))
         .route(
