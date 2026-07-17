@@ -33,6 +33,11 @@ pub struct DiscoveredDb {
     pub driver: String,
     /// Suggested connection string for the Add-connection form.
     pub suggested_dsn: String,
+    /// True when the server answered an unauthenticated probe (no password).
+    /// The operator can then one-click connect. Only meaningful for redis so
+    /// far; None for drivers we don't safely probe.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub no_auth: Option<bool>,
 }
 
 fn suggested_dsn(driver: &str, host: &str, port: u16) -> String {
@@ -75,6 +80,35 @@ async fn probe(addr: SocketAddr) -> bool {
         tokio::time::timeout(PROBE_TIMEOUT, tokio::net::TcpStream::connect(addr)).await,
         Ok(Ok(_))
     )
+}
+
+/// Non-destructive check for whether a server requires a password.
+/// Currently only redis: send `PING` and read the reply — `+PONG` means no
+/// auth, `-NOAUTH`/`-ERR ...auth...` means a password is set. Read-only, sends
+/// no data-mutating commands. Returns None for drivers we don't safely probe.
+async fn probe_no_auth(addr: SocketAddr, driver: &str) -> Option<bool> {
+    if driver != "redis" {
+        return None;
+    }
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::time::timeout(PROBE_TIMEOUT, tokio::net::TcpStream::connect(addr))
+        .await
+        .ok()?
+        .ok()?;
+    stream.write_all(b"PING\r\n").await.ok()?;
+    let mut buf = [0u8; 64];
+    let n = tokio::time::timeout(PROBE_TIMEOUT, stream.read(&mut buf))
+        .await
+        .ok()?
+        .ok()?;
+    let reply = String::from_utf8_lossy(&buf[..n]).to_ascii_uppercase();
+    if reply.starts_with("+PONG") {
+        Some(true) // answered without auth
+    } else if reply.contains("NOAUTH") || reply.contains("AUTH") {
+        Some(false) // password required
+    } else {
+        None
+    }
 }
 
 /// Scan the node's private subnets for reachable database ports.
@@ -124,11 +158,17 @@ pub async fn scan(hosts: &[String]) -> Vec<DiscoveredDb> {
         while let Some(res) = set.join_next().await {
             if let Ok(Some((host, port, driver))) = res {
                 let suggested_dsn = suggested_dsn(&driver, &host, port);
+                let no_auth = if let Ok(ip) = host.parse::<IpAddr>() {
+                    probe_no_auth(SocketAddr::new(ip, port), &driver).await
+                } else {
+                    None
+                };
                 found.push(DiscoveredDb {
                     host,
                     port,
                     driver,
                     suggested_dsn,
+                    no_auth,
                 });
             }
         }
@@ -154,6 +194,25 @@ mod tests {
         // A public IP must never be probed, even when explicitly requested.
         let found = scan(&["8.8.8.8".to_string()]).await;
         assert!(found.is_empty(), "public addresses must be refused");
+    }
+
+    #[tokio::test]
+    async fn no_auth_probe_detects_open_redis() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let Ok(listener) = tokio::net::TcpListener::bind("127.0.0.1:0").await else {
+            return;
+        };
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 16];
+                let _ = sock.read(&mut buf).await;
+                let _ = sock.write_all(b"+PONG\r\n").await;
+            }
+        });
+        assert_eq!(probe_no_auth(addr, "redis").await, Some(true));
+        // Non-redis drivers are never probed.
+        assert_eq!(probe_no_auth(addr, "postgres").await, None);
     }
 
     #[tokio::test]

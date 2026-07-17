@@ -55,6 +55,7 @@ pub mod memory_store;
 pub mod model_routing_config;
 pub mod ollama_model;
 pub mod package_manager;
+pub mod packet_capture;
 pub mod pdf_read;
 pub mod process;
 pub mod proxy_config;
@@ -118,6 +119,7 @@ pub use memory_store::MemoryStoreTool;
 pub use model_routing_config::ModelRoutingConfigTool;
 pub use ollama_model::OllamaModelTool;
 pub use package_manager::PackageManagerTool;
+pub use packet_capture::PacketCaptureTool;
 pub use pdf_read::PdfReadTool;
 pub use process::ProcessTool;
 pub use proxy_config::ProxyConfigTool;
@@ -434,7 +436,16 @@ pub fn all_tools_with_runtime_and_federation(
         }
         tool_arcs.push(Arc::new(workspace_rag));
         tool_arcs.push(Arc::new(CodeRunTool::new(security.clone(), workspace_dir)));
-        tool_arcs.push(Arc::new(GitWorktreeTool::new(security.clone(), workspace_dir.to_path_buf())));
+        tool_arcs.push(Arc::new(PacketCaptureTool::new(security.clone(), workspace_dir.to_path_buf())));
+        tool_arcs.push(Arc::new(
+            GitWorktreeTool::new(security.clone(), workspace_dir.to_path_buf()).with_config_dir(
+                root_config
+                    .config_path
+                    .parent()
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| workspace_dir.to_path_buf()),
+            ),
+        ));
     }
     if runtime.as_any().is::<crate::runtime::WasmRuntime>() {
         tool_arcs.push(Arc::new(WasmModuleTool::new(

@@ -17,6 +17,8 @@ use std::sync::Arc;
 pub struct GitWorktreeTool {
     security: Arc<SecurityPolicy>,
     workspace_dir: PathBuf,
+    /// Node config dir holding the brokered GitHub token, if connected.
+    config_dir: Option<PathBuf>,
 }
 
 impl GitWorktreeTool {
@@ -24,7 +26,15 @@ impl GitWorktreeTool {
         Self {
             security,
             workspace_dir,
+            config_dir: None,
         }
+    }
+
+    /// Provide the config dir so an adopted worktree's push to github.com can
+    /// use the token connected on the Settings page.
+    pub fn with_config_dir(mut self, config_dir: PathBuf) -> Self {
+        self.config_dir = Some(config_dir);
+        self
     }
 
     fn worktrees_root(&self) -> PathBuf {
@@ -32,8 +42,24 @@ impl GitWorktreeTool {
     }
 
     async fn run_git(&self, args: &[&str]) -> Result<String, String> {
+        // Apply the brokered GitHub token via url.insteadOf so any github.com
+        // remote operation (e.g. a push after adopt) authenticates. The token
+        // is scrubbed from error text so it never surfaces in tool output.
+        let token = self
+            .config_dir
+            .as_deref()
+            .and_then(crate::auth::github_device::brokered_token);
+        let mut full: Vec<String> = Vec::new();
+        if let Some(ref t) = token {
+            full.push("-c".into());
+            full.push(format!(
+                "url.https://x-access-token:{t}@github.com/.insteadOf=https://github.com/"
+            ));
+        }
+        full.extend(args.iter().map(|s| s.to_string()));
+
         let output = tokio::process::Command::new("git")
-            .args(args)
+            .args(&full)
             .current_dir(&self.workspace_dir)
             .output()
             .await
@@ -41,7 +67,11 @@ impl GitWorktreeTool {
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).to_string())
         } else {
-            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+            let mut stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            if let Some(ref t) = token {
+                stderr = stderr.replace(t.as_str(), "***");
+            }
+            Err(stderr)
         }
     }
 

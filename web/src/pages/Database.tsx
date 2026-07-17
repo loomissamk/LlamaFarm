@@ -435,7 +435,7 @@ export default function DatabasePage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [discovered, setDiscovered] = useState<
-    { host: string; port: number; driver: string; suggested_dsn: string }[] | null
+    { host: string; port: number; driver: string; suggested_dsn: string; no_auth?: boolean }[] | null
   >(null);
   const [editConn, setEditConn] = useState<DbConnection | null>(null);
 
@@ -549,7 +549,7 @@ export default function DatabasePage() {
     setScanning(true);
     try {
       const res = await apiFetch<{
-        discovered: { host: string; port: number; driver: string; suggested_dsn: string }[];
+        discovered: { host: string; port: number; driver: string; suggested_dsn: string; no_auth?: boolean }[];
       }>('/api/db/discover', { method: 'POST', body: JSON.stringify({ hosts: [] }) });
       setDiscovered(res.discovered);
     } catch (e) {
@@ -687,6 +687,11 @@ export default function DatabasePage() {
                   <span className="text-gray-300 text-xs font-mono truncate flex-1">
                     {d.host}:{d.port}
                   </span>
+                  {d.no_auth === true && (
+                    <span className="text-[10px] px-1 py-0.5 rounded bg-amber-900/60 text-amber-300 flex-shrink-0" title="No password required — one-click connect">
+                      open
+                    </span>
+                  )}
                   <DriverBadge driver={d.driver} />
                 </button>
               ))

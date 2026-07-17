@@ -124,9 +124,9 @@ My honest thoughts on each idea, with a plan:
   chaos_lab / ethical-hacking / disposable-target mission). Keep it a build
   flag, never default; document the "own systems / permission only" boundary.
   Do NOT add mass-targeting, DoS, or self-propagating capabilities.
-- [ ] **Wireshark/packet capture in the agent**: expose tshark via a
-  `packet_capture` tool (bounded duration + packet count, capture to a
-  workspace artifact) so the agent can do real network analysis on the lab.
+- [x] **packet_capture tool** (2026-07-17): bounded tshark/tcpdump capture
+  (max packets + duration, artifact to workspace/captures, 40-line preview),
+  BPF filter sanitized, clean error when the lab image isn't built.
 - [ ] **Discord channel**: LlamaFarm already has telegram/matrix/whatsapp/
   etc. channels; add Discord (bot gateway) as another remote-control surface.
   Verdict: YES, straightforward and genuinely useful for driving the node
@@ -139,10 +139,10 @@ My honest thoughts on each idea, with a plan:
   venv (code_run/python), and runs inference on a sample. Verdict: GREAT
   showcase of the whole platform (git + code_run + RAG + run ledger) on your
   own real repo. Generalize to "bootstrap any of my repos as a project."
-- [ ] **Auto-connect passwordless DBs on scan** (earlier request): when the
-  network scan finds an unauthenticated redis/mongo/pg/etc., offer one-click
-  add with schema auto-import. Keep it opt-in per host (never silent), since
-  auto-connecting to found services is powerful.
+- [~] **Passwordless-DB detection on scan** (2026-07-17): the scan now
+  probes discovered redis with a read-only PING and flags `no_auth`; the UI
+  shows an "open" badge for one-click add. Remaining: extend the safe probe
+  to mongo/pg and auto-import schema on connect.
 
 ## Next-generation agent workflow
 
