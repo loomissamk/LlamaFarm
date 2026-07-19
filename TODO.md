@@ -109,6 +109,20 @@ Remaining to finish this pass, in order:
   send real `InferenceMetrics` (generation_tps/ttft_ms) over the chat
   websocket for the UI TPS indicator (10.3).
 
+
+## Perf finding (2026-07-17, measured on the 4070 laptop)
+
+The ~38s TTFT the operator saw is dominated by PREFILL/KV-cache, not model
+reload. Measured with the new /api/context slider + live metrics:
+- num_ctx 32768 → TTFT ~36-40s
+- num_ctx 8192  → TTFT ~16.8s (>2x faster)
+keep_alive=-1 confirmed the model stays loaded (only ~40→36s from it alone),
+so the win is smaller context on a VRAM-constrained node: a 9B model on 8GB
+already spills to CPU and 32k context makes prefill crawl. Laptop left at
+8192 as a sane default; operator can slide up on the 16GB 5070 Ti / future
+4× V100. Next speed levers: smaller chat model or fast-lane router on the
+4070, and OLLAMA_SPECULATIVE_DECODE=1.
+
 ## Research-backed gen-AI batch (web deep-dive, 2026-07-17)
 
 Sources: futureagi LLM agent architectures, Cognee memory frameworks, MDPI
