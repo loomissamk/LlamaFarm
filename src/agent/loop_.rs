@@ -3011,6 +3011,10 @@ pub(crate) async fn run_tool_call_loop(
                         "generation_tps": metrics.generation_tps,
                         "prefill_tps": metrics.prefill_tps,
                         "total_ms": metrics.total_ms,
+                        // Real prompt token count from the provider — the true
+                        // "how big is my context" number (system prompt + tools
+                        // + memory + history), so the UI budget reflects reality.
+                        "prompt_tokens": resp.usage.as_ref().and_then(|u| u.input_tokens),
                     });
                     let _ = tx.send(format!("{DRAFT_METRICS_SENTINEL}{payload}")).await;
                 }

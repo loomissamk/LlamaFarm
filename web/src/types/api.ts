@@ -310,6 +310,7 @@ export interface WsMessage {
     generation_tps?: number | null;
     prefill_tps?: number | null;
     total_ms?: number | null;
+    prompt_tokens?: number | null;
   };
 }
 

@@ -643,6 +643,7 @@ export default function AgentChat() {
   const [realMetrics, setRealMetrics] = useState<{
     generationTps: number;
     ttftMs: number | null;
+    promptTokens: number | null;
   } | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [federation, setFederation] = useState<FederationPeersResponse | null>(null);
@@ -904,6 +905,7 @@ export default function AgentChat() {
             setRealMetrics({
               generationTps: m.generation_tps,
               ttftMs: typeof m.ttft_ms === 'number' ? m.ttft_ms : null,
+              promptTokens: typeof m.prompt_tokens === 'number' ? m.prompt_tokens : null,
             });
           }
           break;
@@ -1657,6 +1659,8 @@ export default function AgentChat() {
                   {realMetrics.generationTps.toFixed(1)} t/s
                   {realMetrics.ttftMs !== null &&
                     ` · ttft ${(realMetrics.ttftMs / 1000).toFixed(2)}s`}
+                  {realMetrics.promptTokens !== null &&
+                    ` · ${realMetrics.promptTokens.toLocaleString()} prompt tok`}
                 </span>
               ) : (
                 streaming &&

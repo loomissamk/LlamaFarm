@@ -31,6 +31,7 @@ interface ContextInfo {
     keep_alive: string | null;
     kv_cache_type: string | null;
   };
+  gpu: { total_mb: number; used_mb: number; free_mb: number };
   budget: {
     persona_md_tokens: number;
     tool_count: number;
@@ -292,6 +293,35 @@ export function ConnectionsPanel() {
       {/* Context window control + token budget */}
       {ctx && (
         <div className="rounded-xl border border-gray-800 bg-gray-900 p-5">
+          {/* Live VRAM bar — shows the dynamic tradeoff: bigger context / more
+              GPU layers use more VRAM. */}
+          {ctx.gpu.total_mb > 0 && (
+            <div className="mb-4">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-gray-400">GPU VRAM</span>
+                <span className="font-mono text-gray-300">
+                  {(ctx.gpu.used_mb / 1024).toFixed(1)} / {(ctx.gpu.total_mb / 1024).toFixed(1)} GB
+                  <span className="text-gray-600"> · {(ctx.gpu.free_mb / 1024).toFixed(1)} free</span>
+                </span>
+              </div>
+              <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-gray-800">
+                <div
+                  className={`h-full transition-all ${
+                    ctx.gpu.used_mb / ctx.gpu.total_mb > 0.92
+                      ? 'bg-red-500'
+                      : ctx.gpu.used_mb / ctx.gpu.total_mb > 0.75
+                        ? 'bg-amber-500'
+                        : 'bg-green-500'
+                  }`}
+                  style={{ width: `${Math.min(100, (ctx.gpu.used_mb / ctx.gpu.total_mb) * 100)}%` }}
+                />
+              </div>
+              <p className="mt-1 text-[11px] text-gray-600">
+                Bigger context and "All GPU" layers use more VRAM. Keep some headroom for the embed
+                model so both stay resident (avoids the reload penalty).
+              </p>
+            </div>
+          )}
           <div className="flex items-center justify-between">
             <span className="font-medium text-white">Chat context window</span>
             <span className="font-mono text-sm text-blue-300">

@@ -3598,6 +3598,24 @@ pub async fn handle_api_connections(
     .into_response()
 }
 
+/// Query GPU memory (total, used, free) in MiB via nvidia-smi. None if no GPU.
+fn query_gpu_memory() -> Option<(u64, u64, u64)> {
+    let out = std::process::Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=memory.total,memory.used,memory.free",
+            "--format=csv,noheader,nounits",
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let line = String::from_utf8_lossy(&out.stdout);
+    let first = line.lines().next()?;
+    let mut parts = first.split(',').map(|s| s.trim().parse::<u64>().ok());
+    Some((parts.next()??, parts.next()??, parts.next()??))
+}
+
 /// GET /api/context — current chat context window (num_ctx) + bounds.
 /// The main chat model's context size; subtask/subagent contexts are managed
 /// separately and are unaffected by this control.
@@ -3617,6 +3635,10 @@ pub async fn handle_api_context_get(
         )
     };
     let runtime = state.runtime_snapshot();
+
+    // Live GPU memory so the UI can show the VRAM tradeoff dynamically
+    // (more context / more GPU layers → more VRAM used). Best-effort.
+    let (gpu_total_mb, gpu_used_mb, gpu_free_mb) = query_gpu_memory().unwrap_or((0, 0, 0));
 
     // Rough token budget so the operator can see if the .md files + tool
     // schemas are eating the window (~4 chars/token). Persona files:
@@ -3652,6 +3674,13 @@ pub async fn handle_api_context_get(
             "keep_alive": std::env::var("OLLAMA_KEEP_ALIVE").ok(),
             "kv_cache_type": std::env::var("OLLAMA_KV_CACHE_TYPE").ok(),
             "note": "Server settings apply on redeploy. max_loaded_models >= 2 keeps chat + embed models resident (fixes the reload-induced TTFT)."
+        },
+        // Live GPU memory (MiB) so the UI can show the VRAM headroom and the
+        // context/GPU-layer tradeoff dynamically. 0 = unavailable.
+        "gpu": {
+            "total_mb": gpu_total_mb,
+            "used_mb": gpu_used_mb,
+            "free_mb": gpu_free_mb,
         },
         "budget": {
             "persona_md_tokens": est_tokens(md_chars),
