@@ -109,6 +109,36 @@ Remaining to finish this pass, in order:
   send real `InferenceMetrics` (generation_tps/ttft_ms) over the chat
   websocket for the UI TPS indicator (10.3).
 
+## Research-backed gen-AI batch (web deep-dive, 2026-07-17)
+
+Sources: futureagi LLM agent architectures, Cognee memory frameworks, MDPI
+multi-agent orchestration survey, vucense speculative decoding, Gemma-4 MTP.
+
+Key finding that validates the operator's worry: **local models are
+overwhelmed by large tool sets — expanded context degrades their attention
+and tool selection.** Direct implications:
+
+- [ ] **Per-task tool subsetting**: don't expose all ~50 tools every turn.
+  Route by task (a small classifier picks a tool subset: coding / rag /
+  ops / chat), shrinking the prompt and improving local tool-call accuracy.
+  Pairs with the token-budget readout just shipped.
+- [ ] **Speculative decoding** (Ollama 5.x): `OLLAMA_SPECULATIVE_DECODE=1`
+  + a small draft model gives 1.5–3x decode throughput, identical output.
+  Gemma-4 MTP does similar natively. Document + wire an opt-in env in the
+  node profiles. Highest-leverage speed win after keep_alive.
+- [x] **Multi-model routing** — ALREADY IN LlamaFarm: `[[model_routes]]`
+  config (hint→model) + capability registry + a `model_routing_config`
+  tool the agent can call to set routes. Recommendation: route a fast
+  Qwen3 tool-router on the 4070 and the big model on the 5070 Ti (Qwen3 is
+  the most reliable local tool-caller per 2026 benchmarks). Just needs
+  config; surface it in the UI next.
+- [ ] **Graph/queryable memory** (Cognee/Mem0/Zep/Letta pattern): upgrade
+  the flat memory store toward a queryable knowledge graph with provenance
+  so recall scales past keyword/vector. Big but high-value.
+- [ ] **Hierarchical orchestration** (MDPI survey): formalize planner →
+  worker-subagents → verifier as a typed state graph (LlamaFarm already has
+  the pieces: run ledger, subagent_spawn, delegate). Adaptive control axis.
+
 ## Next-gen "dangerously good" batch (operator request, 2026-07-17)
 
 My honest thoughts on each idea, with a plan:
