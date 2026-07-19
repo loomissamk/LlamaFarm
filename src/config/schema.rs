@@ -828,6 +828,16 @@ pub struct AgentConfig {
     /// When true: bootstrap_max_chars=6000, rag_chunk_limit=2. Use for 13B or smaller models.
     #[serde(default)]
     pub compact_context: bool,
+    /// Per-task tool routing (Tool RAG). When enabled, only the query-relevant
+    /// tools plus a small essential set are exposed each turn instead of the
+    /// whole registry — cutting prompt tokens and improving local-model tool
+    /// selection accuracy. Default: enabled.
+    #[serde(default = "default_true")]
+    pub tool_routing_enabled: bool,
+    /// How many query-relevant non-essential tools to keep per turn when tool
+    /// routing is on. Default: 12. Set 0 to expose all tools.
+    #[serde(default = "default_tool_routing_top_k")]
+    pub tool_routing_top_k: usize,
     /// Maximum tool-call loop turns per user message. Default: `20`.
     /// Setting to `0` falls back to the safe default of `20`.
     #[serde(default = "default_agent_max_tool_iterations")]
@@ -856,6 +866,10 @@ pub struct AgentConfig {
     pub tool_dispatcher: String,
 }
 
+fn default_tool_routing_top_k() -> usize {
+    12
+}
+
 fn default_agent_max_tool_iterations() -> usize {
     20
 }
@@ -872,6 +886,8 @@ impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             compact_context: false,
+            tool_routing_enabled: true,
+            tool_routing_top_k: default_tool_routing_top_k(),
             max_tool_iterations: default_agent_max_tool_iterations(),
             max_history_messages: default_agent_max_history_messages(),
             max_output_tokens_per_turn: None,

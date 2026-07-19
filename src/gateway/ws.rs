@@ -2208,7 +2208,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 return;
             }
 
-            let excluded_tools: Vec<String> = match direct_intent {
+            let mut excluded_tools: Vec<String> = match direct_intent {
                 Some(DirectIntent::ForceTool(DirectForcedToolIntent::FileWrite(_))) => runtime
                     .tools_registry_exec
                     .iter()
@@ -2217,6 +2217,31 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     .collect(),
                 _ => Vec::new(),
             };
+
+            // Per-task tool routing (Tool RAG): expose only the query-relevant
+            // tools + essentials, cutting prompt tokens and improving local
+            // tool-selection accuracy. Skips when a direct intent already
+            // narrowed the set.
+            if direct_intent.is_none() {
+                let (routing_enabled, top_k) = {
+                    let c = state.config.lock();
+                    (c.agent.tool_routing_enabled, c.agent.tool_routing_top_k)
+                };
+                if routing_enabled {
+                    let registry: Vec<(String, String)> = runtime
+                        .tools_registry
+                        .iter()
+                        .map(|spec| (spec.name.clone(), spec.description.clone()))
+                        .collect();
+                    let routed =
+                        crate::agent::tool_router::tools_to_exclude(&registry, &content, top_k);
+                    for name in routed {
+                        if !excluded_tools.contains(&name) {
+                            excluded_tools.push(name);
+                        }
+                    }
+                }
+            }
 
             // Durable run ledger for the inspector: one ledger per chat
             // session, appended across turns, keyed by the session id.

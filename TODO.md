@@ -130,10 +130,14 @@ Key finding that validates the operator's worry: **local models are
 overwhelmed by large tool sets — expanded context degrades their attention
 and tool selection.** Direct implications:
 
-- [ ] **Per-task tool subsetting**: don't expose all ~50 tools every turn.
-  Route by task (a small classifier picks a tool subset: coding / rag /
-  ops / chat), shrinking the prompt and improving local tool-call accuracy.
-  Pairs with the token-budget readout just shipped.
+- [x] **Per-task tool routing (Tool RAG)** (2026-07-17): src/agent/tool_router.rs
+  scores the registry against the user message (lexical, name-weighted) and
+  exposes only the top-K relevant tools + a small essential set, via the
+  existing excluded_tools path. Config: agent.tool_routing_enabled (default
+  on), agent.tool_routing_top_k (default 12). Research-backed (RAG-MCP: tool
+  accuracy 13%->43% and >50% prompt reduction with large tool sets). Directly
+  trims the ~2.8k tool-schema tokens from the 17k prompt. Follow-up: embedding-
+  based retrieval + surface the routed set in the run ledger.
 - [ ] **Speculative decoding** (Ollama 5.x): `OLLAMA_SPECULATIVE_DECODE=1`
   + a small draft model gives 1.5–3x decode throughput, identical output.
   Gemma-4 MTP does similar natively. Document + wire an opt-in env in the
