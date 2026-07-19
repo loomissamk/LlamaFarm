@@ -135,9 +135,12 @@ and tool selection.** Direct implications:
 - [ ] **Graph/queryable memory** (Cognee/Mem0/Zep/Letta pattern): upgrade
   the flat memory store toward a queryable knowledge graph with provenance
   so recall scales past keyword/vector. Big but high-value.
-- [ ] **Hierarchical orchestration** (MDPI survey): formalize planner →
-  worker-subagents → verifier as a typed state graph (LlamaFarm already has
-  the pieces: run ledger, subagent_spawn, delegate). Adaptive control axis.
+- [ ] **Hierarchical orchestration** (MDPI survey) — planner → parallel
+  worker-subagents → verifier as a typed state graph. LlamaFarm already has
+  the pieces (run ledger, subagent_spawn, delegate). **GATED ON HARDWARE**:
+  operator's target rig is 4× V100 (~128GB VRAM, high bandwidth) — real
+  parallel multi-subagent orchestration lands when that's available; keep it
+  single/low-fanout on the current 8GB/16GB nodes to avoid VRAM thrash.
 
 ## Next-gen "dangerously good" batch (operator request, 2026-07-17)
 
