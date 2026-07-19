@@ -3598,6 +3598,88 @@ pub async fn handle_api_connections(
     .into_response()
 }
 
+/// GET /api/context — current chat context window (num_ctx) + bounds.
+/// The main chat model's context size; subtask/subagent contexts are managed
+/// separately and are unaffected by this control.
+pub async fn handle_api_context_get(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+    let (num_ctx, workspace_dir) = {
+        let c = state.config.lock();
+        (c.provider.ollama_num_ctx, c.workspace_dir.clone())
+    };
+    let runtime = state.runtime_snapshot();
+
+    // Rough token budget so the operator can see if the .md files + tool
+    // schemas are eating the window (~4 chars/token). Persona files:
+    let est_tokens = |chars: usize| chars / 4;
+    let md_chars: usize = ["AGENTS.md", "AGENT.md", "SOUL.md"]
+        .iter()
+        .filter_map(|f| std::fs::metadata(workspace_dir.join(f)).ok().map(|m| m.len() as usize))
+        .sum();
+    // Tool schemas dominate the fixed prompt cost; estimate from names+descriptions.
+    let tool_count = runtime.tools_registry.len();
+    let tool_chars: usize = runtime
+        .tools_registry
+        .iter()
+        .map(|t| t.name.len() + t.description.len())
+        .sum();
+    let fixed_prompt_tokens = est_tokens(md_chars + tool_chars);
+
+    Json(serde_json::json!({
+        // null means "auto" (use the model's native context length).
+        "num_ctx": num_ctx,
+        "min": 2048,
+        "max": 131072,
+        "note": "Chat context window. 'auto' uses the model's native length. Larger needs more VRAM; pair with OLLAMA_KV_CACHE_TYPE=q8_0. Subtask contexts are separate.",
+        "budget": {
+            "persona_md_tokens": est_tokens(md_chars),
+            "tool_count": tool_count,
+            "tool_schema_tokens": est_tokens(tool_chars),
+            "fixed_prompt_tokens_est": fixed_prompt_tokens,
+            "hint": "Fixed prompt cost (persona + tools) is subtracted from num_ctx before your conversation. Trim AGENTS.md or disable unused tools if this is a large fraction of a small window."
+        }
+    }))
+    .into_response()
+}
+
+#[derive(serde::Deserialize)]
+pub struct ContextPutBody {
+    /// null or 0 resets to auto (model native length).
+    pub num_ctx: Option<u32>,
+}
+
+/// PUT /api/context — set the chat context window and persist it.
+pub async fn handle_api_context_put(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<ContextPutBody>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+    // Clamp to sane bounds; 0/None means auto.
+    let normalized = match body.num_ctx {
+        Some(0) | None => None,
+        Some(n) => Some(n.clamp(2048, 131072)),
+    };
+    let mut updated = state.config.lock().clone();
+    updated.provider.ollama_num_ctx = normalized;
+    if let Err(error) = updated.save().await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to save context: {error}")})),
+        )
+            .into_response();
+    }
+    *state.config.lock() = updated;
+    Json(serde_json::json!({"status": "ok", "num_ctx": normalized})).into_response()
+}
+
 /// POST /api/connections/github/start — begin the GitHub device flow.
 /// Returns the user code + verification URL for the operator to click.
 pub async fn handle_api_github_connect_start(

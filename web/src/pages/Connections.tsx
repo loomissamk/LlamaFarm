@@ -21,6 +21,18 @@ interface ConnectionsResponse {
   tailscale?: { status: string };
 }
 
+interface ContextInfo {
+  num_ctx: number | null;
+  min: number;
+  max: number;
+  budget: {
+    persona_md_tokens: number;
+    tool_count: number;
+    tool_schema_tokens: number;
+    fixed_prompt_tokens_est: number;
+  };
+}
+
 interface DeviceStart {
   device_code: string;
   user_code: string;
@@ -49,6 +61,34 @@ export function ConnectionsPanel() {
   const [device, setDevice] = useState<DeviceStart | null>(null);
   const [connecting, setConnecting] = useState(false);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [ctx, setCtx] = useState<ContextInfo | null>(null);
+  const [ctxDraft, setCtxDraft] = useState<number>(0);
+  const [ctxSaving, setCtxSaving] = useState(false);
+
+  const loadContext = useCallback(async () => {
+    try {
+      const info = await apiFetch<ContextInfo>('/api/context');
+      setCtx(info);
+      setCtxDraft(info.num_ctx ?? 0);
+    } catch {
+      /* non-fatal */
+    }
+  }, []);
+
+  const saveContext = async (value: number) => {
+    setCtxSaving(true);
+    try {
+      await apiFetch('/api/context', {
+        method: 'PUT',
+        body: JSON.stringify({ num_ctx: value === 0 ? null : value }),
+      });
+      await loadContext();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to set context');
+    } finally {
+      setCtxSaving(false);
+    }
+  };
 
   const refresh = useCallback(async () => {
     try {
@@ -61,10 +101,11 @@ export function ConnectionsPanel() {
 
   useEffect(() => {
     refresh();
+    loadContext();
     return () => {
       if (pollTimer.current) clearTimeout(pollTimer.current);
     };
-  }, [refresh]);
+  }, [refresh, loadContext]);
 
   const poll = useCallback(
     async (deviceCode: string, intervalSecs: number) => {
@@ -222,6 +263,53 @@ export function ConnectionsPanel() {
           </div>
         )}
       </div>
+
+      {/* Context window control + token budget */}
+      {ctx && (
+        <div className="rounded-xl border border-gray-800 bg-gray-900 p-5">
+          <div className="flex items-center justify-between">
+            <span className="font-medium text-white">Chat context window</span>
+            <span className="font-mono text-sm text-blue-300">
+              {ctxDraft === 0 ? 'auto (model native)' : `${ctxDraft.toLocaleString()} tokens`}
+            </span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={ctx.max}
+            step={2048}
+            value={ctxDraft}
+            onChange={(e) => setCtxDraft(Number(e.target.value))}
+            onMouseUp={() => saveContext(ctxDraft)}
+            onTouchEnd={() => saveContext(ctxDraft)}
+            disabled={ctxSaving}
+            className="mt-3 w-full accent-blue-500"
+          />
+          <div className="mt-1 flex justify-between text-[10px] text-gray-600">
+            <span>auto</span>
+            <span>{(ctx.max / 1024).toFixed(0)}k</span>
+          </div>
+          <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+            <div className="rounded-lg border border-gray-800 bg-gray-950 p-2">
+              <div className="text-gray-500">Persona .md</div>
+              <div className="font-mono text-gray-300">~{ctx.budget.persona_md_tokens} tok</div>
+            </div>
+            <div className="rounded-lg border border-gray-800 bg-gray-950 p-2">
+              <div className="text-gray-500">Tools ({ctx.budget.tool_count})</div>
+              <div className="font-mono text-gray-300">~{ctx.budget.tool_schema_tokens} tok</div>
+            </div>
+            <div className="rounded-lg border border-gray-800 bg-gray-950 p-2">
+              <div className="text-gray-500">Fixed prompt</div>
+              <div className="font-mono text-amber-300">~{ctx.budget.fixed_prompt_tokens_est} tok</div>
+            </div>
+          </div>
+          <p className="mt-2 text-xs text-gray-500">
+            Fixed prompt cost (persona + tool schemas) is spent before your conversation. Subtasks
+            keep their own separate contexts. Raise the window on a bigger server; trim AGENTS.md or
+            disable unused tools if the fixed cost is a large share of a small window.
+          </p>
+        </div>
+      )}
 
       {/* Ollama + memory: read-only state so the page tells the whole story */}
       <div className="grid gap-4 sm:grid-cols-2">

@@ -312,8 +312,12 @@ hook and refuses public bind without one, so this fits the existing design.
   broker into the git_operations/git_worktree push paths.
 - [ ] Surface repo capability state (can clone / push / open PRs) as
   evidence, so the agent never claims git powers it lacks.
-- [ ] Move the common knobs (model, provider, autonomy level) onto the
-  Dashboard as inline controls; keep advanced TOML behind a disclosure.
+- [x] Context window slider (2026-07-17): GET/PUT /api/context + a slider on
+  the Connections page to raise/lower the chat context (auto..128k), plus a
+  live token-budget readout (persona .md + tool schemas + fixed prompt cost)
+  so the operator can see if the .mds/tools are swamping a small window.
+  Subtask contexts stay separate. Remaining: move model/provider/autonomy
+  knobs onto the Dashboard too.
 
 ## Next-gen RAG and speed ideas (operator request, 2026-07-16)
 
