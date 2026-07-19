@@ -3608,9 +3608,13 @@ pub async fn handle_api_context_get(
     if let Err(e) = require_auth(&state, &headers) {
         return e.into_response();
     }
-    let (num_ctx, workspace_dir) = {
+    let (num_ctx, gpu_layers, workspace_dir) = {
         let c = state.config.lock();
-        (c.provider.ollama_num_ctx, c.workspace_dir.clone())
+        (
+            c.provider.ollama_num_ctx,
+            c.provider.ollama_gpu_layers,
+            c.workspace_dir.clone(),
+        )
     };
     let runtime = state.runtime_snapshot();
 
@@ -3636,6 +3640,19 @@ pub async fn handle_api_context_get(
         "min": 2048,
         "max": 131072,
         "note": "Chat context window. 'auto' uses the model's native length. Larger needs more VRAM; pair with OLLAMA_KV_CACHE_TYPE=q8_0. Subtask contexts are separate.",
+        // GPU layer offload: 999 = put all layers on GPU (use all VRAM), 0 =
+        // CPU-only, null = let Ollama auto-decide. This is the "use the whole
+        // GPU" knob the operator asked for.
+        "gpu_layers": gpu_layers,
+        // Ollama server-level knobs (read-only here; set in the node profile
+        // env and applied on redeploy). max_loaded_models must be >= 2 to keep
+        // both the chat and embed models resident and avoid reload thrash.
+        "server": {
+            "max_loaded_models": std::env::var("OLLAMA_MAX_LOADED_MODELS").ok(),
+            "keep_alive": std::env::var("OLLAMA_KEEP_ALIVE").ok(),
+            "kv_cache_type": std::env::var("OLLAMA_KV_CACHE_TYPE").ok(),
+            "note": "Server settings apply on redeploy. max_loaded_models >= 2 keeps chat + embed models resident (fixes the reload-induced TTFT)."
+        },
         "budget": {
             "persona_md_tokens": est_tokens(md_chars),
             "tool_count": tool_count,
@@ -3650,10 +3667,19 @@ pub async fn handle_api_context_get(
 #[derive(serde::Deserialize)]
 pub struct ContextPutBody {
     /// null or 0 resets to auto (model native length).
+    #[serde(default)]
     pub num_ctx: Option<u32>,
+    /// GPU layer offload: 999 = all layers on GPU, 0 = CPU-only, absent = leave
+    /// unchanged. Sent as a field only when the operator changes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_layers: Option<i32>,
+    /// When true, also apply gpu_layers even if it's None (reset to auto).
+    #[serde(default)]
+    pub set_gpu_layers: bool,
 }
 
-/// PUT /api/context — set the chat context window and persist it.
+/// PUT /api/context — set the chat context window and/or GPU layer offload,
+/// persisted live (per-request options the provider sends to Ollama).
 pub async fn handle_api_context_put(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -3662,22 +3688,27 @@ pub async fn handle_api_context_put(
     if let Err(e) = require_auth(&state, &headers) {
         return e.into_response();
     }
-    // Clamp to sane bounds; 0/None means auto.
-    let normalized = match body.num_ctx {
+    let normalized_ctx = match body.num_ctx {
         Some(0) | None => None,
         Some(n) => Some(n.clamp(2048, 131072)),
     };
     let mut updated = state.config.lock().clone();
-    updated.provider.ollama_num_ctx = normalized;
+    updated.provider.ollama_num_ctx = normalized_ctx;
+    if body.set_gpu_layers || body.gpu_layers.is_some() {
+        // 999 = fill GPU; clamp to a sane range, allow 0 (CPU) and None (auto).
+        updated.provider.ollama_gpu_layers = body.gpu_layers.map(|n| n.clamp(0, 999));
+    }
     if let Err(error) = updated.save().await {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to save context: {error}")})),
+            Json(serde_json::json!({"error": format!("Failed to save runtime settings: {error}")})),
         )
             .into_response();
     }
+    let gpu = updated.provider.ollama_gpu_layers;
     *state.config.lock() = updated;
-    Json(serde_json::json!({"status": "ok", "num_ctx": normalized})).into_response()
+    Json(serde_json::json!({"status": "ok", "num_ctx": normalized_ctx, "gpu_layers": gpu}))
+        .into_response()
 }
 
 /// POST /api/connections/github/start — begin the GitHub device flow.

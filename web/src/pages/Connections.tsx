@@ -25,6 +25,12 @@ interface ContextInfo {
   num_ctx: number | null;
   min: number;
   max: number;
+  gpu_layers: number | null;
+  server: {
+    max_loaded_models: string | null;
+    keep_alive: string | null;
+    kv_cache_type: string | null;
+  };
   budget: {
     persona_md_tokens: number;
     tool_count: number;
@@ -85,6 +91,25 @@ export function ConnectionsPanel() {
       await loadContext();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to set context');
+    } finally {
+      setCtxSaving(false);
+    }
+  };
+
+  const saveGpuLayers = async (value: number) => {
+    setCtxSaving(true);
+    try {
+      await apiFetch('/api/context', {
+        method: 'PUT',
+        body: JSON.stringify({
+          num_ctx: ctxDraft === 0 ? null : ctxDraft,
+          set_gpu_layers: true,
+          gpu_layers: value,
+        }),
+      });
+      await loadContext();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to set GPU layers');
     } finally {
       setCtxSaving(false);
     }
@@ -308,6 +333,63 @@ export function ConnectionsPanel() {
             keep their own separate contexts. Raise the window on a bigger server; trim AGENTS.md or
             disable unused tools if the fixed cost is a large share of a small window.
           </p>
+
+          {/* GPU layer offload */}
+          <div className="mt-4 border-t border-gray-800 pt-3">
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-gray-300">GPU layer offload</span>
+              <span className="font-mono text-xs text-blue-300">
+                {ctx.gpu_layers === null ? 'auto' : ctx.gpu_layers === 999 ? 'all on GPU' : ctx.gpu_layers}
+              </span>
+            </div>
+            <div className="mt-2 flex gap-2">
+              {[
+                ['All GPU', 999],
+                ['Auto', -1],
+                ['CPU only', 0],
+              ].map(([label, val]) => (
+                <button
+                  key={label as string}
+                  disabled={ctxSaving}
+                  onClick={() => saveGpuLayers(val as number)}
+                  className="rounded-lg border border-gray-700 px-3 py-1 text-xs text-gray-300 hover:border-blue-500 hover:text-white disabled:opacity-40"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1 text-[11px] text-gray-600">
+              "All GPU" (999) fills VRAM before spilling to CPU. You're only using part of the card —
+              raise context or keep more models resident to use it.
+            </p>
+          </div>
+
+          {/* Ollama server knobs (apply on redeploy) */}
+          <div className="mt-4 border-t border-gray-800 pt-3">
+            <div className="text-sm text-gray-300 mb-2">Ollama server (applies on redeploy)</div>
+            <div className="grid grid-cols-3 gap-2 text-xs">
+              <div className="rounded-lg border border-gray-800 bg-gray-950 p-2">
+                <div className="text-gray-500">Max loaded models</div>
+                <div className={`font-mono ${ctx.server.max_loaded_models === '1' ? 'text-amber-300' : 'text-gray-300'}`}>
+                  {ctx.server.max_loaded_models ?? '—'}
+                </div>
+              </div>
+              <div className="rounded-lg border border-gray-800 bg-gray-950 p-2">
+                <div className="text-gray-500">Keep alive</div>
+                <div className="font-mono text-gray-300">{ctx.server.keep_alive ?? '—'}</div>
+              </div>
+              <div className="rounded-lg border border-gray-800 bg-gray-950 p-2">
+                <div className="text-gray-500">KV cache</div>
+                <div className="font-mono text-gray-300">{ctx.server.kv_cache_type ?? '—'}</div>
+              </div>
+            </div>
+            {ctx.server.max_loaded_models === '1' && (
+              <p className="mt-1 text-[11px] text-amber-400">
+                Max loaded models = 1 causes the chat model to reload every time a memory/RAG embed
+                runs (~40s TTFT). Set to 2+ in the node profile and redeploy.
+              </p>
+            )}
+          </div>
         </div>
       )}
 
