@@ -198,7 +198,7 @@ RUN apt-get update && apt-get install -y \
 # testing on their disposable lab. Serves the chaos_lab / ethical-hacking
 # mission in TODO.md — not for use against systems you do not own or lack
 # permission to test.
-ARG LLAMAFARM_LAB_TOOLS=0
+ARG LLAMAFARM_LAB_TOOLS=1
 RUN if [ "$LLAMAFARM_LAB_TOOLS" = "1" ]; then \
       apt-get update && apt-get install -y --no-install-recommends \
         nmap tshark tcpdump netcat-openbsd dnsutils whois traceroute \

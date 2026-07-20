@@ -6,7 +6,6 @@ CONFIG_DIR="$DATA_DIR/.llamafarm"
 WORKSPACE_DIR="$DATA_DIR/workspace"
 CONFIG_TEMPLATE="/usr/share/llamafarm/config.template.toml"
 DEFAULT_AGENTS="/usr/share/llamafarm/workspace.preset.god.AGENTS.md"
-DEFAULT_SOUL="/usr/share/llamafarm/workspace.preset.god.SOUL.md"
 
 ensure_runtime_layout() {
   mkdir -p "$CONFIG_DIR" "$WORKSPACE_DIR"
@@ -20,9 +19,8 @@ ensure_runtime_layout() {
     cp "$DEFAULT_AGENTS" "$WORKSPACE_DIR/AGENTS.md"
   fi
 
-  if [ ! -f "$WORKSPACE_DIR/SOUL.md" ] && [ -f "$DEFAULT_SOUL" ]; then
-    cp "$DEFAULT_SOUL" "$WORKSPACE_DIR/SOUL.md"
-  fi
+  # SOUL.md is never injected into the prompt; remove any stale copy.
+  rm -f "$WORKSPACE_DIR/SOUL.md"
 }
 
 if [ "$(id -u)" = "0" ]; then

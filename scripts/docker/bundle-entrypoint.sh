@@ -6,7 +6,6 @@ CONFIG_DIR="$DATA_DIR/.llamafarm"
 WORKSPACE_DIR="$DATA_DIR/workspace"
 CONFIG_TEMPLATE="/usr/share/llamafarm/config.template.toml"
 DEFAULT_AGENTS="/usr/share/llamafarm/workspace.preset.god.AGENTS.md"
-DEFAULT_SOUL="/usr/share/llamafarm/workspace.preset.god.SOUL.md"
 OLLAMA_HTTP_URL="http://127.0.0.1:11434"
 CHROMEDRIVER_STATUS_URL="http://127.0.0.1:${CHROMEDRIVER_PORT:-9515}/status"
 DEFAULT_PULL_MODELS=""
@@ -47,9 +46,10 @@ ensure_runtime_layout() {
     cp "$DEFAULT_AGENTS" "$WORKSPACE_DIR/AGENTS.md"
   fi
 
-  if [ ! -f "$WORKSPACE_DIR/SOUL.md" ] && [ -f "$DEFAULT_SOUL" ]; then
-    cp "$DEFAULT_SOUL" "$WORKSPACE_DIR/SOUL.md"
-  fi
+  # SOUL.md is intentionally NOT written: the prompt builder injects only
+  # AGENTS.md, so a SOUL.md is dead weight on disk and misleading. A stale one
+  # left by an older build is removed so the workspace has a single persona file.
+  rm -f "$WORKSPACE_DIR/SOUL.md"
 
   # Default Python environment: the agent's shell tool and the dashboard IDE
   # terminal both prepend this venv to PATH, so it must always exist.
