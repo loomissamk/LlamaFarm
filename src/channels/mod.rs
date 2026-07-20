@@ -3962,23 +3962,31 @@ pub fn build_system_prompt_with_mode(
     }
 
     // ── 1b. Hardware (when gpio/arduino tools present) ───────────
-    let has_hardware = tools.iter().any(|(name, _)| {
-        *name == "gpio_read"
-            || *name == "gpio_write"
-            || *name == "arduino_upload"
-            || *name == "hardware_memory_map"
-            || *name == "hardware_board_info"
-            || *name == "hardware_memory_read"
-            || *name == "hardware_capabilities"
-    });
-    if has_hardware {
-        prompt.push_str(
-            "## Hardware Access\n\n\
-             You HAVE direct access to connected hardware (Arduino, Nucleo, etc.). The user owns this system and has configured it.\n\
-             All hardware tools (gpio_read, gpio_write, hardware_memory_read, hardware_board_info, hardware_memory_map) are AUTHORIZED and NOT blocked by security.\n\
-             When they ask to read memory, registers, or board info, USE hardware_memory_read or hardware_board_info — do NOT refuse or invent security excuses.\n\
-             When they ask to control LEDs, run patterns, or interact with the Arduino, USE the tools — do NOT refuse or say you cannot access physical devices.\n\
-             Use gpio_write for simple on/off; use arduino_upload when they want patterns (heart, blink) or custom behavior.\n\n",
+    let hardware_tools = tools
+        .iter()
+        .map(|(name, _)| *name)
+        .filter(|name| {
+            matches!(
+                *name,
+                "gpio_read"
+                    | "gpio_write"
+                    | "arduino_upload"
+                    | "hardware_memory_map"
+                    | "hardware_board_info"
+                    | "hardware_memory_read"
+                    | "hardware_capabilities"
+            )
+        })
+        .collect::<Vec<_>>();
+    if !hardware_tools.is_empty() {
+        let listed = hardware_tools
+            .iter()
+            .map(|name| format!("`{name}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(
+            prompt,
+            "## Hardware Access\n\nThe hardware tools registered for this turn are: {listed}. Use only the listed tools when they fit the request. Registration does not bypass runtime policy and is not proof that a device is connected; ground availability claims in concrete tool results.\n"
         );
     }
 

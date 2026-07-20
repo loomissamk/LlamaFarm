@@ -74,6 +74,8 @@ Lưu ý cho người dùng container:
 | Khóa | Mặc định | Mục đích |
 |---|---|---|
 | `compact_context` | `false` | Khi bật: bootstrap_max_chars=6000, rag_chunk_limit=2. Dùng cho model 13B trở xuống |
+| `tool_routing_enabled` | `true` | Chọn registry tool theo từng lượt cho WebSocket Agent Chat, dựa trên yêu cầu hiện tại và ngữ cảnh tác vụ gần đây |
+| `tool_routing_top_k` | `12` | Số tool không thiết yếu liên quan tối đa trước khi thêm tool lõi và các phụ thuộc bắt buộc; `0` tắt định tuyến |
 | `max_tool_iterations` | `20` | Số vòng lặp tool-call tối đa mỗi tin nhắn trên CLI, gateway và channels |
 | `max_history_messages` | `50` | Số tin nhắn lịch sử tối đa giữ lại mỗi phiên |
 | `parallel_tools` | `false` | Bật thực thi tool song song trong một lượt |
@@ -82,6 +84,18 @@ Lưu ý cho người dùng container:
 Lưu ý:
 
 - Đặt `max_tool_iterations = 0` sẽ dùng giá trị mặc định an toàn `20`.
+- Định tuyến tool hiện áp dụng cho các lượt WebSocket Agent Chat. Cùng một tập
+  tool được dùng cho mô tả prompt, schema XML/native, chế độ fallback tương
+  thích và bộ lọc thực thi. Khi truy vấn không đủ tín hiệu hoặc không khớp, hệ
+  thống giữ toàn bộ registry được policy cho phép thay vì đoán.
+- Quyết định và điểm định tuyến được ghi vào run ledger và hiển thị trong Run
+  Inspector. Ranker trên đường xử lý chính là lexical/IDF xác định, chưa phải
+  truy hồi embedding.
+- Nếu một skill không khai báo metadata có cấu trúc cho tool phụ thuộc (đặc
+  biệt là `SKILL.md` độc lập), hệ thống giữ toàn bộ registry để skill không bị
+  thiếu tool sau khi được mở theo yêu cầu.
+- Có thể rollback bằng `LLAMAFARM_AGENT_TOOL_ROUTING_ENABLED=0` hoặc
+  `LLAMAFARM_AGENT_TOOL_ROUTING_TOP_K=0`.
 - Nếu tin nhắn kênh vượt giá trị này, runtime trả về: `Agent exceeded maximum tool iterations (<value>)`.
 - Trong vòng lặp tool của CLI, gateway và channel, các lời gọi tool độc lập được thực thi đồng thời mặc định khi không cần phê duyệt; thứ tự kết quả giữ ổn định.
 - `parallel_tools` áp dụng cho API `Agent::turn()`. Không ảnh hưởng đến vòng lặp runtime của CLI, gateway hay channel.

@@ -142,11 +142,6 @@ struct SkillManifest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct SkillMetadataManifest {
-    skill: SkillMeta,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 struct SkillMeta {
     name: String,
     description: String,
@@ -539,7 +534,10 @@ fn load_skill_toml(path: &Path, load_mode: SkillLoadMode) -> Result<Skill> {
             })
         }
         SkillLoadMode::MetadataOnly => {
-            let manifest: SkillMetadataManifest = toml::from_str(&content)?;
+            // Keep structured tool carrier metadata in memory so per-turn
+            // routing can preserve required runtime tools. Compact prompt
+            // rendering still omits tool commands and instructions.
+            let manifest: SkillManifest = toml::from_str(&content)?;
 
             Ok(Skill {
                 name: manifest.skill.name,
@@ -547,7 +545,7 @@ fn load_skill_toml(path: &Path, load_mode: SkillLoadMode) -> Result<Skill> {
                 version: manifest.skill.version,
                 author: manifest.skill.author,
                 tags: manifest.skill.tags,
-                tools: Vec::new(),
+                tools: manifest.tools,
                 prompts: Vec::new(),
                 location: Some(path.to_path_buf()),
             })
@@ -1667,7 +1665,8 @@ prompts = ["Do not preload me"]
             .unwrap();
         assert_eq!(toml.description, "Toml metadata description");
         assert!(toml.prompts.is_empty());
-        assert!(toml.tools.is_empty());
+        assert_eq!(toml.tools.len(), 1);
+        assert_eq!(toml.tools[0].kind, "shell");
     }
 
     #[test]

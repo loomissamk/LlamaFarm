@@ -1,9 +1,10 @@
 //! Durable planner → executor → verifier run ledger.
 //!
-//! Persists every run's plan steps, tool-call evidence, and deterministic
-//! verification state to `<workspace>/state/runs/<run_id>.ledger.json` so that
-//! "done" can be gated on recorded evidence instead of model prose, and so the
-//! run inspector API/UI can show plan state, the tool timeline, artifacts,
+//! Persists every run's plan steps, per-turn tool-routing decisions, tool-call
+//! evidence, and deterministic verification state to
+//! `<workspace>/state/runs/<run_id>.ledger.json` so that "done" can be gated on
+//! recorded evidence instead of model prose, and so the run inspector API/UI
+//! can show plan state, selected/excluded tools, the tool timeline, artifacts,
 //! attempts, and retry reasons for both live and historical runs.
 //!
 //! Wiring:
@@ -28,7 +29,9 @@ use crate::agent::loop_::scrub_credentials;
 
 const ARGS_SUMMARY_MAX: usize = 400;
 const OUTPUT_EXCERPT_MAX: usize = 1200;
+const ROUTING_QUERY_EXCERPT_MAX: usize = 400;
 const MAX_EVENTS: usize = 2000;
+const MAX_TOOL_ROUTING_RECORDS: usize = 128;
 
 // ── Data model ────────────────────────────────────────────────────
 
@@ -103,6 +106,53 @@ pub struct ToolEvent {
     pub artifacts: Vec<String>,
 }
 
+/// Relevance score assigned to one tool by the per-turn router.
+///
+/// Scores are intentionally stored separately from `selected`/`excluded` so
+/// future routing strategies can report ranked candidates without changing
+/// the durable partition of tools that was actually applied.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolRoutingScore {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub score: f32,
+    #[serde(default)]
+    pub matched_terms: Vec<String>,
+}
+
+/// One durable per-turn tool-routing decision.
+///
+/// `strategy` and `reason` are strings rather than enums so ledgers written by
+/// newer routing strategies remain readable by older binaries. The sequence
+/// is independent from [`ToolEvent::seq`]; plan evidence therefore keeps its
+/// existing tool-event numbering.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolRoutingRecord {
+    #[serde(default)]
+    pub seq: u64,
+    #[serde(default)]
+    pub ts_ms: u64,
+    #[serde(default)]
+    pub strategy: String,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub query_excerpt: String,
+    #[serde(default)]
+    pub selected: Vec<String>,
+    #[serde(default)]
+    pub excluded: Vec<String>,
+    #[serde(default)]
+    pub scores: Vec<ToolRoutingScore>,
+    #[serde(default)]
+    pub total_count: usize,
+    #[serde(default)]
+    pub selected_count: usize,
+    #[serde(default)]
+    pub excluded_count: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunStatus {
@@ -140,6 +190,12 @@ pub struct RunLedgerData {
     pub plan: Vec<PlanStep>,
     #[serde(default)]
     pub events: Vec<ToolEvent>,
+    /// Per-turn tool selection decisions. Missing on pre-routing ledgers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_routing: Vec<ToolRoutingRecord>,
+    /// Number of oldest routing decisions evicted from the bounded history.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub tool_routing_dropped: u64,
     #[serde(default)]
     next_seq: u64,
 }
@@ -177,7 +233,10 @@ impl RunLedger {
                     existing
                 }
                 Err(e) => {
-                    tracing::warn!("Corrupt run ledger {} — starting fresh: {e}", path.display());
+                    tracing::warn!(
+                        "Corrupt run ledger {} — starting fresh: {e}",
+                        path.display()
+                    );
                     fresh_data(run_id, session_id, channel, provider, model, mode)
                 }
             },
@@ -239,8 +298,7 @@ impl RunLedger {
                 .iter()
                 .position(|s| {
                     s.status == StepStatus::InProgress
-                        && (s.allowed_tools.is_empty()
-                            || s.allowed_tools.iter().any(|t| t == tool))
+                        && (s.allowed_tools.is_empty() || s.allowed_tools.iter().any(|t| t == tool))
                 })
                 .or_else(|| {
                     data.plan
@@ -255,6 +313,70 @@ impl RunLedger {
         data.events.push(event);
         drop(data);
         self.verify_and_save();
+    }
+
+    /// Record the tool set selected for one model turn.
+    ///
+    /// The ledger owns durable metadata and sanitization so callers can pass a
+    /// router result directly without assigning sequence numbers or persisting
+    /// an unsanitized user query.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_tool_routing(
+        &self,
+        strategy: &str,
+        reason: String,
+        query: &str,
+        selected: Vec<String>,
+        excluded: Vec<String>,
+        scores: Vec<crate::agent::tool_router::ToolRouteScore>,
+        total_count: usize,
+    ) {
+        let mut data = self.data.lock().unwrap();
+        let seq = data
+            .tool_routing
+            .last()
+            .map(|previous| previous.seq.saturating_add(1))
+            .unwrap_or(0);
+        let selected_count = selected.len();
+        let excluded_count = excluded.len();
+        let partition_count = selected_count.saturating_add(excluded_count);
+        let record = ToolRoutingRecord {
+            seq,
+            ts_ms: now_ms(),
+            strategy: strategy.to_string(),
+            reason,
+            query_excerpt: truncate_chars(&scrub_credentials(query), ROUTING_QUERY_EXCERPT_MAX),
+            selected,
+            excluded,
+            scores: scores
+                .into_iter()
+                .map(|score| ToolRoutingScore {
+                    name: score.name,
+                    score: score.score,
+                    matched_terms: score.matched_terms,
+                })
+                .collect(),
+            // Never persist an impossible count smaller than the applied
+            // selected/excluded partition if a caller supplies stale metadata.
+            total_count: total_count.max(partition_count),
+            selected_count,
+            excluded_count,
+        };
+
+        if data.tool_routing.len() >= MAX_TOOL_ROUTING_RECORDS {
+            let remove_count = data
+                .tool_routing
+                .len()
+                .saturating_add(1)
+                .saturating_sub(MAX_TOOL_ROUTING_RECORDS);
+            data.tool_routing.drain(..remove_count);
+            data.tool_routing_dropped = data
+                .tool_routing_dropped
+                .saturating_add(remove_count as u64);
+        }
+        data.tool_routing.push(record);
+        drop(data);
+        self.save();
     }
 
     /// Mirror `task_plan` tool calls into durable plan records.
@@ -338,11 +460,8 @@ impl RunLedger {
     /// completed, has at least one successful evidence event, its dependencies
     /// verified, and every expected-evidence pattern matches linked evidence.
     fn verify_steps(data: &mut RunLedgerData) {
-        let events: HashMap<u64, ToolEvent> = data
-            .events
-            .iter()
-            .map(|e| (e.seq, e.clone()))
-            .collect();
+        let events: HashMap<u64, ToolEvent> =
+            data.events.iter().map(|e| (e.seq, e.clone())).collect();
         let mut verified_ids: Vec<usize> = Vec::new();
         // Steps are ordered; verify in plan order so depends_on can resolve.
         for i in 0..data.plan.len() {
@@ -454,7 +573,11 @@ impl RunLedger {
     pub fn playbook_summary(&self) -> Option<String> {
         let mut data = self.data.lock().unwrap();
         Self::verify_steps(&mut data);
-        if data.plan.is_empty() || !data.plan.iter().all(|s| s.verified || s.status.is_resolved())
+        if data.plan.is_empty()
+            || !data
+                .plan
+                .iter()
+                .all(|s| s.verified || s.status.is_resolved())
         {
             return None;
         }
@@ -522,9 +645,7 @@ impl RunLedger {
             }
         };
         let tmp = path.with_extension("json.tmp");
-        if let Err(e) =
-            std::fs::write(&tmp, json).and_then(|_| std::fs::rename(&tmp, &path))
-        {
+        if let Err(e) = std::fs::write(&tmp, json).and_then(|_| std::fs::rename(&tmp, &path)) {
             tracing::warn!("Could not persist run ledger {}: {e}", path.display());
         }
     }
@@ -617,6 +738,10 @@ pub fn list_runs(workspace_dir: &Path, limit: usize) -> Vec<RunMeta> {
 
 // ── Helpers ───────────────────────────────────────────────────────
 
+fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
+}
+
 fn fresh_data(
     run_id: &str,
     session_id: Option<&str>,
@@ -641,6 +766,8 @@ fn fresh_data(
         },
         plan: Vec::new(),
         events: Vec::new(),
+        tool_routing: Vec::new(),
+        tool_routing_dropped: 0,
         next_seq: 0,
     }
 }
@@ -720,12 +847,152 @@ mod tests {
     use serde_json::json;
 
     fn temp_ws(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "lf-run-ledger-{name}-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("lf-run-ledger-{name}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn legacy_ledger_deserializes_without_tool_routing() {
+        let legacy = json!({
+            "meta": {
+                "run_id": "legacy-run",
+                "channel": "webchat",
+                "provider": "ollama",
+                "model": "legacy-model",
+                "mode": "chat",
+                "started_at_ms": 123,
+                "status": "completed"
+            },
+            "plan": [],
+            "events": [],
+            "next_seq": 0
+        });
+
+        let parsed: RunLedgerData =
+            serde_json::from_value(legacy).expect("pre-routing ledger should remain readable");
+        assert!(parsed.tool_routing.is_empty());
+
+        let serialized = serde_json::to_value(parsed).expect("legacy ledger should reserialize");
+        assert!(
+            serialized.get("tool_routing").is_none(),
+            "an empty additive field should not rewrite the legacy JSON shape"
+        );
+        assert!(serialized.get("tool_routing_dropped").is_none());
+    }
+
+    #[test]
+    fn tool_routing_records_persist_with_scores_counts_and_independent_sequence() {
+        let ws = temp_ws("tool-routing");
+        let ledger =
+            RunLedger::open_or_create(&ws, "route-run", None, "webchat", "ollama", "m", "chat")
+                .unwrap();
+
+        let long_query = format!(
+            "deploy with api_key=super-secret-value {}",
+            "context ".repeat(80)
+        );
+        ledger.record_tool_routing(
+            "lexical_v1",
+            "query_matches".to_string(),
+            &long_query,
+            vec!["shell".to_string(), "docker".to_string()],
+            vec!["db_query".to_string()],
+            vec![crate::agent::tool_router::ToolRouteScore {
+                name: "docker".to_string(),
+                score: 4.0,
+                matched_terms: vec!["deploy".to_string()],
+            }],
+            3,
+        );
+        ledger.record_tool_event("shell", &json!({"command": "docker ps"}), true, 7, "ok");
+        ledger.finalize(RunStatus::Completed);
+
+        let snapshot = load_snapshot(&ws, "route-run").expect("persisted routing ledger");
+        assert_eq!(snapshot.tool_routing.len(), 1);
+        let routing = &snapshot.tool_routing[0];
+        assert_eq!(routing.seq, 0);
+        assert!(routing.ts_ms > 0);
+        assert_eq!(routing.strategy, "lexical_v1");
+        assert_eq!(routing.reason, "query_matches");
+        assert_eq!(routing.selected, ["shell", "docker"]);
+        assert_eq!(routing.excluded, ["db_query"]);
+        assert_eq!(routing.total_count, 3);
+        assert_eq!(routing.selected_count, 2);
+        assert_eq!(routing.excluded_count, 1);
+        assert_eq!(routing.scores[0].name, "docker");
+        assert_eq!(routing.scores[0].score, 4.0);
+        assert_eq!(routing.scores[0].matched_terms, ["deploy"]);
+        assert!(!routing.query_excerpt.contains("super-secret-value"));
+        assert!(routing.query_excerpt.contains("[REDACTED]"));
+        assert!(routing.query_excerpt.chars().count() <= ROUTING_QUERY_EXCERPT_MAX + 1);
+        assert_eq!(
+            snapshot.events[0].seq, 0,
+            "routing records must not consume plan-evidence tool sequence numbers"
+        );
+
+        // A later chat turn reopens the same session ledger and appends rather
+        // than replacing the prior routing decision.
+        let reopened =
+            RunLedger::open_or_create(&ws, "route-run", None, "webchat", "ollama", "m", "chat")
+                .unwrap();
+        reopened.record_tool_routing(
+            "direct_intent_v1",
+            "forced_file_write".to_string(),
+            "write file demo.txt",
+            vec!["file_write".to_string(), "task_plan".to_string()],
+            vec!["shell".to_string()],
+            Vec::new(),
+            3,
+        );
+        reopened.finalize(RunStatus::Completed);
+
+        let appended = load_snapshot(&ws, "route-run").expect("reopened routing ledger");
+        assert_eq!(appended.tool_routing.len(), 2);
+        assert_eq!(appended.tool_routing[0].seq, 0);
+        assert_eq!(appended.tool_routing[1].seq, 1);
+        assert_eq!(appended.tool_routing[1].reason, "forced_file_write");
+
+        std::fs::remove_dir_all(&ws).ok();
+    }
+
+    #[test]
+    fn tool_routing_history_keeps_the_newest_bounded_window() {
+        let ws = temp_ws("tool-routing-window");
+        let ledger = RunLedger::open_or_create(
+            &ws,
+            "route-window",
+            None,
+            "webchat",
+            "ollama",
+            "m",
+            "chat",
+        )
+        .unwrap();
+
+        for turn in 0..(MAX_TOOL_ROUTING_RECORDS + 3) {
+            ledger.record_tool_routing(
+                "lexical_idf",
+                format!("turn-{turn}"),
+                "current request",
+                vec!["shell".to_string()],
+                Vec::new(),
+                Vec::new(),
+                1,
+            );
+        }
+
+        let snapshot = ledger.snapshot();
+        assert_eq!(snapshot.tool_routing.len(), MAX_TOOL_ROUTING_RECORDS);
+        assert_eq!(snapshot.tool_routing_dropped, 3);
+        assert_eq!(snapshot.tool_routing.first().unwrap().seq, 3);
+        assert_eq!(
+            snapshot.tool_routing.last().unwrap().seq,
+            MAX_TOOL_ROUTING_RECORDS as u64 + 2
+        );
+
+        std::fs::remove_dir_all(&ws).ok();
     }
 
     #[tokio::test]
@@ -776,7 +1043,9 @@ mod tests {
             2,
             "updated",
         );
-        let summary = ledger.unverified_plan_summary().expect("step 2 lacks evidence");
+        let summary = ledger
+            .unverified_plan_summary()
+            .expect("step 2 lacks evidence");
         assert!(summary.contains("step 2"), "summary: {summary}");
         assert!(summary.contains("without any successful tool evidence"));
 
@@ -788,13 +1057,7 @@ mod tests {
             2,
             "updated",
         );
-        ledger.record_tool_event(
-            "file_read",
-            &json!({"path": "/tmp/x.txt"}),
-            true,
-            3,
-            "hi",
-        );
+        ledger.record_tool_event("file_read", &json!({"path": "/tmp/x.txt"}), true, 3, "hi");
         ledger.record_tool_event(
             "task_plan",
             &json!({"action": "update", "id": 2, "status": "completed"}),
@@ -808,7 +1071,10 @@ mod tests {
         let snap = load_snapshot(&ws, "run-1").expect("persisted ledger");
         assert_eq!(snap.meta.status, RunStatus::Completed);
         assert!(snap.plan.iter().all(|s| s.verified));
-        assert_eq!(snap.events.iter().filter(|e| e.tool != "task_plan").count(), 2);
+        assert_eq!(
+            snap.events.iter().filter(|e| e.tool != "task_plan").count(),
+            2
+        );
         std::fs::remove_dir_all(&ws).ok();
     }
 
@@ -828,7 +1094,13 @@ mod tests {
             1,
             "created",
         );
-        ledger.record_tool_event("shell", &json!({"command": "cargo test"}), true, 900, "1 failed");
+        ledger.record_tool_event(
+            "shell",
+            &json!({"command": "cargo test"}),
+            true,
+            900,
+            "1 failed",
+        );
         ledger.record_tool_event(
             "task_plan",
             &json!({"action": "update", "id": 1, "status": "completed"}),
@@ -868,8 +1140,7 @@ mod tests {
     #[tokio::test]
     async fn playbook_summary_requires_verified_plan() {
         let ws = temp_ws("playbook");
-        let ledger =
-            RunLedger::open_or_create(&ws, "run-pb", None, "t", "o", "m", "chat").unwrap();
+        let ledger = RunLedger::open_or_create(&ws, "run-pb", None, "t", "o", "m", "chat").unwrap();
         // No plan → no playbook.
         assert!(ledger.playbook_summary().is_none());
 
@@ -906,8 +1177,8 @@ mod tests {
         let a = RunLedger::open_or_create(&ws, "run-a", None, "t", "o", "m", "chat").unwrap();
         a.finalize(RunStatus::Failed);
         std::thread::sleep(std::time::Duration::from_millis(5));
-        let b = RunLedger::open_or_create(&ws, "run-b", Some("sess-1"), "t", "o", "m", "chat")
-            .unwrap();
+        let b =
+            RunLedger::open_or_create(&ws, "run-b", Some("sess-1"), "t", "o", "m", "chat").unwrap();
         b.finalize(RunStatus::Completed);
         let runs = list_runs(&ws, 10);
         assert_eq!(runs.len(), 2);

@@ -20,7 +20,7 @@ import {
   User,
   X,
 } from 'lucide-react';
-import { apiFetch, getFederationPeers } from '@/lib/api';
+import { getFederationPeers } from '@/lib/api';
 import {
   loadFederationPeerSelections,
   loadFederationTasksBySession,
@@ -637,6 +637,7 @@ export default function AgentChat() {
   const ideResizingRef = useRef(false);
   const [federationBarCollapsed, setFederationBarCollapsed] = useState(() => loadFederationBarCollapsed());
   const [chatControlsCollapsed, setChatControlsCollapsed] = useState(() => loadChatControlsCollapsed());
+  const [confirmDeleteSessionId, setConfirmDeleteSessionId] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tps, setTps] = useState(0);
@@ -660,6 +661,7 @@ export default function AgentChat() {
   const wsRef = useRef<WebSocketClient | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const confirmDeleteCancelRef = useRef<HTMLButtonElement>(null);
   const pendingContentRef = useRef<Record<string, string>>({});
   const pendingToolCallsRef = useRef<Record<string, PendingToolCallSeed[]>>({});
   const completedResponseSessionIdsRef = useRef<Set<string>>(new Set());
@@ -700,6 +702,12 @@ export default function AgentChat() {
   useEffect(() => {
     activeSessionIdRef.current = activeSession?.id ?? activeSessionId;
   }, [activeSession, activeSessionId]);
+
+  useEffect(() => {
+    if (confirmDeleteSessionId) {
+      confirmDeleteCancelRef.current?.focus();
+    }
+  }, [confirmDeleteSessionId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1351,11 +1359,13 @@ export default function AgentChat() {
     const session = createChatSession(temporary);
     setSessions((prev) => sortSessions([session, ...prev]));
     setActiveSessionId(session.id);
+    setConfirmDeleteSessionId(null);
     setInput('');
     inputRef.current?.focus();
   };
 
   const handleDeleteSession = (sessionId: string) => {
+    setConfirmDeleteSessionId(null);
     const nextExisting = sessions.find((session) => session.id !== sessionId);
     const replacementSession = !nextExisting ? createChatSession(false) : null;
 
@@ -1544,25 +1554,6 @@ export default function AgentChat() {
               <p className="mt-3 text-xs text-gray-500">
                 Regular chats persist locally. Temporary chats stay in memory only.
               </p>
-              <button
-                onClick={async () => {
-                  if (!window.confirm('Clear ALL history? This deletes saved chats, memories, and run records on the node to free space.')) return;
-                  try {
-                    const res = await apiFetch<{ bytes_freed: number; memories_removed: number; runs_removed: number }>(
-                      '/api/history/clear',
-                      { method: 'POST' },
-                    );
-                    setSessions([]);
-                    setActiveSessionId('');
-                    window.alert(`Cleared: ${res.memories_removed} memories, ${res.runs_removed} run records, ${(res.bytes_freed / 1024).toFixed(0)} KB freed.`);
-                  } catch (err) {
-                    window.alert(err instanceof Error ? err.message : 'Clear failed');
-                  }
-                }}
-                className="mt-2 w-full rounded-lg border border-red-900/50 bg-red-950/20 px-3 py-1.5 text-xs text-red-400 transition-colors hover:border-red-700 hover:text-red-300"
-              >
-                Clear all history (frees space)
-              </button>
             </>
           )}
         </div>
@@ -1581,7 +1572,10 @@ export default function AgentChat() {
                 }`}
               >
                 <button
-                  onClick={() => setActiveSessionId(session.id)}
+                  onClick={() => {
+                    setActiveSessionId(session.id);
+                    setConfirmDeleteSessionId(null);
+                  }}
                   className="w-full px-3 py-3 text-left"
                 >
                   <div className="flex items-start justify-between gap-3">
@@ -1612,14 +1606,40 @@ export default function AgentChat() {
                 </button>
 
                 <div className="flex items-center justify-end px-3 pb-3">
-                  <button
-                    onClick={() => handleDeleteSession(session.id)}
-                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-gray-500 transition-colors hover:bg-red-950/40 hover:text-red-300"
-                    title="Delete chat"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                    Delete
-                  </button>
+                  {confirmDeleteSessionId === session.id ? (
+                    <div
+                      className="flex items-center gap-1 text-xs"
+                      role="status"
+                      aria-live="polite"
+                    >
+                      <span className="mr-1 text-red-400">Delete?</span>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteSession(session.id)}
+                        className="inline-flex h-8 items-center rounded px-2 font-medium text-red-400 transition-colors hover:bg-red-950/40 hover:text-red-300"
+                      >
+                        Yes
+                      </button>
+                      <button
+                        ref={confirmDeleteCancelRef}
+                        type="button"
+                        onClick={() => setConfirmDeleteSessionId(null)}
+                        className="inline-flex h-8 items-center rounded px-2 font-medium text-gray-400 transition-colors hover:bg-gray-800 hover:text-white"
+                      >
+                        No
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteSessionId(session.id)}
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-red-950/40 hover:text-red-400"
+                      title="Delete chat"
+                      aria-label={`Delete ${session.title}`}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
                 </div>
               </div>
             );

@@ -130,14 +130,26 @@ Key finding that validates the operator's worry: **local models are
 overwhelmed by large tool sets — expanded context degrades their attention
 and tool selection.** Direct implications:
 
-- [x] **Per-task tool routing (Tool RAG)** (2026-07-17): src/agent/tool_router.rs
-  scores the registry against the user message (lexical, name-weighted) and
-  exposes only the top-K relevant tools + a small essential set, via the
-  existing excluded_tools path. Config: agent.tool_routing_enabled (default
-  on), agent.tool_routing_top_k (default 12). Research-backed (RAG-MCP: tool
-  accuracy 13%->43% and >50% prompt reduction with large tool sets). Directly
-  trims the ~2.8k tool-schema tokens from the 17k prompt. Follow-up: embedding-
-  based retrieval + surface the routed set in the run ledger.
+- [x] **Web Agent per-turn tool routing** (reviewed 2026-07-19):
+  `src/agent/tool_router.rs` now uses deterministic IDF-weighted lexical
+  ranking, recent user-task context, domain aliases, core tools, and workflow
+  dependency closure. No-signal/no-match requests fail open. One immutable
+  selection drives prompt descriptions, XML/native schemas, compatibility
+  fallback, skill-dependency fail-open handling, and execution filtering, so
+  routing now removes prompt content
+  instead of merely blocking advertised tools. Decisions, scores, matched
+  terms, and selected/excluded sets are persisted in a bounded run-ledger
+  window and shown in Run Inspector. Config and deployment rollback controls are documented.
+  The earlier 13%→43%, >50%, and fixed token-saving claims were removed: they
+  described semantic retrieval research, not this lexical implementation, and
+  LlamaFarm does not yet have a live-model routing eval proving those numbers.
+- [ ] **Shared cached semantic tool retrieval + cross-surface parity**: build
+  one cached embedding service shared by memory, workspace RAG, and tool
+  routing; warm descriptor vectors by registry digest off the chat hot path;
+  reuse/singleflight query embeddings with a timeout and lexical fail-open.
+  Then apply the same selection contract to CLI, channels, federation,
+  delegate/subagent, autonomous, and `Agent::turn()` surfaces and validate it
+  with a versioned live-model routing eval before enabling semantic weighting.
 - [ ] **Speculative decoding** (Ollama 5.x): `OLLAMA_SPECULATIVE_DECODE=1`
   + a small draft model gives 1.5–3x decode throughput, identical output.
   Gemma-4 MTP does similar natively. Document + wire an opt-in env in the
@@ -191,6 +203,12 @@ My honest thoughts on each idea, with a plan:
   to mongo/pg and auto-import schema on connect.
 
 ## Next-generation agent workflow
+
+- [x] Keep Agent Chat alive across normal SPA navigation (2026-07-19). The
+  stable layout lazily mounts one AgentChat instance and hides it off-route, so
+  `/agent` → another page → `/agent` preserves the WebSocket stream, active
+  task, temporary thread, draft, tool timeline, and federation state. Genuine
+  tab/network disconnects retain the gateway's cancellation behavior.
 
 - [x] Add first-class **follow-ups**.  A user message can attach to, amend,
   reprioritize, or cancel an active run without losing its verified steps,

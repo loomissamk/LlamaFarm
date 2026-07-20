@@ -81,6 +81,13 @@ fn agent_config_default_compact_context_off() {
     );
 }
 
+#[test]
+fn agent_config_default_tool_routing_contract() {
+    let agent = AgentConfig::default();
+    assert!(agent.tool_routing_enabled);
+    assert_eq!(agent.tool_routing_top_k, 12);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MemoryConfig defaults
 // ─────────────────────────────────────────────────────────────────────────────
@@ -139,6 +146,8 @@ fn config_toml_roundtrip_preserves_agent_config() {
     config.agent.max_tool_iterations = 5;
     config.agent.max_history_messages = 25;
     config.agent.compact_context = true;
+    config.agent.tool_routing_enabled = false;
+    config.agent.tool_routing_top_k = 4;
 
     let toml_str = toml::to_string(&config).expect("config should serialize to TOML");
     let parsed: Config = toml::from_str(&toml_str).expect("TOML should deserialize back");
@@ -146,6 +155,8 @@ fn config_toml_roundtrip_preserves_agent_config() {
     assert_eq!(parsed.agent.max_tool_iterations, 5);
     assert_eq!(parsed.agent.max_history_messages, 25);
     assert!(parsed.agent.compact_context);
+    assert!(!parsed.agent.tool_routing_enabled);
+    assert_eq!(parsed.agent.tool_routing_top_k, 4);
 }
 
 #[test]
@@ -202,6 +213,8 @@ default_temperature = 0.7
     assert_eq!(parsed.agent.max_tool_iterations, 20);
     assert_eq!(parsed.agent.max_history_messages, 50);
     assert!(!parsed.agent.compact_context);
+    assert!(parsed.agent.tool_routing_enabled);
+    assert_eq!(parsed.agent.tool_routing_top_k, 12);
 }
 
 #[test]

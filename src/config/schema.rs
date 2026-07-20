@@ -828,10 +828,10 @@ pub struct AgentConfig {
     /// When true: bootstrap_max_chars=6000, rag_chunk_limit=2. Use for 13B or smaller models.
     #[serde(default)]
     pub compact_context: bool,
-    /// Per-task tool routing (Tool RAG). When enabled, only the query-relevant
-    /// tools plus a small essential set are exposed each turn instead of the
-    /// whole registry — cutting prompt tokens and improving local-model tool
-    /// selection accuracy. Default: enabled.
+    /// Per-turn tool routing for WebSocket Agent Chat. When enabled, only the
+    /// query-relevant tools plus a core set and required dependencies are
+    /// exposed to the model. No-signal and unmatched queries fail open.
+    /// Default: enabled.
     #[serde(default = "default_true")]
     pub tool_routing_enabled: bool,
     /// How many query-relevant non-essential tools to keep per turn when tool
@@ -7087,6 +7087,25 @@ impl Config {
             }
         }
 
+        if let Ok(enabled) = std::env::var("LLAMAFARM_AGENT_TOOL_ROUTING_ENABLED") {
+            match enabled.trim().to_ascii_lowercase().as_str() {
+                "1" | "true" | "yes" | "on" => self.agent.tool_routing_enabled = true,
+                "0" | "false" | "no" | "off" => self.agent.tool_routing_enabled = false,
+                _ => tracing::warn!(
+                    "Ignoring invalid LLAMAFARM_AGENT_TOOL_ROUTING_ENABLED (valid: 1|0|true|false|yes|no|on|off)"
+                ),
+            }
+        }
+
+        if let Ok(top_k) = std::env::var("LLAMAFARM_AGENT_TOOL_ROUTING_TOP_K") {
+            match top_k.trim().parse::<usize>() {
+                Ok(value) => self.agent.tool_routing_top_k = value,
+                _ => tracing::warn!(
+                    "Ignoring invalid LLAMAFARM_AGENT_TOOL_ROUTING_TOP_K (must be a non-negative integer)"
+                ),
+            }
+        }
+
         if let Ok(max_history) = std::env::var("LLAMAFARM_AGENT_MAX_HISTORY_MESSAGES") {
             match max_history.trim().parse::<usize>() {
                 Ok(value) if value > 0 => self.agent.max_history_messages = value,
@@ -8292,6 +8311,8 @@ reasoning_level = "high"
     async fn agent_config_defaults() {
         let cfg = AgentConfig::default();
         assert!(!cfg.compact_context);
+        assert!(cfg.tool_routing_enabled);
+        assert_eq!(cfg.tool_routing_top_k, 12);
         assert_eq!(cfg.max_tool_iterations, 20);
         assert_eq!(cfg.max_history_messages, 50);
         assert_eq!(cfg.max_output_tokens_per_turn, None);
@@ -8305,6 +8326,8 @@ reasoning_level = "high"
 default_temperature = 0.7
 [agent]
 compact_context = true
+tool_routing_enabled = false
+tool_routing_top_k = 7
 max_tool_iterations = 20
 max_history_messages = 80
 max_output_tokens_per_turn = 2048
@@ -8313,6 +8336,8 @@ tool_dispatcher = "xml"
 "#;
         let parsed: Config = toml::from_str(raw).unwrap();
         assert!(parsed.agent.compact_context);
+        assert!(!parsed.agent.tool_routing_enabled);
+        assert_eq!(parsed.agent.tool_routing_top_k, 7);
         assert_eq!(parsed.agent.max_tool_iterations, 20);
         assert_eq!(parsed.agent.max_history_messages, 80);
         assert_eq!(parsed.agent.max_output_tokens_per_turn, Some(2048));
@@ -10620,6 +10645,8 @@ default_model = "legacy-model"
         let mut config = Config::default();
 
         std::env::set_var("LLAMAFARM_AGENT_COMPACT_CONTEXT", "true");
+        std::env::set_var("LLAMAFARM_AGENT_TOOL_ROUTING_ENABLED", "false");
+        std::env::set_var("LLAMAFARM_AGENT_TOOL_ROUTING_TOP_K", "0");
         std::env::set_var("LLAMAFARM_AGENT_MAX_HISTORY_MESSAGES", "48");
         std::env::set_var("LLAMAFARM_AGENT_MAX_TOOL_ITERATIONS", "96");
         std::env::set_var("LLAMAFARM_AGENT_MAX_OUTPUT_TOKENS", "2048");
@@ -10627,12 +10654,16 @@ default_model = "legacy-model"
         config.apply_env_overrides();
 
         assert!(config.agent.compact_context);
+        assert!(!config.agent.tool_routing_enabled);
+        assert_eq!(config.agent.tool_routing_top_k, 0);
         assert_eq!(config.agent.max_history_messages, 48);
         assert_eq!(config.agent.max_tool_iterations, 96);
         assert_eq!(config.agent.max_output_tokens_per_turn, Some(2048));
         assert!(config.agent.parallel_tools);
 
         std::env::remove_var("LLAMAFARM_AGENT_COMPACT_CONTEXT");
+        std::env::remove_var("LLAMAFARM_AGENT_TOOL_ROUTING_ENABLED");
+        std::env::remove_var("LLAMAFARM_AGENT_TOOL_ROUTING_TOP_K");
         std::env::remove_var("LLAMAFARM_AGENT_MAX_HISTORY_MESSAGES");
         std::env::remove_var("LLAMAFARM_AGENT_MAX_TOOL_ITERATIONS");
         std::env::remove_var("LLAMAFARM_AGENT_MAX_OUTPUT_TOKENS");

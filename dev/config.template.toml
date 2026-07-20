@@ -24,6 +24,8 @@ request_timeout_secs = 300
 
 [agent]
 compact_context = false
+tool_routing_enabled = true
+tool_routing_top_k = 12
 max_tool_iterations = 512
 max_history_messages = 160
 parallel_tools = false

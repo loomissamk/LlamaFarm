@@ -151,7 +151,7 @@ fn model_prefers_native_tools(model: &str) -> bool {
 
 fn inject_prompt_tool_fallback_instructions(
     history: &mut [ChatMessage],
-    tools_registry: &[Box<dyn Tool>],
+    tool_specs: &[crate::tools::ToolSpec],
 ) {
     let Some(system_message) = history.iter_mut().find(|msg| msg.role == "system") else {
         return;
@@ -171,7 +171,7 @@ fn inject_prompt_tool_fallback_instructions(
     );
     system_message
         .content
-        .push_str(&build_tool_instructions(tools_registry));
+        .push_str(&build_tool_instructions_from_specs(tool_specs));
 }
 
 pub(crate) async fn with_tool_loop_settings<F>(
@@ -1435,7 +1435,13 @@ fn task_plan_progress_snapshot(records: &[SuccessfulToolRecord]) -> Option<TaskP
 /// Drives the model to start executing step 1 without waiting for user input.
 /// After web search, nudge the model to read result pages with `web_fetch`
 /// instead of stopping at search snippets.
-fn build_post_web_search_fetch_prompt(records: &[SuccessfulToolRecord]) -> Option<String> {
+fn build_post_web_search_fetch_prompt(
+    records: &[SuccessfulToolRecord],
+    web_fetch_available: bool,
+) -> Option<String> {
+    if !web_fetch_available {
+        return None;
+    }
     let (search_idx, search_record) = records
         .iter()
         .enumerate()
@@ -1477,6 +1483,15 @@ fn build_post_web_search_fetch_prompt(records: &[SuccessfulToolRecord]) -> Optio
     ))
 }
 
+fn web_search_needs_fetch_continuation(
+    records: &[SuccessfulToolRecord],
+    web_fetch_available: bool,
+) -> bool {
+    web_fetch_available
+        && records.iter().any(|record| record.name == "web_search_tool")
+        && !records.iter().any(|record| record.name == "web_fetch")
+}
+
 fn normalize_url_for_tracking(url: &str) -> String {
     url.trim()
         .trim_end_matches(['.', ',', ';', ':', ')', ']', '}', '>'])
@@ -1516,7 +1531,11 @@ fn is_deep_web_research_request(text: &str) -> bool {
 fn build_agentic_web_research_followup_prompt(
     history: &[ChatMessage],
     records: &[SuccessfulToolRecord],
+    web_fetch_available: bool,
 ) -> Option<String> {
+    if !web_fetch_available {
+        return None;
+    }
     let (search_idx, search_record) = records
         .iter()
         .enumerate()
@@ -2683,6 +2702,7 @@ pub(crate) async fn run_tool_call_loop(
         .filter(|tool| !excluded_tools.iter().any(|ex| ex == tool.name()))
         .map(|tool| tool.spec())
         .collect();
+    let web_fetch_available = tool_specs.iter().any(|spec| spec.name == "web_fetch");
     let mut use_native_tools = TOOL_LOOP_NATIVE_TOOLS_ENABLED
         .try_with(|enabled| *enabled)
         .ok()
@@ -3162,7 +3182,7 @@ pub(crate) async fn run_tool_call_loop(
                 if should_retry_with_prompt_tools {
                     prompt_tool_fallback_used = true;
                     use_native_tools = false;
-                    inject_prompt_tool_fallback_instructions(history, tools_registry);
+                    inject_prompt_tool_fallback_instructions(history, &tool_specs);
                     runtime_trace::record_event(
                         "llm_native_tool_fallback",
                         Some(channel_name),
@@ -3519,7 +3539,7 @@ pub(crate) async fn run_tool_call_loop(
                 if switched_to_prompt_tool_mode {
                     prompt_tool_fallback_used = true;
                     use_native_tools = false;
-                    inject_prompt_tool_fallback_instructions(history, tools_registry);
+                    inject_prompt_tool_fallback_instructions(history, &tool_specs);
                 }
                 missing_tool_call_retry_used = true;
                 retry_count += 1;
@@ -3859,7 +3879,7 @@ pub(crate) async fn run_tool_call_loop(
             );
 
             if excluded_tools.iter().any(|ex| ex == &tool_name) {
-                let blocked = format!("Tool '{tool_name}' is not available in this channel.");
+                let blocked = format!("Tool '{tool_name}' is not available for this turn.");
                 runtime_trace::record_event(
                     "tool_call_result",
                     Some(channel_name),
@@ -3872,7 +3892,7 @@ pub(crate) async fn run_tool_call_loop(
                         "iteration": iteration + 1,
                         "tool": tool_name.clone(),
                         "arguments": scrub_credentials(&tool_args.to_string()),
-                        "blocked_by_channel_policy": true,
+                        "blocked_by_tool_selection": true,
                     }),
                 );
                 ordered_results[idx] = Some((
@@ -4196,12 +4216,10 @@ pub(crate) async fn run_tool_call_loop(
                 .any(task_plan_record_is_create);
         // Track web_search_tool without web_fetch so we can prompt the model to
         // read the actual pages instead of just citing search snippets.
-        let iteration_had_web_search_without_fetch = current_successful_tool_records
-            .iter()
-            .any(|r| r.name == "web_search_tool")
-            && !current_successful_tool_records
-                .iter()
-                .any(|r| r.name == "web_fetch");
+        let iteration_had_web_search_without_fetch = web_search_needs_fetch_continuation(
+            &current_successful_tool_records,
+            web_fetch_available,
+        );
         let iteration_had_fetch = current_successful_tool_records
             .iter()
             .any(|r| r.name == "web_fetch");
@@ -4411,8 +4429,14 @@ pub(crate) async fn run_tool_call_loop(
                     build_agentic_web_research_followup_prompt(
                         history,
                         &recent_successful_tool_records,
+                        web_fetch_available,
                     )
-                    .or_else(|| build_post_web_search_fetch_prompt(&recent_successful_tool_records))
+                    .or_else(|| {
+                        build_post_web_search_fetch_prompt(
+                            &recent_successful_tool_records,
+                            web_fetch_available,
+                        )
+                    })
                     .or_else(|| {
                         build_task_plan_execution_followup_prompt(&recent_successful_tool_records)
                     })
@@ -4456,19 +4480,28 @@ pub(crate) async fn run_tool_call_loop(
                     build_agentic_web_research_followup_prompt(
                         history,
                         &recent_successful_tool_records,
+                        web_fetch_available,
                     )
                     .or_else(|| {
                         build_task_plan_execution_followup_prompt(&recent_successful_tool_records)
                     })
                 }
             } else if iteration_had_only_task_plan_create {
-                build_agentic_web_research_followup_prompt(history, &recent_successful_tool_records)
+                build_agentic_web_research_followup_prompt(
+                    history,
+                    &recent_successful_tool_records,
+                    web_fetch_available,
+                )
                     .or_else(|| build_post_plan_create_start_prompt(&recent_successful_tool_records))
                     // Fallback: snapshot unavailable (args had no tasks array), but we know a plan
                     // was created — always force execution so the model doesn't just summarise.
                     .or_else(|| Some("Internal continuation: task plan created. Begin execution NOW — use task_plan(action:list) to retrieve the steps, then immediately call the tool for step 1. Do not describe or summarise the plan, just execute.".to_string()))
             } else {
-                build_agentic_web_research_followup_prompt(history, &recent_successful_tool_records)
+                build_agentic_web_research_followup_prompt(
+                    history,
+                    &recent_successful_tool_records,
+                    web_fetch_available,
+                )
             }
         } else if consecutive_same_failure_count >= 3 {
             // Same tool keeps failing with the same error 3+ times — break the stall by
@@ -4667,6 +4700,10 @@ pub(crate) fn build_tool_instructions(tools_registry: &[Box<dyn Tool>]) -> Strin
 /// specs so the LLM knows how to invoke tools.
 pub(crate) fn build_tool_instructions_from_specs(tool_specs: &[crate::tools::ToolSpec]) -> String {
     let mut instructions = String::new();
+    let available = tool_specs
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect::<HashSet<_>>();
     instructions.push_str("\n## Tool Use Protocol\n\n");
     instructions.push_str("To use a tool, wrap a JSON object in <tool_call></tool_call> tags:\n\n");
     instructions.push_str("```\n<tool_call>\n{\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}\n</tool_call>\n```\n\n");
@@ -4685,24 +4722,64 @@ pub(crate) fn build_tool_instructions_from_specs(tool_specs: &[crate::tools::Too
     instructions.push_str(
         "Do not wrap tool calls in ```json fences or return bare JSON without <tool_call> tags.\n\n",
     );
-    instructions.push_str("Tool selection guardrails:\n");
-    instructions.push_str(
-        "- Use `shell` for immediate local command execution (for example: lsusb, lsblk, lspci, pwd, git status, rg, cat).\n",
-    );
-    instructions.push_str(
-        "- Use `cron_add` or `schedule` only when the user explicitly wants delayed, scheduled, or recurring execution. Never use them for an immediate one-off command.\n",
-    );
-    instructions.push_str(
-        "- Use `file_read` to inspect files and `file_write`/`file_edit` to change files instead of shelling out when a dedicated file tool exists.\n\n",
-    );
+    let mut guardrails = Vec::new();
+    if available.contains("shell") {
+        guardrails.push(
+            "- Use `shell` for immediate local command execution (for example: lsusb, lsblk, lspci, pwd, git status, rg, cat).".to_string(),
+        );
+    }
+    let scheduling_tools = ["cron_add", "schedule"]
+        .into_iter()
+        .filter(|name| available.contains(name))
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>();
+    if !scheduling_tools.is_empty() {
+        guardrails.push(format!(
+            "- Use {} only when the user explicitly wants delayed, scheduled, or recurring execution. Never use {} for an immediate one-off command.",
+            scheduling_tools.join(" or "),
+            if scheduling_tools.len() == 1 {
+                "it"
+            } else {
+                "them"
+            }
+        ));
+    }
+    if available.contains("file_read") {
+        guardrails.push("- Use `file_read` to inspect files.".to_string());
+    }
+    let file_mutation_tools = ["file_write", "file_edit"]
+        .into_iter()
+        .filter(|name| available.contains(name))
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>();
+    if !file_mutation_tools.is_empty() {
+        guardrails.push(format!(
+            "- Use {} to change files instead of shelling out when the dedicated file tool fits.",
+            file_mutation_tools.join(" or ")
+        ));
+    }
+    if !guardrails.is_empty() {
+        instructions.push_str("Tool selection guardrails:\n");
+        instructions.push_str(&guardrails.join("\n"));
+        instructions.push_str("\n\n");
+    }
     instructions.push_str("You may use multiple tool calls in a single response. ");
     instructions.push_str("After tool execution, results appear in <tool_result> tags. ");
     instructions.push_str(
         "Continue using tools with the results until the task is actually complete, then give the final answer.\n\n",
     );
     instructions.push_str(
-        "Ground the final answer in the actual tool results. Do not reinterpret file contents as tool names or availability errors. For `file_read`, answer from the returned contents. For `file_write`, do not invent contents that were not in the write arguments or a verified read-back.\n\n",
+        "Ground the final answer in the actual tool results. Do not reinterpret tool output as a tool name or availability error.",
     );
+    if available.contains("file_read") {
+        instructions.push_str(" For `file_read`, answer from the returned contents.");
+    }
+    if available.contains("file_write") {
+        instructions.push_str(
+            " For `file_write`, do not invent contents that were not in the write arguments or a verified read-back.",
+        );
+    }
+    instructions.push_str("\n\n");
     instructions.push_str("### Available Tools\n\n");
 
     for tool in tool_specs {
@@ -4791,11 +4868,17 @@ pub(crate) fn build_shell_policy_instructions(autonomy: &crate::config::Autonomy
 }
 
 pub(crate) fn build_runtime_tool_availability_notice(tools_registry: &[Box<dyn Tool>]) -> String {
-    const MAX_LISTED_TOOLS: usize = 40;
-    let names = tools_registry
+    let specs: Vec<crate::tools::ToolSpec> =
+        tools_registry.iter().map(|tool| tool.spec()).collect();
+    build_runtime_tool_availability_notice_from_specs(&specs)
+}
+
+pub(crate) fn build_runtime_tool_availability_notice_from_specs(
+    tool_specs: &[crate::tools::ToolSpec],
+) -> String {
+    let names = tool_specs
         .iter()
-        .map(|tool| tool.name())
-        .take(MAX_LISTED_TOOLS)
+        .map(|tool| tool.name.as_str())
         .collect::<Vec<_>>()
         .join(", ");
 
@@ -4854,7 +4937,12 @@ pub(crate) fn build_auto_plan_execute_instructions() -> String {
 
 pub(crate) fn build_federation_delegation_instructions(
     remote_agents: &[crate::federation::peer_registry::RemoteAgentInfo],
+    delegate_available: bool,
+    subagent_spawn_available: bool,
 ) -> String {
+    if !delegate_available && !subagent_spawn_available {
+        return String::new();
+    }
     let agent_lines: String = remote_agents
         .iter()
         .map(|info| {
@@ -4869,29 +4957,34 @@ pub(crate) fn build_federation_delegation_instructions(
         .first()
         .map(|info| info.agent_name.as_str())
         .unwrap_or("the worker");
-    format!(
+    let mut instructions = format!(
         "\n## Remote Worker Delegation\n\n\
          You have {n} remote worker node(s) available:\n{agent_lines}\n\
          Route tasks based on the worker descriptions above. When a worker has a specialization, \
          prefer it for matching task types.\n\n\
-         When planning multi-step tasks, actively distribute work across workers:\n\
-         - Include `delegate` calls as steps in your `task_plan` just like any local tool step\n\
-         - Use `delegate` with agentic=true when the remote worker needs to run its own tool loop \
-           (file operations, shell commands, multi-step research on that machine)\n\
-         - Use `delegate` without agentic for single-shot inference tasks (summarization, \
-           code generation, analysis where you pass all context in the prompt)\n\n\
          Good candidates to send to a remote worker:\n\
          - Tasks that can run in parallel with local work\n\
          - Compute-heavy inference where the remote has a better/different model\n\
          - Operations that need to run on the remote machine's filesystem or services\n\
-         - Subtasks that are fully self-contained and don't need local context\n\n\
-         Example plan step: delegate to {first_agent} with agentic=true: [subtask]\n\
-         You do not need to wait for one delegate to finish before starting the next — \
-         use subagent_spawn for fire-and-forget parallel delegation.\n",
+         - Subtasks that are fully self-contained and don't need local context\n",
         n = remote_agents.len(),
         agent_lines = agent_lines,
-        first_agent = first_agent,
-    )
+    );
+    if delegate_available {
+        instructions.push_str(
+            "\nUse `delegate` with agentic=true when the remote worker needs its own tool loop (file operations, shell commands, or multi-step research). Use `delegate` without agentic for single-shot inference where all context is supplied. Include `delegate` calls in a task plan when planning is useful.\n",
+        );
+        let _ = writeln!(
+            instructions,
+            "Example: delegate to {first_agent} with agentic=true: [subtask]"
+        );
+    }
+    if subagent_spawn_available {
+        instructions.push_str(
+            "\nUse `subagent_spawn` for independent fire-and-forget work that can run in parallel.\n",
+        );
+    }
+    instructions
 }
 
 // ── CLI Entrypoint ───────────────────────────────────────────────────────
@@ -5744,9 +5837,11 @@ mod tests {
             std::path::Path::new("."),
         ));
         let tools_registry = tools::default_tools(security);
+        let tool_specs: Vec<crate::tools::ToolSpec> =
+            tools_registry.iter().map(|tool| tool.spec()).collect();
 
-        inject_prompt_tool_fallback_instructions(&mut history, &tools_registry);
-        inject_prompt_tool_fallback_instructions(&mut history, &tools_registry);
+        inject_prompt_tool_fallback_instructions(&mut history, &tool_specs);
+        inject_prompt_tool_fallback_instructions(&mut history, &tool_specs);
 
         let system_prompt = &history[0].content;
         assert!(system_prompt.contains("## Compatibility Fallback"));
@@ -5755,6 +5850,50 @@ mod tests {
             system_prompt.matches("## Compatibility Fallback").count(),
             1
         );
+    }
+
+    #[test]
+    fn inject_prompt_tool_fallback_instructions_uses_only_selected_specs() {
+        let mut history = vec![ChatMessage::system("Base prompt")];
+        let all_specs = vec![
+            crate::tools::ToolSpec {
+                name: "selected_tool".to_string(),
+                description: "Selected tool description".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "selected_field": { "type": "string" }
+                    }
+                }),
+            },
+            crate::tools::ToolSpec {
+                name: "excluded_tool".to_string(),
+                description: "Excluded tool description".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "excluded_field": { "type": "string" }
+                    }
+                }),
+            },
+        ];
+        let selected_specs: Vec<_> = all_specs
+            .into_iter()
+            .filter(|spec| spec.name == "selected_tool")
+            .collect();
+
+        inject_prompt_tool_fallback_instructions(&mut history, &selected_specs);
+
+        let system_prompt = &history[0].content;
+        assert!(system_prompt.contains("**selected_tool**"));
+        assert!(system_prompt.contains("selected_field"));
+        assert!(!system_prompt.contains("excluded_tool"));
+        assert!(!system_prompt.contains("excluded_field"));
+        assert!(!system_prompt.contains("`shell`"));
+        assert!(!system_prompt.contains("`cron_add`"));
+        assert!(!system_prompt.contains("`file_read`"));
+        assert!(!system_prompt.contains("`file_write`"));
+        assert!(!system_prompt.contains("`file_edit`"));
     }
 
     #[test]
@@ -7040,7 +7179,7 @@ mod tests {
         assert!(
             tool_results_message
                 .content
-                .contains("not available in this channel"),
+                .contains("not available for this turn"),
             "blocked reason should be visible to the model"
         );
     }
@@ -9033,6 +9172,20 @@ mod tests {
     }
 
     #[test]
+    fn runtime_tool_notice_lists_the_entire_selected_set() {
+        let specs = (0..45)
+            .map(|index| crate::tools::ToolSpec {
+                name: format!("selected_tool_{index}"),
+                description: "Selected fixture".to_string(),
+                parameters: serde_json::json!({"type": "object"}),
+            })
+            .collect::<Vec<_>>();
+        let notice = build_runtime_tool_availability_notice_from_specs(&specs);
+        assert!(notice.contains("selected_tool_0"));
+        assert!(notice.contains("selected_tool_44"));
+    }
+
+    #[test]
     fn auto_plan_instructions_require_bounded_evidence_for_capability_audits() {
         let instructions = build_auto_plan_execute_instructions();
 
@@ -10697,13 +10850,24 @@ Tail"#;
                 .into(),
         }];
 
-        let prompt = build_post_web_search_fetch_prompt(&records)
+        let prompt = build_post_web_search_fetch_prompt(&records, true)
             .expect("web search output should yield fetch URLs");
 
         assert!(prompt.contains("use web_fetch"));
         assert!(prompt.contains("https://www.rust-lang.org/"));
         assert!(prompt.contains("https://doc.rust-lang.org/book/"));
         assert!(prompt.contains("Do not summarize only the search snippets"));
+    }
+
+    #[test]
+    fn web_search_only_requires_fetch_when_fetch_is_selected() {
+        let records = vec![SuccessfulToolRecord {
+            name: "web_search_tool".into(),
+            arguments: serde_json::json!({ "query": "current news" }),
+            output: "Search result snippets".into(),
+        }];
+        assert!(web_search_needs_fetch_continuation(&records, true));
+        assert!(!web_search_needs_fetch_continuation(&records, false));
     }
 
     #[test]
@@ -10721,7 +10885,7 @@ Tail"#;
                 .into(),
         }];
 
-        let prompt = build_agentic_web_research_followup_prompt(&history, &records)
+        let prompt = build_agentic_web_research_followup_prompt(&history, &records, true)
             .expect("deep research request should produce a multi-hop follow-up prompt");
 
         assert!(prompt.contains("deeper online-research task"));
@@ -10750,7 +10914,7 @@ Tail"#;
         ];
 
         assert!(
-            build_agentic_web_research_followup_prompt(&history, &records).is_none(),
+            build_agentic_web_research_followup_prompt(&history, &records, true).is_none(),
             "basic lookup should not force extra fetch hops after one page is read"
         );
     }

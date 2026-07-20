@@ -6,6 +6,7 @@ import {
   ChevronRight,
   ClipboardList,
   FileText,
+  Filter,
   Loader2,
   ShieldAlert,
   ShieldCheck,
@@ -51,10 +52,34 @@ interface ToolEvent {
   artifacts: string[];
 }
 
+interface ToolRoutingScore {
+  name: string;
+  score: number;
+  matched_terms: string[];
+}
+
+interface ToolRoutingRecord {
+  seq?: number;
+  ts_ms?: number;
+  strategy?: string;
+  reason?: string;
+  query_excerpt?: string;
+  selected?: string[];
+  excluded?: string[];
+  scores?: ToolRoutingScore[];
+  total_count?: number;
+  selected_count?: number;
+  excluded_count?: number;
+}
+
 interface RunDetail {
   meta: RunMeta;
   plan: PlanStep[];
   events: ToolEvent[];
+  /** Missing on ledgers created before per-turn tool routing was recorded. */
+  tool_routing?: ToolRoutingRecord[];
+  /** Oldest routing decisions evicted from the bounded ledger window. */
+  tool_routing_dropped?: number;
 }
 
 const STATUS_STYLES: Record<RunMeta['status'], string> = {
@@ -180,6 +205,164 @@ function EventRow({ event }: { event: ToolEvent }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function routingLabel(value: string | undefined, fallback: string): string {
+  return value?.trim() ? value.replace(/_/g, ' ') : fallback;
+}
+
+function ToolRoutingPanel({
+  records,
+  dropped = 0,
+}: {
+  records?: ToolRoutingRecord[];
+  dropped?: number;
+}) {
+  if (!records || records.length === 0) {
+    return (
+      <p className="text-sm text-gray-500">
+        No tool-routing decision was recorded. This is expected for legacy runs and turns that did
+        not use the model tool loop.
+      </p>
+    );
+  }
+
+  const visibleRecords = records.slice(-20).reverse();
+  const retainedNotShown = Math.max(0, records.length - visibleRecords.length);
+
+  return (
+    <div className="space-y-2">
+      {(dropped > 0 || retainedNotShown > 0) && (
+        <p className="text-xs text-gray-500">
+          Showing the latest {visibleRecords.length} decisions
+          {retainedNotShown > 0 ? `; ${retainedNotShown} older retained decisions are hidden` : ''}
+          {dropped > 0 ? `; ${dropped} oldest decisions were evicted from the bounded ledger` : ''}.
+        </p>
+      )}
+      {visibleRecords.map((record, index) => {
+        const selected = record.selected ?? [];
+        const excluded = record.excluded ?? [];
+        const scores = record.scores ?? [];
+        const selectedCount = Math.max(record.selected_count ?? 0, selected.length);
+        const excludedCount = Math.max(record.excluded_count ?? 0, excluded.length);
+        const partitionCount = selectedCount + excludedCount;
+        const totalCount = Math.max(record.total_count ?? partitionCount, partitionCount);
+        const hiddenPercent = totalCount > 0 ? Math.round((excludedCount / totalCount) * 100) : 0;
+        const turnNumber = record.seq === undefined ? records.length - index : record.seq + 1;
+
+        return (
+          <div
+            key={`${record.seq ?? index}-${record.ts_ms ?? 0}`}
+            className="border border-gray-800 rounded-md bg-gray-900/40 p-3 space-y-3"
+          >
+            <div className="flex items-center gap-2 flex-wrap text-sm">
+              <Filter className="h-4 w-4 text-cyan-400" />
+              <span className="font-medium text-gray-200">Turn {turnNumber}</span>
+              <span className="rounded border border-cyan-800/60 bg-cyan-950/40 px-2 py-0.5 text-xs text-cyan-300">
+                {routingLabel(record.strategy, 'unknown strategy')}
+              </span>
+              <span className="rounded border border-gray-700 bg-gray-950 px-2 py-0.5 text-xs text-gray-300">
+                {routingLabel(record.reason, 'reason not recorded')}
+              </span>
+              {record.ts_ms !== undefined && record.ts_ms > 0 && (
+                <span className="ml-auto text-xs text-gray-500">{formatTime(record.ts_ms)}</span>
+              )}
+            </div>
+
+            {record.query_excerpt && (
+              <div className="rounded border border-gray-800 bg-gray-950 px-2.5 py-2 text-xs text-gray-400">
+                <span className="text-gray-600">current turn: </span>
+                {record.query_excerpt}
+              </div>
+            )}
+
+            <div className="grid grid-cols-3 gap-2 text-xs">
+              <div className="rounded border border-gray-800 bg-gray-950 p-2">
+                <div className="text-gray-500">Registry</div>
+                <div className="font-mono text-gray-200">{totalCount} tools</div>
+              </div>
+              <div className="rounded border border-gray-800 bg-gray-950 p-2">
+                <div className="text-gray-500">Selected</div>
+                <div className="font-mono text-green-300">{selectedCount}</div>
+              </div>
+              <div className="rounded border border-gray-800 bg-gray-950 p-2">
+                <div className="text-gray-500">Hidden</div>
+                <div className="font-mono text-cyan-300">
+                  {excludedCount} ({hiddenPercent}%)
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="text-xs font-medium uppercase tracking-wide text-gray-500">
+                Selected tools
+              </div>
+              {selected.length === 0 ? (
+                <p className="text-xs text-gray-500">No tools selected.</p>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {selected.map((tool) => {
+                    const ranked = scores.find((entry) => entry.name === tool);
+                    const title = ranked?.matched_terms?.length
+                      ? `matched: ${ranked.matched_terms.join(', ')}`
+                      : ranked
+                        ? 'ranked query match'
+                        : 'always available or directly selected';
+                    return (
+                      <span
+                        key={tool}
+                        title={title}
+                        className="rounded border border-green-800/50 bg-green-950/30 px-2 py-1 font-mono text-xs text-green-300"
+                      >
+                        {tool}
+                        {ranked && (
+                          <span className="ml-1 text-green-600">{ranked.score.toFixed(1)}</span>
+                        )}
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {scores.length > 0 && (
+              <div className="text-xs text-gray-500">
+                Ranked matches:{' '}
+                {scores
+                  .map((entry) => {
+                    const terms = entry.matched_terms?.length
+                      ? ` [${entry.matched_terms.join(', ')}]`
+                      : '';
+                    return `${entry.name} ${entry.score.toFixed(1)}${terms}`;
+                  })
+                  .join(' · ')}
+              </div>
+            )}
+
+            <details className="text-xs text-gray-500">
+              <summary className="cursor-pointer hover:text-gray-300">
+                Excluded tools ({excludedCount})
+              </summary>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {excluded.length === 0 ? (
+                  <span>None</span>
+                ) : (
+                  excluded.map((tool) => (
+                    <span
+                      key={tool}
+                      className="rounded border border-gray-800 bg-gray-950 px-2 py-1 font-mono text-gray-500"
+                    >
+                      {tool}
+                    </span>
+                  ))
+                )}
+              </div>
+            </details>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -325,6 +508,17 @@ export default function Runs() {
                   )}
                 </div>
               </div>
+
+              <section className="space-y-2">
+                <h2 className="text-sm font-semibold text-gray-300 uppercase tracking-wide">
+                  Tool routing · {detail.tool_routing?.length ?? 0}{' '}
+                  {(detail.tool_routing?.length ?? 0) === 1 ? 'decision' : 'decisions'}
+                </h2>
+                <ToolRoutingPanel
+                  records={detail.tool_routing}
+                  dropped={detail.tool_routing_dropped}
+                />
+              </section>
 
               <section className="space-y-2">
                 <h2 className="text-sm font-semibold text-gray-300 uppercase tracking-wide">

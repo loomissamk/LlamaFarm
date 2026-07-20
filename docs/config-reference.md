@@ -90,6 +90,8 @@ Operational note for container users:
 | Key | Default | Purpose |
 |---|---|---|
 | `compact_context` | `false` | When true: bootstrap_max_chars=6000, rag_chunk_limit=2. Use for 13B or smaller models |
+| `tool_routing_enabled` | `true` | Route the WebSocket Agent Chat registry per turn using the current request plus recent user-task context |
+| `tool_routing_top_k` | `12` | Maximum relevant non-essential tools to select before adding core tools and required workflow dependencies; `0` disables routing |
 | `max_tool_iterations` | `20` | Maximum tool-call loop turns per user message across CLI, gateway, and channels |
 | `max_history_messages` | `50` | Maximum conversation history messages retained per session |
 | `parallel_tools` | `false` | Enable parallel tool execution within a single iteration |
@@ -98,6 +100,22 @@ Operational note for container users:
 Notes:
 
 - Setting `max_tool_iterations = 0` falls back to safe default `20`.
+- Tool routing is currently applied to WebSocket Agent Chat turns. The selected
+  set is used consistently for prompt descriptions, XML/native schemas,
+  compatibility fallback, and execution filtering. Empty, context-free,
+  unmatched, and non-English queries fail open to the full registered registry
+  rather than guessing. Runtime security and approval policy still applies.
+- Routing decisions and scores are recorded in the run ledger and shown in the
+  Run Inspector. The ledger retains a bounded newest-first history; temporary
+  chats do not persist raw routing-query excerpts. The hot-path ranker is
+  deterministic lexical/IDF routing, not embedding retrieval.
+- If a visible skill lacks structured carrier metadata (notably a standalone
+  `SKILL.md`), routing conservatively keeps the full registered tool set.
+  Compact `SKILL.toml` loading retains carrier metadata internally without
+  injecting commands, and any missing declared carrier also fails open.
+- Deployment rollback overrides are
+  `LLAMAFARM_AGENT_TOOL_ROUTING_ENABLED=0` and
+  `LLAMAFARM_AGENT_TOOL_ROUTING_TOP_K=0`.
 - If a channel message exceeds this value, the runtime returns: `Agent exceeded maximum tool iterations (<value>)`.
 - In CLI, gateway, and channel tool loops, multiple independent tool calls are executed concurrently by default when the pending calls do not require approval gating; result order remains stable.
 - `parallel_tools` applies to the `Agent::turn()` API surface. It does not gate the runtime loop used by CLI, gateway, or channel handlers.

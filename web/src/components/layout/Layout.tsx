@@ -1,7 +1,8 @@
-import { useState } from 'react';
-import { Outlet } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { Outlet, useMatch } from 'react-router-dom';
 import Sidebar from '@/components/layout/Sidebar';
 import Header from '@/components/layout/Header';
+import AgentChat from '@/pages/AgentChat';
 
 const SIDEBAR_COLLAPSED_KEY = 'llamafarm.sidebar_collapsed.v1';
 
@@ -15,6 +16,14 @@ function loadSidebarCollapsed(): boolean {
 
 export default function Layout() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => loadSidebarCollapsed());
+  const isAgentRoute = useMatch({ path: '/agent', end: true }) !== null;
+  const [agentMounted, setAgentMounted] = useState(isAgentRoute);
+
+  useEffect(() => {
+    if (isAgentRoute) {
+      setAgentMounted(true);
+    }
+  }, [isAgentRoute]);
 
   const toggleSidebar = () => {
     setSidebarCollapsed((prev) => {
@@ -36,7 +45,12 @@ export default function Layout() {
         <Header />
 
         <main className="flex-1 overflow-y-auto">
-          <Outlet />
+          {(agentMounted || isAgentRoute) && (
+            <div className={isAgentRoute ? '' : 'hidden'}>
+              <AgentChat />
+            </div>
+          )}
+          {!isAgentRoute && <Outlet />}
         </main>
       </div>
     </div>
