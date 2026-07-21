@@ -736,8 +736,10 @@ fn check_workspace(config: &Config, items: &mut Vec<DiagItem>) {
         }
     }
 
-    // Key workspace files
-    check_file_exists(ws, "SOUL.md", false, cat, items);
+    // Key workspace files. SOUL.md is intentionally not checked here: the
+    // prompt builder only ever injects AGENTS.md, and bundle/dev entrypoints
+    // actively delete any stale SOUL.md on boot, so "not found" is the
+    // permanent, expected state rather than something worth a warning.
     check_file_exists(ws, "AGENTS.md", false, cat, items);
 }
 
