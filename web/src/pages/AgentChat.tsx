@@ -18,6 +18,7 @@ import {
   Square,
   Trash2,
   User,
+  Wrench,
   X,
 } from 'lucide-react';
 import { getFederationPeers } from '@/lib/api';
@@ -121,6 +122,12 @@ const IDE_DEFAULT_WIDTH = 560;
 const CHAT_FEDERATION_COLLAPSED_STORAGE_KEY = 'llamafarm.agent_chat.federation_collapsed.v1';
 const CHAT_CONTROLS_COLLAPSED_STORAGE_KEY = 'llamafarm.agent_chat.controls_collapsed.v1';
 const MAX_PERSISTED_MESSAGES = 500;
+// Kicks off a self-contained acceptance run: the model must enumerate every
+// registered tool via task_plan (not just guess a few) and chain through
+// them one at a time so each gets a real, verified call before the plan can
+// reach a terminal state.
+const TEST_ALL_TOOLS_PROMPT =
+  'Look at the entire tool catalogue available to you right now. Create a task_plan with one pending step per tool in that catalogue — do not group tools together or skip any. Then execute the plan step by step: call each tool once with a safe, minimal, non-destructive test input, mark the step completed or blocked based on the real result, and immediately continue to the next pending step without stopping to ask me anything. When every step has reached a terminal state, report a pass/fail summary for the whole catalogue.';
 const MAX_PERSISTED_SESSIONS = 40;
 
 function CopyButton({ text }: Readonly<{ text: string }>) {
@@ -1423,9 +1430,14 @@ export default function AgentChat() {
     }
   };
 
-  const handleSend = () => {
-    const trimmed = input.trim();
-    if (!trimmed || !wsRef.current?.connected || !activeSession) {
+  // Shared by the manual send box and programmatic triggers (e.g. "Test All
+  // Tools") that need to fire a message into a session that may have just
+  // been created in the same event handler — so it takes `session` and
+  // `content` explicitly rather than reading `activeSession`/`input` state,
+  // which would not have settled yet in that same-tick scenario.
+  const dispatchUserMessage = (session: ChatSession, content: string) => {
+    const trimmed = content.trim();
+    if (!trimmed || !wsRef.current?.connected) {
       return;
     }
 
@@ -1439,22 +1451,22 @@ export default function AgentChat() {
     };
 
     const updatedSession = normalizeSession({
-      ...activeSession,
-      messages: [...activeSession.messages, userMessage],
+      ...session,
+      messages: [...session.messages, userMessage],
       updatedAt: timestamp,
     });
 
     setSessions((prev) =>
-      sortSessions(prev.map((session) => (session.id === activeSession.id ? updatedSession : session))),
+      sortSessions(prev.map((s) => (s.id === session.id ? updatedSession : s))),
     );
 
     try {
-      deletedSessionIdsRef.current.delete(activeSession.id);
-      completedResponseSessionIdsRef.current.delete(activeSession.id);
+      deletedSessionIdsRef.current.delete(session.id);
+      completedResponseSessionIdsRef.current.delete(session.id);
       wsRef.current.sendMessage({
         content: trimmed,
-        sessionId: activeSession.id,
-        temporary: activeSession.temporary,
+        sessionId: session.id,
+        temporary: session.temporary,
         historySeed: buildHistorySeed(updatedSession.messages),
         federationPeerIds: federationEnabled ? selectedFederationPeerIds : [],
       });
@@ -1464,22 +1476,37 @@ export default function AgentChat() {
       setTps(0);
       setRealMetrics(null);
       setStreaming(true);
-      setTypingSessionIds((prev) =>
-        prev.includes(activeSession.id) ? prev : [...prev, activeSession.id],
-      );
-      setStoppingSessionIds((prev) => prev.filter((id) => id !== activeSession.id));
-      pendingContentRef.current[activeSession.id] = '';
-      setStreamingContentBySession((prev) => ({ ...prev, [activeSession.id]: '' }));
-      setStreamingPreviewCollapsedBySession((prev) => ({ ...prev, [activeSession.id]: false }));
+      setTypingSessionIds((prev) => (prev.includes(session.id) ? prev : [...prev, session.id]));
+      setStoppingSessionIds((prev) => prev.filter((id) => id !== session.id));
+      pendingContentRef.current[session.id] = '';
+      setStreamingContentBySession((prev) => ({ ...prev, [session.id]: '' }));
+      setStreamingPreviewCollapsedBySession((prev) => ({ ...prev, [session.id]: false }));
     } catch {
       setError('Failed to send message. Please try again.');
     }
+  };
 
+  const handleSend = () => {
+    if (!activeSession) {
+      return;
+    }
+    dispatchUserMessage(activeSession, input);
     setInput('');
     if (inputRef.current) {
       inputRef.current.style.height = 'auto';
       inputRef.current.focus();
     }
+  };
+
+  const handleTestAllTools = () => {
+    if (!wsRef.current?.connected) {
+      return;
+    }
+    const session = createChatSession(true);
+    setSessions((prev) => sortSessions([session, ...prev]));
+    setActiveSessionId(session.id);
+    setConfirmDeleteSessionId(null);
+    dispatchUserMessage(session, TEST_ALL_TOOLS_PROMPT);
   };
 
   const handleStop = () => {
@@ -1554,6 +1581,15 @@ export default function AgentChat() {
               <p className="mt-3 text-xs text-gray-500">
                 Regular chats persist locally. Temporary chats stay in memory only.
               </p>
+              <button
+                onClick={handleTestAllTools}
+                disabled={!connected}
+                title="Start a temporary chat that has the agent enumerate and exercise every registered tool via a task plan"
+                className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-sm font-medium text-gray-200 transition-colors hover:border-amber-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Wrench className="h-4 w-4" />
+                Test All Tools
+              </button>
             </>
           )}
         </div>

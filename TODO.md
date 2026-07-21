@@ -175,8 +175,9 @@ and tool selection.** Direct implications:
 My honest thoughts on each idea, with a plan:
 
 - [~] **Authorized-lab security toolkit** (started): opt-in Docker build arg
-  `LLAMAFARM_LAB_TOOLS=1` adds nmap, tshark/tcpdump, sqlmap, hydra, nikto,
-  john, hashcat, etc. — off by default to keep the image lean. Verdict:
+  `LLAMAFARM_LAB_TOOLS=1` adds nmap, tshark/tcpdump, sqlmap, hydra, john,
+  hashcat, etc. (nikto isn't packaged for Debian trixie, so it's left out)
+  — off by default to keep the image lean. Verdict:
   YES, but framed for the operator's OWN authorized lab (this repo's stated
   chaos_lab / ethical-hacking / disposable-target mission). Keep it a build
   flag, never default; document the "own systems / permission only" boundary.

@@ -8,8 +8,12 @@ DEFAULT_PULL_MODELS=""
 OLLAMA_IMAGE_DEFAULT="ollama/ollama:latest"
 OLLAMA_IMAGE_ROCM="ollama/ollama:rocm"
 TMP_OVERRIDE=""
-RUNTIME_UID="${LLAMAFARM_RUNTIME_UID:-$(id -u)}"
-RUNTIME_GID="${LLAMAFARM_RUNTIME_GID:-$(id -g)}"
+# Default to root: this is a disposable, single-tenant lab container, and the
+# agent needs unrestricted filesystem/package access inside it. Set
+# LLAMAFARM_RUNTIME_UID/GID explicitly to map to a host user instead (e.g. for
+# strict host bind-mount write compatibility).
+RUNTIME_UID="${LLAMAFARM_RUNTIME_UID:-0}"
+RUNTIME_GID="${LLAMAFARM_RUNTIME_GID:-0}"
 
 cleanup() {
   if [ -n "$TMP_OVERRIDE" ] && [ -f "$TMP_OVERRIDE" ]; then

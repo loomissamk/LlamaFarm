@@ -125,9 +125,7 @@ COPY --from=builder /app/llamafarm /usr/local/bin/llamafarm
 COPY dev/config.template.toml /usr/share/llamafarm/config.template.toml
 COPY dev/config.preset.safe.toml /usr/share/llamafarm/config.preset.safe.toml
 COPY dev/workspace.preset.god.AGENTS.md /usr/share/llamafarm/workspace.preset.god.AGENTS.md
-COPY dev/workspace.preset.god.SOUL.md /usr/share/llamafarm/workspace.preset.god.SOUL.md
 COPY dev/workspace.preset.safe.AGENTS.md /usr/share/llamafarm/workspace.preset.safe.AGENTS.md
-COPY dev/workspace.preset.safe.SOUL.md /usr/share/llamafarm/workspace.preset.safe.SOUL.md
 COPY scripts/docker/dev-entrypoint.sh /usr/local/bin/dev-entrypoint.sh
 RUN chmod 755 /usr/local/bin/dev-entrypoint.sh && \
     chmod 644 /usr/share/llamafarm/config.template.toml /usr/share/llamafarm/config.preset.safe.toml && \
@@ -202,7 +200,7 @@ ARG LLAMAFARM_LAB_TOOLS=1
 RUN if [ "$LLAMAFARM_LAB_TOOLS" = "1" ]; then \
       apt-get update && apt-get install -y --no-install-recommends \
         nmap tshark tcpdump netcat-openbsd dnsutils whois traceroute \
-        openssh-client sshpass hydra nikto sqlmap john hashcat \
+        openssh-client sshpass hydra sqlmap john hashcat \
       && rm -rf /var/lib/apt/lists/*; \
     fi
 
@@ -213,9 +211,7 @@ COPY --from=ollama_base /usr/lib/ollama /usr/lib/ollama
 COPY dev/config.template.toml /usr/share/llamafarm/config.template.toml
 COPY dev/config.preset.safe.toml /usr/share/llamafarm/config.preset.safe.toml
 COPY dev/workspace.preset.god.AGENTS.md /usr/share/llamafarm/workspace.preset.god.AGENTS.md
-COPY dev/workspace.preset.god.SOUL.md /usr/share/llamafarm/workspace.preset.god.SOUL.md
 COPY dev/workspace.preset.safe.AGENTS.md /usr/share/llamafarm/workspace.preset.safe.AGENTS.md
-COPY dev/workspace.preset.safe.SOUL.md /usr/share/llamafarm/workspace.preset.safe.SOUL.md
 COPY scripts/docker/bundle-entrypoint.sh /usr/local/bin/bundle-entrypoint.sh
 RUN chmod 755 /usr/local/bin/bundle-entrypoint.sh /usr/bin/ollama && \
     ln -sf /usr/bin/ollama /usr/local/bin/ollama && \
@@ -261,9 +257,7 @@ COPY --from=builder /llamafarm-data /llamafarm-data
 COPY dev/config.template.toml /usr/share/llamafarm/config.template.toml
 COPY dev/config.preset.safe.toml /usr/share/llamafarm/config.preset.safe.toml
 COPY dev/workspace.preset.god.AGENTS.md /usr/share/llamafarm/workspace.preset.god.AGENTS.md
-COPY dev/workspace.preset.god.SOUL.md /usr/share/llamafarm/workspace.preset.god.SOUL.md
 COPY dev/workspace.preset.safe.AGENTS.md /usr/share/llamafarm/workspace.preset.safe.AGENTS.md
-COPY dev/workspace.preset.safe.SOUL.md /usr/share/llamafarm/workspace.preset.safe.SOUL.md
 
 # Environment setup
 ENV LLAMAFARM_WORKSPACE=/llamafarm-data/workspace

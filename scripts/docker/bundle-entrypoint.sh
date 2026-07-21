@@ -232,8 +232,11 @@ monitor_children() {
 }
 
 if [ "$(id -u)" = "0" ]; then
-  target_uid="${LLAMAFARM_RUNTIME_UID:-65534}"
-  target_gid="${LLAMAFARM_RUNTIME_GID:-65534}"
+  # Default to root: this is a disposable, single-tenant lab container and
+  # the agent needs unrestricted filesystem/package access inside it. Set
+  # LLAMAFARM_RUNTIME_UID/GID to map to a non-root host user instead.
+  target_uid="${LLAMAFARM_RUNTIME_UID:-0}"
+  target_gid="${LLAMAFARM_RUNTIME_GID:-0}"
 
   case "$target_uid" in
     ''|*[!0-9]*)
@@ -249,16 +252,23 @@ if [ "$(id -u)" = "0" ]; then
       ;;
   esac
 
-  ensure_runtime_identity "$target_uid" "$target_gid"
-  ensure_runtime_layout
-  chown -R "$target_uid:$target_gid" "$DATA_DIR"
-  drop_args=(--reuid="$target_uid" --regid="$target_gid")
-  if [ -n "${LLAMAFARM_SUPP_GROUPS:-}" ]; then
-    drop_args+=(--groups "${LLAMAFARM_SUPP_GROUPS}")
-  else
-    drop_args+=(--clear-groups)
+  # A target of root is a no-op: staying at uid 0 needs no chown and no
+  # re-exec. Re-execing via `setpriv --reuid=0 --regid=0` would still be uid
+  # 0 afterward, so this `if` would trigger again on every relaunch — an
+  # infinite chown-then-reexec loop that never reaches the code below that
+  # actually starts Ollama/the gateway.
+  if [ "$target_uid" != "0" ] || [ "$target_gid" != "0" ]; then
+    ensure_runtime_identity "$target_uid" "$target_gid"
+    ensure_runtime_layout
+    chown -R "$target_uid:$target_gid" "$DATA_DIR"
+    drop_args=(--reuid="$target_uid" --regid="$target_gid")
+    if [ -n "${LLAMAFARM_SUPP_GROUPS:-}" ]; then
+      drop_args+=(--groups "${LLAMAFARM_SUPP_GROUPS}")
+    else
+      drop_args+=(--clear-groups)
+    fi
+    exec setpriv "${drop_args[@]}" /usr/local/bin/bundle-entrypoint.sh "$@"
   fi
-  exec setpriv "${drop_args[@]}" /usr/local/bin/bundle-entrypoint.sh "$@"
 fi
 
 ensure_runtime_layout

@@ -105,6 +105,38 @@ pub(super) fn trim_history(history: &mut Vec<ChatMessage>, max_history: usize) {
     history.drain(start..start + to_remove);
 }
 
+/// Returns the `[start, compact_end)` message range that should fold into a
+/// compaction summary, or `None` if `history` is already within `max_history`.
+/// Shared by the model-backed and deterministic compaction paths so both
+/// apply the exact same threshold, and exposed to the parent module so it can
+/// build a deterministic summary from exactly the slice being compacted away
+/// (not the whole history, which would echo "old" content right back into
+/// the surviving summary message).
+pub(super) fn compaction_range(
+    history: &[ChatMessage],
+    max_history: usize,
+) -> Option<(usize, usize)> {
+    let has_system = history.first().map_or(false, |m| m.role == "system");
+    let non_system_count = if has_system {
+        history.len().saturating_sub(1)
+    } else {
+        history.len()
+    };
+
+    if non_system_count <= max_history {
+        return None;
+    }
+
+    let start = if has_system { 1 } else { 0 };
+    let keep_recent = max_history.min(non_system_count);
+    let compact_count = non_system_count.saturating_sub(keep_recent);
+    if compact_count == 0 {
+        return None;
+    }
+
+    Some((start, start + compact_count))
+}
+
 pub(super) fn build_compaction_transcript(messages: &[ChatMessage]) -> String {
     let mut transcript = String::new();
     for msg in messages {
@@ -155,25 +187,9 @@ pub(super) async fn auto_compact_history_focused(
     memory: Option<&dyn Memory>,
     focus: Option<&str>,
 ) -> Result<bool> {
-    let has_system = history.first().map_or(false, |m| m.role == "system");
-    let non_system_count = if has_system {
-        history.len().saturating_sub(1)
-    } else {
-        history.len()
+    let Some((start, compact_end)) = compaction_range(history, max_history) else {
+        return Ok(false);
     };
-
-    if non_system_count <= max_history {
-        return Ok(false);
-    }
-
-    let start = if has_system { 1 } else { 0 };
-    let keep_recent = max_history.min(non_system_count);
-    let compact_count = non_system_count.saturating_sub(keep_recent);
-    if compact_count == 0 {
-        return Ok(false);
-    }
-
-    let compact_end = start + compact_count;
     let to_compact: Vec<ChatMessage> = history[start..compact_end].to_vec();
     let transcript = build_compaction_transcript(&to_compact);
 
@@ -213,6 +229,39 @@ pub(super) async fn auto_compact_history_focused(
     }
 
     Ok(true)
+}
+
+/// Compact tool-chain history using an already-computed, model-free summary.
+///
+/// This mirrors [`auto_compact_history_focused`]'s splicing and checkpoint
+/// persistence but never calls the provider. It exists for the active
+/// tool-calling loop, which already rebuilds a fresh checklist + recent-tool-
+/// results snapshot on every provider request (see `build_working_state_prompt`
+/// in the parent module). Folding older raw messages through an extra model
+/// call on every plan-item boundary was pure overhead there: a full extra
+/// round trip (tens of seconds) that told the model nothing the checklist
+/// snapshot didn't already cover. Compaction that happens once per turn (the
+/// CLI's end-of-turn pass, the autonomous loop's between-attempt pass) still
+/// goes through [`auto_compact_history`] / [`auto_compact_history_focused`],
+/// where the higher-quality model summary is worth the one-time cost.
+pub(super) fn deterministic_compact_history(
+    history: &mut Vec<ChatMessage>,
+    max_history: usize,
+    summary: &str,
+    model: &str,
+) -> bool {
+    let Some((start, compact_end)) = compaction_range(history, max_history) else {
+        return false;
+    };
+
+    let bounded_summary = truncate_with_ellipsis(summary, COMPACTION_MAX_SUMMARY_CHARS);
+    apply_compaction_summary(history, start, compact_end, &bounded_summary);
+
+    if let Err(err) = persist_working_state_checkpoint(model, &bounded_summary, None) {
+        tracing::warn!("failed to persist working-state checkpoint: {err}");
+    }
+
+    true
 }
 
 #[cfg(test)]

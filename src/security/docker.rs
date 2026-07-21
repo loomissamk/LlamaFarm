@@ -61,6 +61,18 @@ impl Sandbox for DockerSandbox {
             .map(|s| s.to_string_lossy().to_string())
             .collect();
 
+        // `program` is often an absolute path the caller resolved against the
+        // *host* filesystem (e.g. `which sh` on a Debian-based host resolves
+        // to `/usr/bin/sh`). The sandbox image has its own, different
+        // filesystem layout — Alpine only ships `/bin/sh`, not `/usr/bin/sh`
+        // — so forwarding that host-resolved absolute path verbatim fails
+        // inside the container. Pass just the executable name and let the
+        // container's own PATH resolve it against its own filesystem.
+        let program_name = std::path::Path::new(&program)
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or(program);
+
         let mut docker_cmd = Command::new("docker");
         docker_cmd.args([
             "run",
@@ -73,7 +85,7 @@ impl Sandbox for DockerSandbox {
             "none",
         ]);
         docker_cmd.arg(&self.image);
-        docker_cmd.arg(&program);
+        docker_cmd.arg(&program_name);
         docker_cmd.args(&args);
 
         *cmd = docker_cmd;
@@ -192,6 +204,33 @@ mod tests {
         assert!(
             args.contains(&"-la".to_string()),
             "original args must be preserved"
+        );
+    }
+
+    #[test]
+    fn docker_wrap_command_rewrites_host_absolute_program_to_basename() {
+        // A caller often resolves the interpreter to an absolute host path
+        // (e.g. `which sh` on a Debian-based host yields `/usr/bin/sh`). The
+        // sandbox image has a different filesystem — Alpine only ships
+        // `/bin/sh` — so the host's absolute path must not be forwarded
+        // verbatim; only the executable name should cross into the container.
+        let sandbox = DockerSandbox::default();
+        let mut cmd = Command::new("/usr/bin/sh");
+        cmd.arg("-c").arg("echo hi");
+        sandbox.wrap_command(&mut cmd).unwrap();
+
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect();
+
+        assert!(
+            !args.iter().any(|a| a.contains("/usr/bin/sh")),
+            "host-absolute path must not be forwarded into the sandbox: {args:?}"
+        );
+        assert!(
+            args.contains(&"sh".to_string()),
+            "basename of the resolved program must be passed instead: {args:?}"
         );
     }
 

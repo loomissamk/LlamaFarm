@@ -34,7 +34,10 @@ use execution::{
 };
 #[cfg(test)]
 use history::{apply_compaction_summary, build_compaction_transcript};
-use history::{auto_compact_history, auto_compact_history_focused, trim_history};
+use history::{
+    auto_compact_history, auto_compact_history_focused, compaction_range,
+    deterministic_compact_history, trim_history,
+};
 
 /// Compact conversation history with an optional objective focus.
 ///
@@ -1799,6 +1802,64 @@ fn build_retrospective_task_plan_prompt(
     ))
 }
 
+/// Build a compaction summary for the active tool loop without calling the
+/// model. Reuses the same plan snapshot and recent-results state that
+/// [`build_working_state_prompt`] injects on every iteration, so the raw
+/// messages being folded away are replaced by exactly the checklist + latest
+/// results the model already sees fresh each turn — not the entire chat
+/// history a model-based summarizer would otherwise have to re-read.
+///
+/// `to_compact` must be the specific message slice being folded away (see
+/// [`compaction_range`]), not the full history — the fallback path below
+/// transcribes it verbatim, and using the full history there would echo
+/// "old" content back into the surviving summary message.
+fn deterministic_compaction_summary(
+    to_compact: &[ChatMessage],
+    successful_records: &[SuccessfulToolRecord],
+    failed_records: &[FailedToolRecord],
+) -> String {
+    let mut lines = Vec::new();
+
+    if let Some(snapshot) = task_plan_snapshot(successful_records) {
+        lines.push("Active task plan:".to_string());
+        for item in snapshot.items.iter().take(8) {
+            lines.push(format!("- [{}] [{}] {}", item.id, item.status, item.title));
+        }
+    }
+
+    let recent_results = successful_records.iter().rev().take(5).collect::<Vec<_>>();
+    if !recent_results.is_empty() {
+        lines.push("Recent verified tool results:".to_string());
+        for record in recent_results.into_iter().rev() {
+            let output = truncate_with_ellipsis(&scrub_credentials(record.output.trim()), 180);
+            lines.push(format!("- {} => {}", record.name, output));
+        }
+    }
+
+    if let Some(record) = failed_records.last() {
+        lines.push(format!(
+            "Last tool error: {} => {}",
+            record.name,
+            truncate_with_ellipsis(&scrub_credentials(record.output.trim()), 180)
+        ));
+    }
+
+    if lines.is_empty() {
+        // No plan/tool-record state yet (e.g. a chain that hasn't run
+        // task_plan or any tool successfully). There is nothing worth
+        // preserving verbatim without a model to paraphrase it, and echoing
+        // the raw old messages back in would defeat the point of compacting
+        // them out — so collapse to a short deterministic placeholder
+        // instead.
+        return format!(
+            "{} earlier tool-chain message(s) omitted (no plan or tool results yet to preserve).",
+            to_compact.len()
+        );
+    }
+
+    lines.join("\n")
+}
+
 fn build_working_state_prompt(
     history: &[ChatMessage],
     successful_records: &[SuccessfulToolRecord],
@@ -2828,52 +2889,43 @@ pub(crate) async fn run_tool_call_loop(
             .into());
         }
 
+        // Deterministic, local compaction: this loop already rebuilds a fresh
+        // checklist + recent-results snapshot every iteration (see
+        // `build_working_state_prompt` below), so folding older raw messages
+        // through an extra model call here was pure overhead — most visibly
+        // right after a plan item resolves, when `forced_history_budget`
+        // shrinks and used to trigger a full provider round trip (tens of
+        // seconds) just to re-derive what the checklist already captured.
+        // No provider call, no Result to fail on.
         let history_len_before_compaction = history.len();
         let request_history_budget = forced_history_budget.take().unwrap_or(history_budget);
-        match auto_compact_history(history, provider, model, request_history_budget, None).await {
-            Ok(compacted) if compacted => {
-                runtime_trace::record_event(
-                    "tool_loop_history_auto_compacted",
-                    Some(channel_name),
-                    Some(provider_name),
-                    Some(model),
-                    Some(&turn_id),
-                    Some(true),
-                    Some("compacted history before provider request"),
-                    serde_json::json!({
-                        "iteration": iteration + 1,
-                        "history_budget": request_history_budget,
-                        "messages_before": history_len_before_compaction,
-                        "messages_after": history.len(),
-                    }),
-                );
-            }
-            Ok(_) => {}
-            Err(err) => {
-                tracing::warn!(
-                    channel = channel_name,
-                    provider = provider_name,
-                    model = model,
-                    iteration = iteration + 1,
-                    request_history_budget,
-                    "failed to auto-compact tool loop history: {err}"
-                );
-                runtime_trace::record_event(
-                    "tool_loop_history_auto_compaction_failed",
-                    Some(channel_name),
-                    Some(provider_name),
-                    Some(model),
-                    Some(&turn_id),
-                    Some(false),
-                    Some("history compaction failed; continuing with existing history"),
-                    serde_json::json!({
-                        "iteration": iteration + 1,
-                        "history_budget": request_history_budget,
-                        "messages_before": history_len_before_compaction,
-                        "error": scrub_credentials(&err.to_string()),
-                    }),
-                );
-            }
+        let compacted = if let Some((start, end)) = compaction_range(history, request_history_budget)
+        {
+            let compaction_summary = deterministic_compaction_summary(
+                &history[start..end],
+                &recent_successful_tool_records,
+                &recent_failed_tool_records,
+            );
+            deterministic_compact_history(history, request_history_budget, &compaction_summary, model)
+        } else {
+            false
+        };
+        if compacted {
+            runtime_trace::record_event(
+                "tool_loop_history_auto_compacted",
+                Some(channel_name),
+                Some(provider_name),
+                Some(model),
+                Some(&turn_id),
+                Some(true),
+                Some("compacted history locally before provider request (no model call)"),
+                serde_json::json!({
+                    "iteration": iteration + 1,
+                    "history_budget": request_history_budget,
+                    "messages_before": history_len_before_compaction,
+                    "messages_after": history.len(),
+                }),
+            );
         }
 
         let mut request_history = history.clone();
@@ -8787,7 +8839,11 @@ mod tests {
         .expect("tool loop should return final response");
 
         assert_eq!(result, "done");
-        assert_eq!(provider.summary_calls(), 1);
+        // The tool loop compacts history deterministically (see
+        // `deterministic_compact_history`), never through a provider call —
+        // that model round trip was the source of the multi-second stalls on
+        // every plan-item boundary this test now guards against.
+        assert_eq!(provider.summary_calls(), 0);
 
         let recorded_requests = provider.recorded_requests();
         assert_eq!(recorded_requests.len(), 1);
@@ -11189,6 +11245,56 @@ Tail"#;
         let transcript = build_compaction_transcript(&messages);
         assert!(transcript.contains("USER: I like dark mode"));
         assert!(transcript.contains("ASSISTANT: Got it"));
+    }
+
+    #[test]
+    fn deterministic_compaction_summary_uses_checklist_and_recent_results_not_raw_history() {
+        let to_compact = vec![
+            ChatMessage::user("old raw message one"),
+            ChatMessage::assistant("old raw message two"),
+        ];
+        let successful_records = vec![
+            SuccessfulToolRecord {
+                name: "task_plan".into(),
+                arguments: serde_json::json!({
+                    "action": "create",
+                    "tasks": [{"title": "Inspect repo"}, {"title": "Ship fix"}],
+                }),
+                output: "Plan created".into(),
+            },
+            SuccessfulToolRecord {
+                name: "shell".into(),
+                arguments: serde_json::json!({"command": "cargo build"}),
+                output: "Compiling... Finished".into(),
+            },
+        ];
+        let failed_records = vec![FailedToolRecord {
+            name: "shell".into(),
+            output: "permission denied".into(),
+        }];
+
+        let summary =
+            deterministic_compaction_summary(&to_compact, &successful_records, &failed_records);
+
+        // Checklist + minimal results, not the entire compacted-away chat history.
+        assert!(summary.contains("Active task plan"));
+        assert!(summary.contains("Inspect repo"));
+        assert!(summary.contains("shell => Compiling"));
+        assert!(summary.contains("Last tool error"));
+        assert!(!summary.contains("old raw message"));
+    }
+
+    #[test]
+    fn deterministic_compaction_summary_falls_back_to_placeholder_without_records() {
+        let to_compact = vec![
+            ChatMessage::user("old raw message one"),
+            ChatMessage::assistant("old raw message two"),
+        ];
+
+        let summary = deterministic_compaction_summary(&to_compact, &[], &[]);
+
+        assert!(!summary.contains("old raw message"));
+        assert!(summary.contains("2 earlier tool-chain message"));
     }
 
     #[test]

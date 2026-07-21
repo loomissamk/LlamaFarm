@@ -73,8 +73,8 @@ services:
       - LLAMAFARM_FEDERATION_TOKEN=${LLAMAFARM_FEDERATION_TOKEN:-}
       - LLAMAFARM_DEFAULT_ROLE=${LLAMAFARM_DEFAULT_ROLE:-both}
       - LLAMAFARM_ALLOW_REMOTE_SUBAGENTS=${LLAMAFARM_ALLOW_REMOTE_SUBAGENTS:-true}
-      - LLAMAFARM_RUNTIME_UID=${LLAMAFARM_RUNTIME_UID:-65534}
-      - LLAMAFARM_RUNTIME_GID=${LLAMAFARM_RUNTIME_GID:-65534}
+      - LLAMAFARM_RUNTIME_UID=${LLAMAFARM_RUNTIME_UID:-0}
+      - LLAMAFARM_RUNTIME_GID=${LLAMAFARM_RUNTIME_GID:-0}
       - OLLAMA_HOST=0.0.0.0:11434
       # This platform is local-first: never route inference to an Ollama cloud
       # model. Model pulls still use the registry, while generation stays on

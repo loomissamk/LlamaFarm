@@ -40,9 +40,7 @@ const WORKSPACE_EDITOR_FILES: &[&str] = &["AGENTS.md", "SOUL.md"];
 const GOD_CONFIG_PRESET_FILE: &str = "config.template.toml";
 const SAFE_CONFIG_PRESET_FILE: &str = "config.preset.safe.toml";
 const GOD_WORKSPACE_AGENTS_PRESET_FILE: &str = "workspace.preset.god.AGENTS.md";
-const GOD_WORKSPACE_SOUL_PRESET_FILE: &str = "workspace.preset.god.SOUL.md";
 const SAFE_WORKSPACE_AGENTS_PRESET_FILE: &str = "workspace.preset.safe.AGENTS.md";
-const SAFE_WORKSPACE_SOUL_PRESET_FILE: &str = "workspace.preset.safe.SOUL.md";
 
 // ── Bearer token auth extractor ─────────────────────────────────
 
@@ -1579,19 +1577,6 @@ pub async fn handle_api_config_presets(
         }
     };
 
-    let safe_workspace_soul = match load_preset_file(SAFE_WORKSPACE_SOUL_PRESET_FILE) {
-        Ok(content) => content,
-        Err(error) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "error": format!("Failed to load Safe SOUL preset: {error}")
-                })),
-            )
-                .into_response();
-        }
-    };
-
     let god_workspace_agents = match load_preset_file(GOD_WORKSPACE_AGENTS_PRESET_FILE) {
         Ok(content) => content,
         Err(error) => {
@@ -1599,19 +1584,6 @@ pub async fn handle_api_config_presets(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({
                     "error": format!("Failed to load God AGENTS preset: {error}")
-                })),
-            )
-                .into_response();
-        }
-    };
-
-    let god_workspace_soul = match load_preset_file(GOD_WORKSPACE_SOUL_PRESET_FILE) {
-        Ok(content) => content,
-        Err(error) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "error": format!("Failed to load God SOUL preset: {error}")
                 })),
             )
                 .into_response();
@@ -1628,19 +1600,13 @@ pub async fn handle_api_config_presets(
                 "autonomous inside guardrails",
                 "workspace-only boundaries",
                 "lower budgets than god",
-                "safer AGENTS/SOUL bundle",
+                "safer AGENTS bundle",
             ],
             content: safe_content,
-            workspace_files: vec![
-                ConfigPresetWorkspaceFile {
-                    name: "AGENTS.md",
-                    content: safe_workspace_agents,
-                },
-                ConfigPresetWorkspaceFile {
-                    name: "SOUL.md",
-                    content: safe_workspace_soul,
-                },
-            ],
+            workspace_files: vec![ConfigPresetWorkspaceFile {
+                name: "AGENTS.md",
+                content: safe_workspace_agents,
+            }],
         },
         god: ConfigPresetEntry {
             id: "god",
@@ -1651,19 +1617,13 @@ pub async fn handle_api_config_presets(
                 "bigger iteration budgets",
                 "broader build + low-level commands",
                 "redirect + quoted-heredoc shell writes enabled",
-                "aggressive AGENTS/SOUL bundle",
+                "aggressive AGENTS bundle",
             ],
             content: god_content,
-            workspace_files: vec![
-                ConfigPresetWorkspaceFile {
-                    name: "AGENTS.md",
-                    content: god_workspace_agents,
-                },
-                ConfigPresetWorkspaceFile {
-                    name: "SOUL.md",
-                    content: god_workspace_soul,
-                },
-            ],
+            workspace_files: vec![ConfigPresetWorkspaceFile {
+                name: "AGENTS.md",
+                content: god_workspace_agents,
+            }],
         },
     })
     .into_response()
