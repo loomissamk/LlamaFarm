@@ -2256,22 +2256,45 @@ fn synthesize_grounded_final_answer(
         }
     }
 
+    // Research/inspection tools (web_search, db_query, file_read) only get to
+    // supply the final answer if nothing more substantive happened since —
+    // otherwise a stale early-research-phase call (e.g. the web search that
+    // kicked off a coding task) outranks the actual outcome (a server that
+    // was started, files that were written) just because it's checked first
+    // in this fixed tool-type order below.
+    let is_superseded = |idx: usize| -> bool {
+        records[idx + 1..].iter().any(|later| {
+            matches!(
+                later.name.as_str(),
+                "file_write" | "file_edit" | "apply_patch" | "shell" | "code_run"
+            )
+        })
+    };
+
     let last_web_search = records
         .iter()
+        .enumerate()
         .rev()
-        .find(|record| record.name == "web_search_tool");
-    if let Some(record) = last_web_search {
-        if let Some(url) = extract_preferred_url(&record.output) {
-            return Some(format!("The main URL is {url}"));
-        }
-        if !record.output.trim().is_empty() {
-            return Some(record.output.trim().to_string());
+        .find(|(_, record)| record.name == "web_search_tool");
+    if let Some((idx, record)) = last_web_search {
+        if !is_superseded(idx) {
+            if let Some(url) = extract_preferred_url(&record.output) {
+                return Some(format!("The main URL is {url}"));
+            }
+            if !record.output.trim().is_empty() {
+                return Some(record.output.trim().to_string());
+            }
         }
     }
 
-    let last_db_query = records.iter().rev().find(|r| r.name == "db_query");
-    if let Some(record) = last_db_query {
-        if record.output.starts_with("Query returned ")
+    let last_db_query = records
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, r)| r.name == "db_query");
+    if let Some((idx, record)) = last_db_query {
+        if !is_superseded(idx)
+            && record.output.starts_with("Query returned ")
             && !record.output.starts_with("Query returned no rows")
         {
             return Some(record.output.trim().to_string());
@@ -2280,18 +2303,21 @@ fn synthesize_grounded_final_answer(
 
     let last_file_read = records
         .iter()
+        .enumerate()
         .rev()
-        .find(|record| record.name == "file_read");
-    if let Some(record) = last_file_read {
+        .find(|(_, record)| record.name == "file_read");
+    if let Some((idx, record)) = last_file_read {
         let path = record
             .arguments
             .get("path")
             .and_then(|value| value.as_str())
             .unwrap_or("the file");
-        if let Some(content) = extract_file_read_content(&record.output) {
-            return Some(format!(
-                "The file `{path}` contains:\n\n```\n{content}\n```"
-            ));
+        if !is_superseded(idx) {
+            if let Some(content) = extract_file_read_content(&record.output) {
+                return Some(format!(
+                    "The file `{path}` contains:\n\n```\n{content}\n```"
+                ));
+            }
         }
     }
 
@@ -11056,6 +11082,47 @@ Tail"#;
         assert!(answer.contains("created and executed successfully"));
         assert!(answer.contains("```text\n4\n```"));
         assert!(!answer.starts_with("Task plan created with"));
+    }
+
+    #[test]
+    fn synthesize_grounded_final_answer_does_not_cite_a_stale_web_search_url_after_later_work() {
+        // Regression: an early research-phase web_search's URL used to win
+        // unconditionally over everything that happened afterward, so a
+        // completed coding task (files written, a server started) reported
+        // "The main URL is <the tutorial link from step one>" as its final
+        // answer instead of anything about the actual outcome.
+        let records = vec![
+            SuccessfulToolRecord {
+                name: "web_search_tool".into(),
+                arguments: serde_json::json!({"query": "stock trading platform tutorial"}),
+                output: "1. Predicting Stock Prices - Medium\n   https://medium.com/example-tutorial"
+                    .into(),
+            },
+            SuccessfulToolRecord {
+                name: "file_write".into(),
+                arguments: serde_json::json!({
+                    "path": "stock_trading_platform/app.py",
+                    "content": "from flask import Flask\napp = Flask(__name__)\n"
+                }),
+                output: "Written 40 bytes to stock_trading_platform/app.py".into(),
+            },
+            SuccessfulToolRecord {
+                name: "shell".into(),
+                arguments: serde_json::json!({
+                    "command": "nohup python3 app.py > server.log 2>&1 & echo \"Server PID: $!\""
+                }),
+                output: "Server PID: 1853".into(),
+            },
+        ];
+
+        let answer = synthesize_grounded_final_answer(&records, &[]);
+
+        if let Some(answer) = answer {
+            assert!(
+                !answer.contains("medium.com"),
+                "must not fall back to the stale research-phase URL: {answer}"
+            );
+        }
     }
 
     #[test]

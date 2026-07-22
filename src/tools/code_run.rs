@@ -225,7 +225,16 @@ impl Tool for CodeRunTool {
                 )),
             });
         };
-        let Some(code) = args.get("code").and_then(|v| v.as_str()).filter(|c| !c.trim().is_empty())
+        // Sibling tool `shell` takes its script under `command`, not `code` —
+        // seen in practice: a model calling code_run right after a run of
+        // shell calls carries that param name over by habit. Accepting it as
+        // a fallback turns a hard, repeated failure into a silent recovery
+        // instead of relying on the model to notice and self-correct.
+        let Some(code) = args
+            .get("code")
+            .or_else(|| args.get("command"))
+            .and_then(|v| v.as_str())
+            .filter(|c| !c.trim().is_empty())
         else {
             return Ok(ToolResult {
                 success: false,
@@ -329,6 +338,34 @@ mod tests {
             .map(|d| d.count())
             .unwrap_or(0);
         assert_eq!(leftovers, 0, "scratch dir must be cleaned up");
+    }
+
+    #[tokio::test]
+    async fn accepts_command_as_a_fallback_for_the_code_parameter() {
+        // Regression: a model that just called `shell` (which takes
+        // `command`) sometimes carries that param name over into the next
+        // `code_run` call instead of switching to `code`.
+        if which::which("bash").is_err() {
+            return;
+        }
+        let (tool, _tmp) = tool();
+        let result = tool
+            .execute(json!({"language": "bash", "command": "echo command-fallback-ok"}))
+            .await
+            .unwrap();
+        assert!(result.success, "{:?}", result.error);
+        assert!(result.output.contains("command-fallback-ok"));
+    }
+
+    #[tokio::test]
+    async fn missing_both_code_and_command_still_errors() {
+        let (tool, _tmp) = tool();
+        let result = tool
+            .execute(json!({"language": "python"}))
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert_eq!(result.error.as_deref(), Some("Parameter 'code' is required"));
     }
 
     #[tokio::test]
