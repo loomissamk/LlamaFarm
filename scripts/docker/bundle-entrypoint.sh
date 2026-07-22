@@ -71,24 +71,48 @@ import sys
 
 config_path = Path(sys.argv[1])
 text = config_path.read_text()
+changed = False
+
 required_commands = ["rm"]
 marker = "allowed_commands = ["
 start = text.find(marker)
-if start == -1:
-    sys.exit(0)
+end = text.find("\n]", start) if start != -1 else -1
+if start != -1 and end != -1:
+    for command in required_commands:
+        token = f"\"{command}\""
+        if token in text:
+            continue
+        text = text[:end] + f'  "{command}",\n' + text[end:]
+        end += len(f'  "{command}",\n')
+        changed = True
 
-end = text.find("\n]", start)
-if end == -1:
-    sys.exit(0)
-
-changed = False
-for command in required_commands:
-    token = f"\"{command}\""
-    if token in text:
-        continue
-    text = text[:end] + f'  "{command}",\n' + text[end:]
-    end += len(f'  "{command}",\n')
+# Auto-detect sandboxing picks Docker whenever the socket is reachable (it
+# always is here) and wraps every shell call in its own fresh, unmounted,
+# networkless `docker run --rm` — every effect vanishes the instant that
+# throwaway container exits, breaking ordinary multi-step shell use (write a
+# file, read it back on the next call: file-not-found). This container is
+# already the disposable sandbox; nesting another one inside it is
+# redundant at best. Handles both a missing [security.sandbox] section and
+# one already materialized with the broken "auto" value (config saves can
+# write out the full struct including defaulted fields) — but never
+# touches a section an operator has deliberately set to anything else.
+sandbox_start = text.find("[security.sandbox]")
+if sandbox_start == -1:
+    if not text.endswith("\n"):
+        text += "\n"
+    text += '\n[security.sandbox]\nbackend = "none"\n'
     changed = True
+else:
+    next_section = text.find("\n[", sandbox_start + 1)
+    section_end = next_section if next_section != -1 else len(text)
+    section = text[sandbox_start:section_end]
+    if 'backend = "auto"' in section:
+        text = (
+            text[:sandbox_start]
+            + section.replace('backend = "auto"', 'backend = "none"')
+            + text[section_end:]
+        )
+        changed = True
 
 if changed:
     config_path.write_text(text)

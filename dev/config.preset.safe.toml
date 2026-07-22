@@ -201,6 +201,14 @@ enabled = true
 db_path = "~/.llamafarm/agents.db"
 staleness_secs = 600
 
+# See config.template.toml: auto-detect picks Docker whenever the socket is
+# reachable and wraps every shell call in its own unmounted, networkless
+# `docker run --rm` — every effect vanishes when that throwaway container
+# exits, breaking ordinary multi-step shell use. This container is already
+# the disposable sandbox; nesting another one inside it is redundant.
+[security.sandbox]
+backend = "none"
+
 [security.resources]
 max_memory_mb = 4096
 max_cpu_time_seconds = 1800

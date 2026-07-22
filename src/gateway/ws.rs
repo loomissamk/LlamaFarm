@@ -2462,6 +2462,22 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                         // and the next tool-loop iteration immediately.
                         let cancellation_token = turn_cancellation.clone();
                         let mut cancellation_requested = false;
+                        // Set once the browser connection drops. The run is
+                        // intentionally NOT cancelled when this happens — it
+                        // keeps executing server-side so closing the tab (or a
+                        // flaky network) doesn't throw away in-progress work.
+                        // Delta/federation events still have to be drained
+                        // every iteration once this is true, just without
+                        // writing them to the dead socket, or the bounded
+                        // `delta_tx` channel below fills up and stalls the
+                        // "detached" run waiting for buffer space that will
+                        // never free.
+                        let mut socket_disconnected = false;
+                        // Guards the delta_rx branch below: a closed mpsc receiver
+                        // resolves immediately on every poll, so once we've drained
+                        // its final `None` we must stop selecting on it or the loop
+                        // busy-spins until loop_future completes.
+                        let mut delta_closed = false;
                         let (delta_tx, mut delta_rx) = tokio::sync::mpsc::channel::<String>(128);
                         let mut loop_future =
                             std::pin::pin!(crate::agent::run_ledger::RUN_LEDGER.scope(
@@ -2490,10 +2506,12 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                             tokio::select! {
                                 federation_event = federation_event_rx.recv() => {
                                     if let Some(federation_event) = federation_event {
-                                        emit_ws_federation_event(&mut socket, federation_event).await;
+                                        if !socket_disconnected {
+                                            emit_ws_federation_event(&mut socket, federation_event).await;
+                                        }
                                     }
                                 }
-                                inbound = socket_rx.next() => {
+                                inbound = socket_rx.next(), if !socket_disconnected => {
                                     match inbound {
                                         Some(Ok(Message::Text(text))) => {
                                             match parse_inflight_ws_control(&text) {
@@ -2559,31 +2577,44 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                             }
                                         }
                                         Some(Ok(Message::Close(_))) | Some(Err(_)) | None => {
-                                            // The browser disconnected; dropping the active future would
-                                            // stop it eventually, but signal it first so model/tool futures
-                                            // take their own cancellation-aware paths.
-                                            cancellation_token.cancel();
-                                            break loop_future.await;
+                                            // The browser disconnected. Deliberately do NOT cancel: the
+                                            // run keeps going server-side and its result still gets
+                                            // persisted below (for non-temporary sessions) once it
+                                            // finishes, so reopening the chat later shows the completed
+                                            // work instead of a truncated, cancelled one. Stop trying to
+                                            // write to the dead socket; the `if !socket_disconnected`
+                                            // branch guard above stops re-polling `socket_rx` too.
+                                            socket_disconnected = true;
                                         }
                                         _ => {}
                                     }
                                 }
-                                maybe_delta = delta_rx.recv() => {
-                                    if let Some(delta) = maybe_delta {
-                                        if let Some(event) = parse_ws_delta_event(&delta) {
-                                            emit_ws_delta_event(&mut socket, &session_id, event).await;
+                                maybe_delta = delta_rx.recv(), if !delta_closed => {
+                                    match maybe_delta {
+                                        Some(delta) => {
+                                            if !socket_disconnected {
+                                                if let Some(event) = parse_ws_delta_event(&delta) {
+                                                    emit_ws_delta_event(&mut socket, &session_id, event).await;
+                                                }
+                                            }
                                         }
-                                    } else {
-                                        break loop_future.await;
+                                        // A closed mpsc receiver resolves immediately forever, so
+                                        // once we've seen it close we must stop polling this branch
+                                        // (`if !delta_closed` above) or the select loop busy-spins
+                                        // until loop_future finally completes.
+                                        None if socket_disconnected => delta_closed = true,
+                                        None => break loop_future.await,
                                     }
                                 }
                                 response = &mut loop_future => {
-                                    while let Ok(federation_event) = federation_event_rx.try_recv() {
-                                        emit_ws_federation_event(&mut socket, federation_event).await;
-                                    }
-                                    while let Ok(delta) = delta_rx.try_recv() {
-                                        if let Some(event) = parse_ws_delta_event(&delta) {
-                                            emit_ws_delta_event(&mut socket, &session_id, event).await;
+                                    if !socket_disconnected {
+                                        while let Ok(federation_event) = federation_event_rx.try_recv() {
+                                            emit_ws_federation_event(&mut socket, federation_event).await;
+                                        }
+                                        while let Ok(delta) = delta_rx.try_recv() {
+                                            if let Some(event) = parse_ws_delta_event(&delta) {
+                                                emit_ws_delta_event(&mut socket, &session_id, event).await;
+                                            }
                                         }
                                     }
                                     break response;

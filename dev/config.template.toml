@@ -326,6 +326,19 @@ enabled = true
 db_path = "~/.llamafarm/agents.db"
 staleness_secs = 600
 
+# Auto-detect picks Docker whenever the socket is reachable (it is here, for
+# the docker/service_control/package_manager tools) and wraps every shell
+# call in its own fresh `docker run --rm` — no volume mount, no network, a
+# bare Alpine image with no python3 or anything else the outer container
+# already has installed. Every effect vanishes the instant that throwaway
+# container exits, so multi-step shell work (write a file, then read it back)
+# silently fails file-not-found on the very next call. This container is
+# already the disposable, isolated environment (that's the whole point of
+# the bundle image) — nesting another sandbox inside it is redundant at best
+# and breaks ordinary shell use at worst.
+[security.sandbox]
+backend = "none"
+
 [security.resources]
 max_memory_mb = 16384
 max_cpu_time_seconds = 7200
