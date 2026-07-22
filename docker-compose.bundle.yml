@@ -118,6 +118,11 @@ services:
       # deliberate, separately secured integration.
       - "${LLAMAFARM_HOST_BIND_IP:-127.0.0.1}:${HOST_PORT:-42617}:${LLAMAFARM_GATEWAY_PORT:-42617}"
       - "${OLLAMA_HOST_BIND_IP:-127.0.0.1}:${OLLAMA_PORT:-11434}:11434"
+      # Ad-hoc dev-server port: whatever the agent's own in-workspace projects
+      # bind to (e.g. a Flask/Node dev server) so the operator can actually
+      # open them in a browser instead of only curling from inside the
+      # container. Same bind-IP override as the gateway port above.
+      - "${LLAMAFARM_HOST_BIND_IP:-127.0.0.1}:${DEV_APP_PORT:-5000}:5000"
 
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:${LLAMAFARM_GATEWAY_PORT:-42617}/health >/dev/null && curl -fsS http://127.0.0.1:11434/api/tags >/dev/null && curl -fsS http://127.0.0.1:9515/status >/dev/null"]
