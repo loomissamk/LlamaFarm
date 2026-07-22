@@ -26,6 +26,16 @@ const ESSENTIAL_TOOLS: &[&str] = &[
     "memory_recall",
     "memory_store",
     "code_run",
+    // Fans out a subtask to a specialized agent.planner/coder/verifier/
+    // operator persona (see config.toml [agents.*]). Lexical routing rarely
+    // surfaces "delegate" on its own merits — a request like "build a
+    // trading platform with an ML model and a dashboard" has no token
+    // overlap with the word "delegate" — so without pinning it, large
+    // multi-part tasks silently never get the option to split off a
+    // tightly-scoped coder/verifier pass and just get done ad hoc in the
+    // main loop instead, one shell call at a time with no separate
+    // verification step.
+    "delegate",
 ];
 
 /// Tools whose successful use normally requires a follow-up tool. Dependency
