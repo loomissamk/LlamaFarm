@@ -247,7 +247,12 @@ WORKDIR /llamafarm-data
 USER 0:0
 EXPOSE 42617
 ENTRYPOINT ["/usr/local/bin/bundle-entrypoint.sh"]
-CMD ["llamafarm", "gateway"]
+# "daemon" is a strict superset of "gateway": it starts the same gateway
+# server plus the supervised channels/heartbeat/cron background workers.
+# Running plain "gateway" here meant cron jobs created in the UI were only
+# ever CRUD records — nothing ever ticked them, so "scheduled" jobs never
+# actually fired on their own.
+CMD ["llamafarm", "daemon"]
 
 # ── Stage 4: Production Runtime (Distroless) ─────────────────
 FROM gcr.io/distroless/cc-debian13:nonroot@sha256:84fcd3c223b144b0cb6edc5ecc75641819842a9679a3a58fd6294bec47532bf7 AS release
