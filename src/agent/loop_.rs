@@ -259,6 +259,11 @@ const RETROSPECTIVE_PLAN_THRESHOLD: usize = 3;
 const WEB_SEARCH_WITHOUT_FETCH_STREAK_LIMIT: usize = 3;
 const DUPLICATE_TOOL_CALL_STREAK_PER_NUDGE: usize = 2;
 const DUPLICATE_TOOL_CALL_MAX_NUDGES: usize = 3;
+// A thinking model that keeps exhausting its per-segment output budget on
+// reasoning tokens alone, never emitting any visible text or tool call, is
+// not making bounded progress like a normal multi-segment continuation —
+// it's stuck. Hard-exit rather than checkpointing forever.
+const MAX_CONSECUTIVE_EMPTY_OUTPUT_BUDGET_CHECKPOINTS: usize = 6;
 const COORDINATION_STATUS_POLL_STREAK_LIMIT: usize = 2;
 const MISSING_TOOL_CALL_RETRY_PROMPT: &str = "Internal correction: stay on the current user task. Your last reply implied follow-up action, but no valid tool call was emitted. If another tool step is still required, emit that tool call now and nothing else. For shell actions, prefer a single real command or the runtime's canonical shell tool syntax; do not wrap it in markdown, do not describe what you would run, and do not switch topics. If file creation or editing is needed, prefer the dedicated file tools. If shell-level file creation is still required, use a direct command and, for heredocs, use a quoted delimiter like << 'EOF'. If no tool is needed, provide the complete final answer now and do not defer action.";
 const DUPLICATE_TOOL_CALL_NUDGE_PROMPTS: &[&str] = &[
@@ -2834,6 +2839,11 @@ pub(crate) async fn run_tool_call_loop(
     // per-segment output limit. This is intentionally separate from retries:
     // reaching a reasoning budget is progress, not an error.
     let mut output_budget_continuation_count: usize = 0;
+    // Consecutive output-budget checkpoints that produced NO visible text at
+    // all (pure reasoning, nothing else). Reset the instant a checkpoint (or
+    // any other iteration) produces visible content or a tool call — only a
+    // run of total silence indicates a stall.
+    let mut consecutive_empty_output_budget_checkpoints: usize = 0;
     // Visible text produced before a length stop. We join it with the eventual
     // final segment so a normal continuation never silently drops the first
     // half of a long answer.
@@ -3392,15 +3402,49 @@ pub(crate) async fn run_tool_call_loop(
                 if !checkpoint_text.is_empty() && !parse_issue_detected {
                     checkpointed_output_segments.push(checkpoint_text.to_string());
                 }
-                if response_text.trim().is_empty() {
+                let checkpoint_was_totally_empty = response_text.trim().is_empty();
+                if checkpoint_was_totally_empty {
+                    consecutive_empty_output_budget_checkpoints =
+                        consecutive_empty_output_budget_checkpoints.saturating_add(1);
                     history.push(ChatMessage::assistant(
                         "[Local inference checkpoint: reasoning segment reached its output budget before visible text.]",
                     ));
                 } else {
+                    consecutive_empty_output_budget_checkpoints = 0;
                     // Keep raw provider text in history so the next model call
                     // can continue from the exact partial answer or incomplete
                     // tool-formulation boundary.
                     history.push(ChatMessage::assistant(response_text.clone()));
+                }
+
+                // A model that spends every single segment on reasoning tokens
+                // alone, with nothing visible ever coming out, isn't making
+                // bounded progress the way a normal long-answer continuation
+                // does — it's stuck. Without this, the loop above (which has no
+                // overall iteration cap by design) would checkpoint forever.
+                if consecutive_empty_output_budget_checkpoints
+                    >= MAX_CONSECUTIVE_EMPTY_OUTPUT_BUDGET_CHECKPOINTS
+                {
+                    runtime_trace::record_event(
+                        "llm_output_budget_stall_hard_exit",
+                        Some(channel_name),
+                        Some(provider_name),
+                        Some(model),
+                        Some(&turn_id),
+                        Some(false),
+                        Some("model produced no visible output across consecutive reasoning segments; hard-exiting turn"),
+                        serde_json::json!({
+                            "iteration": iteration + 1,
+                            "consecutive_empty_output_budget_checkpoints": consecutive_empty_output_budget_checkpoints,
+                        }),
+                    );
+                    early_exit_reason = Some((
+                        "output_budget_stall",
+                        format!(
+                            "Agent exited after {consecutive_empty_output_budget_checkpoints} consecutive reasoning segments produced no visible output"
+                        ),
+                    ));
+                    break;
                 }
 
                 missing_tool_call_retry_prompt = Some(build_output_budget_continuation_prompt(
@@ -3894,6 +3938,10 @@ pub(crate) async fn run_tool_call_loop(
             )
             .await;
         }
+
+        // A real tool call is genuine progress, not a stall — reset the
+        // empty-reasoning-checkpoint streak.
+        consecutive_empty_output_budget_checkpoints = 0;
 
         // Print any text the LLM produced alongside tool calls (unless silent)
         if !silent && !display_text.is_empty() {
