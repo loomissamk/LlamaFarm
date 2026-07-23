@@ -59,6 +59,43 @@ pub fn floor_utf8_char_boundary(s: &str, index: usize) -> usize {
     i
 }
 
+/// Signatures that indicate a shell/script command's output shows an uncaught
+/// exception or crash rather than a clean run, even when the process itself
+/// returned an `Ok` exit status or the tool call otherwise "succeeded".
+///
+/// Broader than a plain `Traceback (most recent call last):` check: it also
+/// catches compile-time Python errors (`SyntaxError:`, `IndentationError:`)
+/// which never produce a traceback preamble, plus common runtime exception
+/// class names and non-Python crash signatures (unhandled JS rejections, Rust
+/// panics).
+const OUTPUT_FAILURE_SIGNATURES: &[&str] = &[
+    "Traceback (most recent call last):",
+    "Unhandled Rejection",
+    "panicked at",
+    "SyntaxError:",
+    "IndentationError:",
+    "NameError:",
+    "TypeError:",
+    "ValueError:",
+    "KeyError:",
+    "AttributeError:",
+    "ImportError:",
+    "ModuleNotFoundError:",
+    "ZeroDivisionError:",
+    "UnboundLocalError:",
+    "RuntimeError:",
+    "IndexError:",
+];
+
+/// Check whether a command/script's captured output shows an uncaught
+/// exception or crash, so callers don't have to trust a process's own exit
+/// status or a preceding "it worked" claim at face value.
+pub fn output_shows_uncaught_exception(output: &str) -> bool {
+    OUTPUT_FAILURE_SIGNATURES
+        .iter()
+        .any(|sig| output.contains(sig))
+}
+
 /// Utility enum for handling optional values.
 pub enum MaybeSet<T> {
     Set(T),
@@ -174,5 +211,31 @@ mod tests {
         assert_eq!(floor_utf8_char_boundary(s, 2), 1);
         // Index 5 is inside "你" (3-byte char), floor should move back to 3.
         assert_eq!(floor_utf8_char_boundary(s, 5), 3);
+    }
+
+    #[test]
+    fn output_shows_uncaught_exception_detects_python_traceback() {
+        let output = "Traceback (most recent call last):\n  File \"x.py\", line 1\nRuntimeError: boom";
+        assert!(output_shows_uncaught_exception(output));
+    }
+
+    #[test]
+    fn output_shows_uncaught_exception_detects_bare_syntax_error() {
+        // Python SyntaxError/IndentationError are compile-time errors and never
+        // print a "Traceback (most recent call last):" preamble.
+        let output = "  File \"data_pipeline_fixed.py\", line 180\n    \"current_price\": round(current_price if current_price else (previous_close and float(previous_close) else 0), 2),\nSyntaxError: invalid syntax";
+        assert!(output_shows_uncaught_exception(output));
+    }
+
+    #[test]
+    fn output_shows_uncaught_exception_ignores_clean_output() {
+        let output = "Fetched 42 rows\nWrote output.csv\nDone.";
+        assert!(!output_shows_uncaught_exception(output));
+    }
+
+    #[test]
+    fn output_shows_uncaught_exception_ignores_unrelated_mentions_of_error() {
+        let output = "0 errors, 0 warnings. Build succeeded.";
+        assert!(!output_shows_uncaught_exception(output));
     }
 }

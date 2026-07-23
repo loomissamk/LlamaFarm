@@ -9,7 +9,7 @@ use crate::providers::{
 use crate::runtime;
 use crate::security::SecurityPolicy;
 use crate::tools::{self, Tool};
-use crate::util::truncate_with_ellipsis;
+use crate::util::{output_shows_uncaught_exception, truncate_with_ellipsis};
 use anyhow::Result;
 use futures_util::StreamExt;
 use regex::{Regex, RegexSet};
@@ -2127,7 +2127,11 @@ fn synthesize_python_execution_answer(records: &[SuccessfulToolRecord]) -> Optio
                         .is_some_and(|candidate| shell_command_removes_path(candidate, path))
             });
 
-        let mut answer = format!("The script `{path}` was created and executed successfully.");
+        let mut answer = if output_shows_uncaught_exception(output) {
+            format!("The script `{path}` was created, but it failed when executed.")
+        } else {
+            format!("The script `{path}` was created and executed successfully.")
+        };
         answer.push_str("\n\nOutput:\n\n```text\n");
         answer.push_str(output);
         answer.push_str("\n```");
@@ -2202,11 +2206,19 @@ fn should_short_circuit_after_tool_execution(
             None => continue,
         };
 
-        if run_record.output.trim().is_empty() {
+        let output = run_record.output.trim();
+        if output.is_empty() {
             continue;
         }
 
-        // Non-empty shell output after a matching file_write — we're done.
+        if output_shows_uncaught_exception(output) {
+            // The script crashed — let the loop continue so the model can see the
+            // failure and react (fix the bug, retry, explain) instead of being cut
+            // off right as the error becomes visible.
+            continue;
+        }
+
+        // Non-empty, non-failing shell output after a matching file_write — we're done.
         return true;
     }
 
@@ -11035,6 +11047,99 @@ Tail"#;
         assert!(answer.contains("```text\n4\n```"));
         assert!(answer.contains("```python\nprint(2 + 2)\n```"));
         assert!(answer.contains("deleted after execution"));
+    }
+
+    #[test]
+    fn synthesize_python_execution_answer_reports_failure_on_syntax_error() {
+        // Regression test: the "Tool follow through" session showed the exact
+        // canned "was created and executed successfully" wording sitting right
+        // above a visible Python SyntaxError traceback. The wording must flip
+        // to a failure message whenever the captured output shows a crash.
+        let records = vec![
+            SuccessfulToolRecord {
+                name: "file_write".into(),
+                arguments: serde_json::json!({
+                    "path": "/llamafarm-data/workspace/data_pipeline_fixed.py",
+                    "content": "def broken():\n    pass"
+                }),
+                output: "Written 24 bytes to /llamafarm-data/workspace/data_pipeline_fixed.py"
+                    .into(),
+            },
+            SuccessfulToolRecord {
+                name: "shell".into(),
+                arguments: serde_json::json!({
+                    "command": "python3 /llamafarm-data/workspace/data_pipeline_fixed.py"
+                }),
+                output: "  File \"data_pipeline_fixed.py\", line 180\n    \"current_price\": round(current_price if current_price else (previous_close and float(previous_close) else 0), 2),\nSyntaxError: invalid syntax".into(),
+            },
+        ];
+
+        let answer = synthesize_python_execution_answer(&records)
+            .expect("python execution should synthesize a grounded answer even on failure");
+
+        assert!(
+            !answer.contains("executed successfully"),
+            "must not claim success when the output shows a SyntaxError: {answer}"
+        );
+        assert!(answer.contains("failed when executed"));
+        assert!(answer.contains("SyntaxError: invalid syntax"));
+    }
+
+    #[test]
+    fn should_short_circuit_after_tool_execution_stops_on_clean_success() {
+        let history = vec![ChatMessage::user("write and run a python script")];
+        let records = vec![
+            SuccessfulToolRecord {
+                name: "file_write".into(),
+                arguments: serde_json::json!({
+                    "path": "/llamafarm-data/workspace/add_two.py",
+                    "content": "print(2 + 2)"
+                }),
+                output: "Written 12 bytes to /llamafarm-data/workspace/add_two.py".into(),
+            },
+            SuccessfulToolRecord {
+                name: "shell".into(),
+                arguments: serde_json::json!({
+                    "command": "python3 /llamafarm-data/workspace/add_two.py"
+                }),
+                output: "4".into(),
+            },
+        ];
+
+        assert!(should_short_circuit_after_tool_execution(
+            &history, &records
+        ));
+    }
+
+    #[test]
+    fn should_short_circuit_after_tool_execution_keeps_going_after_a_crash() {
+        // Regression test: forcing an early stop the instant a script produces
+        // any non-empty output meant the loop stopped right as a crash became
+        // visible, never letting the model see and fix the error in the same
+        // turn. A failing script must NOT short-circuit the loop.
+        let history = vec![ChatMessage::user("write and run a python script")];
+        let records = vec![
+            SuccessfulToolRecord {
+                name: "file_write".into(),
+                arguments: serde_json::json!({
+                    "path": "/llamafarm-data/workspace/data_pipeline_fixed.py",
+                    "content": "def broken():\n    pass"
+                }),
+                output: "Written 24 bytes to /llamafarm-data/workspace/data_pipeline_fixed.py"
+                    .into(),
+            },
+            SuccessfulToolRecord {
+                name: "shell".into(),
+                arguments: serde_json::json!({
+                    "command": "python3 /llamafarm-data/workspace/data_pipeline_fixed.py"
+                }),
+                output: "Traceback (most recent call last):\nSyntaxError: invalid syntax".into(),
+            },
+        ];
+
+        assert!(!should_short_circuit_after_tool_execution(
+            &history, &records
+        ));
     }
 
     #[test]
