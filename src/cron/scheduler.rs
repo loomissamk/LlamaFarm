@@ -183,16 +183,40 @@ async fn run_agent_job(
     };
 
     match run_result {
-        Ok(response) => (
-            true,
-            if response.trim().is_empty() {
-                "agent job executed".to_string()
+        Ok(response) => {
+            // `Ok` here only means the agent loop itself didn't hard-error —
+            // it says nothing about whether the task the agent was actually
+            // asked to do succeeded. Seen in practice: a cron job recorded
+            // last_status "ok" verbatim quoting its own tool output showing
+            // an uncaught Python exception, because the agent's closing
+            // prose ("...executed successfully") was trusted without
+            // checking the evidence sitting right above it in the same
+            // response. A raw Python traceback is unambiguous, low-noise
+            // proof of a real failure regardless of what the agent's own
+            // summary claims, so it overrides an apparent success here.
+            if response_shows_uncaught_exception(&response) {
+                (false, response)
+            } else if response.trim().is_empty() {
+                (true, "agent job executed".to_string())
             } else {
-                response
-            },
-        ),
+                (true, response)
+            }
+        }
         Err(e) => (false, format!("agent job failed: {e}")),
     }
+}
+
+/// Detects an uncaught-exception signature in agent/tool output. Deliberately
+/// narrow (exact interpreter tracebacks only) to avoid false positives on
+/// output that merely mentions the word "error" in an unrelated, successful
+/// context (e.g. "0 errors found", a log line, a variable named `error`).
+fn response_shows_uncaught_exception(response: &str) -> bool {
+    const SIGNATURES: &[&str] = &[
+        "Traceback (most recent call last):",
+        "Unhandled Rejection",
+        "panicked at",
+    ];
+    SIGNATURES.iter().any(|sig| response.contains(sig))
 }
 
 async fn persist_job_result(
@@ -824,6 +848,26 @@ mod tests {
         assert!(!success);
         assert!(output.contains("blocked by security policy"));
         assert!(output.contains("rate limit exceeded"));
+    }
+
+    #[test]
+    fn response_shows_uncaught_exception_detects_real_python_traceback() {
+        // Regression: a real observed cron job reported last_status "ok"
+        // while its own tool output — quoted verbatim in the same
+        // response — showed this exact class of failure.
+        let response = "The script was created and executed successfully.\n\n\
+             Output:\n```text\nTesting AAPL...\n\
+             Traceback (most recent call last):\n  \
+             File \"test_pipeline.py\", line 9, in <module>\n    \
+             data = fetch_stock_data(\"AAPL\")\n\
+             UnboundLocalError: cannot access local variable 'indicators'\n```";
+        assert!(response_shows_uncaught_exception(response));
+    }
+
+    #[test]
+    fn response_shows_uncaught_exception_ignores_unrelated_mentions_of_error() {
+        let response = "Linted the project: 0 errors found. All checks passed.";
+        assert!(!response_shows_uncaught_exception(response));
     }
 
     #[tokio::test]
