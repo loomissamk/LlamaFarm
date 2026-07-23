@@ -24,6 +24,8 @@ import type {
   DbSchema,
   DbQueryResult,
   DbTestResult,
+  ChatSessionsListResponse,
+  ChatSessionDetailResponse,
 } from '../types/api';
 import { clearToken, getToken } from './auth';
 
@@ -579,5 +581,19 @@ export function testDbConnection(body: Partial<DbConnection>): Promise<DbTestRes
 export function getCliTools(): Promise<CliTool[]> {
   return apiFetch<CliTool[] | { cli_tools: CliTool[] }>('/api/cli-tools').then((data) =>
     unwrapField(data, 'cli_tools'),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Chat sessions (server-persisted, cross-device discovery)
+// ---------------------------------------------------------------------------
+
+export function getChatSessions(): Promise<ChatSessionsListResponse> {
+  return apiFetch<ChatSessionsListResponse>('/api/chat-sessions');
+}
+
+export function getChatSession(sessionId: string): Promise<ChatSessionDetailResponse> {
+  return apiFetch<ChatSessionDetailResponse>(
+    `/api/chat-sessions/${encodeURIComponent(sessionId)}`,
   );
 }

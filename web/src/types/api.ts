@@ -361,3 +361,31 @@ export interface DbQueryResult {
 export interface DbConnectionsResponse {
   connections: DbConnection[];
 }
+
+/** Summary of a chat session persisted on this node's disk — may have been
+ * started from a different browser/device than the one currently viewing it. */
+export interface ChatSessionSummary {
+  session_id: string;
+  title: string;
+  updated_at_unix: number;
+  message_count: number;
+}
+
+export interface ChatSessionsListResponse {
+  sessions: ChatSessionSummary[];
+}
+
+/** Raw stored message: same {role, content} shape used on the wire for
+ * history_seed. `content` may itself be a JSON-encoded tool_calls/tool_result
+ * envelope (see AgentChat's reconstructFromStoredMessages), matching exactly
+ * what the WS protocol already sends as history_seed. */
+export interface StoredChatMessage {
+  role: 'user' | 'assistant' | 'agent' | 'tool';
+  content: string;
+}
+
+export interface ChatSessionDetailResponse {
+  session_id: string;
+  updated_at_unix: number;
+  messages: StoredChatMessage[];
+}

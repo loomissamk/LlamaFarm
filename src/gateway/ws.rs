@@ -20,11 +20,12 @@ use crate::federation::remote_subagent::{
 use crate::memory::MemoryCategory;
 use crate::providers::ChatMessage;
 use axum::{
+    Json,
     extract::{
-        State, WebSocketUpgrade,
+        Path as AxumPath, State, WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
-    http::{HeaderMap, header},
+    http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
 };
 use futures_util::{SinkExt, StreamExt, stream::SplitSink};
@@ -343,6 +344,97 @@ async fn delete_persisted_ws_chat_session(store_path: &Path, session_id: &str) {
     if let Err(error) = write_persisted_ws_chat_sessions(store_path, &persisted).await {
         tracing::warn!(path = %store_path.display(), error = %error, "failed to delete persisted ws chat session");
     }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+struct ChatSessionSummary {
+    session_id: String,
+    title: String,
+    updated_at_unix: u64,
+    message_count: usize,
+}
+
+/// GET /api/chat-sessions — list persisted chat sessions from *this node's*
+/// disk store, so any device (not just the browser that started them) can
+/// discover a conversation that kept running after that browser disconnected.
+/// Temporary sessions are never persisted, so they never appear here — that
+/// is by design, unrelated to this endpoint.
+pub(crate) async fn handle_api_chat_sessions_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = crate::gateway::api::require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let store_path = {
+        let config = state.config.lock();
+        resolve_ws_chat_store_path(&config)
+    };
+    let persisted = read_persisted_ws_chat_sessions(&store_path).await;
+    let summaries = summarize_persisted_sessions(persisted);
+
+    Json(serde_json::json!({ "sessions": summaries })).into_response()
+}
+
+fn session_title(history: &[ChatMessage]) -> String {
+    history
+        .iter()
+        .find(|m| m.role == "user")
+        .map(|m| crate::util::truncate_with_ellipsis(m.content.trim(), 60))
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| "(empty session)".to_string())
+}
+
+fn summarize_persisted_sessions(persisted: PersistedWsChatSessions) -> Vec<ChatSessionSummary> {
+    let mut summaries: Vec<ChatSessionSummary> = persisted
+        .sessions
+        .into_iter()
+        .map(|(session_id, session)| ChatSessionSummary {
+            session_id,
+            title: session_title(&session.history),
+            updated_at_unix: session.updated_at_unix,
+            message_count: session.history.len(),
+        })
+        .collect();
+    summaries.sort_by(|a, b| b.updated_at_unix.cmp(&a.updated_at_unix));
+    summaries
+}
+
+/// GET /api/chat-sessions/:id — full raw message history for one persisted
+/// session (same `{role, content}` shape used on the wire for history_seed),
+/// so a client that never had this session in its own localStorage can
+/// reconstruct the full conversation, tool calls and all, instead of a
+/// collapsed/summarized stand-in.
+pub(crate) async fn handle_api_chat_session_get(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(session_id): AxumPath<String>,
+) -> impl IntoResponse {
+    if let Err(e) = crate::gateway::api::require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let store_path = {
+        let config = state.config.lock();
+        resolve_ws_chat_store_path(&config)
+    };
+    let persisted = read_persisted_ws_chat_sessions(&store_path).await;
+
+    let Some(session) = persisted.sessions.get(&session_id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "session not found"})),
+        )
+            .into_response();
+    };
+
+    Json(serde_json::json!({
+        "session_id": session_id,
+        "updated_at_unix": session.updated_at_unix,
+        "messages": session.history,
+    }))
+    .into_response()
 }
 
 async fn load_ws_chat_history(
@@ -3213,6 +3305,51 @@ Reminder set successfully."#;
         delete_persisted_ws_chat_session(&store_path, "session-a").await;
         let after_delete = read_persisted_ws_chat_sessions(&store_path).await;
         assert!(!after_delete.sessions.contains_key("session-a"));
+    }
+
+    #[test]
+    fn session_title_uses_first_user_message_truncated() {
+        let history = vec![
+            ChatMessage::system("sys"),
+            ChatMessage::user("build me a stock trading platform with an ML model please"),
+            ChatMessage::assistant("Sure, on it."),
+        ];
+        assert_eq!(
+            session_title(&history),
+            "build me a stock trading platform with an ML model please"
+        );
+    }
+
+    #[test]
+    fn session_title_falls_back_when_no_user_message() {
+        let history = vec![ChatMessage::assistant("hello")];
+        assert_eq!(session_title(&history), "(empty session)");
+    }
+
+    #[test]
+    fn summarize_persisted_sessions_sorts_newest_first_with_correct_counts() {
+        let mut sessions = HashMap::new();
+        sessions.insert(
+            "older".to_string(),
+            PersistedWsChatSession {
+                history: vec![ChatMessage::user("first task"), ChatMessage::assistant("done")],
+                updated_at_unix: 100,
+            },
+        );
+        sessions.insert(
+            "newer".to_string(),
+            PersistedWsChatSession {
+                history: vec![ChatMessage::user("second task")],
+                updated_at_unix: 200,
+            },
+        );
+
+        let summaries = summarize_persisted_sessions(PersistedWsChatSessions { sessions });
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(summaries[0].session_id, "newer");
+        assert_eq!(summaries[0].message_count, 1);
+        assert_eq!(summaries[1].session_id, "older");
+        assert_eq!(summaries[1].message_count, 2);
     }
 
     #[test]

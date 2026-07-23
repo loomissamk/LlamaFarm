@@ -985,6 +985,12 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .route("/api/events", get(sse::handle_sse_events))
         // ── WebSocket agent chat ──
         .route("/ws/chat", get(ws::handle_ws_chat))
+        // ── Cross-device chat session discovery (server-persisted) ──
+        .route("/api/chat-sessions", get(ws::handle_api_chat_sessions_list))
+        .route(
+            "/api/chat-sessions/{id}",
+            get(ws::handle_api_chat_session_get),
+        )
         // ── Static assets (web dashboard) ──
         .route("/_app/{*path}", get(static_files::handle_static))
         // ── Config PUT with larger body limit ──

@@ -21,6 +21,7 @@ import {
   Wrench,
   X,
 } from 'lucide-react';
+import { getChatSession, getChatSessions } from '@/lib/api';
 import { getFederationPeers } from '@/lib/api';
 import {
   loadFederationPeerSelections,
@@ -34,6 +35,7 @@ import type {
   FederationPeerSummary,
   FederationPeersResponse,
   FederationRole,
+  StoredChatMessage,
   WsMessage,
 } from '@/types/api';
 import type { AgentFileTouch } from '@/components/ide/IdePanel';
@@ -608,6 +610,102 @@ function buildHistorySeed(messages: ChatMessage[]): SeedChatMessage[] {
     });
 }
 
+/**
+ * Reverse of buildHistorySeed/buildAssistantToolCallSeed/buildToolResultSeed:
+ * turns the server's stored `{role, content}` pairs (fetched via
+ * GET /api/chat-sessions/:id, for a session this browser never saw live)
+ * back into renderable ChatMessage bubbles, so a chat picked up on a
+ * different device looks like the same conversation instead of a wall of
+ * raw JSON. Each reconstructed message also carries seedRole/seedContent set
+ * to its own original stored form, so continuing the conversation from here
+ * round-trips exactly like it would have on the original device.
+ *
+ * Note: the server only ever persists *completed* tool traces as a
+ * collapsed final-answer summary (see normalize_ws_history_for_storage in
+ * ws.rs) rather than every individual tool_call/tool_result step — that's
+ * intentional, to keep stored history lean for the model, not a bug here.
+ * So a session with a lot of tool use will show up with fewer, denser
+ * bubbles than it had live; nothing said or produced is missing, just the
+ * blow-by-blow of *how* older turns got there.
+ */
+function reconstructFromStoredMessages(stored: StoredChatMessage[]): ChatMessage[] {
+  const result: ChatMessage[] = [];
+
+  for (const entry of stored) {
+    const trimmed = entry.content.trim();
+    if (!trimmed) continue;
+
+    if (entry.role === 'user') {
+      result.push({
+        id: makeMessageId(),
+        role: 'user',
+        kind: 'message',
+        content: trimmed,
+        timestamp: new Date(),
+        seedRole: 'user',
+        seedContent: entry.content,
+      });
+      continue;
+    }
+
+    if (entry.role === 'tool') {
+      const parsed = safeJsonParse<{ tool_name?: string; content?: string }>(trimmed);
+      const toolName = parsed?.tool_name ?? 'unknown';
+      const output = parsed?.content?.trim() || '(no output)';
+      result.push({
+        id: makeMessageId(),
+        role: 'agent',
+        kind: 'tool_result',
+        content: `[Tool Result] ${toolName}\n${output}`,
+        timestamp: new Date(),
+        seedRole: 'tool',
+        seedContent: entry.content,
+      });
+      continue;
+    }
+
+    // assistant (or legacy 'agent'): either a tool_calls envelope or plain text.
+    const parsed = safeJsonParse<{
+      tool_calls?: { id: string; name: string; arguments: string }[];
+    }>(trimmed);
+    if (parsed?.tool_calls && parsed.tool_calls.length > 0) {
+      for (const call of parsed.tool_calls) {
+        const args = safeJsonParse<Record<string, unknown>>(call.arguments) ?? {};
+        result.push({
+          id: makeMessageId(),
+          role: 'agent',
+          kind: 'tool_call',
+          content: `[Tool Call] ${call.name}(${JSON.stringify(args)})`,
+          timestamp: new Date(),
+          seedRole: 'assistant',
+          seedContent: entry.content,
+        });
+      }
+      continue;
+    }
+
+    result.push({
+      id: makeMessageId(),
+      role: 'agent',
+      kind: 'message',
+      content: trimmed,
+      timestamp: new Date(),
+      seedRole: 'assistant',
+      seedContent: entry.content,
+    });
+  }
+
+  return result;
+}
+
+function safeJsonParse<T>(raw: string): T | null {
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
 function federationRoleAllowsWorker(role: FederationRole): boolean {
   return role === 'worker' || role === 'both';
 }
@@ -656,6 +754,13 @@ export default function AgentChat() {
   const [streaming, setStreaming] = useState(false);
   const [federation, setFederation] = useState<FederationPeersResponse | null>(null);
   const [federationLoading, setFederationLoading] = useState(true);
+  // Session ids present in the sidebar as a lightweight placeholder fetched
+  // from this node's server-side store (title/timestamp only, no messages
+  // yet) — hydrated with the real transcript lazily, the first time the
+  // operator actually opens one, rather than fetching every session's full
+  // history up front.
+  const [remoteOnlySessionIds, setRemoteOnlySessionIds] = useState<Set<string>>(new Set());
+  const [hydratingSessionId, setHydratingSessionId] = useState<string | null>(null);
   const [selectedFederationPeerIdsBySession, setSelectedFederationPeerIdsBySession] =
     useState<Record<string, string[]>>(() => loadFederationPeerSelections());
   const [federationTasksBySession, setFederationTasksBySession] = useState<
@@ -743,6 +848,79 @@ export default function AgentChat() {
       globalThis.clearInterval(interval);
     };
   }, []);
+
+  // Merge in any non-temporary session this node has persisted that this
+  // browser doesn't already know about locally — e.g. started from a phone,
+  // or a run that kept going after that browser disconnected. Placeholder
+  // only (title + timestamp); the transcript itself loads on first open.
+  useEffect(() => {
+    let cancelled = false;
+
+    const discoverRemoteSessions = async () => {
+      try {
+        const { sessions: remote } = await getChatSessions();
+        if (cancelled || remote.length === 0) return;
+
+        setSessions((prev) => {
+          const knownIds = new Set(prev.map((s) => s.id));
+          const additions: ChatSession[] = remote
+            .filter((r) => !knownIds.has(r.session_id))
+            .map((r) => ({
+              id: r.session_id,
+              title: r.title,
+              temporary: false,
+              createdAt: new Date(r.updated_at_unix * 1000),
+              updatedAt: new Date(r.updated_at_unix * 1000),
+              messages: [],
+            }));
+          if (additions.length === 0) return prev;
+          setRemoteOnlySessionIds((prevIds) => {
+            const next = new Set(prevIds);
+            for (const a of additions) next.add(a.id);
+            return next;
+          });
+          return sortSessions([...prev, ...additions]);
+        });
+      } catch {
+        // Best-effort discovery; local sessions still work without it.
+      }
+    };
+
+    void discoverRemoteSessions();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const openSession = async (sessionId: string) => {
+    if (!remoteOnlySessionIds.has(sessionId)) {
+      setActiveSessionId(sessionId);
+      setConfirmDeleteSessionId(null);
+      return;
+    }
+
+    setHydratingSessionId(sessionId);
+    try {
+      const detail = await getChatSession(sessionId);
+      const messages = reconstructFromStoredMessages(detail.messages);
+      setSessions((prev) =>
+        prev.map((s) => (s.id === sessionId ? { ...s, messages } : s)),
+      );
+      setRemoteOnlySessionIds((prev) => {
+        const next = new Set(prev);
+        next.delete(sessionId);
+        return next;
+      });
+    } catch {
+      // Leave it as an empty placeholder rather than blocking selection —
+      // the operator can still see the title/timestamp and retry by
+      // reselecting (remoteOnlySessionIds keeps it eligible for another try).
+    } finally {
+      setHydratingSessionId(null);
+      setActiveSessionId(sessionId);
+      setConfirmDeleteSessionId(null);
+    }
+  };
 
   useEffect(() => {
     if (!federation?.enabled) {
@@ -1598,6 +1776,8 @@ export default function AgentChat() {
           {sessions.map((session) => {
             const selected = session.id === activeSession?.id;
             const typing = typingSessionIds.includes(session.id);
+            const isRemoteOnly = remoteOnlySessionIds.has(session.id);
+            const isHydrating = hydratingSessionId === session.id;
             return (
               <div
                 key={session.id}
@@ -1608,10 +1788,7 @@ export default function AgentChat() {
                 }`}
               >
                 <button
-                  onClick={() => {
-                    setActiveSessionId(session.id);
-                    setConfirmDeleteSessionId(null);
-                  }}
+                  onClick={() => void openSession(session.id)}
                   className="w-full px-3 py-3 text-left"
                 >
                   <div className="flex items-start justify-between gap-3">
@@ -1628,6 +1805,19 @@ export default function AgentChat() {
                         {typing && (
                           <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-300">
                             Live
+                          </span>
+                        )}
+                        {isHydrating && (
+                          <span className="rounded-full border border-blue-500/30 bg-blue-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-blue-300">
+                            Loading…
+                          </span>
+                        )}
+                        {isRemoteOnly && !isHydrating && (
+                          <span
+                            title="Started on another device or node — opening it loads the full conversation"
+                            className="rounded-full border border-gray-600 bg-gray-800 px-2 py-0.5 text-[10px] uppercase tracking-wide text-gray-400"
+                          >
+                            From server
                           </span>
                         )}
                       </div>
