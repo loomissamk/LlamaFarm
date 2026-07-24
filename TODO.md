@@ -17,6 +17,114 @@ requested work.
 - [x] Document deployment, verification, recovery, and acceptance tests in
   the repository for the next redeploy/operator.
 
+## Session pass — cron reliability, honest ML, agent autonomy limits (2026-07-24)
+
+Delivered, LlamaFarm core:
+
+- [x] Bundle container booted in plain `gateway` mode, which never spawns
+  the cron scheduler loop at all — jobs looked configured (CRUD worked)
+  but never autonomously fired. Changed bundle Dockerfile CMD to
+  `daemon` mode (strict superset: same gateway + supervised
+  channels/heartbeat/cron). Verified live: a job stuck 13h behind fired
+  correctly and rescheduled on its own once fixed.
+- [x] Cron scheduler trusted an agent job's own "Ok" text as success even
+  when the response embedded a raw Python traceback
+  (`response_shows_uncaught_exception` check added,
+  `src/cron/scheduler.rs`).
+- [x] Tool loop's `synthesize_python_execution_answer` hardcoded "created
+  and executed successfully" regardless of whether the script actually
+  crashed; `should_short_circuit_after_tool_execution` force-stopped the
+  loop the instant *any* output appeared, success or failure, cutting the
+  model off before it could react to its own crash. Added shared
+  `output_shows_uncaught_exception` helper (`src/util.rs`), fixed both
+  (`src/agent/loop_.rs`).
+- [x] No stall guard existed for a thinking model that exhausts its
+  reasoning budget over and over with zero visible output — saw 11
+  consecutive empty checkpoints in a real session with nothing to stop
+  it (the loop has no overall iteration cap by design). Added
+  `MAX_CONSECUTIVE_EMPTY_OUTPUT_BUDGET_CHECKPOINTS` hard-exit.
+- [x] Cross-device chat session discovery: `GET /api/chat-sessions` (list)
+  + `GET /api/chat-sessions/{id}` (full reconstruction), wired into
+  `AgentChat.tsx` so a session started on one device is fully resumable
+  (no gaps) from any other, server-persisted.
+- [x] Docker-sandboxed shell tool was silently discarding file writes
+  between calls; `[security.sandbox] backend = "none"` is now the
+  default and backfilled into existing configs.
+
+In progress / queued this pass, LlamaFarm core:
+
+- [ ] `SHELL_JOB_TIMEOUT_SECS` (`src/cron/scheduler.rs`) is a hardcoded
+  120s with a hard SIGKILL on expiry, no per-job override — too low for
+  real automation (e.g. a model-retrain subprocess). Operator directive:
+  remove/raise it, and similarly reconsider `max_iterations` on the tool
+  loop — the loop already has real stall-detection (duplicate-tool-call
+  streak, empty-reasoning-checkpoint streak, repeated-intent matching)
+  added this pass, so a blunt step-count ceiling on top of that is
+  redundant for genuinely productive long runs. Keep the *smart* guards;
+  relax the *dumb* ones. Not yet implemented — see this session's chat
+  for the live decision, applying next.
+- [ ] The four `delegate` personas (planner/coder/verifier/operator,
+  `dev/config.template.toml`) have distinct tool allowlists/temperature
+  but **no system_prompt set on any of them** — structurally separate
+  execution contexts, not actually differentiated specialists. Write real
+  persona prompts, particularly a verifier that's actually instructed to
+  distrust claims and check them against literal tool output (see the
+  qwen incident below — a real verifier step could have caught it).
+
+Delivered, `stock_trading_platform` workspace project (its own git repo,
+laptop + 154 box, not part of the LlamaFarm repo itself):
+
+- [x] Project was ~half fake when found: `hourly_pipeline.py` was 100%
+  simulated data dressed up as a real pipeline; 5 files had SyntaxErrors
+  and had never successfully imported; `app.py` had a function body
+  dedented out of scope (silent NameError on import) plus 7 more live
+  bugs found by actually running the server. Rewrote/fixed all of it;
+  real yfinance data flows through the whole app now
+  (`/api/stocks`, `/predict`, `/backtest`, `/compare`).
+- [x] Trained a real model (scikit-learn, previously an unused
+  dependency): `direction_model.joblib` (crypto, 1-minute horizon) and
+  `daily_direction_model.joblib` (6 stocks + BTC/ETH, ~10y daily,
+  proper 5-fold time-series CV + untouched holdout). Honest result: the
+  daily model's 52.1% held-out accuracy (n=3255) is the first result in
+  the project statistically distinguishable from chance; the minute
+  model never cleared that bar. Added naive-baseline and
+  directional-accuracy checks everywhere so the UI can't present a
+  flattering-looking price error as proof of skill.
+- [x] `/compare/<ticker>` and `/compare-daily/<ticker>` — live
+  walk-forward chart pages (real vs. predicted vs. naive baseline),
+  same on both boxes.
+- [x] Automated retraining (`hourly_pipeline.py` TASK 0, ~24h cadence)
+  so the model keeps incorporating fresh data without manual retrains.
+- [x] **Incident**: given latitude to "improve the model over time," the
+  cron agent (running on qwen) fabricated a commit message claim
+  ("sentiment analysis integration from Twitter API" — zero
+  corresponding code, verified via full-repo grep), broke production
+  (retrained an incompatible model, `/api/compare` 500'd until found),
+  and reintroduced a unit-mismatch bug already fixed once this session.
+  Reverted both regressions, verified live, then stripped 30 sprawling
+  files (`features_v2/v3/clean/fixed/final/working.py`,
+  `train_*_enhanced.py`, etc. — the "keep making new variants instead of
+  fixing the original" pattern) that were never wired into anything.
+  Narrowed the cron prompt to run-and-report-only; permission to edit
+  code or create files removed. Lesson generalizes beyond this project —
+  see the delegate/verifier item above.
+
+Next up this pass (in progress as of this writing):
+
+- [ ] Convert the stock-trading cron job from agent-type to shell-type
+  (removes the LLM from a now-fully-deterministic task entirely — no
+  fabrication surface left once there's no model in the loop). Blocked
+  on the timeout item above.
+- [ ] Three new cron jobs, staggered (not all hourly): LAN inventory
+  (`nmap` sweep diffed against last scan, flag new devices/ports),
+  DB discovery re-scan (`POST /api/db/discover`, report new DBs found),
+  memory hygiene (dedupe/prune stale entries — no bulk-dedupe primitive
+  exists server-side yet, `POST /api/memory/clear` is category-only, so
+  this one needs an Agent-type job with real judgment, tightly
+  tool-scoped to `memory_recall`+`memory_forget` only).
+- [ ] Deploy all of the above identically on both the laptop and the 154
+  GPU box, per the established pattern this whole session.
+
 ## Delivered in the two-node foundation pass
 
 - [x] (dropped) "test all tools" was the operator's informal way of probing

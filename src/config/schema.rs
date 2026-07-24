@@ -838,8 +838,11 @@ pub struct AgentConfig {
     /// routing is on. Default: 12. Set 0 to expose all tools.
     #[serde(default = "default_tool_routing_top_k")]
     pub tool_routing_top_k: usize,
-    /// Maximum tool-call loop turns per user message. Default: `20`.
-    /// Setting to `0` falls back to the safe default of `20`.
+    /// Maximum tool-call loop turns per user message. Default: `100_000`
+    /// (effectively unbounded for real usage) -- real non-progress is
+    /// caught by dedicated stall detectors in the loop itself (duplicate
+    /// tool calls, empty reasoning-only checkpoints), not a step count.
+    /// Setting to `0` falls back to the default.
     #[serde(default = "default_agent_max_tool_iterations")]
     pub max_tool_iterations: usize,
     /// Maximum conversation history messages retained per session. Default: `50`.
@@ -871,7 +874,7 @@ fn default_tool_routing_top_k() -> usize {
 }
 
 fn default_agent_max_tool_iterations() -> usize {
-    20
+    100_000
 }
 
 fn default_agent_max_history_messages() -> usize {
@@ -8313,7 +8316,7 @@ reasoning_level = "high"
         assert!(!cfg.compact_context);
         assert!(cfg.tool_routing_enabled);
         assert_eq!(cfg.tool_routing_top_k, 12);
-        assert_eq!(cfg.max_tool_iterations, 20);
+        assert_eq!(cfg.max_tool_iterations, 100_000);
         assert_eq!(cfg.max_history_messages, 50);
         assert_eq!(cfg.max_output_tokens_per_turn, None);
         assert!(!cfg.parallel_tools);

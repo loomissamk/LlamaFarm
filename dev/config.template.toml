@@ -26,7 +26,7 @@ request_timeout_secs = 300
 compact_context = false
 tool_routing_enabled = true
 tool_routing_top_k = 12
-max_tool_iterations = 512
+max_tool_iterations = 100000
 max_history_messages = 160
 parallel_tools = false
 # Local Ollama models on this machine are still more reliable with the XML

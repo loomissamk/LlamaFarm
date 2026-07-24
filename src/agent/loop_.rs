@@ -69,9 +69,18 @@ const STREAM_TOOL_MARKER_WINDOW_CHARS: usize = 512;
 /// non-streaming response so structured tool calls remain reliable.
 const MODEL_PROGRESS_HEARTBEAT_SECS: u64 = 10;
 
-/// Default maximum agentic tool-use iterations per user message to prevent runaway loops.
-/// Used as a safe fallback when `max_tool_iterations` is unset or configured as zero.
-const DEFAULT_MAX_TOOL_ITERATIONS: usize = 20;
+/// Default maximum agentic tool-use iterations per user message. Used as a
+/// fallback when `max_tool_iterations` is unset or configured as zero.
+///
+/// Deliberately very large, not a tight runaway guard: real non-progress
+/// (duplicate tool calls, empty reasoning-only checkpoints, repeated
+/// no-tool-call text) is caught by dedicated stall detectors elsewhere in
+/// this loop (see the duplicate-tool-call streak guard and
+/// MAX_CONSECUTIVE_EMPTY_OUTPUT_BUDGET_CHECKPOINTS), which check for actual
+/// lack of progress rather than just counting steps. A blunt step-count
+/// ceiling on top of those would only ever cut off a *legitimately*
+/// productive long-running task.
+const DEFAULT_MAX_TOOL_ITERATIONS: usize = 100_000;
 
 /// Minimum user-message length (in chars) for auto-save to memory.
 /// Matches the channel-side constant in `channels/mod.rs`.
@@ -11817,7 +11826,6 @@ Done."#;
 
     const _: () = {
         assert!(DEFAULT_MAX_TOOL_ITERATIONS > 0);
-        assert!(DEFAULT_MAX_TOOL_ITERATIONS <= 100);
         assert!(DEFAULT_MAX_HISTORY_MESSAGES > 0);
         assert!(DEFAULT_MAX_HISTORY_MESSAGES <= 1000);
     };

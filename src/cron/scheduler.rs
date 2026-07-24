@@ -18,7 +18,16 @@ use tokio::process::Command;
 use tokio::time::{self, Duration};
 
 const MIN_POLL_SECONDS: u64 = 5;
-const SHELL_JOB_TIMEOUT_SECS: u64 = 120;
+/// Production ceiling for a shell-type cron job's real run time. Was 120s
+/// with a hard SIGKILL and no per-job override -- too tight for real
+/// automation (e.g. a model-retrain subprocess a job might legitimately
+/// kick off). Raised to a week: effectively unbounded for any real job,
+/// while still guaranteeing a genuinely wedged process eventually gets
+/// reaped rather than holding a concurrency slot forever. The timeout
+/// mechanism itself stays (see `run_job_command_with_timeout`, exercised
+/// directly with a short duration in tests) -- only the production default
+/// changed.
+const SHELL_JOB_TIMEOUT_SECS: u64 = 604_800;
 const SCHEDULER_COMPONENT: &str = "scheduler";
 
 pub async fn run(config: Config) -> Result<()> {
