@@ -2175,7 +2175,16 @@ pub async fn handle_api_config_put(
     };
 
     let current_config = state.config.lock().clone();
-    let new_config = hydrate_config_for_save(incoming, &current_config);
+    let new_config = match hydrate_config_for_save(incoming, &current_config) {
+        Ok(config) => config,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": format!("Invalid config: {error}")})),
+            )
+                .into_response();
+        }
+    };
 
     if let Err(e) = new_config.validate() {
         return (
@@ -3808,7 +3817,7 @@ pub async fn handle_api_db_discover(
         crate::gateway::db_discovery::reconcile_connections(found, &mut config.db_connections);
 
     if reconciled.iter().any(|item| item.newly_added) {
-        if config.save().await.is_err() {
+        if config.save_db_connections_only().await.is_err() {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({
@@ -4000,14 +4009,19 @@ fn restore_vec_secrets(values: &mut [String], current: &[String]) {
 fn restore_map_secrets(
     values: &mut std::collections::HashMap<String, String>,
     current: &std::collections::HashMap<String, String>,
-) {
+    field_name: &str,
+) -> Result<(), String> {
     for (key, value) in values.iter_mut() {
         if is_masked_secret(value) {
-            if let Some(existing) = current.get(key) {
-                *value = existing.clone();
-            }
+            let existing = current.get(key).ok_or_else(|| {
+                format!(
+                    "{field_name}.{key} is masked but has no existing credential; provide a value for the new or renamed key"
+                )
+            })?;
+            *value = existing.clone();
         }
     }
+    Ok(())
 }
 
 fn mask_sensitive_fields(config: &crate::config::Config) -> crate::config::Config {
@@ -4112,7 +4126,7 @@ fn mask_sensitive_fields(config: &crate::config::Config) -> crate::config::Confi
 fn restore_masked_sensitive_fields(
     incoming: &mut crate::config::Config,
     current: &crate::config::Config,
-) {
+) -> Result<(), String> {
     restore_optional_secret(&mut incoming.api_key, &current.api_key);
     restore_vec_secrets(
         &mut incoming.reliability.api_keys,
@@ -4121,7 +4135,8 @@ fn restore_masked_sensitive_fields(
     restore_map_secrets(
         &mut incoming.reliability.fallback_api_keys,
         &current.reliability.fallback_api_keys,
-    );
+        "reliability.fallback_api_keys",
+    )?;
     restore_vec_secrets(
         &mut incoming.gateway.paired_tokens,
         &current.gateway.paired_tokens,
@@ -4307,17 +4322,18 @@ fn restore_masked_sensitive_fields(
         restore_required_secret(&mut incoming_ch.api_key, &current_ch.api_key);
         restore_optional_secret(&mut incoming_ch.webhook_secret, &current_ch.webhook_secret);
     }
+    Ok(())
 }
 
 fn hydrate_config_for_save(
     mut incoming: crate::config::Config,
     current: &crate::config::Config,
-) -> crate::config::Config {
-    restore_masked_sensitive_fields(&mut incoming, current);
+) -> Result<crate::config::Config, String> {
+    restore_masked_sensitive_fields(&mut incoming, current)?;
     // These are runtime-computed fields skipped from TOML serialization.
     incoming.config_path = current.config_path.clone();
     incoming.workspace_dir = current.workspace_dir.clone();
-    incoming
+    Ok(incoming)
 }
 
 // ── Database explorer API ─────────────────────────────────────────────────────
@@ -4857,7 +4873,8 @@ mod tests {
         // Simulate UI changing only one key and keeping the first masked.
         incoming.reliability.api_keys = vec![MASKED_SECRET.to_string(), "r2-new".to_string()];
 
-        let hydrated = hydrate_config_for_save(incoming, &current);
+        let hydrated =
+            hydrate_config_for_save(incoming, &current).expect("masked secrets should restore");
 
         assert_eq!(hydrated.config_path, current.config_path);
         assert_eq!(hydrated.workspace_dir, current.workspace_dir);
@@ -4882,6 +4899,39 @@ mod tests {
         assert_eq!(
             hydrated.db_connections[0].uri,
             "mongodb://reader:real-password@db.internal:27017"
+        );
+    }
+
+    #[test]
+    fn hydrate_config_for_save_rejects_orphan_masked_fallback_key() {
+        let mut current = crate::config::Config::default();
+        current
+            .reliability
+            .fallback_api_keys
+            .insert("old-provider".to_string(), "existing-secret".to_string());
+
+        let mut incoming = mask_sensitive_fields(&current);
+        incoming
+            .reliability
+            .fallback_api_keys
+            .remove("old-provider");
+        incoming.reliability.fallback_api_keys.insert(
+            "renamed-provider".to_string(),
+            MASKED_SECRET.to_string(),
+        );
+
+        let error = hydrate_config_for_save(incoming, &current)
+            .expect_err("a masked renamed key has no credential to restore");
+
+        assert!(error.contains("reliability.fallback_api_keys.renamed-provider"));
+        assert!(error.contains("provide a value"));
+        assert_eq!(
+            current
+                .reliability
+                .fallback_api_keys
+                .get("old-provider")
+                .map(String::as_str),
+            Some("existing-secret")
         );
     }
 
@@ -5061,7 +5111,8 @@ mod tests {
         });
 
         let incoming = mask_sensitive_fields(&current);
-        let restored = hydrate_config_for_save(incoming, &current);
+        let restored =
+            hydrate_config_for_save(incoming, &current).expect("masked secrets should restore");
 
         assert_eq!(
             restored.proxy.http_proxy.as_deref(),

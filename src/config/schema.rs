@@ -7543,7 +7543,62 @@ impl Config {
 
         let toml_str =
             toml::to_string_pretty(&config_to_save).context("Failed to serialize config")?;
+        self.write_serialized_config(&toml_str).await
+    }
 
+    /// Persist only database explorer connections without serializing the
+    /// environment-resolved runtime config back over operator-owned settings.
+    pub(crate) async fn save_db_connections_only(&self) -> Result<()> {
+        let contents = fs::read_to_string(&self.config_path)
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to read config file before saving database connections: {}",
+                    self.config_path.display()
+                )
+            })?;
+        let mut raw_toml: toml::Value =
+            toml::from_str(&contents).context("Failed to parse config file")?;
+        let root = raw_toml
+            .as_table_mut()
+            .context("Config root must be a TOML table")?;
+        let mut db_connections = toml::Value::try_from(&self.db_connections)
+            .context("Failed to serialize database connections")?;
+
+        // Keep existing URIs exactly as stored. Runtime values may have been
+        // decrypted or otherwise resolved after load; discovery must never
+        // write an effective credential back in plaintext.
+        if let (Some(stored_connections), Some(runtime_connections)) = (
+            root.get("db_connections")
+                .and_then(toml::Value::as_array),
+            db_connections.as_array_mut(),
+        ) {
+            for runtime_connection in runtime_connections {
+                let Some(runtime_table) = runtime_connection.as_table_mut() else {
+                    continue;
+                };
+                let Some(name) = runtime_table.get("name").and_then(toml::Value::as_str) else {
+                    continue;
+                };
+                let stored_uri = stored_connections.iter().find_map(|stored_connection| {
+                    let stored_table = stored_connection.as_table()?;
+                    (stored_table.get("name").and_then(toml::Value::as_str) == Some(name))
+                        .then(|| stored_table.get("uri").cloned())
+                        .flatten()
+                });
+                if let Some(stored_uri) = stored_uri {
+                    runtime_table.insert("uri".to_string(), stored_uri);
+                }
+            }
+        }
+        root.insert("db_connections".to_string(), db_connections);
+
+        let toml_str =
+            toml::to_string_pretty(&raw_toml).context("Failed to serialize config")?;
+        self.write_serialized_config(&toml_str).await
+    }
+
+    async fn write_serialized_config(&self, toml_str: &str) -> Result<()> {
         let parent_dir = self
             .config_path
             .parent()
@@ -8619,6 +8674,125 @@ tool_dispatcher = "xml"
         assert!((loaded.default_temperature - 0.9).abs() < f64::EPSILON);
 
         let _ = fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn save_db_connections_only_preserves_disk_settings_and_secret_storage() {
+        let dir = TempDir::new().expect("temp dir");
+        let config_path = dir.path().join("config.toml");
+        let stored_db_uri = crate::security::SecretStore::new(dir.path(), true)
+            .encrypt("mongodb://reader:stored-password@old.internal:27017")
+            .expect("encrypt stored database URI");
+        let original = r#"
+api_key = "enc2:disk-api-key"
+default_model = "disk-model"
+
+[reliability]
+fallback_api_keys = { openai = "enc2:disk-fallback-key" }
+
+[future_section]
+operator_owned = "keep-me"
+
+[[db_connections]]
+name = "old"
+driver = "mongodb"
+uri = "__STORED_DB_URI__"
+read_only = true
+max_rows = 500
+"#
+        .replace("__STORED_DB_URI__", &stored_db_uri);
+        fs::write(&config_path, original)
+            .await
+            .expect("write original config");
+
+        let mut runtime = Config::default();
+        runtime.config_path = config_path.clone();
+        runtime.workspace_dir = dir.path().join("workspace");
+        runtime.api_key = Some("environment-only-api-key".to_string());
+        runtime.api_url = Some("https://environment-only.invalid/v1".to_string());
+        runtime.default_model = Some("environment-only-model".to_string());
+        runtime.reliability.fallback_api_keys.insert(
+            "openai".to_string(),
+            "environment-only-fallback-key".to_string(),
+        );
+        runtime.db_connections = vec![
+            DbConnectionConfig {
+                name: "old".to_string(),
+                driver: DbDriver::Mongodb,
+                uri: "mongodb://reader:decrypted-password@old.internal:27017".to_string(),
+                database: None,
+                read_only: true,
+                max_rows: 500,
+                label: None,
+            },
+            DbConnectionConfig {
+                name: "discovered".to_string(),
+                driver: DbDriver::Postgres,
+                uri: "postgresql://postgres@192.168.1.25:5432/postgres".to_string(),
+                database: None,
+                read_only: true,
+                max_rows: 500,
+                label: Some("Discovered postgres".to_string()),
+            },
+        ];
+
+        runtime
+            .save_db_connections_only()
+            .await
+            .expect("persist only database connections");
+
+        let stored = fs::read_to_string(&config_path)
+            .await
+            .expect("read updated config");
+        let parsed: toml::Value = toml::from_str(&stored).expect("updated config should parse");
+
+        assert_eq!(
+            parsed.get("api_key").and_then(toml::Value::as_str),
+            Some("enc2:disk-api-key")
+        );
+        assert_eq!(
+            parsed.get("default_model").and_then(toml::Value::as_str),
+            Some("disk-model")
+        );
+        assert!(parsed.get("api_url").is_none());
+        assert_eq!(
+            parsed
+                .get("reliability")
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("fallback_api_keys"))
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("openai"))
+                .and_then(toml::Value::as_str),
+            Some("enc2:disk-fallback-key")
+        );
+        assert_eq!(
+            parsed
+                .get("future_section")
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("operator_owned"))
+                .and_then(toml::Value::as_str),
+            Some("keep-me")
+        );
+
+        let connections = parsed
+            .get("db_connections")
+            .and_then(toml::Value::as_array)
+            .expect("database connection array");
+        assert_eq!(connections.len(), 2);
+        assert_eq!(
+            connections[0].get("uri").and_then(toml::Value::as_str),
+            Some(stored_db_uri.as_str())
+        );
+        assert!(!stored.contains("stored-password"));
+        assert!(!stored.contains("decrypted-password"));
+        assert_eq!(
+            connections[1].get("name").and_then(toml::Value::as_str),
+            Some("discovered")
+        );
+        assert_eq!(
+            connections[1].get("uri").and_then(toml::Value::as_str),
+            Some("postgresql://postgres@192.168.1.25:5432/postgres")
+        );
     }
 
     #[tokio::test]
