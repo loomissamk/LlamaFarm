@@ -1,13 +1,14 @@
 //! Local-network database discovery.
 //!
 //! Scans the node's own subnets for reachable database servers on their
-//! standard ports so the Database page can offer them as one-click
-//! connections instead of making the operator hand-write DSNs.
+//! standard ports so the Database page can reconcile them into connections
+//! without making the operator hand-write DSNs.
 //!
 //! This is a TCP-connect probe only: it never authenticates, never sends
 //! payloads, and never reads data. It is confined to the node's own private
 //! (RFC1918) subnets — it will not scan the public internet.
 
+use crate::config::{DbConnectionConfig, DbDriver};
 use serde::Serialize;
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -31,25 +32,187 @@ pub struct DiscoveredDb {
     pub host: String,
     pub port: u16,
     pub driver: String,
-    /// Suggested connection string for the Add-connection form.
-    pub suggested_dsn: String,
-    /// True when the server answered an unauthenticated probe (no password).
-    /// The operator can then one-click connect. Only meaningful for redis so
-    /// far; None for drivers we don't safely probe.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub no_auth: Option<bool>,
 }
 
-fn suggested_dsn(driver: &str, host: &str, port: u16) -> String {
+/// Internal-only connection URI for a passwordless probe. Discovery responses
+/// must never serialize this value.
+fn passwordless_uri(driver: &str, host: &str, port: u16) -> Option<String> {
+    let authority = if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    };
     match driver {
-        "postgres" => format!("postgres://USER:PASSWORD@{host}:{port}/postgres"),
-        "mysql" => format!("mysql://USER:PASSWORD@{host}:{port}/mysql"),
-        "mongodb" => format!("mongodb://{host}:{port}"),
-        "qdrant" => format!("http://{host}:{port}"),
-        "redis" => format!("redis://{host}:{port}"),
-        "ollama" => format!("http://{host}:{port}"),
-        _ => format!("{host}:{port}"),
+        "postgres" => Some(format!("postgresql://postgres@{authority}/postgres")),
+        "mongodb" => Some(format!("mongodb://{authority}")),
+        _ => None,
     }
+}
+
+fn config_driver(driver: &str) -> Option<DbDriver> {
+    match driver {
+        "postgres" => Some(DbDriver::Postgres),
+        "mongodb" => Some(DbDriver::Mongodb),
+        _ => None,
+    }
+}
+
+fn default_port(driver: &DbDriver) -> Option<u16> {
+    match driver {
+        DbDriver::Postgres => Some(5432),
+        DbDriver::Mysql => Some(3306),
+        DbDriver::Mongodb => Some(27017),
+        DbDriver::Sqlite => None,
+    }
+}
+
+fn normalized_host(host: &str) -> String {
+    host.trim_matches(['[', ']']).to_ascii_lowercase()
+}
+
+/// Parse only the authority needed for endpoint reconciliation. This is kept
+/// deliberately small and internal so configured credentials are never copied
+/// into discovery results or errors.
+fn uri_hosts(uri: &str, driver: &DbDriver) -> Vec<(String, u16)> {
+    let Some((_, remainder)) = uri.split_once("://") else {
+        return Vec::new();
+    };
+    let authority = remainder
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default()
+        .rsplit_once('@')
+        .map(|(_, hosts)| hosts)
+        .unwrap_or_else(|| remainder.split(['/', '?', '#']).next().unwrap_or_default());
+    let Some(fallback_port) = default_port(driver) else {
+        return Vec::new();
+    };
+
+    authority
+        .split(',')
+        .filter_map(|raw| {
+            let raw = raw.trim();
+            if let Some(rest) = raw.strip_prefix('[') {
+                let (host, suffix) = rest.split_once(']')?;
+                let port = suffix
+                    .strip_prefix(':')
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(fallback_port);
+                return Some((normalized_host(host), port));
+            }
+            match raw.rsplit_once(':') {
+                Some((host, port)) if !host.contains(':') => {
+                    Some((normalized_host(host), port.parse().ok()?))
+                }
+                _ => Some((normalized_host(raw), fallback_port)),
+            }
+        })
+        .collect()
+}
+
+fn connection_matches(
+    connection: &DbConnectionConfig,
+    discovered: &DiscoveredDb,
+    driver: &DbDriver,
+) -> bool {
+    connection.driver == *driver
+        && uri_hosts(&connection.uri, driver)
+            .iter()
+            .any(|(host, port)| {
+                host == &normalized_host(&discovered.host) && *port == discovered.port
+            })
+}
+
+fn discovered_connection_name(discovered: &DiscoveredDb) -> String {
+    let host = discovered
+        .host
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    format!(
+        "discovered-{}-{}-{}",
+        discovered.driver, host, discovered.port
+    )
+}
+
+#[derive(Debug, Clone)]
+pub struct ReconciledDb {
+    pub discovered: DiscoveredDb,
+    /// Present for Explorer-supported drivers. This may be an existing
+    /// operator-updated connection (including stored credentials) or a newly
+    /// created passwordless candidate.
+    pub connection: Option<DbConnectionConfig>,
+    pub newly_added: bool,
+}
+
+/// Reconcile scan results with configured Explorer connections.
+///
+/// Supported candidates are added read-only so the caller can probe them and
+/// so an authentication/routing failure has a real saved connection for the
+/// dashboard's Update/Retry flow. Unsupported services remain visible but are
+/// never falsely marked connected.
+pub fn reconcile_connections(
+    discovered: Vec<DiscoveredDb>,
+    connections: &mut Vec<DbConnectionConfig>,
+) -> Vec<ReconciledDb> {
+    discovered
+        .into_iter()
+        .map(|item| {
+            let Some(driver) = config_driver(&item.driver) else {
+                return ReconciledDb {
+                    discovered: item,
+                    connection: None,
+                    newly_added: false,
+                };
+            };
+
+            if let Some(existing) = connections
+                .iter()
+                .find(|connection| connection_matches(connection, &item, &driver))
+                .cloned()
+            {
+                return ReconciledDb {
+                    discovered: item,
+                    connection: Some(existing),
+                    newly_added: false,
+                };
+            }
+
+            let uri = passwordless_uri(&item.driver, &item.host, item.port)
+                .expect("supported discovery drivers have a passwordless URI");
+            let base_name = discovered_connection_name(&item);
+            let mut name = base_name.clone();
+            let mut suffix = 2usize;
+            while connections.iter().any(|connection| connection.name == name) {
+                name = format!("{base_name}-{suffix}");
+                suffix += 1;
+            }
+            let connection = DbConnectionConfig {
+                name: name.clone(),
+                driver,
+                uri,
+                database: None,
+                read_only: true,
+                max_rows: 500,
+                label: Some(format!(
+                    "Discovered {} {}:{}",
+                    item.driver, item.host, item.port
+                )),
+            };
+            connections.push(connection.clone());
+            ReconciledDb {
+                discovered: item,
+                connection: Some(connection),
+                newly_added: true,
+            }
+        })
+        .collect()
 }
 
 /// Private IPv4 /24 subnets this node is attached to (RFC1918 only).
@@ -164,35 +327,6 @@ async fn probe(addr: SocketAddr) -> bool {
     )
 }
 
-/// Non-destructive check for whether a server requires a password.
-/// Currently only redis: send `PING` and read the reply — `+PONG` means no
-/// auth, `-NOAUTH`/`-ERR ...auth...` means a password is set. Read-only, sends
-/// no data-mutating commands. Returns None for drivers we don't safely probe.
-async fn probe_no_auth(addr: SocketAddr, driver: &str) -> Option<bool> {
-    if driver != "redis" {
-        return None;
-    }
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let mut stream = tokio::time::timeout(PROBE_TIMEOUT, tokio::net::TcpStream::connect(addr))
-        .await
-        .ok()?
-        .ok()?;
-    stream.write_all(b"PING\r\n").await.ok()?;
-    let mut buf = [0u8; 64];
-    let n = tokio::time::timeout(PROBE_TIMEOUT, stream.read(&mut buf))
-        .await
-        .ok()?
-        .ok()?;
-    let reply = String::from_utf8_lossy(&buf[..n]).to_ascii_uppercase();
-    if reply.starts_with("+PONG") {
-        Some(true) // answered without auth
-    } else if reply.contains("NOAUTH") || reply.contains("AUTH") {
-        Some(false) // password required
-    } else {
-        None
-    }
-}
-
 /// Scan the node's private subnets for reachable database ports.
 ///
 /// `hosts` optionally restricts the scan to specific addresses; when empty the
@@ -239,19 +373,7 @@ pub async fn scan(hosts: &[String]) -> Vec<DiscoveredDb> {
         }
         while let Some(res) = set.join_next().await {
             if let Ok(Some((host, port, driver))) = res {
-                let suggested_dsn = suggested_dsn(&driver, &host, port);
-                let no_auth = if let Ok(ip) = host.parse::<IpAddr>() {
-                    probe_no_auth(SocketAddr::new(ip, port), &driver).await
-                } else {
-                    None
-                };
-                found.push(DiscoveredDb {
-                    host,
-                    port,
-                    driver,
-                    suggested_dsn,
-                    no_auth,
-                });
+                found.push(DiscoveredDb { host, port, driver });
             }
         }
     }
@@ -282,10 +404,18 @@ mod tests {
     }
 
     #[test]
-    fn dsn_suggestions_match_driver() {
-        assert!(suggested_dsn("postgres", "10.0.0.5", 5432).starts_with("postgres://"));
-        assert_eq!(suggested_dsn("mongodb", "10.0.0.5", 27017), "mongodb://10.0.0.5:27017");
-        assert_eq!(suggested_dsn("qdrant", "10.0.0.5", 6333), "http://10.0.0.5:6333");
+    fn discovery_serialization_never_exposes_a_connection_uri() {
+        let discovered = DiscoveredDb {
+            host: "10.0.0.5".to_string(),
+            port: 27017,
+            driver: "mongodb".to_string(),
+        };
+
+        let serialized = serde_json::to_string(&discovered).expect("discovery should serialize");
+
+        assert!(!serialized.contains("mongodb://"));
+        assert!(!serialized.contains("uri"));
+        assert!(!serialized.contains("password"));
     }
 
     #[tokio::test]
@@ -295,23 +425,74 @@ mod tests {
         assert!(found.is_empty(), "public addresses must be refused");
     }
 
-    #[tokio::test]
-    async fn no_auth_probe_detects_open_redis() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let Ok(listener) = tokio::net::TcpListener::bind("127.0.0.1:0").await else {
-            return;
+    #[test]
+    fn reconciliation_reuses_a_credentialed_connection_without_exposing_it() {
+        let mut connections = vec![DbConnectionConfig {
+            name: "research".to_string(),
+            driver: DbDriver::Mongodb,
+            uri: "mongodb://reader:private-value@10.0.0.5:27017/research".to_string(),
+            database: Some("research".to_string()),
+            read_only: true,
+            max_rows: 100,
+            label: None,
+        }];
+        let reconciled = reconcile_connections(
+            vec![DiscoveredDb {
+                host: "10.0.0.5".to_string(),
+                port: 27017,
+                driver: "mongodb".to_string(),
+            }],
+            &mut connections,
+        );
+
+        assert_eq!(connections.len(), 1);
+        assert!(!reconciled[0].newly_added);
+        assert_eq!(
+            reconciled[0]
+                .connection
+                .as_ref()
+                .map(|connection| connection.name.as_str()),
+            Some("research")
+        );
+    }
+
+    #[test]
+    fn reconciliation_adds_supported_passwordless_candidates_once() {
+        let discovered = DiscoveredDb {
+            host: "192.168.1.154".to_string(),
+            port: 27017,
+            driver: "mongodb".to_string(),
         };
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            if let Ok((mut sock, _)) = listener.accept().await {
-                let mut buf = [0u8; 16];
-                let _ = sock.read(&mut buf).await;
-                let _ = sock.write_all(b"+PONG\r\n").await;
-            }
-        });
-        assert_eq!(probe_no_auth(addr, "redis").await, Some(true));
-        // Non-redis drivers are never probed.
-        assert_eq!(probe_no_auth(addr, "postgres").await, None);
+        let mut connections = Vec::new();
+
+        let first = reconcile_connections(vec![discovered.clone()], &mut connections);
+        let second = reconcile_connections(vec![discovered], &mut connections);
+
+        assert!(first[0].newly_added);
+        assert!(!second[0].newly_added);
+        assert_eq!(connections.len(), 1);
+        assert_eq!(
+            connections[0].name,
+            "discovered-mongodb-192-168-1-154-27017"
+        );
+        assert!(connections[0].read_only);
+    }
+
+    #[test]
+    fn reconciliation_keeps_unsupported_services_visible_but_unconfigured() {
+        let mut connections = Vec::new();
+        let reconciled = reconcile_connections(
+            vec![DiscoveredDb {
+                host: "10.0.0.8".to_string(),
+                port: 6379,
+                driver: "redis".to_string(),
+            }],
+            &mut connections,
+        );
+
+        assert!(connections.is_empty());
+        assert!(reconciled[0].connection.is_none());
+        assert!(!reconciled[0].newly_added);
     }
 
     #[tokio::test]

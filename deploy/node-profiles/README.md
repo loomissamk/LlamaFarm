@@ -207,6 +207,6 @@ read-only status only while the host daemon is actually online.
 The former container VPN profile was removed because its separate network
 namespace did not publish the LlamaFarm gateway. For off-LAN federation, set
 `LLAMAFARM_MANUAL_PEERS` to peers' tailnet IPs or MagicDNS names. Use tailnet
-ACLs to control access to ports 42617, 5000, and 8501-8510, and keep the shared
+ACLs to control access to ports 42617, 5000, and 8501-8599, and keep the shared
 federation token as defence-in-depth. Do not expose these ports directly to the
 public internet.

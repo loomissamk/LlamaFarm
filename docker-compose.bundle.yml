@@ -28,7 +28,7 @@ services:
       context: .
       target: bundle
       args:
-        LLAMAFARM_CARGO_FEATURES: browser-native,db-mongo
+        LLAMAFARM_CARGO_FEATURES: browser-native,db-mongo,db-postgres
     container_name: LlamaFarm
     restart: unless-stopped
     init: true
@@ -84,7 +84,7 @@ services:
       # host daemon (this is not an isolated Docker-in-Docker daemon).
       - LLAMAFARM_HOST_DOCKER=${LLAMAFARM_HOST_DOCKER:-true}
       - LLAMAFARM_RESERVED_APP_PORTS=${LLAMAFARM_RESERVED_APP_PORTS:-5000}
-      - LLAMAFARM_MANAGED_APP_PORTS=${LLAMAFARM_MANAGED_APP_PORTS:-8501-8510}
+      - LLAMAFARM_MANAGED_APP_PORTS=${LLAMAFARM_MANAGED_APP_PORTS:-8501-8599}
       - LLAMAFARM_PUBLIC_APP_HOSTS=${LLAMAFARM_PUBLIC_APP_HOSTS:-}
       - LLAMAFARM_LAN_IP=${LLAMAFARM_LAN_IP:-}
       - LLAMAFARM_TAILSCALE_IP=${LLAMAFARM_TAILSCALE_IP:-}
@@ -146,7 +146,7 @@ services:
       - "${LLAMAFARM_HOST_BIND_IP:-127.0.0.1}:${DEV_APP_PORT:-5000}:5000"
       # One-to-one host/container mappings for generated Streamlit and other
       # development apps. Agents choose the first free port and bind 0.0.0.0.
-      - "${LLAMAFARM_HOST_BIND_IP:-127.0.0.1}:8501-8510:8501-8510"
+      - "${LLAMAFARM_HOST_BIND_IP:-127.0.0.1}:${LLAMAFARM_MANAGED_APP_PORTS:-8501-8599}:${LLAMAFARM_MANAGED_APP_PORTS:-8501-8599}"
 
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:${LLAMAFARM_GATEWAY_PORT:-42617}/health >/dev/null && curl -fsS http://127.0.0.1:11434/api/tags >/dev/null && curl -fsS http://127.0.0.1:9515/status >/dev/null"]

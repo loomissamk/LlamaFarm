@@ -20,9 +20,15 @@ import {
   CheckCircle,
   Radar,
 } from 'lucide-react';
-import type { DbConnection, DbSchema, DbTableInfo, DbQueryResult } from '@/types/api';
+import type {
+  DbConnection,
+  DbDiscoveryResult,
+  DbSchema,
+  DbTableInfo,
+  DbQueryResult,
+} from '@/types/api';
 import {
-  apiFetch,
+  discoverDbConnections,
   getDbConnections,
   getDbSchema,
   runDbQuery,
@@ -31,6 +37,7 @@ import {
   removeDbConnection,
   testDbConnection,
 } from '@/lib/api';
+import { pickDiscoveredConnection } from '@/lib/databaseDiscovery';
 
 // ── Driver badge ──────────────────────────────────────────────────────────────
 
@@ -449,9 +456,7 @@ export default function DatabasePage() {
   const [connsError, setConnsError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [scanning, setScanning] = useState(false);
-  const [discovered, setDiscovered] = useState<
-    { host: string; port: number; driver: string; suggested_dsn: string; no_auth?: boolean }[] | null
-  >(null);
+  const [discovered, setDiscovered] = useState<DbDiscoveryResult[] | null>(null);
   const [editConn, setEditConn] = useState<DbConnection | null>(null);
 
   const [activeConn, setActiveConn] = useState<string | null>(null);
@@ -468,6 +473,9 @@ export default function DatabasePage() {
   const [result, setResult] = useState<DbQueryResult | null>(null);
   const [queryError, setQueryError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const discoveryProbeRef = useRef(
+    new Map<string, { schema?: DbSchema; error?: string }>(),
+  );
 
   const loadConnections = () => {
     setLoadingConns(true);
@@ -484,28 +492,38 @@ export default function DatabasePage() {
   useEffect(loadConnections, []);
 
   useEffect(() => {
-    if (!activeConn) return;
+    if (!activeConn || activeConn === MEMORY_CONN) return;
     setSchema(null); setSchemaError(null); setLoadingSchema(true);
     setResult(null); setQueryError(null); setActiveTable(null); setQuery('');
     const connName = activeConn;
+    const applySchema = (loadedSchema: DbSchema) => {
+      setSchema(loadedSchema);
+      // Auto-browse first table on connect (Compass-style).
+      if (loadedSchema.tables.length > 0) {
+        const conn = connections.find((candidate) => candidate.name === connName);
+        const table = loadedSchema.tables[0];
+        if (!conn || !table) return;
+        setActiveTable(table.name);
+        const nextQuery = conn.driver === 'mongodb'
+          ? JSON.stringify({ collection: table.name, filter: {} }, null, 2)
+          : `SELECT *\nFROM ${table.name};`;
+        setQuery(nextQuery);
+        setPageOffset(0);
+        runQuery(nextQuery, connName, 0, pageSize);
+      }
+    };
+
+    const discoveryProbe = discoveryProbeRef.current.get(connName);
+    if (discoveryProbe) {
+      discoveryProbeRef.current.delete(connName);
+      if (discoveryProbe.schema) applySchema(discoveryProbe.schema);
+      if (discoveryProbe.error) setSchemaError(discoveryProbe.error);
+      setLoadingSchema(false);
+      return;
+    }
+
     getDbSchema(connName)
-      .then((s) => {
-        setSchema(s);
-        // Auto-browse first table on connect (Compass-style)
-        if (s.tables.length > 0) {
-          const conn = connections.find((c) => c.name === connName);
-          if (!conn) return;
-          const table = s.tables[0];
-          if (!table) return;
-          setActiveTable(table.name);
-          const q = conn.driver === 'mongodb'
-            ? JSON.stringify({ collection: table.name, filter: {} }, null, 2)
-            : `SELECT *\nFROM ${table.name};`;
-          setQuery(q);
-          setPageOffset(0);
-          runQuery(q, connName, 0, pageSize);
-        }
-      })
+      .then(applySchema)
       .catch((e) => setSchemaError(String(e)))
       .finally(() => setLoadingSchema(false));
   }, [activeConn, connectionRevision]);
@@ -563,11 +581,27 @@ export default function DatabasePage() {
 
   const handleScan = async () => {
     setScanning(true);
+    setConnsError(null);
     try {
-      const res = await apiFetch<{
-        discovered: { host: string; port: number; driver: string; suggested_dsn: string; no_auth?: boolean }[];
-      }>('/api/db/discover', { method: 'POST', body: JSON.stringify({ hosts: [] }) });
+      const res = await discoverDbConnections();
       setDiscovered(res.discovered);
+      const refreshed = await getDbConnections();
+      setConnections(refreshed.connections);
+
+      for (const item of res.discovered) {
+        if (!item.connection_name) continue;
+        if (item.schema) {
+          discoveryProbeRef.current.set(item.connection_name, { schema: item.schema });
+        } else if (item.error) {
+          discoveryProbeRef.current.set(item.connection_name, { error: item.error });
+        }
+      }
+
+      const selected = pickDiscoveredConnection(res.discovered);
+      if (selected) {
+        setActiveConn(selected);
+        setConnectionRevision((revision) => revision + 1);
+      }
     } catch (e) {
       setConnsError(e instanceof Error ? e.message : 'Network scan failed');
     } finally {
@@ -696,25 +730,48 @@ export default function DatabasePage() {
               </p>
             ) : (
               discovered.map((d) => (
-                <button
-                  key={`${d.host}:${d.port}`}
-                  onClick={() => {
-                    navigator.clipboard?.writeText(d.suggested_dsn);
-                    setShowAddModal(true);
-                  }}
-                  className="w-full flex items-center gap-1.5 px-2 py-1.5 hover:bg-gray-800 text-left"
-                  title={`${d.suggested_dsn} — click to copy the DSN and add it`}
-                >
-                  <span className="text-gray-300 text-xs font-mono truncate flex-1">
-                    {d.host}:{d.port}
-                  </span>
-                  {d.no_auth === true && (
-                    <span className="text-[10px] px-1 py-0.5 rounded bg-amber-900/60 text-amber-300 flex-shrink-0" title="No password required — one-click connect">
-                      open
+                <div key={`${d.host}:${d.port}`} className="border-t border-gray-900">
+                  <button
+                    onClick={() => {
+                      if (!d.connection_name) return;
+                      if (d.schema) {
+                        discoveryProbeRef.current.set(d.connection_name, { schema: d.schema });
+                      } else if (d.error) {
+                        discoveryProbeRef.current.set(d.connection_name, { error: d.error });
+                      }
+                      setActiveConn(d.connection_name);
+                      setConnectionRevision((revision) => revision + 1);
+                    }}
+                    disabled={!d.connection_name}
+                    className="w-full flex items-center gap-1.5 px-2 py-1.5 hover:bg-gray-800 text-left disabled:cursor-default disabled:hover:bg-transparent"
+                    title={d.error ?? (d.status === 'connected' ? 'Connected and schema loaded' : 'Discovered database')}
+                  >
+                    <span className="text-gray-300 text-xs font-mono truncate flex-1">
+                      {d.host}:{d.port}
                     </span>
+                    {d.status === 'connected' && (
+                      <span className="text-[10px] px-1 py-0.5 rounded bg-green-900/60 text-green-300 flex-shrink-0">
+                        connected
+                      </span>
+                    )}
+                    {d.status === 'needs_configuration' && (
+                      <span className="text-[10px] px-1 py-0.5 rounded bg-amber-900/60 text-amber-300 flex-shrink-0">
+                        setup
+                      </span>
+                    )}
+                    {d.status === 'unsupported' && (
+                      <span className="text-[10px] px-1 py-0.5 rounded bg-gray-800 text-gray-400 flex-shrink-0">
+                        unsupported
+                      </span>
+                    )}
+                    <DriverBadge driver={d.driver} />
+                  </button>
+                  {d.error && (
+                    <p className="px-2 pb-1.5 text-[10px] leading-4 text-amber-400 break-words">
+                      {d.error}
+                    </p>
                   )}
-                  <DriverBadge driver={d.driver} />
-                </button>
+                </div>
               ))
             )}
           </div>

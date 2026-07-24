@@ -24,6 +24,7 @@ import type {
   DbSchema,
   DbQueryResult,
   DbTestResult,
+  DbDiscoveryResponse,
   ChatSessionsListResponse,
   ChatSessionDetailResponse,
 } from '../types/api';
@@ -532,6 +533,13 @@ export function getCost(): Promise<CostSummary> {
 
 export function getDbConnections(): Promise<DbConnectionsResponse> {
   return apiFetch<DbConnectionsResponse>('/api/db/connections');
+}
+
+export function discoverDbConnections(hosts: string[] = []): Promise<DbDiscoveryResponse> {
+  return apiFetch<DbDiscoveryResponse>('/api/db/discover', {
+    method: 'POST',
+    body: JSON.stringify({ hosts }),
+  });
 }
 
 export function getDbSchema(name: string): Promise<DbSchema> {

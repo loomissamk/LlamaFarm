@@ -31,6 +31,7 @@ use std::{
     net::SocketAddr,
     path::{Component, Path as FsPath, PathBuf},
     sync::Arc,
+    time::Duration,
 };
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -3737,8 +3738,72 @@ pub struct DbScanBody {
     pub hosts: Vec<String>,
 }
 
-/// POST /api/db/discover — scan the local network for reachable databases.
-/// TCP-connect probe only, confined to private subnets; never authenticates.
+const DB_DISCOVERY_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DbDiscoveryStatus {
+    Connected,
+    NeedsConfiguration,
+    Unsupported,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct DbDiscoveryResult {
+    host: String,
+    port: u16,
+    driver: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    connection_name: Option<String>,
+    status: DbDiscoveryStatus,
+    newly_added: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    schema: Option<crate::db::DbSchema>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+fn unsupported_discovery_error(driver: &str) -> String {
+    match driver {
+        "mysql" => {
+            "MySQL is reachable, but this image does not include a DB Explorer adapter for it yet."
+        }
+        "redis" => "Redis is reachable, but DB Explorer does not support Redis connections yet.",
+        "qdrant" => "Qdrant is reachable, but it is managed outside DB Explorer.",
+        "ollama" => {
+            "Ollama is reachable, but it is a model service rather than a DB Explorer connection."
+        }
+        _ => "The service is reachable, but DB Explorer does not support its driver.",
+    }
+    .to_string()
+}
+
+fn failed_discovery_result(
+    reconciled: &crate::gateway::db_discovery::ReconciledDb,
+    connection: &crate::config::DbConnectionConfig,
+    error: &dyn std::fmt::Display,
+) -> DbDiscoveryResult {
+    DbDiscoveryResult {
+        host: reconciled.discovered.host.clone(),
+        port: reconciled.discovered.port,
+        driver: reconciled.discovered.driver.clone(),
+        connection_name: Some(connection.name.clone()),
+        status: DbDiscoveryStatus::NeedsConfiguration,
+        newly_added: reconciled.newly_added,
+        schema: None,
+        error: Some(format!(
+            "Could not load schema: {}",
+            crate::db::sanitize_connection_error(error, &connection.uri)
+        )),
+    }
+}
+
+/// POST /api/db/discover — scan, reconcile, and probe local-network databases.
+///
+/// Explorer-supported endpoints become saved read-only connections. Their
+/// internally derived or previously stored URI is never returned. Passwordless
+/// connections are schema-probed immediately; authentication/routing failures
+/// remain saved so the dashboard can offer Update connection and Retry.
 pub async fn handle_api_db_discover(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -3749,7 +3814,83 @@ pub async fn handle_api_db_discover(
     }
     let hosts = body.map(|Json(b)| b.hosts).unwrap_or_default();
     let found = crate::gateway::db_discovery::scan(&hosts).await;
-    Json(serde_json::json!({"discovered": found})).into_response()
+    let mut config = state.config.lock().clone();
+    let reconciled =
+        crate::gateway::db_discovery::reconcile_connections(found, &mut config.db_connections);
+
+    if reconciled.iter().any(|item| item.newly_added) {
+        if config.save().await.is_err() {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": "Failed to persist discovered database connections"
+                })),
+            )
+                .into_response();
+        }
+        *state.config.lock() = config.clone();
+        if let Ok(snapshot) = build_gateway_runtime_snapshot_with_federation(
+            &config,
+            state.federation.as_ref().map(|f| f.remote_adapter()),
+        ) {
+            state.replace_runtime_snapshot(snapshot);
+        }
+    }
+
+    let mut results = Vec::with_capacity(reconciled.len());
+    for item in reconciled {
+        let Some(connection) = item.connection.as_ref() else {
+            results.push(DbDiscoveryResult {
+                host: item.discovered.host.clone(),
+                port: item.discovered.port,
+                driver: item.discovered.driver.clone(),
+                connection_name: None,
+                status: DbDiscoveryStatus::Unsupported,
+                newly_added: false,
+                schema: None,
+                error: Some(unsupported_discovery_error(&item.discovered.driver)),
+            });
+            continue;
+        };
+
+        let adapter = match crate::db::build_adapter(connection) {
+            Ok(adapter) => adapter,
+            Err(error) => {
+                results.push(failed_discovery_result(&item, connection, &error));
+                continue;
+            }
+        };
+        match tokio::time::timeout(DB_DISCOVERY_CONNECT_TIMEOUT, adapter.schema()).await {
+            Ok(Ok(schema)) => results.push(DbDiscoveryResult {
+                host: item.discovered.host.clone(),
+                port: item.discovered.port,
+                driver: item.discovered.driver.clone(),
+                connection_name: Some(connection.name.clone()),
+                status: DbDiscoveryStatus::Connected,
+                newly_added: item.newly_added,
+                schema: Some(schema),
+                error: None,
+            }),
+            Ok(Err(error)) => {
+                results.push(failed_discovery_result(&item, connection, &error));
+            }
+            Err(_) => results.push(DbDiscoveryResult {
+                host: item.discovered.host.clone(),
+                port: item.discovered.port,
+                driver: item.discovered.driver.clone(),
+                connection_name: Some(connection.name.clone()),
+                status: DbDiscoveryStatus::NeedsConfiguration,
+                newly_added: item.newly_added,
+                schema: None,
+                error: Some(
+                    "Schema probe timed out. Check authentication and routing, then update the connection or retry."
+                        .to_string(),
+                ),
+            }),
+        }
+    }
+
+    Json(serde_json::json!({"discovered": results})).into_response()
 }
 
 /// GET /api/runs — run inspector index: live + historical run ledgers.
@@ -4689,6 +4830,38 @@ mod tests {
             hydrated.db_connections[0].uri,
             "mongodb://reader:real-password@db.internal:27017"
         );
+    }
+
+    #[test]
+    fn discovery_probe_error_serialization_never_exposes_uri_or_password() {
+        let connection = crate::config::DbConnectionConfig {
+            name: "research".to_string(),
+            driver: crate::config::DbDriver::Mongodb,
+            uri: "mongodb://reader:private-value@db.internal:27017/research".to_string(),
+            database: Some("research".to_string()),
+            read_only: true,
+            max_rows: 100,
+            label: None,
+        };
+        let reconciled = crate::gateway::db_discovery::ReconciledDb {
+            discovered: crate::gateway::db_discovery::DiscoveredDb {
+                host: "10.0.0.5".to_string(),
+                port: 27017,
+                driver: "mongodb".to_string(),
+            },
+            connection: Some(connection.clone()),
+            newly_added: false,
+        };
+        let driver_error = anyhow::anyhow!("server rejected {}", connection.uri);
+
+        let result = failed_discovery_result(&reconciled, &connection, &driver_error);
+        let serialized =
+            serde_json::to_string(&result).expect("discovery probe result should serialize");
+
+        assert!(serialized.contains("\"status\":\"needs_configuration\""));
+        assert!(serialized.contains("\"connection_name\":\"research\""));
+        assert!(!serialized.contains("mongodb://"));
+        assert!(!serialized.contains("private-value"));
     }
 
     #[test]

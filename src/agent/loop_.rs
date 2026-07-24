@@ -9548,13 +9548,13 @@ mod tests {
     fn managed_app_notice_separates_reserved_ports_and_host_docker() {
         let notice = build_managed_app_runtime_notice_from_values(
             "5000",
-            "8501-8510",
+            "8501-8599",
             "192.168.1.154,100.107.226.49",
             true,
         );
 
         assert!(notice.contains("Ports 5000 are reserved"));
-        assert!(notice.contains("first free port in 8501-8510"));
+        assert!(notice.contains("first free port in 8501-8599"));
         assert!(notice.contains("http://192.168.1.154:<port>"));
         assert!(notice.contains("http://100.107.226.49:<port>"));
         assert!(notice.contains("controls the host Docker daemon"));

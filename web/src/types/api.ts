@@ -365,6 +365,23 @@ export interface DbConnectionsResponse {
   connections: DbConnection[];
 }
 
+export type DbDiscoveryStatus = 'connected' | 'needs_configuration' | 'unsupported';
+
+export interface DbDiscoveryResult {
+  host: string;
+  port: number;
+  driver: string;
+  connection_name?: string;
+  status: DbDiscoveryStatus;
+  newly_added: boolean;
+  schema?: DbSchema;
+  error?: string;
+}
+
+export interface DbDiscoveryResponse {
+  discovered: DbDiscoveryResult[];
+}
+
 /** Summary of a chat session persisted on this node's disk — may have been
  * started from a different browser/device than the one currently viewing it. */
 export interface ChatSessionSummary {

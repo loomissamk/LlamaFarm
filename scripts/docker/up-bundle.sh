@@ -235,7 +235,7 @@ export LLAMAFARM_RUNTIME_GID="$RUNTIME_GID"
 echo "LlamaFarm bundle GPU backend: $BACKEND"
 echo "LlamaFarm bundle Ollama preload models: $OLLAMA_PULL_MODELS"
 echo "LlamaFarm bundle runtime user: ${LLAMAFARM_RUNTIME_UID}:${LLAMAFARM_RUNTIME_GID}"
-echo "LlamaFarm managed app ports: 8501-8510 (5000 reserved)"
+echo "LlamaFarm managed app ports: ${LLAMAFARM_MANAGED_APP_PORTS:-8501-8599} (${LLAMAFARM_RESERVED_APP_PORTS:-5000} reserved)"
 echo "LlamaFarm public app hosts: ${LLAMAFARM_PUBLIC_APP_HOSTS:-none detected}"
 if [ "$EXPOSE_DRI" = "1" ]; then
   echo "Exposing /dev/dri to the container"
