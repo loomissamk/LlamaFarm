@@ -197,11 +197,16 @@ RUN apt-get update && apt-get install -y \
 # mission in TODO.md — not for use against systems you do not own or lack
 # permission to test.
 ARG LLAMAFARM_LAB_TOOLS=1
+# Best-effort per package: a package missing from the base distro's repos
+# (e.g. nikto is not in Debian trixie) must NOT abort the whole image build.
 RUN if [ "$LLAMAFARM_LAB_TOOLS" = "1" ]; then \
-      apt-get update && apt-get install -y --no-install-recommends \
-        nmap tshark tcpdump netcat-openbsd dnsutils whois traceroute \
-        openssh-client sshpass hydra sqlmap john hashcat \
-      && rm -rf /var/lib/apt/lists/*; \
+      apt-get update; \
+      for p in nmap tshark tcpdump netcat-openbsd dnsutils whois traceroute \
+               openssh-client sshpass hydra sqlmap john hashcat; do \
+        apt-get install -y --no-install-recommends "$p" \
+          || echo "lab-tools: skipping unavailable package $p"; \
+      done; \
+      rm -rf /var/lib/apt/lists/*; \
     fi
 
 COPY --from=builder /llamafarm-data /llamafarm-data
