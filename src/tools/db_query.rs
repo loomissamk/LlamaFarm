@@ -1,6 +1,6 @@
 use super::traits::{Tool, ToolResult};
 use crate::config::DbConnectionConfig;
-use crate::db::build_adapter;
+use crate::db::{build_adapter, sanitize_connection_error};
 use async_trait::async_trait;
 use serde_json::json;
 
@@ -256,7 +256,11 @@ impl Tool for DbQueryTool {
                 return Ok(ToolResult {
                     success: false,
                     output: String::new(),
-                    error: Some(format!("Failed to connect to '{}': {e}", conn_cfg.name)),
+                    error: Some(format!(
+                        "Failed to connect to '{}': {}",
+                        conn_cfg.name,
+                        sanitize_connection_error(&e, &conn_cfg.uri)
+                    )),
                 });
             }
         };
@@ -313,7 +317,11 @@ impl Tool for DbQueryTool {
             Err(e) => Ok(ToolResult {
                 success: false,
                 output: String::new(),
-                error: Some(format!("Query failed on '{}': {e}", conn_name)),
+                error: Some(format!(
+                    "Query failed on '{}': {}",
+                    conn_name,
+                    sanitize_connection_error(&e, &conn_cfg.uri)
+                )),
             }),
         }
     }

@@ -4452,7 +4452,13 @@ pub async fn handle_api_db_test_connection(
     match crate::db::build_adapter(&conn_cfg) {
         Err(e) => (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "ok": false, "error": format!("Connect failed: {e}") })),
+            Json(serde_json::json!({
+                "ok": false,
+                "error": format!(
+                    "Connect failed: {}",
+                    crate::db::sanitize_connection_error(&e, &conn_cfg.uri)
+                )
+            })),
         ).into_response(),
         Ok(adapter) => match adapter.schema().await {
             Ok(schema) => Json(serde_json::json!({
@@ -4463,7 +4469,13 @@ pub async fn handle_api_db_test_connection(
             })).into_response(),
             Err(e) => (
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "ok": false, "error": format!("Connected but schema failed: {e}") })),
+                Json(serde_json::json!({
+                    "ok": false,
+                    "error": format!(
+                        "Connected but schema failed: {}",
+                        crate::db::sanitize_connection_error(&e, &conn_cfg.uri)
+                    )
+                })),
             ).into_response(),
         },
     }
@@ -4496,7 +4508,12 @@ pub async fn handle_api_db_schema(
         Err(e) => {
             return (
                 StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({ "error": format!("Connection failed: {e}") })),
+                Json(serde_json::json!({
+                    "error": format!(
+                        "Connection failed: {}",
+                        crate::db::sanitize_connection_error(&e, &conn_cfg.uri)
+                    )
+                })),
             )
                 .into_response();
         }
@@ -4505,7 +4522,12 @@ pub async fn handle_api_db_schema(
         Ok(schema) => Json(schema).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("Schema fetch failed: {e}") })),
+            Json(serde_json::json!({
+                "error": format!(
+                    "Schema fetch failed: {}",
+                    crate::db::sanitize_connection_error(&e, &conn_cfg.uri)
+                )
+            })),
         )
             .into_response(),
     }
@@ -4558,7 +4580,12 @@ pub async fn handle_api_db_query(
         Err(e) => {
             return (
                 StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({ "error": format!("Connection failed: {e}") })),
+                Json(serde_json::json!({
+                    "error": format!(
+                        "Connection failed: {}",
+                        crate::db::sanitize_connection_error(&e, &conn_cfg.uri)
+                    )
+                })),
             )
                 .into_response();
         }
@@ -4567,7 +4594,12 @@ pub async fn handle_api_db_query(
         Ok(result) => Json(result).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("Query failed: {e}") })),
+            Json(serde_json::json!({
+                "error": format!(
+                    "Query failed: {}",
+                    crate::db::sanitize_connection_error(&e, &conn_cfg.uri)
+                )
+            })),
         )
             .into_response(),
     }

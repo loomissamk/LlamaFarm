@@ -231,7 +231,9 @@ function EditConnectionModal({ conn, onClose, onSave }: { conn: DbConnection; on
   const handleTest = async () => {
     setTestStatus({ state: 'testing', msg: '' });
     try {
-      const r = await testDbConnection({ name: form.name || conn.name, driver: form.driver as DbConnection['driver'], uri: form.uri, database: form.database || null });
+      // A masked URI is resolved by the connection's currently persisted name.
+      // A pending rename must not make the Test action lose that stored value.
+      const r = await testDbConnection({ name: conn.name, driver: form.driver as DbConnection['driver'], uri: form.uri, database: form.database || null });
       if (r.ok) setTestStatus({ state: 'ok', msg: `Connected · ${r.tables ?? 0} ${r.driver === 'mongodb' ? 'collections' : 'tables'}${r.database ? ` · ${r.database}` : ''}` });
       else setTestStatus({ state: 'err', msg: r.error ?? 'Connection failed' });
     } catch (e) { setTestStatus({ state: 'err', msg: String(e) }); }

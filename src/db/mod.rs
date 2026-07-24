@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 
 pub mod sqlite;
 
@@ -48,6 +49,30 @@ pub trait DbAdapter: Send + Sync {
     fn driver_name(&self) -> &str;
     async fn schema(&self) -> anyhow::Result<DbSchema>;
     async fn query(&self, sql: &str, max_rows: usize) -> anyhow::Result<QueryResult>;
+}
+
+/// Remove configured database URIs and embedded passwords from errors before
+/// they cross an API or tool boundary.
+///
+/// Driver libraries generally avoid echoing credentials, but parse and
+/// connection errors are not a stable contract. Keep the original error useful
+/// while ensuring a future driver version cannot expose a saved URI.
+pub fn sanitize_connection_error(error: &dyn std::fmt::Display, connection_uri: &str) -> String {
+    let mut message = error.to_string();
+    if !connection_uri.trim().is_empty() {
+        message = message.replace(connection_uri, "<redacted database URI>");
+    }
+
+    static URI_USERINFO: OnceLock<regex::Regex> = OnceLock::new();
+    let regex = URI_USERINFO.get_or_init(|| {
+        regex::Regex::new(
+            r"(?i)\b(?P<scheme>mongodb(?:\+srv)?|postgres(?:ql)?|mysql)://(?P<user>[^/\s:@]+):[^@\s/]+@",
+        )
+        .expect("database URI credential regex must compile")
+    });
+    regex
+        .replace_all(&message, "${scheme}://${user}:***MASKED***@")
+        .into_owned()
 }
 
 // ── Factory ───────────────────────────────────────────────────────────────────
@@ -100,4 +125,33 @@ fn build_mongo(_conn: &crate::config::DbConnectionConfig) -> anyhow::Result<Box<
         "MongoDB support requires the 'db-mongo' Cargo feature \
          (add db-mongo to LLAMAFARM_CARGO_FEATURES)"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_connection_error;
+
+    #[test]
+    fn connection_error_removes_the_exact_configured_uri() {
+        let uri = "mongodb://reader:private-value@db.internal:27017/ArXivDB";
+        let error = format!("failed to parse {uri}");
+
+        let sanitized = sanitize_connection_error(&error, uri);
+
+        assert_eq!(sanitized, "failed to parse <redacted database URI>");
+        assert!(!sanitized.contains("private-value"));
+    }
+
+    #[test]
+    fn connection_error_masks_driver_rendered_userinfo() {
+        let error = "server rejected postgresql://reader:private-value@db.internal:5432/research";
+
+        let sanitized = sanitize_connection_error(&error, "different stored value");
+
+        assert_eq!(
+            sanitized,
+            "server rejected postgresql://reader:***MASKED***@db.internal:5432/research"
+        );
+        assert!(!sanitized.contains("private-value"));
+    }
 }

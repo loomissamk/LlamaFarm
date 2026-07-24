@@ -1,6 +1,6 @@
 use super::traits::{Tool, ToolResult};
 use crate::config::DbConnectionConfig;
-use crate::db::build_adapter;
+use crate::db::{build_adapter, sanitize_connection_error};
 use async_trait::async_trait;
 use serde_json::json;
 
@@ -91,12 +91,18 @@ impl Tool for DbSchemaTool {
                 ));
                 match build_adapter(conn_cfg) {
                     Err(e) => {
-                        all_out.push_str(&format!("  [connect error: {e}]\n\n"));
+                        all_out.push_str(&format!(
+                            "  [connect error: {}]\n\n",
+                            sanitize_connection_error(&e, &conn_cfg.uri)
+                        ));
                         any_error = true;
                     }
                     Ok(adapter) => match adapter.schema().await {
                         Err(e) => {
-                            all_out.push_str(&format!("  [schema error: {e}]\n\n"));
+                            all_out.push_str(&format!(
+                                "  [schema error: {}]\n\n",
+                                sanitize_connection_error(&e, &conn_cfg.uri)
+                            ));
                             any_error = true;
                         }
                         Ok(schema) => {
@@ -150,7 +156,11 @@ impl Tool for DbSchemaTool {
                 return Ok(ToolResult {
                     success: false,
                     output: String::new(),
-                    error: Some(format!("Failed to connect to '{}': {e}", conn_cfg.name)),
+                    error: Some(format!(
+                        "Failed to connect to '{}': {}",
+                        conn_cfg.name,
+                        sanitize_connection_error(&e, &conn_cfg.uri)
+                    )),
                 });
             }
         };
@@ -189,7 +199,11 @@ impl Tool for DbSchemaTool {
             Err(e) => Ok(ToolResult {
                 success: false,
                 output: String::new(),
-                error: Some(format!("Schema fetch failed for '{}': {e}", conn_name)),
+                error: Some(format!(
+                    "Schema fetch failed for '{}': {}",
+                    conn_name,
+                    sanitize_connection_error(&e, &conn_cfg.uri)
+                )),
             }),
         }
     }
