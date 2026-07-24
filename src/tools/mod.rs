@@ -47,6 +47,7 @@ pub mod hardware_board_info;
 pub mod hardware_memory_map;
 #[cfg(feature = "hardware")]
 pub mod hardware_memory_read;
+pub mod host_exec;
 pub mod http_request;
 pub mod image_info;
 pub mod memory_forget;
@@ -112,6 +113,7 @@ pub use hardware_board_info::HardwareBoardInfoTool;
 pub use hardware_memory_map::HardwareMemoryMapTool;
 #[cfg(feature = "hardware")]
 pub use hardware_memory_read::HardwareMemoryReadTool;
+pub use host_exec::HostExecTool;
 pub use http_request::HttpRequestTool;
 pub use image_info::ImageInfoTool;
 pub use memory_forget::MemoryForgetTool;
@@ -380,6 +382,20 @@ pub fn all_tools_with_runtime_and_federation(
             workspace_dir.to_path_buf(),
         )),
     ];
+
+    if root_config.host_runner.enabled {
+        if let Some(socket_path) = root_config.host_runner.effective_socket_path() {
+            tool_arcs.push(Arc::new(HostExecTool::new(
+                security.clone(),
+                socket_path,
+                root_config.host_runner.max_exec_timeout_secs,
+            )));
+        } else {
+            tracing::warn!(
+                "host_runner.enabled is true but no socket path or home directory is available"
+            );
+        }
+    }
 
     let sop_engine = Arc::new(Mutex::new(SopEngine::new(config.sop.clone())));
     let sop_audit = Arc::new(SopAuditLogger::new(memory.clone()));
@@ -869,6 +885,56 @@ mod tests {
         assert!(names.contains(&"model_routing_config"));
         assert!(names.contains(&"pushover"));
         assert!(names.contains(&"proxy_config"));
+    }
+
+    #[test]
+    fn all_tools_registers_host_runner_only_when_enabled() {
+        let tmp = TempDir::new().unwrap();
+        let security = Arc::new(SecurityPolicy::default());
+        let mem_cfg = MemoryConfig {
+            backend: "markdown".into(),
+            ..MemoryConfig::default()
+        };
+        let mem: Arc<dyn Memory> =
+            Arc::from(crate::memory::create_memory(&mem_cfg, tmp.path(), None).unwrap());
+        let browser = BrowserConfig::default();
+        let http = crate::config::HttpRequestConfig::default();
+        let mut disabled = test_config(&tmp);
+        disabled.host_runner.socket_path = Some(tmp.path().join("host-runner.sock"));
+
+        let disabled_tools = all_tools(
+            Arc::new(Config::default()),
+            &security,
+            mem.clone(),
+            None,
+            None,
+            &browser,
+            &http,
+            &crate::config::WebFetchConfig::default(),
+            tmp.path(),
+            &HashMap::new(),
+            None,
+            &disabled,
+        );
+        assert!(!disabled_tools.iter().any(|tool| tool.name() == "host_exec"));
+
+        let mut enabled = disabled;
+        enabled.host_runner.enabled = true;
+        let enabled_tools = all_tools(
+            Arc::new(Config::default()),
+            &security,
+            mem,
+            None,
+            None,
+            &browser,
+            &http,
+            &crate::config::WebFetchConfig::default(),
+            tmp.path(),
+            &HashMap::new(),
+            None,
+            &enabled,
+        );
+        assert!(enabled_tools.iter().any(|tool| tool.name() == "host_exec"));
     }
 
     #[test]

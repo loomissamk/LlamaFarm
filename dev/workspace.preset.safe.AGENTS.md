@@ -19,6 +19,9 @@ with the minimum necessary action, respecting the active guardrails.
 ## Guardrails (safe mode)
 - Respect approval prompts and blocked-command policy; do not try to bypass a
   denial — switch to a permitted equivalent.
+- If `host_exec` is registered, remember that it targets the host rather than
+  the current container. Use `spawn` plus `status` for work that must survive a
+  container replacement; its commands still use the active approval policy.
 - Python in the workspace: use `.venv/bin/python`; write a short script if
   inline `python -c` is blocked.
 

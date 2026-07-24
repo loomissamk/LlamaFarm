@@ -35,6 +35,20 @@ Notes:
 - Unset keeps the provider's built-in default.
 - Environment override: `LLAMAFARM_MODEL_SUPPORT_VISION` or `MODEL_SUPPORT_VISION` (values: `true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off`).
 
+## `[host_runner]`
+
+| Key | Default | Purpose |
+|---|---|---|
+| `enabled` | `false` | Register the policy-checked `host_exec` tool |
+| `socket_path` | unset | Exact owner-only Unix socket path |
+| `host_home` | unset | Host home mirrored into Docker; used to derive the socket |
+| `max_exec_timeout_secs` | `300` | Maximum foreground host command timeout |
+
+Environment overrides are `LLAMAFARM_HOST_RUNNER_ENABLED`,
+`LLAMAFARM_HOST_RUNNER_SOCKET`, `LLAMAFARM_HOST_HOME`, and
+`LLAMAFARM_HOST_RUNNER_MAX_TIMEOUT_SECS`. Enabling the client does not install
+or start the service; follow [host-runner.md](host-runner.md).
+
 ## `[observability]`
 
 | Key | Default | Purpose |

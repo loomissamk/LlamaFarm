@@ -9,7 +9,7 @@ pub use schema::{
     DbConnectionConfig, DbDriver, DelegateAgentConfig, DiscordConfig, DockerRuntimeConfig,
     EmbeddingRouteConfig, EstopConfig, FederationConfig, FederationDiscoveryMode, FederationRole,
     FeishuConfig, GatewayConfig, GroupReplyConfig, GroupReplyMode, HardwareConfig,
-    HardwareTransport, HeartbeatConfig, HooksConfig, HttpRequestConfig, IMessageConfig,
+    HardwareTransport, HeartbeatConfig, HooksConfig, HostRunnerConfig, HttpRequestConfig, IMessageConfig,
     IdentityConfig, LarkConfig, MatrixConfig, MemoryConfig, ModelRouteConfig, MultimodalConfig,
     NextcloudTalkConfig, NonCliNaturalLanguageApprovalMode, ObservabilityConfig, OtpConfig,
     OtpMethod, PeripheralBoardConfig, PeripheralsConfig, ProviderConfig, ProxyConfig, ProxyScope,

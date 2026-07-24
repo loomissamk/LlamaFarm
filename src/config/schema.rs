@@ -132,6 +132,10 @@ pub struct Config {
     #[serde(default)]
     pub runtime: RuntimeConfig,
 
+    /// Opt-in host user-service bridge (`[host_runner]`).
+    #[serde(default)]
+    pub host_runner: HostRunnerConfig,
+
     /// Research phase configuration (`[research]`). Proactive information gathering.
     #[serde(default)]
     pub research: ResearchPhaseConfig,
@@ -3154,6 +3158,61 @@ impl Default for RuntimeConfig {
     }
 }
 
+// ── Host runner ─────────────────────────────────────────────────
+
+/// Client settings for the opt-in host-runner Unix socket.
+///
+/// The server is installed and managed separately as a systemd user service.
+/// Keeping this disabled by default prevents a container from acquiring host
+/// execution merely because a socket happens to be present in a bind mount.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HostRunnerConfig {
+    /// Register the `host_exec` tool.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Exact host-runner socket path. When omitted, `host_home` plus
+    /// `.llamafarm/run/host-runner.sock` is used.
+    #[serde(default)]
+    pub socket_path: Option<PathBuf>,
+    /// Host home path mirrored into a container. This is distinct from the
+    /// container process's own `HOME`.
+    #[serde(default)]
+    pub host_home: Option<PathBuf>,
+    /// Maximum foreground host command timeout accepted by the client.
+    #[serde(default = "default_host_runner_max_exec_timeout_secs")]
+    pub max_exec_timeout_secs: u64,
+}
+
+fn default_host_runner_max_exec_timeout_secs() -> u64 {
+    crate::host_runner::DEFAULT_MAX_EXEC_TIMEOUT_SECS
+}
+
+impl HostRunnerConfig {
+    pub fn effective_socket_path(&self) -> Option<PathBuf> {
+        self.socket_path
+            .clone()
+            .or_else(|| {
+                self.host_home
+                    .as_ref()
+                    .map(|home| home.join(".llamafarm/run/host-runner.sock"))
+            })
+            .or_else(|| {
+                UserDirs::new().map(|dirs| dirs.home_dir().join(".llamafarm/run/host-runner.sock"))
+            })
+    }
+}
+
+impl Default for HostRunnerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            socket_path: None,
+            host_home: None,
+            max_exec_timeout_secs: default_host_runner_max_exec_timeout_secs(),
+        }
+    }
+}
+
 // ── Research Phase ───────────────────────────────────────────────
 
 /// Research phase trigger mode.
@@ -5287,6 +5346,7 @@ impl Default for Config {
             autonomy: AutonomyConfig::default(),
             security: SecurityConfig::default(),
             runtime: RuntimeConfig::default(),
+            host_runner: HostRunnerConfig::default(),
             research: ResearchPhaseConfig::default(),
             reliability: ReliabilityConfig::default(),
             scheduler: SchedulerConfig::default(),
@@ -6563,6 +6623,33 @@ impl Config {
             anyhow::bail!("agent.max_output_tokens_per_turn must be greater than 0 when set");
         }
 
+        // Host runner. This bridge is opt-in and must always resolve to an
+        // absolute owner-controlled Unix socket.
+        if self.host_runner.max_exec_timeout_secs == 0 {
+            anyhow::bail!("host_runner.max_exec_timeout_secs must be greater than 0");
+        }
+        if self.host_runner.enabled {
+            let socket_path = self
+                .host_runner
+                .effective_socket_path()
+                .context("host_runner.enabled requires socket_path, host_home, or HOME")?;
+            if !socket_path.is_absolute() {
+                anyhow::bail!("host_runner socket path must be absolute");
+            }
+            if let Some(host_home) = self.host_runner.host_home.as_deref() {
+                if !host_home.is_absolute()
+                    || host_home
+                        .components()
+                        .any(|component| matches!(component, std::path::Component::ParentDir))
+                {
+                    anyhow::bail!("host_runner.host_home must be an absolute normalized path");
+                }
+                if !socket_path.starts_with(host_home) {
+                    anyhow::bail!("host_runner socket path must stay under host_runner.host_home");
+                }
+            }
+        }
+
         // Reliability
         let configured_fallbacks = self
             .reliability
@@ -6940,6 +7027,41 @@ impl Config {
                 let (_, workspace_dir) =
                     resolve_config_dir_for_workspace(&PathBuf::from(workspace));
                 self.workspace_dir = workspace_dir;
+            }
+        }
+
+        // Host execution is a separate, explicit opt-in. The compose bundle
+        // passes LLAMAFARM_HOST_HOME so the socket path resolves to the host
+        // mount instead of the container's HOME.
+        if let Ok(flag) = std::env::var("LLAMAFARM_HOST_RUNNER_ENABLED") {
+            match flag.trim().to_ascii_lowercase().as_str() {
+                "1" | "true" | "yes" | "on" => self.host_runner.enabled = true,
+                "0" | "false" | "no" | "off" => self.host_runner.enabled = false,
+                _ => tracing::warn!(
+                    "Ignoring invalid LLAMAFARM_HOST_RUNNER_ENABLED (valid: 1|0|true|false|yes|no|on|off)"
+                ),
+            }
+        }
+        if let Ok(path) = std::env::var("LLAMAFARM_HOST_RUNNER_SOCKET") {
+            let trimmed = path.trim();
+            if !trimmed.is_empty() {
+                self.host_runner.socket_path = Some(PathBuf::from(trimmed));
+            }
+        }
+        if let Ok(path) = std::env::var("LLAMAFARM_HOST_HOME") {
+            let trimmed = path.trim();
+            if !trimmed.is_empty() {
+                self.host_runner.host_home = Some(PathBuf::from(trimmed));
+            }
+        }
+        if let Ok(raw) = std::env::var("LLAMAFARM_HOST_RUNNER_MAX_TIMEOUT_SECS") {
+            match raw.trim().parse::<u64>() {
+                Ok(seconds) if seconds > 0 => {
+                    self.host_runner.max_exec_timeout_secs = seconds;
+                }
+                _ => tracing::warn!(
+                    "Ignoring invalid LLAMAFARM_HOST_RUNNER_MAX_TIMEOUT_SECS (expected a positive integer)"
+                ),
             }
         }
 
@@ -7932,6 +8054,7 @@ default_temperature = 0.7
                 kind: "docker".into(),
                 ..RuntimeConfig::default()
             },
+            host_runner: HostRunnerConfig::default(),
             research: ResearchPhaseConfig::default(),
             reliability: ReliabilityConfig::default(),
             scheduler: SchedulerConfig::default(),
@@ -8436,6 +8559,7 @@ tool_dispatcher = "xml"
             autonomy: AutonomyConfig::default(),
             security: SecurityConfig::default(),
             runtime: RuntimeConfig::default(),
+            host_runner: HostRunnerConfig::default(),
             research: ResearchPhaseConfig::default(),
             reliability: ReliabilityConfig::default(),
             scheduler: SchedulerConfig::default(),
@@ -10641,6 +10765,28 @@ default_model = "legacy-model"
         assert_eq!(config.gateway.port, 8080);
 
         std::env::remove_var("LLAMAFARM_GATEWAY_PORT");
+    }
+
+    #[test]
+    async fn env_override_enables_host_runner_with_host_socket() {
+        let _env_guard = env_override_lock().await;
+        let mut config = Config::default();
+
+        std::env::set_var("LLAMAFARM_HOST_RUNNER_ENABLED", "true");
+        std::env::set_var("LLAMAFARM_HOST_HOME", "/host/operator");
+        std::env::remove_var("LLAMAFARM_HOST_RUNNER_SOCKET");
+        config.apply_env_overrides();
+
+        assert!(config.host_runner.enabled);
+        assert_eq!(
+            config.host_runner.effective_socket_path(),
+            Some(PathBuf::from(
+                "/host/operator/.llamafarm/run/host-runner.sock"
+            ))
+        );
+
+        std::env::remove_var("LLAMAFARM_HOST_RUNNER_ENABLED");
+        std::env::remove_var("LLAMAFARM_HOST_HOME");
     }
 
     #[test]

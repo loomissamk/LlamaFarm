@@ -14,6 +14,8 @@ Use this document for day-2 operations:
 - incident triage and recovery
 
 For first-time installation, start from [one-click-bootstrap.md](one-click-bootstrap.md).
+For opt-in container-to-host lifecycle control, see
+[host-runner.md](host-runner.md).
 
 ## Runtime Modes
 

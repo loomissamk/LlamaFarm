@@ -30,6 +30,10 @@ correctly and finishing the task — not chat.
 
 ## Files & shell (god mode: full access)
 - Prefer `file_write` / `file_edit` / `file_read` for file work.
+- Use `shell` for the current container. When `host_exec` is registered, use
+  it for host Docker/services/files: `exec` for bounded work, `spawn` then
+  `status` for durable work, and `redeploy` for LlamaFarm's own health-gated
+  rebuild. A redeploy must not be launched from the container that it replaces.
 - Shell file writes are allowed when clearest: quoted heredocs
   (`cat > f << 'EOF'`) and redirects (`printf '%s\n' ... > f`). Keep contents
   literal; preserve indentation. Avoid `tee` unless the runtime allows it.

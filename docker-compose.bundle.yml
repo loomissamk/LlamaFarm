@@ -91,6 +91,12 @@ services:
       - LLAMAFARM_TAILSCALE_SOCKET=${LLAMAFARM_TAILSCALE_SOCKET:-/run/tailscale-host/tailscaled.sock}
       - LLAMAFARM_STOCK_APP_ENABLED=${LLAMAFARM_STOCK_APP_ENABLED:-auto}
       - LLAMAFARM_STOCK_APP_DIR=${LLAMAFARM_STOCK_APP_DIR:-/llamafarm-data/workspace/stock_trading_platform}
+      # Host execution is disabled unless the operator installs the user
+      # service and explicitly opts this container into its owner-only socket.
+      - LLAMAFARM_HOST_RUNNER_ENABLED=${LLAMAFARM_HOST_RUNNER_ENABLED:-false}
+      - LLAMAFARM_HOST_RUNNER_SOCKET=${LLAMAFARM_HOST_RUNNER_SOCKET:-}
+      - LLAMAFARM_HOST_HOME=${HOME}
+      - LLAMAFARM_HOST_RUNNER_MAX_TIMEOUT_SECS=${LLAMAFARM_HOST_RUNNER_MAX_TIMEOUT_SECS:-300}
       - OLLAMA_HOST=0.0.0.0:11434
       # This platform is local-first: never route inference to an Ollama cloud
       # model. Model pulls still use the registry, while generation stays on

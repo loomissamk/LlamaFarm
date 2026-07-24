@@ -33,6 +33,12 @@ parallel_tools = false
 # dispatcher than native function-calling in this stack.
 tool_dispatcher = "xml"
 
+[host_runner]
+# The Docker bundle enables this only through an explicit environment opt-in
+# after scripts/install-host-runner.sh has installed the user service.
+enabled = false
+max_exec_timeout_secs = 300
+
 [autonomy]
 level = "full"
 workspace_only = false

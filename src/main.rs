@@ -71,6 +71,7 @@ mod hardware;
 mod health;
 mod heartbeat;
 mod hooks;
+mod host_runner;
 mod identity;
 mod integrations;
 mod memory;
@@ -289,6 +290,12 @@ Examples:
 
         #[command(subcommand)]
         service_command: ServiceCommands,
+    },
+
+    /// Run or inspect the opt-in host-side user service
+    HostRunner {
+        #[command(subcommand)]
+        host_runner_command: HostRunnerCommands,
     },
 
     /// Run diagnostics for daemon/scheduler/channel freshness
@@ -587,6 +594,41 @@ Examples:
 enum ConfigCommands {
     /// Dump the full configuration JSON Schema to stdout
     Schema,
+}
+
+#[derive(Subcommand, Debug)]
+enum HostRunnerCommands {
+    /// Serve the owner-only Unix socket (normally launched by systemd --user)
+    Serve {
+        /// Permit arbitrary exec/spawn requests; disabled unless explicitly set
+        #[arg(long)]
+        allow_exec: bool,
+        /// Override LLAMAFARM_HOST_RUNNER_SOCKET
+        #[arg(long)]
+        socket: Option<PathBuf>,
+        /// Override LLAMAFARM_HOST_RUNNER_STATE_DIR
+        #[arg(long)]
+        state_dir: Option<PathBuf>,
+        /// Repository used by the fixed health-gated redeploy operation
+        #[arg(long)]
+        repo_dir: Option<PathBuf>,
+        /// Maximum foreground exec duration
+        #[arg(long)]
+        max_exec_timeout_secs: Option<u64>,
+    },
+    /// Check whether the host runner is reachable
+    Health {
+        /// Override LLAMAFARM_HOST_RUNNER_SOCKET
+        #[arg(long)]
+        socket: Option<PathBuf>,
+    },
+    /// Inspect a durable host job
+    Status {
+        job_id: String,
+        /// Override LLAMAFARM_HOST_RUNNER_SOCKET
+        #[arg(long)]
+        socket: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -889,6 +931,72 @@ async fn main() -> Result<()> {
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
     tracing::info!("Runtime logging initialized");
 
+    // Host-runner commands deliberately do not load the application config:
+    // this user service must remain available while a broken deployment is
+    // being rebuilt or its container is absent.
+    if let Commands::HostRunner {
+        host_runner_command,
+    } = &cli.command
+    {
+        match host_runner_command {
+            HostRunnerCommands::Serve {
+                allow_exec,
+                socket,
+                state_dir,
+                repo_dir,
+                max_exec_timeout_secs,
+            } => {
+                let mut runner_config = host_runner::HostRunnerServerConfig::from_env(*allow_exec)?;
+                if let Some(path) = socket {
+                    runner_config.socket_path = path.clone();
+                }
+                if let Some(path) = state_dir {
+                    runner_config.state_dir = path.clone();
+                }
+                if let Some(path) = repo_dir {
+                    runner_config.repo_dir = Some(path.clone());
+                }
+                if let Some(seconds) = max_exec_timeout_secs {
+                    if *seconds == 0 {
+                        bail!("--max-exec-timeout-secs must be greater than zero");
+                    }
+                    runner_config.max_exec_timeout_secs = *seconds;
+                }
+                return host_runner::serve(runner_config).await;
+            }
+            HostRunnerCommands::Health { socket } | HostRunnerCommands::Status { socket, .. } => {
+                let runner_config = host_runner::HostRunnerServerConfig::from_env(false)?;
+                let socket_path = socket.as_ref().unwrap_or(&runner_config.socket_path);
+                let operation = match host_runner_command {
+                    HostRunnerCommands::Health { .. } => host_runner::HostRunnerOperation::Health,
+                    HostRunnerCommands::Status { job_id, .. } => {
+                        host_runner::HostRunnerOperation::Status {
+                            job_id: job_id.clone(),
+                        }
+                    }
+                    HostRunnerCommands::Serve { .. } => unreachable!(),
+                };
+                let request = host_runner::HostRunnerRequest::new(operation);
+                let response = host_runner::send_request(
+                    socket_path,
+                    &request,
+                    std::time::Duration::from_secs(10),
+                )
+                .await?;
+                println!("{}", serde_json::to_string_pretty(&response)?);
+                if !response.success {
+                    bail!(
+                        "{}",
+                        response
+                            .error
+                            .unwrap_or_else(|| "host runner request failed".to_string())
+                    );
+                }
+                return Ok(());
+            }
+        }
+    }
+
     // Onboard runs quick setup by default, or the interactive wizard with --interactive.
     // The onboard wizard uses reqwest::blocking internally, which creates its own
     // Tokio runtime. To avoid "Cannot drop a runtime in a context where blocking is
@@ -962,7 +1070,9 @@ async fn main() -> Result<()> {
     }
 
     match cli.command {
-        Commands::Onboard { .. } | Commands::Completions { .. } => unreachable!(),
+        Commands::Onboard { .. } | Commands::Completions { .. } | Commands::HostRunner { .. } => {
+            unreachable!()
+        }
 
         Commands::Agent {
             message,

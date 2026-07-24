@@ -1,0 +1,25 @@
+[Unit]
+Description=LlamaFarm opt-in host command runner
+Documentation=https://github.com/llamafarm-ai/llamafarm
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/llamafarm/host-runner.env
+ExecStart=%h/.local/libexec/llamafarm/host-runner host-runner serve --allow-exec
+Restart=on-failure
+RestartSec=2
+# Background jobs persist their own result and must outlive a runner/container
+# replacement. Only the service's main process is stopped during a restart.
+KillMode=process
+TimeoutStopSec=10
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+LockPersonality=true
+RestrictRealtime=true
+
+[Install]
+WantedBy=default.target
