@@ -32,6 +32,7 @@ interface PlanStep {
   id: number;
   title: string;
   status: string;
+  context?: string | null;
   allowed_tools: string[];
   depends_on: number[];
   expected_evidence: string[];
@@ -139,6 +140,16 @@ function PlanTable({ plan }: { plan: PlanStep[] }) {
               <td className="py-2 pr-3 text-gray-500">{step.id}</td>
               <td className="py-2 pr-3">
                 <span className="text-gray-200">{step.title}</span>
+                {step.context && (
+                  <div className="text-xs text-gray-400 mt-0.5">
+                    context: {step.context}
+                  </div>
+                )}
+                {step.allowed_tools.length > 0 && (
+                  <div className="text-xs text-cyan-500/80 mt-0.5">
+                    tools: {step.allowed_tools.join(', ')}
+                  </div>
+                )}
                 {step.expected_evidence.length > 0 && (
                   <div className="text-xs text-gray-500 mt-0.5">
                     expects: {step.expected_evidence.join(', ')}

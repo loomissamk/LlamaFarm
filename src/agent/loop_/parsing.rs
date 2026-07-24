@@ -633,12 +633,54 @@ fn normalize_task_plan_arguments(
                 .get("title")
                 .or_else(|| item_obj.get("description"))
                 .or_else(|| item_obj.get("name"))
+                .or_else(|| item_obj.get("task_name"))
+                .or_else(|| item_obj.get("step"))
                 .or_else(|| item_obj.get("command"))
                 .and_then(serde_json::Value::as_str)
                 .and_then(normalize_string_argument);
 
             if let Some(title) = title {
-                tasks.push(serde_json::json!({ "title": title }));
+                let mut task = serde_json::Map::from_iter([(
+                    "title".to_string(),
+                    serde_json::Value::String(title),
+                )]);
+                if let Some(status) = item_obj
+                    .get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(normalize_string_argument)
+                {
+                    task.insert("status".to_string(), serde_json::Value::String(status));
+                }
+                if let Some(context) = item_obj
+                    .get("context")
+                    .or_else(|| item_obj.get("sub_context"))
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(normalize_string_argument)
+                {
+                    task.insert("context".to_string(), serde_json::Value::String(context));
+                }
+                if let Some(tools) = item_obj
+                    .get("tools")
+                    .or_else(|| item_obj.get("allowed_tools"))
+                    .and_then(serde_json::Value::as_array)
+                {
+                    let mut normalized = Vec::new();
+                    for tool in tools.iter().filter_map(serde_json::Value::as_str) {
+                        let Some(tool) = normalize_string_argument(tool) else {
+                            continue;
+                        };
+                        if !normalized.iter().any(|value| value == &tool) {
+                            normalized.push(tool);
+                        }
+                    }
+                    task.insert("tools".to_string(), serde_json::json!(normalized));
+                }
+                for key in ["depends_on", "expected_evidence"] {
+                    if let Some(value) = item_obj.get(key) {
+                        task.insert(key.to_string(), value.clone());
+                    }
+                }
+                tasks.push(serde_json::Value::Object(task));
             }
         }
 
@@ -647,20 +689,56 @@ fn normalize_task_plan_arguments(
 
     fn extract_update_from_items(
         map: &serde_json::Map<String, serde_json::Value>,
-    ) -> Option<(u64, String)> {
+    ) -> Option<serde_json::Map<String, serde_json::Value>> {
         for key in ["tasks", "steps", "updates"] {
-            let items = map.get(key).and_then(serde_json::Value::as_array)?;
-            let item = items.first()?.as_object()?;
-            let id = item
+            let Some(items) = map.get(key).and_then(serde_json::Value::as_array) else {
+                continue;
+            };
+            let Some(item) = items.first().and_then(serde_json::Value::as_object) else {
+                continue;
+            };
+            let Some(id) = item
                 .get("id")
                 .or_else(|| item.get("step"))
                 .or_else(|| item.get("task_id"))
-                .and_then(serde_json::Value::as_u64)?;
-            let status = item
+                .and_then(serde_json::Value::as_u64)
+            else {
+                continue;
+            };
+            let mut update = serde_json::Map::from_iter([(
+                "id".to_string(),
+                serde_json::Value::Number(id.into()),
+            )]);
+            if let Some(status) = item
                 .get("status")
                 .and_then(serde_json::Value::as_str)
-                .and_then(normalize_string_argument)?;
-            return Some((id, status));
+                .and_then(normalize_string_argument)
+            {
+                update.insert("status".to_string(), serde_json::Value::String(status));
+            }
+            if let Some(context) = item
+                .get("context")
+                .or_else(|| item.get("sub_context"))
+                .and_then(serde_json::Value::as_str)
+                .and_then(normalize_string_argument)
+            {
+                update.insert("context".to_string(), serde_json::Value::String(context));
+            }
+            if let Some(tools) = item
+                .get("tools")
+                .or_else(|| item.get("allowed_tools"))
+                .and_then(serde_json::Value::as_array)
+            {
+                update.insert("tools".to_string(), serde_json::Value::Array(tools.clone()));
+            }
+            for metadata_key in ["depends_on", "expected_evidence"] {
+                if let Some(value) = item.get(metadata_key) {
+                    update.insert(metadata_key.to_string(), value.clone());
+                }
+            }
+            if update.len() > 1 {
+                return Some(update);
+            }
         }
 
         None
@@ -677,11 +755,17 @@ fn normalize_task_plan_arguments(
             .and_then(normalize_string_argument)
             .is_some();
         let has_update_fields = map.get("id").is_some()
-            && map
-                .get("status")
-                .and_then(serde_json::Value::as_str)
-                .and_then(normalize_string_argument)
-                .is_some();
+            && [
+                "status",
+                "context",
+                "sub_context",
+                "tools",
+                "allowed_tools",
+                "depends_on",
+                "expected_evidence",
+            ]
+            .iter()
+            .any(|key| map.get(*key).is_some());
 
         if has_tasks {
             Some("create")
@@ -698,9 +782,8 @@ fn normalize_task_plan_arguments(
 
     match arguments {
         serde_json::Value::Object(mut map) => {
-            if let Some((id, status)) = extract_update_from_items(&map) {
-                map.insert("id".to_string(), serde_json::Value::Number(id.into()));
-                map.insert("status".to_string(), serde_json::Value::String(status));
+            if let Some(update) = extract_update_from_items(&map) {
+                map.extend(update);
                 map.remove("tasks");
                 map.remove("steps");
                 map.remove("updates");
@@ -1468,7 +1551,11 @@ pub(super) fn parse_xml_tool_calls(xml_content: &str) -> Option<Vec<ParsedToolCa
         });
     }
 
-    if calls.is_empty() { None } else { Some(calls) }
+    if calls.is_empty() {
+        None
+    } else {
+        Some(calls)
+    }
 }
 
 fn parse_xml_tool_arguments(tool_name: &str, inner_content: &str) -> serde_json::Value {
@@ -5133,6 +5220,69 @@ mod tests {
                 "action": "update",
                 "id": 1,
                 "status": "completed"
+            })
+        );
+    }
+
+    #[test]
+    fn normalize_task_plan_arguments_preserves_rich_step_metadata() {
+        assert_eq!(
+            normalize_tool_arguments(
+                "task_plan",
+                json!({
+                    "steps": [{
+                        "description": "Launch the app",
+                        "status": "in_progress",
+                        "sub_context": "Use the host-published development port.",
+                        "allowed_tools": ["shell", "http_request", "shell"],
+                        "depends_on": [1],
+                        "expected_evidence": ["HTTP 200"]
+                    }]
+                }),
+                None,
+            ),
+            json!({
+                "action": "create",
+                "steps": [{
+                    "description": "Launch the app",
+                    "status": "in_progress",
+                    "sub_context": "Use the host-published development port.",
+                    "allowed_tools": ["shell", "http_request", "shell"],
+                    "depends_on": [1],
+                    "expected_evidence": ["HTTP 200"]
+                }],
+                "tasks": [{
+                    "title": "Launch the app",
+                    "status": "in_progress",
+                    "context": "Use the host-published development port.",
+                    "tools": ["shell", "http_request"],
+                    "depends_on": [1],
+                    "expected_evidence": ["HTTP 200"]
+                }]
+            })
+        );
+    }
+
+    #[test]
+    fn normalize_task_plan_arguments_finds_nested_update_after_missing_tasks_key() {
+        assert_eq!(
+            normalize_tool_arguments(
+                "task_plan",
+                json!({
+                    "action": "update",
+                    "updates": [{
+                        "task_id": 2,
+                        "context": "Re-run the external HTTP probe.",
+                        "tools": []
+                    }]
+                }),
+                None,
+            ),
+            json!({
+                "action": "update",
+                "id": 2,
+                "context": "Re-run the external HTTP probe.",
+                "tools": []
             })
         );
     }

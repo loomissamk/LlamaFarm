@@ -5,7 +5,7 @@
 //! memory (`Arc<RwLock<Vec<TaskItem>>>`) and is discarded when the session
 //! ends — it is intentionally not persisted via the Memory trait.
 
-use crate::security::{SecurityPolicy, policy::ToolOperation};
+use crate::security::{policy::ToolOperation, SecurityPolicy};
 use crate::tools::traits::{Tool, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
@@ -56,6 +56,57 @@ struct TaskItem {
     id: usize,
     title: String,
     status: TaskStatus,
+    /// Compact task-local intent and acceptance context.
+    context: Option<String>,
+    /// Expected tools for this step. This guides execution and evidence
+    /// attribution; it does not expand any runtime security allowlist.
+    tools: Vec<String>,
+    /// Earlier step IDs that must resolve before this step can verify.
+    depends_on: Vec<usize>,
+    /// Evidence patterns used by the durable run-ledger verifier.
+    expected_evidence: Vec<String>,
+}
+
+fn optional_string(entry: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| entry.get(*key).and_then(serde_json::Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn string_list(entry: &serde_json::Value, keys: &[&str]) -> Vec<String> {
+    let mut values = Vec::new();
+    for key in keys {
+        if let Some(items) = entry.get(*key).and_then(serde_json::Value::as_array) {
+            for item in items {
+                if let Some(value) = item
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    if !values.iter().any(|existing| existing == value) {
+                        values.push(value.to_string());
+                    }
+                }
+            }
+        }
+    }
+    values
+}
+
+fn usize_list(entry: &serde_json::Value, key: &str) -> Vec<usize> {
+    let mut values = Vec::new();
+    if let Some(items) = entry.get(key).and_then(serde_json::Value::as_array) {
+        for item in items {
+            if let Some(value) = item.as_u64().and_then(|value| usize::try_from(value).ok()) {
+                if value > 0 && !values.contains(&value) {
+                    values.push(value);
+                }
+            }
+        }
+    }
+    values
 }
 
 // ── Tool ─────────────────────────────────────────────────────────────────
@@ -110,6 +161,28 @@ impl TaskPlanTool {
         )];
         for task in tasks {
             lines.push(format!("- [{}] [{}] {}", task.id, task.status, task.title));
+            if let Some(context) = task.context.as_deref() {
+                lines.push(format!("    ↳ context: {context}"));
+            }
+            if !task.tools.is_empty() {
+                lines.push(format!("    ↳ tools: {}", task.tools.join(", ")));
+            }
+            if !task.depends_on.is_empty() {
+                lines.push(format!(
+                    "    ↳ depends_on: {}",
+                    task.depends_on
+                        .iter()
+                        .map(usize::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            if !task.expected_evidence.is_empty() {
+                lines.push(format!(
+                    "    ↳ evidence: {}",
+                    task.expected_evidence.join(", ")
+                ));
+            }
         }
 
         lines.join("\n")
@@ -123,7 +196,7 @@ impl TaskPlanTool {
                     success: false,
                     output: String::new(),
                     error: Some(
-                        "Parameter 'tasks' must be a non-empty array of {title, status?}".into(),
+                        "Parameter 'tasks' must be a non-empty array of {title, status?, context?, tools?}".into(),
                     ),
                 };
             }
@@ -147,7 +220,15 @@ impl TaskPlanTool {
                 .and_then(|v| v.as_str())
                 .and_then(TaskStatus::from_str)
                 .unwrap_or(TaskStatus::Pending);
-            items.push(TaskItem { id, title, status });
+            items.push(TaskItem {
+                id,
+                title,
+                status,
+                context: optional_string(entry, &["context", "sub_context"]),
+                tools: string_list(entry, &["tools", "allowed_tools"]),
+                depends_on: usize_list(entry, "depends_on"),
+                expected_evidence: string_list(entry, &["expected_evidence"]),
+            });
             id += 1;
         }
 
@@ -168,7 +249,12 @@ impl TaskPlanTool {
         }
     }
 
-    fn handle_add(&self, title: &str) -> ToolResult {
+    fn handle_add(&self, args: &serde_json::Value) -> ToolResult {
+        let title = args
+            .get("title")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
         if title.is_empty() {
             return ToolResult {
                 success: false,
@@ -185,6 +271,10 @@ impl TaskPlanTool {
             id,
             title: title.to_string(),
             status: TaskStatus::Pending,
+            context: optional_string(args, &["context", "sub_context"]),
+            tools: string_list(args, &["tools", "allowed_tools"]),
+            depends_on: usize_list(args, "depends_on"),
+            expected_evidence: string_list(args, &["expected_evidence"]),
         });
 
         ToolResult {
@@ -194,27 +284,63 @@ impl TaskPlanTool {
         }
     }
 
-    fn handle_update(&self, id: usize, status_str: &str) -> ToolResult {
-        let status = match TaskStatus::from_str(status_str) {
-            Some(s) => s,
-            None => {
-                return ToolResult {
-                    success: false,
-                    output: String::new(),
-                    error: Some(format!(
-                        "Invalid status '{status_str}'. Must be: pending, in_progress, completed, failed, blocked, skipped"
-                    )),
-                };
-            }
+    fn handle_update(&self, id: usize, args: &serde_json::Value) -> ToolResult {
+        let status = match args.get("status").and_then(serde_json::Value::as_str) {
+            Some(status_str) => match TaskStatus::from_str(status_str) {
+                Some(status) => Some(status),
+                None => {
+                    return ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(format!(
+                            "Invalid status '{status_str}'. Must be: pending, in_progress, completed, failed, blocked, skipped"
+                        )),
+                    };
+                }
+            },
+            None => None,
         };
-
+        let updates_metadata = [
+            "context",
+            "sub_context",
+            "tools",
+            "allowed_tools",
+            "depends_on",
+            "expected_evidence",
+        ]
+        .iter()
+        .any(|key| args.get(*key).is_some());
+        if status.is_none() && !updates_metadata {
+            return ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(
+                    "Update requires at least one of status, context, tools, depends_on, or expected_evidence"
+                        .into(),
+                ),
+            };
+        }
         let mut tasks = self.tasks.write().unwrap();
         match tasks.iter_mut().find(|t| t.id == id) {
             Some(task) => {
-                task.status = status;
+                if let Some(status) = status {
+                    task.status = status;
+                }
+                if args.get("context").is_some() || args.get("sub_context").is_some() {
+                    task.context = optional_string(args, &["context", "sub_context"]);
+                }
+                if args.get("tools").is_some() || args.get("allowed_tools").is_some() {
+                    task.tools = string_list(args, &["tools", "allowed_tools"]);
+                }
+                if args.get("depends_on").is_some() {
+                    task.depends_on = usize_list(args, "depends_on");
+                }
+                if args.get("expected_evidence").is_some() {
+                    task.expected_evidence = string_list(args, &["expected_evidence"]);
+                }
                 ToolResult {
                     success: true,
-                    output: format!("Task [{id}] updated to {status}."),
+                    output: format!("Task [{id}] updated.\n{}", Self::render_task_list(&tasks)),
                     error: None,
                 }
             }
@@ -267,9 +393,7 @@ impl TaskPlanTool {
             "create"
         } else if args.get("title").and_then(|v| v.as_str()).is_some() {
             "add"
-        } else if args.get("id").and_then(|v| v.as_u64()).is_some()
-            && args.get("status").and_then(|v| v.as_str()).is_some()
-        {
+        } else if args.get("id").and_then(|v| v.as_u64()).is_some() {
             "update"
         } else {
             "list"
@@ -300,6 +424,19 @@ impl TaskPlanTool {
                 "status".to_string(),
                 serde_json::Value::String(status.to_string()),
             );
+        }
+        let entry = serde_json::Value::Object(obj.clone());
+        if let Some(context) = optional_string(&entry, &["context", "sub_context"]) {
+            normalized.insert("context".to_string(), serde_json::Value::String(context));
+        }
+        let tools = string_list(&entry, &["tools", "allowed_tools"]);
+        if !tools.is_empty() || obj.get("tools").is_some() || obj.get("allowed_tools").is_some() {
+            normalized.insert("tools".to_string(), json!(tools));
+        }
+        for key in ["depends_on", "expected_evidence"] {
+            if let Some(value) = obj.get(key) {
+                normalized.insert(key.to_string(), value.clone());
+            }
         }
         Some(serde_json::Value::Object(normalized))
     }
@@ -333,6 +470,7 @@ impl Tool for TaskPlanTool {
     fn description(&self) -> &str {
         "Manage a task checklist for the current session. Use to break complex work into steps and track progress.\n\
          Actions: create (batch), add (single), update (change status), list (view all), delete (clear all). \
+         Give each step compact context and expected tools when they improve execution fidelity. \
          Statuses: pending, in_progress, completed, failed, blocked, skipped. Mark completed only after a verifier or concrete successful result."
     }
 
@@ -354,6 +492,23 @@ impl Tool for TaskPlanTool {
                             "status": {
                                 "type": "string",
                                 "enum": ["pending", "in_progress", "completed", "failed", "blocked", "skipped"]
+                            },
+                            "context": {
+                                "type": "string",
+                                "description": "Compact step-local goal and acceptance context"
+                            },
+                            "tools": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "Expected tools for this step; never expands runtime permissions"
+                            },
+                            "depends_on": {
+                                "type": "array",
+                                "items": { "type": "integer", "minimum": 1 }
+                            },
+                            "expected_evidence": {
+                                "type": "array",
+                                "items": { "type": "string" }
                             }
                         },
                         "required": ["title"]
@@ -363,6 +518,23 @@ impl Tool for TaskPlanTool {
                 "title": {
                     "type": "string",
                     "description": "For 'add': title of the new task"
+                },
+                "context": {
+                    "type": "string",
+                    "description": "For 'add'/'update': compact step-local context"
+                },
+                "tools": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "For 'add'/'update': expected tools; never expands runtime permissions"
+                },
+                "depends_on": {
+                    "type": "array",
+                    "items": { "type": "integer", "minimum": 1 }
+                },
+                "expected_evidence": {
+                    "type": "array",
+                    "items": { "type": "string" }
                 },
                 "id": {
                     "type": "integer",
@@ -398,11 +570,7 @@ impl Tool for TaskPlanTool {
                 if let Err(r) = self.enforce_mutation() {
                     return Ok(r);
                 }
-                let title = args
-                    .get("title")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                Ok(self.handle_add(title))
+                Ok(self.handle_add(&args))
             }
             "update" => {
                 if let Err(r) = self.enforce_mutation() {
@@ -410,10 +578,6 @@ impl Tool for TaskPlanTool {
                 }
                 #[allow(clippy::cast_possible_truncation)]
                 let id = args.get("id").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                let status = args
-                    .get("status")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
                 if id == 0 {
                     return Ok(ToolResult {
                         success: false,
@@ -421,14 +585,7 @@ impl Tool for TaskPlanTool {
                         error: Some("Parameter 'id' is required for update".into()),
                     });
                 }
-                if status.is_empty() {
-                    return Ok(ToolResult {
-                        success: false,
-                        output: String::new(),
-                        error: Some("Parameter 'status' is required for update".into()),
-                    });
-                }
-                Ok(self.handle_update(id, status))
+                Ok(self.handle_update(id, &args))
             }
             "list" => Ok(self.handle_list()),
             "delete" => {
@@ -473,6 +630,10 @@ mod tests {
         assert!(schema["properties"]["tasks"].is_object());
         assert!(schema["properties"]["id"].is_object());
         assert!(schema["properties"]["status"].is_object());
+        assert!(schema["properties"]["context"].is_object());
+        assert!(schema["properties"]["tools"].is_object());
+        assert!(schema["properties"]["tasks"]["items"]["properties"]["context"].is_object());
+        assert!(schema["properties"]["tasks"]["items"]["properties"]["tools"].is_object());
     }
 
     #[tokio::test]
@@ -557,6 +718,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_preserves_step_context_tools_and_verifier_metadata() {
+        let tool = default_tool();
+
+        let result = tool
+            .execute(json!({
+                "action": "create",
+                "steps": [{
+                    "description": "Launch and verify the app",
+                    "status": "in_progress",
+                    "sub_context": "Bind the container app to the host-published development port and require HTTP 200.",
+                    "allowed_tools": ["shell", "http_request", "shell", ""],
+                    "depends_on": [1, 1, 0],
+                    "expected_evidence": ["HTTP/1.1 200"]
+                }]
+            }))
+            .await
+            .unwrap();
+
+        assert!(result.success);
+        assert!(result
+            .output
+            .contains("[in_progress] Launch and verify the app"));
+        assert!(result
+            .output
+            .contains("context: Bind the container app to the host-published development port"));
+        assert!(result.output.contains("tools: shell, http_request"));
+        assert!(result.output.contains("depends_on: 1"));
+        assert!(result.output.contains("evidence: HTTP/1.1 200"));
+    }
+
+    #[tokio::test]
     async fn add_task() {
         let tool = default_tool();
 
@@ -579,6 +771,44 @@ mod tests {
         let r = tool.execute(json!({ "action": "list" })).await.unwrap();
         assert!(r.output.contains("[1] [pending] first"));
         assert!(r.output.contains("[2] [pending] second"));
+    }
+
+    #[tokio::test]
+    async fn add_and_update_preserve_unspecified_metadata_and_allow_clearing_tools() {
+        let tool = default_tool();
+        let added = tool
+            .execute(json!({
+                "action": "add",
+                "title": "Verify service",
+                "context": "Check the published URL from outside the container.",
+                "tools": ["shell", "http_request"]
+            }))
+            .await
+            .unwrap();
+        assert!(added.success);
+
+        let updated = tool
+            .execute(json!({
+                "action": "update",
+                "id": 1,
+                "status": "in_progress"
+            }))
+            .await
+            .unwrap();
+        assert!(updated.output.contains("context: Check the published URL"));
+        assert!(updated.output.contains("tools: shell, http_request"));
+
+        let cleared = tool
+            .execute(json!({
+                "action": "update",
+                "id": 1,
+                "tools": []
+            }))
+            .await
+            .unwrap();
+        assert!(cleared.success);
+        assert!(!cleared.output.contains("tools:"));
+        assert!(cleared.output.contains("context: Check the published URL"));
     }
 
     #[tokio::test]
@@ -626,11 +856,9 @@ mod tests {
         }
 
         let result = tool.execute(json!({ "action": "list" })).await.unwrap();
-        assert!(
-            result
-                .output
-                .contains("Tasks (1/3 completed; 3/3 resolved):")
-        );
+        assert!(result
+            .output
+            .contains("Tasks (1/3 completed; 3/3 resolved):"));
         assert!(result.output.contains("[blocked] missing credential"));
         assert!(result.output.contains("[failed] unsupported integration"));
     }

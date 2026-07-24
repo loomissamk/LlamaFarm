@@ -71,6 +71,9 @@ pub struct PlanStep {
     pub id: usize,
     pub title: String,
     pub status: StepStatus,
+    /// Compact task-local goal and acceptance context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
     /// Tools this step is expected to use; empty means unrestricted.
     #[serde(default)]
     pub allowed_tools: Vec<String>,
@@ -401,7 +404,17 @@ impl RunLedger {
                     .iter()
                     .enumerate()
                     .filter_map(|(i, entry)| {
-                        let title = entry.get("title").and_then(|v| v.as_str())?;
+                        let title = first_string(
+                            entry,
+                            &[
+                                "title",
+                                "description",
+                                "name",
+                                "task_name",
+                                "step",
+                                "command",
+                            ],
+                        )?;
                         let status = entry
                             .get("status")
                             .and_then(|v| v.as_str())
@@ -409,9 +422,10 @@ impl RunLedger {
                             .unwrap_or(StepStatus::Pending);
                         Some(PlanStep {
                             id: i + 1,
-                            title: title.to_string(),
+                            title,
                             status,
-                            allowed_tools: str_list(entry.get("allowed_tools")),
+                            context: first_string(entry, &["context", "sub_context"]),
+                            allowed_tools: str_list_alias(entry, &["tools", "allowed_tools"]),
                             depends_on: usize_list(entry.get("depends_on")),
                             expected_evidence: str_list(entry.get("expected_evidence")),
                             evidence: Vec::new(),
@@ -428,9 +442,10 @@ impl RunLedger {
                         id,
                         title: title.to_string(),
                         status: StepStatus::Pending,
-                        allowed_tools: Vec::new(),
-                        depends_on: Vec::new(),
-                        expected_evidence: Vec::new(),
+                        context: first_string(args, &["context", "sub_context"]),
+                        allowed_tools: str_list_alias(args, &["tools", "allowed_tools"]),
+                        depends_on: usize_list(args.get("depends_on")),
+                        expected_evidence: str_list(args.get("expected_evidence")),
                         evidence: Vec::new(),
                         verified: false,
                         verifier_note: None,
@@ -446,6 +461,22 @@ impl RunLedger {
                 if let (Some(id), Some(status)) = (id, status) {
                     if let Some(step) = data.plan.iter_mut().find(|s| s.id == id) {
                         step.status = status;
+                    }
+                }
+                if let Some(id) = id {
+                    if let Some(step) = data.plan.iter_mut().find(|s| s.id == id) {
+                        if args.get("context").is_some() || args.get("sub_context").is_some() {
+                            step.context = first_string(args, &["context", "sub_context"]);
+                        }
+                        if args.get("tools").is_some() || args.get("allowed_tools").is_some() {
+                            step.allowed_tools = str_list_alias(args, &["tools", "allowed_tools"]);
+                        }
+                        if args.get("depends_on").is_some() {
+                            step.depends_on = usize_list(args.get("depends_on"));
+                        }
+                        if args.get("expected_evidence").is_some() {
+                            step.expected_evidence = str_list(args.get("expected_evidence"));
+                        }
                     }
                 }
             }
@@ -817,6 +848,27 @@ fn str_list(v: Option<&serde_json::Value>) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn first_string(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(serde_json::Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn str_list_alias(value: &serde_json::Value, keys: &[&str]) -> Vec<String> {
+    let mut values = Vec::new();
+    for key in keys {
+        for item in str_list(value.get(*key)) {
+            let item = item.trim();
+            if !item.is_empty() && !values.iter().any(|existing| existing == item) {
+                values.push(item.to_string());
+            }
+        }
+    }
+    values
+}
+
 fn usize_list(v: Option<&serde_json::Value>) -> Vec<usize> {
     v.and_then(|v| v.as_array())
         .map(|arr| {
@@ -960,16 +1012,9 @@ mod tests {
     #[test]
     fn tool_routing_history_keeps_the_newest_bounded_window() {
         let ws = temp_ws("tool-routing-window");
-        let ledger = RunLedger::open_or_create(
-            &ws,
-            "route-window",
-            None,
-            "webchat",
-            "ollama",
-            "m",
-            "chat",
-        )
-        .unwrap();
+        let ledger =
+            RunLedger::open_or_create(&ws, "route-window", None, "webchat", "ollama", "m", "chat")
+                .unwrap();
 
         for turn in 0..(MAX_TOOL_ROUTING_RECORDS + 3) {
             ledger.record_tool_routing(
@@ -1075,6 +1120,60 @@ mod tests {
             snap.events.iter().filter(|e| e.tool != "task_plan").count(),
             2
         );
+        std::fs::remove_dir_all(&ws).ok();
+    }
+
+    #[test]
+    fn task_plan_mirror_preserves_context_and_tool_aliases() {
+        let ws = temp_ws("rich-plan");
+        let ledger =
+            RunLedger::open_or_create(&ws, "run-rich", None, "test", "ollama", "m", "operator")
+                .unwrap();
+
+        ledger.record_tool_event(
+            "task_plan",
+            &json!({"action": "create", "tasks": [{
+                "title": "Launch app",
+                "context": "Use the host-published development port and verify HTTP 200.",
+                "tools": ["shell", "http_request"],
+                "status": "in_progress"
+            }]}),
+            true,
+            1,
+            "created",
+        );
+        let created = ledger.snapshot();
+        assert_eq!(
+            created.plan[0].context.as_deref(),
+            Some("Use the host-published development port and verify HTTP 200.")
+        );
+        assert_eq!(
+            created.plan[0].allowed_tools,
+            vec!["shell".to_string(), "http_request".to_string()]
+        );
+
+        ledger.record_tool_event(
+            "task_plan",
+            &json!({
+                "action": "update",
+                "id": 1,
+                "sub_context": "Verify from both loopback and the host LAN address.",
+                "allowed_tools": ["http_request"]
+            }),
+            true,
+            1,
+            "updated",
+        );
+        let updated = ledger.snapshot();
+        assert_eq!(
+            updated.plan[0].context.as_deref(),
+            Some("Verify from both loopback and the host LAN address.")
+        );
+        assert_eq!(
+            updated.plan[0].allowed_tools,
+            vec!["http_request".to_string()]
+        );
+
         std::fs::remove_dir_all(&ws).ok();
     }
 

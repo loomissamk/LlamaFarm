@@ -2,7 +2,7 @@ use crate::approval::{ApprovalManager, ApprovalRequest, ApprovalResponse};
 use crate::config::Config;
 use crate::memory::{self, Memory, MemoryCategory};
 use crate::multimodal;
-use crate::observability::{self, Observer, ObserverEvent, runtime_trace};
+use crate::observability::{self, runtime_trace, Observer, ObserverEvent};
 use crate::providers::{
     self, ChatMessage, ChatRequest, Provider, ProviderCapabilityError, ToolCall,
 };
@@ -29,8 +29,8 @@ pub(crate) mod parsing;
 
 use context::{build_context, build_hardware_context};
 use execution::{
-    ToolExecutionOutcome, execute_tools_parallel, execute_tools_sequential,
-    should_execute_tools_in_parallel,
+    execute_tools_parallel, execute_tools_sequential, should_execute_tools_in_parallel,
+    ToolExecutionOutcome,
 };
 #[cfg(test)]
 use history::{apply_compaction_summary, build_compaction_transcript};
@@ -54,10 +54,10 @@ pub(crate) async fn compact_history_with_focus(
 }
 #[allow(unused_imports)]
 use parsing::{
-    ParsedToolCall, default_param_for_tool, detect_tool_call_parse_issue, extract_json_values,
-    map_tool_name_alias, parse_arguments_value, parse_glm_shortened_body,
-    parse_glm_style_tool_calls, parse_perl_style_tool_calls, parse_structured_tool_calls,
-    parse_tool_call_value, parse_tool_calls, parse_tool_calls_from_json_value, tool_call_signature,
+    default_param_for_tool, detect_tool_call_parse_issue, extract_json_values, map_tool_name_alias,
+    parse_arguments_value, parse_glm_shortened_body, parse_glm_style_tool_calls,
+    parse_perl_style_tool_calls, parse_structured_tool_calls, parse_tool_call_value,
+    parse_tool_calls, parse_tool_calls_from_json_value, tool_call_signature, ParsedToolCall,
 };
 
 /// Minimum characters per chunk when relaying LLM text to a streaming draft.
@@ -1261,7 +1261,7 @@ fn should_require_task_plan_before_execution(
 }
 
 fn build_auto_plan_retry_prompt() -> String {
-    "Internal correction: this request contains multiple actionable steps. First emit a real `task_plan` create call with concise task titles derived from the user's request, then continue executing the plan with real tool calls. Do not ask the user what to do next unless a tool returns a blocking error.".to_string()
+    "Internal correction: this request contains multiple actionable steps. First emit a real `task_plan` create call. Give each step a concise title, compact task-local context, and the expected tool names, then continue executing with real tool calls. Do not ask the user what to do next unless a tool returns a blocking error.".to_string()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1276,6 +1276,8 @@ struct TaskPlanItemSnapshot {
     id: usize,
     title: String,
     status: String,
+    context: Option<String>,
+    tools: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1289,7 +1291,11 @@ fn task_plan_status_is_terminal(status: &str) -> bool {
 
 fn task_plan_record_resolves_item(record: &SuccessfulToolRecord) -> bool {
     record.name == "task_plan"
-        && record.arguments.get("action").and_then(|value| value.as_str()) == Some("update")
+        && record
+            .arguments
+            .get("action")
+            .and_then(|value| value.as_str())
+            == Some("update")
         && record
             .arguments
             .get("status")
@@ -1328,11 +1334,33 @@ fn task_plan_items_from_create_arguments(
                         .get("status")
                         .and_then(|value| value.as_str())
                         .unwrap_or("pending");
+                    let context = task
+                        .get("context")
+                        .or_else(|| task.get("sub_context"))
+                        .and_then(|value| value.as_str())
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string);
+                    let mut tools = Vec::new();
+                    if let Some(items) = task
+                        .get("tools")
+                        .or_else(|| task.get("allowed_tools"))
+                        .and_then(|value| value.as_array())
+                    {
+                        for tool in items.iter().filter_map(|value| value.as_str()) {
+                            let tool = tool.trim();
+                            if !tool.is_empty() && !tools.iter().any(|value| value == tool) {
+                                tools.push(tool.to_string());
+                            }
+                        }
+                    }
 
                     Some(TaskPlanItemSnapshot {
                         id: idx + 1,
                         title: title.to_string(),
                         status: status.to_string(),
+                        context,
+                        tools,
                     })
                 })
                 .collect()
@@ -1344,23 +1372,54 @@ fn parse_task_plan_items_from_output(output: &str) -> Vec<TaskPlanItemSnapshot> 
     static TASK_PLAN_OUTPUT_ITEM_RE: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"(?m)^\s*-\s*\[(\d+)\]\s*\[([a-z_]+)\]\s+(.+?)\s*$").unwrap());
 
-    TASK_PLAN_OUTPUT_ITEM_RE
-        .captures_iter(output)
-        .filter_map(|captures| {
-            let id = captures.get(1)?.as_str().parse::<usize>().ok()?;
-            let status = captures.get(2)?.as_str().trim();
-            let title = captures.get(3)?.as_str().trim();
+    let mut items = Vec::new();
+    for line in output.lines() {
+        if let Some(captures) = TASK_PLAN_OUTPUT_ITEM_RE.captures(line) {
+            let Some(id) = captures
+                .get(1)
+                .and_then(|value| value.as_str().parse::<usize>().ok())
+            else {
+                continue;
+            };
+            let Some(status) = captures.get(2).map(|value| value.as_str().trim()) else {
+                continue;
+            };
+            let Some(title) = captures.get(3).map(|value| value.as_str().trim()) else {
+                continue;
+            };
             if status.is_empty() || title.is_empty() {
-                return None;
+                continue;
             }
 
-            Some(TaskPlanItemSnapshot {
+            items.push(TaskPlanItemSnapshot {
                 id,
                 title: title.to_string(),
                 status: status.to_string(),
-            })
-        })
-        .collect()
+                context: None,
+                tools: Vec::new(),
+            });
+            continue;
+        }
+
+        let detail = line.trim();
+        let Some(item) = items.last_mut() else {
+            continue;
+        };
+        if let Some(context) = detail.strip_prefix("↳ context:") {
+            let context = context.trim();
+            if !context.is_empty() {
+                item.context = Some(context.to_string());
+            }
+        } else if let Some(tools) = detail.strip_prefix("↳ tools:") {
+            item.tools = tools
+                .split(',')
+                .map(str::trim)
+                .filter(|tool| !tool.is_empty())
+                .map(str::to_string)
+                .collect();
+        }
+    }
+    items
 }
 
 fn task_plan_snapshot(records: &[SuccessfulToolRecord]) -> Option<TaskPlanSnapshot> {
@@ -1401,6 +1460,51 @@ fn task_plan_snapshot(records: &[SuccessfulToolRecord]) -> Option<TaskPlanSnapsh
                     }
                 }
             }
+            "add" => {
+                let Some(title) = record
+                    .arguments
+                    .get("title")
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    .filter(|title| !title.is_empty())
+                else {
+                    continue;
+                };
+                let id = items.keys().next_back().copied().unwrap_or(0) + 1;
+                let context = record
+                    .arguments
+                    .get("context")
+                    .or_else(|| record.arguments.get("sub_context"))
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string);
+                let tools = record
+                    .arguments
+                    .get("tools")
+                    .or_else(|| record.arguments.get("allowed_tools"))
+                    .and_then(|value| value.as_array())
+                    .map(|values| {
+                        values
+                            .iter()
+                            .filter_map(|value| value.as_str())
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                items.insert(
+                    id,
+                    TaskPlanItemSnapshot {
+                        id,
+                        title: title.to_string(),
+                        status: "pending".to_string(),
+                        context,
+                        tools,
+                    },
+                );
+            }
             "update" => {
                 let Some(id) = record
                     .arguments
@@ -1410,15 +1514,45 @@ fn task_plan_snapshot(records: &[SuccessfulToolRecord]) -> Option<TaskPlanSnapsh
                 else {
                     continue;
                 };
-                let Some(status) = record
-                    .arguments
-                    .get("status")
-                    .and_then(|value| value.as_str())
-                else {
-                    continue;
-                };
                 if let Some(existing) = items.get_mut(&id) {
-                    existing.status = status.to_string();
+                    if let Some(status) = record
+                        .arguments
+                        .get("status")
+                        .and_then(|value| value.as_str())
+                    {
+                        existing.status = status.to_string();
+                    }
+                    if record.arguments.get("context").is_some()
+                        || record.arguments.get("sub_context").is_some()
+                    {
+                        existing.context = record
+                            .arguments
+                            .get("context")
+                            .or_else(|| record.arguments.get("sub_context"))
+                            .and_then(|value| value.as_str())
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_string);
+                    }
+                    if record.arguments.get("tools").is_some()
+                        || record.arguments.get("allowed_tools").is_some()
+                    {
+                        existing.tools = record
+                            .arguments
+                            .get("tools")
+                            .or_else(|| record.arguments.get("allowed_tools"))
+                            .and_then(|value| value.as_array())
+                            .map(|values| {
+                                values
+                                    .iter()
+                                    .filter_map(|value| value.as_str())
+                                    .map(str::trim)
+                                    .filter(|value| !value.is_empty())
+                                    .map(str::to_string)
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                    }
                 }
             }
             "delete" => items.clear(),
@@ -1505,7 +1639,9 @@ fn web_search_needs_fetch_continuation(
     web_fetch_available: bool,
 ) -> bool {
     web_fetch_available
-        && records.iter().any(|record| record.name == "web_search_tool")
+        && records
+            .iter()
+            .any(|record| record.name == "web_search_tool")
         && !records.iter().any(|record| record.name == "web_fetch")
 }
 
@@ -1645,6 +1781,12 @@ fn build_post_plan_create_start_prompt(records: &[SuccessfulToolRecord]) -> Opti
             snapshot.items.len() - 20
         ));
     }
+    if let Some(context) = next.context.as_deref() {
+        prompt.push_str(&format!("Step context: {context}\n"));
+    }
+    if !next.tools.is_empty() {
+        prompt.push_str(&format!("Expected tools: {}\n", next.tools.join(", ")));
+    }
     prompt.push_str(&format!(
         "Execute step [{id}]: {title} — call the appropriate tool right now.",
         id = next.id,
@@ -1692,6 +1834,12 @@ fn build_task_plan_execution_followup_prompt(records: &[SuccessfulToolRecord]) -
             "\nNext incomplete step: [{}] {}",
             next_step.id, next_step.title
         ));
+        if let Some(context) = next_step.context.as_deref() {
+            prompt.push_str(&format!("\nStep context: {context}"));
+        }
+        if !next_step.tools.is_empty() {
+            prompt.push_str(&format!("\nExpected tools: {}", next_step.tools.join(", ")));
+        }
     }
 
     if task_plan_execution_started(records) {
@@ -2956,17 +3104,22 @@ pub(crate) async fn run_tool_call_loop(
         // No provider call, no Result to fail on.
         let history_len_before_compaction = history.len();
         let request_history_budget = forced_history_budget.take().unwrap_or(history_budget);
-        let compacted = if let Some((start, end)) = compaction_range(history, request_history_budget)
-        {
-            let compaction_summary = deterministic_compaction_summary(
-                &history[start..end],
-                &recent_successful_tool_records,
-                &recent_failed_tool_records,
-            );
-            deterministic_compact_history(history, request_history_budget, &compaction_summary, model)
-        } else {
-            false
-        };
+        let compacted =
+            if let Some((start, end)) = compaction_range(history, request_history_budget) {
+                let compaction_summary = deterministic_compaction_summary(
+                    &history[start..end],
+                    &recent_successful_tool_records,
+                    &recent_failed_tool_records,
+                );
+                deterministic_compact_history(
+                    history,
+                    request_history_budget,
+                    &compaction_summary,
+                    model,
+                )
+            } else {
+                false
+            };
         if compacted {
             runtime_trace::record_event(
                 "tool_loop_history_auto_compacted",
@@ -4397,10 +4550,9 @@ pub(crate) async fn run_tool_call_loop(
             // ordinary action records to the latest 12. This prevents large
             // autonomous plans from forgetting their own checklist halfway
             // through execution.
-            if let Some(latest_create) = recent_successful_tool_records
-                .iter()
-                .rposition(|record| record.name == "task_plan" && task_plan_call_is_create(&record.arguments))
-            {
+            if let Some(latest_create) = recent_successful_tool_records.iter().rposition(|record| {
+                record.name == "task_plan" && task_plan_call_is_create(&record.arguments)
+            }) {
                 let mut non_plan_after_create = 0usize;
                 recent_successful_tool_records = recent_successful_tool_records
                     .drain(..)
@@ -5063,7 +5215,7 @@ pub(crate) fn build_auto_plan_execute_instructions() -> String {
      Use `task_plan` only when it materially helps: long or branching work, batch/exhaustive checks, multi-host or delegated work, or anything that needs progress tracking across many tool calls.\n\
      For short direct tasks, execute immediately without planning.\n\n\
      When a request clearly needs a task plan, follow this exact pattern without stopping:\n\
-     1. Call `task_plan` with action=create and a `tasks` array listing every step.\n\
+     1. Call `task_plan` with action=create and a `tasks` array listing every step. Include compact `context` and expected `tools` per step when they improve precision; these fields guide execution but never grant permissions.\n\
      2. Immediately — in the same turn — start executing step 1 using real tools.\n\
      3. After each step has concrete verification evidence, call `task_plan` with action=update to mark it completed, then start the next step. If recovery is exhausted, mark the item failed or blocked rather than falsely completing it, then continue independent work.\n\
      4. Never stop after creating the plan to summarize or wait for user input. Execute immediately.\n\
@@ -5889,7 +6041,7 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -6105,8 +6257,8 @@ mod tests {
 
     use crate::memory::{Memory, MemoryCategory, SqliteMemory};
     use crate::observability::NoopObserver;
-    use crate::providers::ChatResponse;
     use crate::providers::traits::{ProviderCapabilities, StreamChunk, StreamOptions};
+    use crate::providers::ChatResponse;
     use crate::runtime::NativeRuntime;
     use crate::security::{AutonomyLevel, SecurityPolicy, ShellRedirectPolicy};
     use tempfile::TempDir;
@@ -6841,10 +6993,9 @@ mod tests {
         .await
         .expect_err("oversized payload must fail");
 
-        assert!(
-            err.to_string()
-                .contains("multimodal image size limit exceeded")
-        );
+        assert!(err
+            .to_string()
+            .contains("multimodal image size limit exceeded"));
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
@@ -9096,16 +9247,12 @@ mod tests {
             .expect("second request should include an internal working state message");
 
         assert!(working_state.content.contains("Current user task"));
-        assert!(
-            working_state
-                .content
-                .contains("[1] [pending] Inspect rust_kernel")
-        );
-        assert!(
-            working_state
-                .content
-                .contains("Next incomplete step: [1] Inspect rust_kernel")
-        );
+        assert!(working_state
+            .content
+            .contains("[1] [pending] Inspect rust_kernel"));
+        assert!(working_state
+            .content
+            .contains("Next incomplete step: [1] Inspect rust_kernel"));
     }
 
     #[tokio::test]
@@ -9974,15 +10121,13 @@ node smoke_js/add_two.mjs
         assert!(text.contains("Now let me run the script"));
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].name, "shell");
-        assert!(
-            calls[0]
-                .arguments
-                .get("command")
-                .unwrap()
-                .as_str()
-                .unwrap()
-                .contains("mkdir -p smoke_js")
-        );
+        assert!(calls[0]
+            .arguments
+            .get("command")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("mkdir -p smoke_js"));
         assert_eq!(calls[1].name, "shell");
         assert_eq!(
             calls[1].arguments.get("command").unwrap().as_str().unwrap(),
@@ -10103,15 +10248,13 @@ echo "=== System Information ===" && uname -a && echo "" && echo "=== USB Device
         assert!(text.contains("Option 1"));
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "shell");
-        assert!(
-            calls[0]
-                .arguments
-                .get("command")
-                .unwrap()
-                .as_str()
-                .unwrap()
-                .contains("uname -a")
-        );
+        assert!(calls[0]
+            .arguments
+            .get("command")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("uname -a"));
     }
 
     #[test]
@@ -10841,7 +10984,11 @@ Tail"#;
                     "action": "create",
                     "tasks": [
                         { "title": "Write a file" },
-                        { "title": "Run it" },
+                        {
+                            "title": "Run it",
+                            "context": "Start on the host-published app port and require HTTP 200.",
+                            "tools": ["shell", "http_request"]
+                        },
                         { "title": "Delete it" }
                     ]
                 }),
@@ -10864,6 +11011,27 @@ Tail"#;
         assert!(prompt.contains("[1] [completed] Write a file"));
         assert!(prompt.contains("[2] [pending] Run it"));
         assert!(prompt.contains("Next incomplete step: [2] Run it"));
+        assert!(prompt
+            .contains("Step context: Start on the host-published app port and require HTTP 200."));
+        assert!(prompt.contains("Expected tools: shell, http_request"));
+    }
+
+    #[test]
+    fn task_plan_list_output_recovers_context_and_tools() {
+        let records = vec![SuccessfulToolRecord {
+            name: "task_plan".into(),
+            arguments: serde_json::json!({"action": "list"}),
+            output: "Tasks (0/1 completed; 0/1 resolved):\n\
+- [1] [pending] Launch app\n\
+    ↳ context: Bind to the published development port.\n\
+    ↳ tools: shell, http_request"
+                .into(),
+        }];
+
+        let prompt =
+            build_task_plan_execution_followup_prompt(&records).expect("task plan should exist");
+        assert!(prompt.contains("Step context: Bind to the published development port."));
+        assert!(prompt.contains("Expected tools: shell, http_request"));
     }
 
     #[test]
@@ -11257,8 +11425,9 @@ Tail"#;
             SuccessfulToolRecord {
                 name: "web_search_tool".into(),
                 arguments: serde_json::json!({"query": "stock trading platform tutorial"}),
-                output: "1. Predicting Stock Prices - Medium\n   https://medium.com/example-tutorial"
-                    .into(),
+                output:
+                    "1. Predicting Stock Prices - Medium\n   https://medium.com/example-tutorial"
+                        .into(),
             },
             SuccessfulToolRecord {
                 name: "file_write".into(),
@@ -11357,8 +11526,8 @@ Tail"#;
     }
 
     #[test]
-    fn synthesize_grounded_final_answer_plan_first_then_execute_request_suppresses_plan_only_answer()
-     {
+    fn synthesize_grounded_final_answer_plan_first_then_execute_request_suppresses_plan_only_answer(
+    ) {
         let records = vec![SuccessfulToolRecord {
             name: "task_plan".into(),
             arguments: serde_json::json!({
@@ -11446,7 +11615,7 @@ Tail"#;
         assert_eq!(history[0].content, "system prompt");
         // Trimmed to limit
         assert_eq!(history.len(), DEFAULT_MAX_HISTORY_MESSAGES + 1); // +1 for system
-        // Most recent messages preserved
+                                                                     // Most recent messages preserved
         let last = &history[history.len() - 1];
         assert_eq!(
             last.content,
@@ -12011,12 +12180,10 @@ Done."#;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, "shell");
         assert!(calls[0].1["command"].as_str().unwrap().contains("curl"));
-        assert!(
-            calls[0].1["command"]
-                .as_str()
-                .unwrap()
-                .contains("example.com")
-        );
+        assert!(calls[0].1["command"]
+            .as_str()
+            .unwrap()
+            .contains("example.com"));
     }
 
     #[test]
