@@ -6,6 +6,8 @@ DEFAULT_REPO="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 REPO_DIR="$DEFAULT_REPO"
 BUILD=1
 ENABLE_COMPOSE=1
+START_TIMEOUT_SECONDS="${LLAMAFARM_HOST_RUNNER_START_TIMEOUT_SECONDS:-30}"
+START_POLL_SECONDS="${LLAMAFARM_HOST_RUNNER_START_POLL_SECONDS:-0.25}"
 
 usage() {
   cat <<'EOF'
@@ -67,6 +69,18 @@ if [ ! -f "$SOURCE_UNIT" ]; then
 fi
 if ! command -v systemctl >/dev/null 2>&1; then
   echo "systemctl is required for the user service" >&2
+  exit 1
+fi
+case "$START_TIMEOUT_SECONDS" in
+  ''|*[!0-9]*|0)
+    echo "LLAMAFARM_HOST_RUNNER_START_TIMEOUT_SECONDS must be a positive integer" >&2
+    exit 1
+    ;;
+esac
+if ! [[ "$START_POLL_SECONDS" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]] ||
+  ! awk -v seconds="$START_POLL_SECONDS" 'BEGIN { exit !(seconds > 0) }'
+then
+  echo "LLAMAFARM_HOST_RUNNER_START_POLL_SECONDS must be a positive number" >&2
   exit 1
 fi
 
@@ -146,7 +160,40 @@ fi
 
 systemctl --user daemon-reload
 systemctl --user enable --now llamafarm-host-runner.service
-"$INSTALL_BINARY" host-runner health --socket "$SOCKET_PATH"
+
+wait_for_host_runner() {
+  local deadline=$((SECONDS + START_TIMEOUT_SECONDS))
+  local health_output=""
+  local last_health_error=""
+
+  while (( SECONDS < deadline )); do
+    if [ -S "$SOCKET_PATH" ]; then
+      if health_output="$("$INSTALL_BINARY" host-runner health --socket "$SOCKET_PATH" 2>&1)"; then
+        printf '%s\n' "$health_output"
+        return 0
+      fi
+      last_health_error="$health_output"
+    fi
+    if (( SECONDS < deadline )); then
+      sleep "$START_POLL_SECONDS"
+    fi
+  done
+
+  echo "Host runner did not become healthy within ${START_TIMEOUT_SECONDS}s: $SOCKET_PATH" >&2
+  if [ ! -S "$SOCKET_PATH" ]; then
+    echo "The service did not create its Unix socket." >&2
+  elif [ -n "$last_health_error" ]; then
+    echo "Last health check failed:" >&2
+    printf '%s\n' "$last_health_error" >&2
+  fi
+  systemctl --user status llamafarm-host-runner.service \
+    --no-pager --lines=20 >&2 || true
+  return 1
+}
+
+if ! wait_for_host_runner; then
+  exit 1
+fi
 
 echo
 echo "Host runner is active at $SOCKET_PATH"
