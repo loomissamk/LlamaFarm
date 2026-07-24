@@ -3966,6 +3966,14 @@ fn mask_vec_secrets(values: &mut [String]) {
     }
 }
 
+fn mask_map_secrets(values: &mut std::collections::HashMap<String, String>) {
+    for value in values.values_mut() {
+        if !value.is_empty() {
+            *value = MASKED_SECRET.to_string();
+        }
+    }
+}
+
 #[allow(clippy::ref_option)]
 fn restore_optional_secret(value: &mut Option<String>, current: &Option<String>) {
     if value.as_deref().is_some_and(is_masked_secret) {
@@ -3989,11 +3997,26 @@ fn restore_vec_secrets(values: &mut [String], current: &[String]) {
     }
 }
 
+fn restore_map_secrets(
+    values: &mut std::collections::HashMap<String, String>,
+    current: &std::collections::HashMap<String, String>,
+) {
+    for (key, value) in values.iter_mut() {
+        if is_masked_secret(value) {
+            if let Some(existing) = current.get(key) {
+                *value = existing.clone();
+            }
+        }
+    }
+}
+
 fn mask_sensitive_fields(config: &crate::config::Config) -> crate::config::Config {
     let mut masked = config.clone();
 
     mask_optional_secret(&mut masked.api_key);
     mask_vec_secrets(&mut masked.reliability.api_keys);
+    mask_map_secrets(&mut masked.reliability.fallback_api_keys);
+    mask_vec_secrets(&mut masked.gateway.paired_tokens);
     mask_optional_secret(&mut masked.composio.api_key);
     mask_optional_secret(&mut masked.proxy.http_proxy);
     mask_optional_secret(&mut masked.proxy.https_proxy);
@@ -4094,6 +4117,14 @@ fn restore_masked_sensitive_fields(
     restore_vec_secrets(
         &mut incoming.reliability.api_keys,
         &current.reliability.api_keys,
+    );
+    restore_map_secrets(
+        &mut incoming.reliability.fallback_api_keys,
+        &current.reliability.fallback_api_keys,
+    );
+    restore_vec_secrets(
+        &mut incoming.gateway.paired_tokens,
+        &current.gateway.paired_tokens,
     );
     restore_optional_secret(&mut incoming.composio.api_key, &current.composio.api_key);
     restore_optional_secret(&mut incoming.proxy.http_proxy, &current.proxy.http_proxy);
@@ -4758,6 +4789,10 @@ mod tests {
         let mut cfg = crate::config::Config::default();
         cfg.api_key = Some("sk-live-123".to_string());
         cfg.reliability.api_keys = vec!["rk-1".to_string(), "rk-2".to_string()];
+        cfg.reliability
+            .fallback_api_keys
+            .insert("openai".to_string(), "fallback-live-123".to_string());
+        cfg.gateway.paired_tokens = vec!["paired-live-123".to_string()];
         cfg.db_connections.push(crate::config::DbConnectionConfig {
             name: "secret-db".to_string(),
             driver: crate::config::DbDriver::Mongodb,
@@ -4778,6 +4813,18 @@ mod tests {
             parsed.reliability.api_keys,
             vec![MASKED_SECRET.to_string(), MASKED_SECRET.to_string()]
         );
+        assert_eq!(
+            parsed
+                .reliability
+                .fallback_api_keys
+                .get("openai")
+                .map(String::as_str),
+            Some(MASKED_SECRET)
+        );
+        assert_eq!(
+            parsed.gateway.paired_tokens,
+            vec![MASKED_SECRET.to_string()]
+        );
         assert_eq!(parsed.db_connections[0].uri, MASKED_SECRET);
     }
 
@@ -4788,6 +4835,11 @@ mod tests {
         current.workspace_dir = std::path::PathBuf::from("/tmp/current/workspace");
         current.api_key = Some("real-key".to_string());
         current.reliability.api_keys = vec!["r1".to_string(), "r2".to_string()];
+        current
+            .reliability
+            .fallback_api_keys
+            .insert("openai".to_string(), "fallback-real".to_string());
+        current.gateway.paired_tokens = vec!["paired-real".to_string()];
         current
             .db_connections
             .push(crate::config::DbConnectionConfig {
@@ -4814,6 +4866,18 @@ mod tests {
         assert_eq!(
             hydrated.reliability.api_keys,
             vec!["r1".to_string(), "r2-new".to_string()]
+        );
+        assert_eq!(
+            hydrated
+                .reliability
+                .fallback_api_keys
+                .get("openai")
+                .map(String::as_str),
+            Some("fallback-real")
+        );
+        assert_eq!(
+            hydrated.gateway.paired_tokens,
+            vec!["paired-real".to_string()]
         );
         assert_eq!(
             hydrated.db_connections[0].uri,
