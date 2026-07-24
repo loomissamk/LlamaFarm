@@ -191,6 +191,30 @@ fn boxed_registry_from_arcs(tools: Vec<Arc<dyn Tool>>) -> Vec<Box<dyn Tool>> {
     tools.into_iter().map(ArcDelegatingTool::boxed).collect()
 }
 
+/// An empty `provider`/`model` in a persona's `[agents.*]` config means
+/// "follow whatever the system default is" -- resolved here, once, rather
+/// than requiring every persona config to hardcode a model that then
+/// silently goes stale the next time the operator changes their default
+/// model (this exact staleness bit us once already: delegate persona
+/// configs kept pointing at an old model long after the deployment had
+/// moved on to a different one).
+fn resolve_delegate_agent_defaults(
+    cfg: &DelegateAgentConfig,
+    default_provider: Option<&str>,
+    default_model: Option<&str>,
+) -> DelegateAgentConfig {
+    let mut resolved = cfg.clone();
+    if resolved.provider.trim().is_empty() {
+        resolved.provider = default_provider.unwrap_or("ollama").to_string();
+    }
+    if resolved.model.trim().is_empty() {
+        if let Some(default_model) = default_model {
+            resolved.model = default_model.to_string();
+        }
+    }
+    resolved
+}
+
 /// Create the default tool registry
 pub fn default_tools(security: Arc<SecurityPolicy>) -> Vec<Box<dyn Tool>> {
     default_tools_with_runtime(security, Arc::new(NativeRuntime::new()))
@@ -569,7 +593,16 @@ pub fn all_tools_with_runtime_and_federation(
     if root_config.federation.enable_delegation && (!agents.is_empty() || federation.is_some()) {
         let delegate_agents: HashMap<String, DelegateAgentConfig> = agents
             .iter()
-            .map(|(name, cfg)| (name.clone(), cfg.clone()))
+            .map(|(name, cfg)| {
+                (
+                    name.clone(),
+                    resolve_delegate_agent_defaults(
+                        cfg,
+                        root_config.default_provider.as_deref(),
+                        root_config.default_model.as_deref(),
+                    ),
+                )
+            })
             .collect();
         let delegate_fallback_credential = fallback_api_key.and_then(|value| {
             let trimmed_value = value.trim();
@@ -727,6 +760,56 @@ mod tests {
         let tools = default_tools_with_runtime(security, runtime);
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(names.contains(&"wasm_module"));
+    }
+
+    fn test_delegate_agent_config(provider: &str, model: &str) -> DelegateAgentConfig {
+        DelegateAgentConfig {
+            provider: provider.into(),
+            model: model.into(),
+            system_prompt: None,
+            api_key: None,
+            temperature: None,
+            max_depth: 2,
+            agentic: true,
+            allowed_tools: Vec::new(),
+            max_iterations: 10,
+        }
+    }
+
+    #[test]
+    fn resolve_delegate_agent_defaults_fills_empty_provider_and_model() {
+        let cfg = test_delegate_agent_config("", "");
+        let resolved = resolve_delegate_agent_defaults(&cfg, Some("anthropic"), Some("claude-x"));
+        assert_eq!(resolved.provider, "anthropic");
+        assert_eq!(resolved.model, "claude-x");
+    }
+
+    #[test]
+    fn resolve_delegate_agent_defaults_leaves_explicit_values_untouched() {
+        let cfg = test_delegate_agent_config("ollama", "qwen3.5:9b");
+        let resolved = resolve_delegate_agent_defaults(&cfg, Some("anthropic"), Some("claude-x"));
+        assert_eq!(resolved.provider, "ollama");
+        assert_eq!(resolved.model, "qwen3.5:9b");
+    }
+
+    #[test]
+    fn resolve_delegate_agent_defaults_falls_back_to_ollama_when_no_default_provider_set() {
+        let cfg = test_delegate_agent_config("", "");
+        let resolved = resolve_delegate_agent_defaults(&cfg, None, Some("some-model"));
+        assert_eq!(resolved.provider, "ollama");
+        assert_eq!(resolved.model, "some-model");
+    }
+
+    #[test]
+    fn resolve_delegate_agent_defaults_leaves_model_empty_when_no_default_model_set() {
+        // Matches DelegateAgentConfig.model's required-String type: we can't
+        // leave it unresolved as None, but an empty string surfaces loudly
+        // (a provider will reject it) rather than silently picking a model
+        // nobody chose.
+        let cfg = test_delegate_agent_config("", "");
+        let resolved = resolve_delegate_agent_defaults(&cfg, Some("ollama"), None);
+        assert_eq!(resolved.provider, "ollama");
+        assert_eq!(resolved.model, "");
     }
 
     #[test]

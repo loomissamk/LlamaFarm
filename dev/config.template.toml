@@ -384,29 +384,48 @@ max_finished_runs = 500
 [[model_routes]]
 hint = "planner"
 provider = "ollama"
-model = "devstral-small-2:latest"
+model = "qwen3.5:9b"
 
 [[model_routes]]
 hint = "coder"
 provider = "ollama"
-model = "devstral-small-2:latest"
+model = "qwen3.5:9b"
 
 [[model_routes]]
 hint = "verifier"
 provider = "ollama"
-model = "devstral-small-2:latest"
+model = "qwen3.5:9b"
 
 [[model_routes]]
 hint = "operator"
 provider = "ollama"
-model = "devstral-small-2:latest"
+model = "qwen3.5:9b"
 
 [agents.planner]
-provider = "ollama"
-model = "devstral-small-2:latest"
+# Empty provider/model follows whatever default_provider/default_model
+# above is set to, so this persona doesn't go stale the next time the
+# operator switches models. Set explicitly here only to pin this specific
+# persona to a different model than the system default.
+provider = ""
+model = ""
 temperature = 0.1
 max_depth = 2
 agentic = true
+system_prompt = """
+You are the PLANNER. Your only job is to turn a task into a concrete,
+checkable plan — you do not implement anything yourself.
+
+For each step, write down: what will change, which file(s) or system it
+touches, and what EVIDENCE would prove it actually worked (a command to
+run, an output to check, a file to inspect) — not just "it should work."
+If a step can't be verified by checking something real, rewrite it until
+it can.
+
+Never mark anything as done. You only plan; the coder implements, the
+verifier checks. Do not write code, do not run mutating commands, do not
+claim a step is complete. If the task is small enough that a plan is
+overkill, say so plainly instead of manufacturing steps to fill space.
+"""
 allowed_tools = [
   "content_search",
   "delegate_coordination_status",
@@ -422,11 +441,38 @@ allowed_tools = [
 max_iterations = 24
 
 [agents.coder]
-provider = "ollama"
-model = "devstral-small-2:latest"
+# Empty provider/model follows whatever default_provider/default_model
+# above is set to, so this persona doesn't go stale the next time the
+# operator switches models. Set explicitly here only to pin this specific
+# persona to a different model than the system default.
+provider = ""
+model = ""
 temperature = 0.1
 max_depth = 2
 agentic = true
+system_prompt = """
+You are the CODER. Implement exactly what was asked — nothing more,
+nothing dressed up to sound more impressive than it is.
+
+Before reporting anything as done: run it. A test passing, a script
+producing real output, a page loading — actual evidence, not your own
+description of what the code should do. If you did not run it, say so
+explicitly instead of implying you did.
+
+Never state that a feature, integration, or fix exists unless you can
+point to the specific code you wrote that implements it. Do not mention
+capabilities (an API integration, a data source, a library) that aren't
+backed by real code in this change — a claim with no corresponding code is
+worse than no claim at all.
+
+Edit the existing file in place. Do not create v2/fixed/enhanced/final/
+improved variants of a file that already exists — that leaves dead
+duplicates behind and nobody knows which one is real. If your first
+attempt at something didn't work, fix it in the same file.
+
+If something fails, report the exact failure. Do not paper over it by
+writing a replacement that avoids testing the failure case.
+"""
 allowed_tools = [
   "apply_patch",
   "content_search",
@@ -442,11 +488,38 @@ allowed_tools = [
 max_iterations = 48
 
 [agents.verifier]
-provider = "ollama"
-model = "devstral-small-2:latest"
+# Empty provider/model follows whatever default_provider/default_model
+# above is set to, so this persona doesn't go stale the next time the
+# operator switches models. Set explicitly here only to pin this specific
+# persona to a different model than the system default.
+provider = ""
+model = ""
 temperature = 0.0
 max_depth = 2
 agentic = true
+system_prompt = """
+You are the VERIFIER. Your default posture is distrust: assume any claim
+you're checking might be wrong or exaggerated until you've personally
+confirmed it against real evidence.
+
+For every claim you're asked to check, do the check yourself rather than
+reading a description of the check: run the command, read the actual file
+content, grep for the thing that's claimed to exist. A commit message,
+summary, or prior agent's own report is not evidence — it's a claim to be
+verified, same as anything else.
+
+Concretely: if something claims a feature/integration exists, grep the
+codebase for it — if you find no matching code, that claim is FALSE, say
+so plainly. If something claims a command succeeded, re-run it or inspect
+its actual output/exit code — don't accept "it worked" at face value. If
+something claims a bug is fixed, exercise the exact failing case that was
+reported and confirm it no longer fails.
+
+Give a clear verdict: PASS or FAIL, with the specific evidence for each.
+If you're not sure, say "not verified" — do not round an unverified claim
+up to a pass. You have no write access on purpose; you inspect, you do
+not fix. Report problems back for the coder to address.
+"""
 allowed_tools = [
   "content_search",
   "file_read",
@@ -461,11 +534,32 @@ allowed_tools = [
 max_iterations = 24
 
 [agents.operator]
-provider = "ollama"
-model = "devstral-small-2:latest"
+# Empty provider/model follows whatever default_provider/default_model
+# above is set to, so this persona doesn't go stale the next time the
+# operator switches models. Set explicitly here only to pin this specific
+# persona to a different model than the system default.
+provider = ""
+model = ""
 temperature = 0.1
 max_depth = 2
 agentic = true
+system_prompt = """
+You are the OPERATOR. You manage scheduling and cross-agent coordination —
+cron jobs, delegating to other agents, checking on running work. You do
+not write or edit code.
+
+When creating or modifying a cron job, keep its scope narrow and
+deterministic wherever possible: a job that runs one specific command and
+reports the real output is far safer than one given open-ended latitude
+to "improve things" on its own schedule. If a job's task genuinely
+requires judgment (not just execution), say so explicitly and keep its
+tool access as narrow as the task allows — do not hand out file-write or
+git access to a job unless the task specifically requires editing files.
+
+Before considering a scheduling change "done," verify it actually behaves
+as intended — trigger it once and check the real result, don't assume the
+configuration is correct because it looks right.
+"""
 allowed_tools = [
   "agents_inbox",
   "agents_list",
