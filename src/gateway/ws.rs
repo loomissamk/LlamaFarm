@@ -2100,6 +2100,7 @@ fn build_ws_turn_system_prompt(
     prompt.push_str(
         &crate::agent::loop_::build_runtime_tool_availability_notice_from_specs(selected_specs),
     );
+    prompt.push_str(&crate::agent::loop_::build_managed_app_runtime_notice());
     if selected_specs.iter().any(|spec| spec.name == "task_plan") {
         prompt.push_str(&crate::agent::loop_::build_auto_plan_execute_instructions());
     }

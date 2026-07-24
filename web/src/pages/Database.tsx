@@ -75,6 +75,7 @@ function ConnectionFormFields({
   testStatus: { state: 'idle' | 'testing' | 'ok' | 'err'; msg: string };
   onTest: () => void;
 }) {
+  const usingStoredUri = form.uri === '***MASKED***';
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-3">
@@ -95,7 +96,9 @@ function ConnectionFormFields({
 
       <div>
         <div className="flex items-center justify-between mb-1">
-          <label className="text-xs text-gray-400">Connection URI *</label>
+          <label className="text-xs text-gray-400">
+            {usingStoredUri ? 'Connection URI (stored)' : 'Connection URI *'}
+          </label>
           <button
             type="button"
             onClick={onTest}
@@ -106,7 +109,17 @@ function ConnectionFormFields({
             Test
           </button>
         </div>
-        <input value={form.uri} onChange={(e) => set('uri', e.target.value)} placeholder={URI_PLACEHOLDER[form.driver] ?? ''} className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 font-mono focus:outline-none focus:border-blue-500" />
+        <input
+          value={form.uri}
+          onChange={(e) => set('uri', e.target.value)}
+          placeholder={usingStoredUri ? 'Enter a new URI only to replace the stored connection' : (URI_PLACEHOLDER[form.driver] ?? '')}
+          className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 font-mono focus:outline-none focus:border-blue-500"
+        />
+        {usingStoredUri && (
+          <p className="mt-1 text-xs text-gray-500">
+            The saved URI remains active. Replace the masked value only when the host or credentials changed.
+          </p>
+        )}
         {testStatus.state === 'ok' && (
           <p className="mt-1 text-xs text-green-400 flex items-center gap-1"><CheckCircle className="h-3 w-3" />{testStatus.msg}</p>
         )}
@@ -440,6 +453,7 @@ export default function DatabasePage() {
   const [editConn, setEditConn] = useState<DbConnection | null>(null);
 
   const [activeConn, setActiveConn] = useState<string | null>(null);
+  const [connectionRevision, setConnectionRevision] = useState(0);
   const [schema, setSchema] = useState<DbSchema | null>(null);
   const [loadingSchema, setLoadingSchema] = useState(false);
   const [schemaError, setSchemaError] = useState<string | null>(null);
@@ -492,7 +506,7 @@ export default function DatabasePage() {
       })
       .catch((e) => setSchemaError(String(e)))
       .finally(() => setLoadingSchema(false));
-  }, [activeConn]);
+  }, [activeConn, connectionRevision]);
 
   const runQuery = useCallback(async (q: string, connName: string, offset: number, ps: number) => {
     if (!connName || !q.trim()) return;
@@ -570,7 +584,10 @@ export default function DatabasePage() {
       {showAddModal && (
         <AddConnectionModal
           onClose={() => setShowAddModal(false)}
-          onAdd={(c) => { setConnections((cs) => [...cs, c]); setActiveConn(c.name); }}
+          onAdd={(c) => {
+            setConnections((cs) => [...cs, { ...c, uri: '***MASKED***' }]);
+            setActiveConn(c.name);
+          }}
         />
       )}
       {editConn && (
@@ -578,8 +595,10 @@ export default function DatabasePage() {
           conn={editConn}
           onClose={() => setEditConn(null)}
           onSave={(updated) => {
-            setConnections((cs) => cs.map((c) => c.name === editConn.name ? updated : c));
+            const maskedUpdate = { ...updated, uri: '***MASKED***' };
+            setConnections((cs) => cs.map((c) => c.name === editConn.name ? maskedUpdate : c));
             if (activeConn === editConn.name) setActiveConn(updated.name);
+            setConnectionRevision((revision) => revision + 1);
             setEditConn(null);
           }}
         />
@@ -711,7 +730,29 @@ export default function DatabasePage() {
 
         <div className="flex-1 overflow-y-auto">
           {loadingSchema && <div className="flex items-center gap-2 px-3 py-3 text-gray-500 text-xs"><Loader2 className="h-3 w-3 animate-spin" /> Loading…</div>}
-          {schemaError && <div className="px-3 py-2 text-red-400 text-xs">{schemaError}</div>}
+          {schemaError && (
+            <div className="m-2 rounded border border-red-900/60 bg-red-950/30 p-2 text-xs">
+              <p className="text-red-400">Auto-connect failed: {schemaError}</p>
+              <p className="mt-1 text-gray-500">
+                Confirm how this database should be reached, then update the saved connection.
+              </p>
+              <div className="mt-2 flex gap-2">
+                <button
+                  onClick={() => activeCfg && setEditConn(activeCfg)}
+                  disabled={!activeCfg}
+                  className="rounded bg-blue-600 px-2 py-1 text-white disabled:opacity-40"
+                >
+                  Update connection
+                </button>
+                <button
+                  onClick={() => setConnectionRevision((revision) => revision + 1)}
+                  className="rounded border border-gray-700 px-2 py-1 text-gray-300"
+                >
+                  Retry
+                </button>
+              </div>
+            </div>
+          )}
           {schema && !loadingSchema && (
             <SchemaTree schema={schema} activeTable={activeTable} onClickTable={handleClickTable} />
           )}

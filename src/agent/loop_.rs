@@ -5191,6 +5191,65 @@ pub(crate) fn build_runtime_tool_availability_notice_from_specs(
     )
 }
 
+pub(crate) fn build_managed_app_runtime_notice() -> String {
+    let managed_ports = std::env::var("LLAMAFARM_MANAGED_APP_PORTS").unwrap_or_default();
+    if managed_ports.trim().is_empty() {
+        return String::new();
+    }
+    let reserved_ports =
+        std::env::var("LLAMAFARM_RESERVED_APP_PORTS").unwrap_or_else(|_| "5000".to_string());
+    let public_hosts = std::env::var("LLAMAFARM_PUBLIC_APP_HOSTS").unwrap_or_default();
+    let host_docker = std::env::var("LLAMAFARM_HOST_DOCKER")
+        .map(|value| value.eq_ignore_ascii_case("true") || value == "1")
+        .unwrap_or(false);
+
+    build_managed_app_runtime_notice_from_values(
+        reserved_ports.trim(),
+        managed_ports.trim(),
+        public_hosts.trim(),
+        host_docker,
+    )
+}
+
+fn build_managed_app_runtime_notice_from_values(
+    reserved_ports: &str,
+    managed_ports: &str,
+    public_hosts: &str,
+    host_docker: bool,
+) -> String {
+    use std::fmt::Write as _;
+
+    let mut notice = format!(
+        "\n## Managed App Runtime (Authoritative)\n\n\
+         - Your shell and background processes run inside the LlamaFarm bundle container.\n\
+         - Ports {reserved_ports} are reserved for operator services; do not use them for generated apps.\n\
+         - For generated web apps, choose the first free port in {managed_ports}, bind to `0.0.0.0:<port>`, and use the `process` tool for the long-running server.\n\
+         - Verify syntax/imports, then verify the app's real HTTP health endpoint. A listening process or static shell HTML alone is not proof that the app works.\n"
+    );
+    if !public_hosts.is_empty() {
+        let urls = public_hosts
+            .split(',')
+            .map(str::trim)
+            .filter(|host| !host.is_empty())
+            .map(|host| format!("`http://{host}:<port>`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if !urls.is_empty() {
+            let _ = writeln!(
+                notice,
+                "- After an external HTTP check succeeds, report the verified operator URLs: {urls}."
+            );
+        }
+    }
+    if host_docker {
+        notice.push_str(
+            "- The mounted Docker socket controls the host Docker daemon. The `docker` tool manages sibling/outside host containers; do not describe it as an isolated Docker-in-Docker daemon.\n\
+             - Replacing the currently running LlamaFarm container requires a verified external updater or helper that survives this container stopping. Do not claim a self-update succeeded from an in-container command alone.\n",
+        );
+    }
+    notice
+}
+
 pub(crate) fn build_ipc_state_usage_instructions(tools_registry: &[Box<dyn Tool>]) -> String {
     let has_state_tools = tools_registry.iter().any(|tool| {
         matches!(
@@ -5565,6 +5624,7 @@ pub async fn run(
     }
     system_prompt.push_str(&build_shell_policy_instructions(&config.autonomy));
     system_prompt.push_str(&build_runtime_tool_availability_notice(&tools_registry));
+    system_prompt.push_str(&build_managed_app_runtime_notice());
     system_prompt.push_str(&build_ipc_state_usage_instructions(&tools_registry));
     system_prompt.push_str(&build_auto_plan_execute_instructions());
 
@@ -5993,6 +6053,7 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
     }
     system_prompt.push_str(&build_shell_policy_instructions(&config.autonomy));
     system_prompt.push_str(&build_runtime_tool_availability_notice(&tools_registry));
+    system_prompt.push_str(&build_managed_app_runtime_notice());
     system_prompt.push_str(&build_ipc_state_usage_instructions(&tools_registry));
     system_prompt.push_str(&build_auto_plan_execute_instructions());
 
@@ -9481,6 +9542,23 @@ mod tests {
         let notice = build_runtime_tool_availability_notice_from_specs(&specs);
         assert!(notice.contains("selected_tool_0"));
         assert!(notice.contains("selected_tool_44"));
+    }
+
+    #[test]
+    fn managed_app_notice_separates_reserved_ports_and_host_docker() {
+        let notice = build_managed_app_runtime_notice_from_values(
+            "5000",
+            "8501-8510",
+            "192.168.1.154,100.107.226.49",
+            true,
+        );
+
+        assert!(notice.contains("Ports 5000 are reserved"));
+        assert!(notice.contains("first free port in 8501-8510"));
+        assert!(notice.contains("http://192.168.1.154:<port>"));
+        assert!(notice.contains("http://100.107.226.49:<port>"));
+        assert!(notice.contains("controls the host Docker daemon"));
+        assert!(notice.contains("external updater or helper"));
     }
 
     #[test]

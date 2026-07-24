@@ -14,6 +14,8 @@ OLLAMA_PID=""
 CHROMEDRIVER_PID=""
 APP_PID=""
 PULL_PID=""
+STOCK_APP_PID=""
+STOCK_APP_RESTARTS=0
 
 ensure_runtime_identity() {
   local uid="$1"
@@ -209,6 +211,44 @@ pull_models_background() {
   PULL_PID=$!
 }
 
+start_stock_app() {
+  local mode="${LLAMAFARM_STOCK_APP_ENABLED:-auto}"
+  local app_dir="${LLAMAFARM_STOCK_APP_DIR:-$WORKSPACE_DIR/stock_trading_platform}"
+  local python=""
+
+  if [ "$mode" = "false" ] || [ "$mode" = "0" ]; then
+    return 0
+  fi
+  if [ ! -f "$app_dir/app.py" ]; then
+    if [ "$mode" = "true" ] || [ "$mode" = "1" ]; then
+      echo "stock app enabled but app.py is missing under $app_dir" >&2
+    fi
+    return 0
+  fi
+  for candidate in "$app_dir/venv/bin/python" "$WORKSPACE_DIR/.venv/bin/python" python3; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      python="$candidate"
+      break
+    fi
+  done
+  if [ -z "$python" ]; then
+    echo "stock app found but no Python interpreter is available" >&2
+    return 0
+  fi
+  if ! "$python" -c 'import flask' >/dev/null 2>&1; then
+    echo "stock app found but Flask is unavailable in $python" >&2
+    return 0
+  fi
+
+  (
+    cd "$app_dir"
+    exec "$python" -m flask --app app:app run \
+      --host=0.0.0.0 --port=5000 --no-debugger --no-reload
+  ) >>/tmp/stock-app.log 2>&1 &
+  STOCK_APP_PID=$!
+  echo "stock app started on container port 5000 (pid $STOCK_APP_PID)"
+}
+
 start_ollama() {
   /usr/bin/ollama serve >/tmp/ollama.log 2>&1 &
   OLLAMA_PID=$!
@@ -223,7 +263,7 @@ start_chromedriver() {
 }
 
 cleanup() {
-  for pid in "$APP_PID" "$CHROMEDRIVER_PID" "$OLLAMA_PID" "$PULL_PID"; do
+  for pid in "$APP_PID" "$STOCK_APP_PID" "$CHROMEDRIVER_PID" "$OLLAMA_PID" "$PULL_PID"; do
     if [ -n "$pid" ] && kill -0 "$pid" >/dev/null 2>&1; then
       kill "$pid" >/dev/null 2>&1 || true
       wait "$pid" >/dev/null 2>&1 || true
@@ -249,6 +289,18 @@ monitor_children() {
     if ! kill -0 "$APP_PID" >/dev/null 2>&1; then
       wait "$APP_PID"
       return $?
+    fi
+
+    if [ -n "$STOCK_APP_PID" ] && ! kill -0 "$STOCK_APP_PID" >/dev/null 2>&1; then
+      wait "$STOCK_APP_PID" >/dev/null 2>&1 || true
+      STOCK_APP_PID=""
+      if [ "$STOCK_APP_RESTARTS" -lt 3 ]; then
+        STOCK_APP_RESTARTS=$((STOCK_APP_RESTARTS + 1))
+        echo "stock app exited; restart $STOCK_APP_RESTARTS/3" >&2
+        start_stock_app
+      else
+        echo "stock app stopped after 3 restart attempts; see /tmp/stock-app.log" >&2
+      fi
     fi
 
     sleep 2
@@ -302,6 +354,7 @@ repair_config_for_available_models
 start_chromedriver
 wait_for_http "chromedriver" "$CHROMEDRIVER_STATUS_URL"
 pull_models_background
+start_stock_app
 
 trap cleanup EXIT INT TERM
 monitor_children "$@"

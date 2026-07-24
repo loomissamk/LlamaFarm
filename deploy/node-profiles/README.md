@@ -193,26 +193,16 @@ restore the prior environment values and rerun `up-node.sh`; to return to the
 old compose behavior, use the prior compose file revision and restart without
 `-v`. Do not delete volumes during a rollback.
 
-## Optional: reach your nodes from anywhere (Tailscale VPN)
+## Reach nodes over host Tailscale
 
-The bundle ships an **opt-in** Tailscale sidecar (WireGuard). It gives each
-node a stable `100.x` tailnet address reachable worldwide with no
-port-forwarding and without exposing port 42617 to the internet.
+Install and join Tailscale on the host, then run the normal node deployment.
+The bundle detects the host's live Tailscale address, publishes the gateway and
+managed app ports on the configured host bind address, and shows a compact
+read-only status only while the host daemon is actually online.
 
-```bash
-export TS_AUTHKEY=tskey-auth-...        # Tailscale admin console > Settings > Keys
-./scripts/docker/up-node.sh rtx4070-laptop --profile vpn up -d
-```
-
-Notes:
-
-- Strictly opt-in: without `--profile vpn` nothing changes and no VPN
-  container runs. The deploy fails fast if the profile is used without a key.
-- State persists in the `tailscale-state` volume, so the node keeps its
-  identity across redeploys.
-- Off-LAN federation: set `LLAMAFARM_MANUAL_PEERS` to the peers' tailnet IPs
-  (or MagicDNS names) instead of `192.168.1.x` and the two-node setup keeps
-  working from anywhere.
-- Keep `allow_public_bind = false`. Restrict access with tailnet ACLs and
-  keep the shared `LLAMAFARM_FEDERATION_TOKEN` as defence-in-depth.
-- Do **not** expose 42617 directly to the internet.
+The former container VPN profile was removed because its separate network
+namespace did not publish the LlamaFarm gateway. For off-LAN federation, set
+`LLAMAFARM_MANUAL_PEERS` to peers' tailnet IPs or MagicDNS names. Use tailnet
+ACLs to control access to ports 42617, 5000, and 8501-8510, and keep the shared
+federation token as defence-in-depth. Do not expose these ports directly to the
+public internet.

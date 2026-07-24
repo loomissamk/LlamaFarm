@@ -152,6 +152,12 @@ write_override() {
         echo "      - /dev/accel:/dev/accel"
       fi
     fi
+    if [ -S /run/tailscale/tailscaled.sock ]; then
+      echo "    volumes:"
+      # Mount the directory rather than the socket inode so a tailscaled
+      # restart can recreate the socket without leaving a stale bind mount.
+      echo "      - /run/tailscale:/run/tailscale-host:ro"
+    fi
     if [ "${#groups[@]}" -gt 0 ]; then
       echo "    group_add:"
       local gid
@@ -192,6 +198,34 @@ if have_accel_device; then
 fi
 
 mapfile -t GROUP_IDS < <(collect_group_ids)
+
+detect_lan_ip() {
+  ip -4 route get 1.1.1.1 2>/dev/null \
+    | awk '{for (i = 1; i <= NF; i++) if ($i == "src") {print $(i + 1); exit}}' \
+    || true
+}
+
+detect_tailscale_ip() {
+  command -v tailscale >/dev/null 2>&1 || return 0
+  tailscale ip -4 2>/dev/null | awk 'NF {print; exit}' || true
+}
+
+if [ -z "${LLAMAFARM_LAN_IP:-}" ]; then
+  LLAMAFARM_LAN_IP="$(detect_lan_ip)"
+fi
+if [ -z "${LLAMAFARM_TAILSCALE_IP:-}" ]; then
+  LLAMAFARM_TAILSCALE_IP="$(detect_tailscale_ip)"
+fi
+if [ -z "${LLAMAFARM_PUBLIC_APP_HOSTS:-}" ]; then
+  LLAMAFARM_PUBLIC_APP_HOSTS="$LLAMAFARM_LAN_IP"
+  if [ -n "$LLAMAFARM_TAILSCALE_IP" ]; then
+    LLAMAFARM_PUBLIC_APP_HOSTS="${LLAMAFARM_PUBLIC_APP_HOSTS:+${LLAMAFARM_PUBLIC_APP_HOSTS},}${LLAMAFARM_TAILSCALE_IP}"
+  fi
+fi
+
+export LLAMAFARM_LAN_IP
+export LLAMAFARM_TAILSCALE_IP
+export LLAMAFARM_PUBLIC_APP_HOSTS
 write_override "$BACKEND" "$EXPOSE_DRI" "$EXPOSE_KFD" "$EXPOSE_ACCEL" "${GROUP_IDS[@]}"
 
 export OLLAMA_PULL_MODELS="${OLLAMA_PULL_MODELS-$DEFAULT_PULL_MODELS}"
@@ -201,6 +235,8 @@ export LLAMAFARM_RUNTIME_GID="$RUNTIME_GID"
 echo "LlamaFarm bundle GPU backend: $BACKEND"
 echo "LlamaFarm bundle Ollama preload models: $OLLAMA_PULL_MODELS"
 echo "LlamaFarm bundle runtime user: ${LLAMAFARM_RUNTIME_UID}:${LLAMAFARM_RUNTIME_GID}"
+echo "LlamaFarm managed app ports: 8501-8510 (5000 reserved)"
+echo "LlamaFarm public app hosts: ${LLAMAFARM_PUBLIC_APP_HOSTS:-none detected}"
 if [ "$EXPOSE_DRI" = "1" ]; then
   echo "Exposing /dev/dri to the container"
 fi
@@ -245,16 +281,6 @@ fi
 # container is healthy, deploy, then require /health to come back within
 # LLAMAFARM_HEALTH_TIMEOUT seconds. On failure, retag last-green and recreate
 # so a bad build never leaves the node down. Non-up commands exec as before.
-
-# Fail fast with a clear message if the opt-in VPN profile is requested
-# without an auth key, rather than letting the sidecar crash-loop.
-for arg in "$@"; do
-  if [ "$arg" = "vpn" ] && [ -z "${TS_AUTHKEY:-}" ]; then
-    echo "The vpn profile needs a Tailscale auth key:" >&2
-    echo "  export TS_AUTHKEY=tskey-auth-...   # Tailscale admin console > Settings > Keys" >&2
-    exit 2
-  fi
-done
 
 IS_UP=0
 [ "${1:-}" = "up" ] && IS_UP=1

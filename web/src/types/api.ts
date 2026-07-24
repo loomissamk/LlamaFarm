@@ -330,7 +330,7 @@ export interface DbTestResult {
   ok: boolean;
   driver?: string;
   database?: string | null;
-  tables?: string[];
+  tables?: number;
   error?: string;
 }
 

@@ -18,7 +18,12 @@ interface ConnectionsResponse {
   ollama: { status: string; model: string; provider: string };
   memory: { status: string; backend: string };
   discord?: { status: string };
-  tailscale?: { status: string };
+  tailscale?: {
+    status: 'up' | 'down' | 'unavailable';
+    ipv4?: string;
+    dns_name?: string;
+    health_warnings?: number;
+  };
 }
 
 interface ContextInfo {
@@ -128,7 +133,9 @@ export function ConnectionsPanel() {
   useEffect(() => {
     refresh();
     loadContext();
+    const connectionRefresh = setInterval(refresh, 30_000);
     return () => {
+      clearInterval(connectionRefresh);
       if (pollTimer.current) clearTimeout(pollTimer.current);
     };
   }, [refresh, loadContext]);
@@ -453,17 +460,21 @@ export function ConnectionsPanel() {
               : 'Add a bot token under [channels.discord] in config to enable.'}
           </p>
         </div>
-        <div className="rounded-xl border border-gray-800 bg-gray-900 p-5">
-          <div className="flex items-center gap-2">
-            <span className="font-medium text-white">Tailscale VPN</span>
-            <StatusDot connected={data?.tailscale?.status === 'configured'} />
+        {data?.tailscale?.status === 'up' && (
+          <div className="rounded-xl border border-gray-800 bg-gray-900 p-5">
+            <div className="flex items-center gap-2">
+              <span className="font-medium text-white">Tailscale</span>
+              <StatusDot connected />
+              <span className="text-xs text-green-400">Up</span>
+            </div>
+            <p className="mt-1 text-sm text-gray-400">
+              {data.tailscale.ipv4 || 'Connected'}
+              {data.tailscale.dns_name ? (
+                <span className="text-gray-600"> · {data.tailscale.dns_name}</span>
+              ) : null}
+            </p>
           </div>
-          <p className="mt-1 text-sm text-gray-500">
-            {data?.tailscale?.status === 'configured'
-              ? 'Auth key set — deploy with --profile vpn for worldwide access.'
-              : 'Set TS_AUTHKEY and deploy with --profile vpn to reach this node anywhere.'}
-          </p>
-        </div>
+        )}
       </div>
     </div>
   );

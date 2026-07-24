@@ -3506,6 +3506,86 @@ fn node_config_dir(state: &AppState) -> std::path::PathBuf {
         .unwrap_or_else(|| config.workspace_dir.clone())
 }
 
+fn parse_host_tailscale_status(status: &serde_json::Value) -> serde_json::Value {
+    let backend_running = status
+        .get("BackendState")
+        .and_then(serde_json::Value::as_str)
+        == Some("Running");
+    let ipv4 = status
+        .pointer("/Self/TailscaleIPs")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|values| {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .find(|value| value.parse::<std::net::Ipv4Addr>().is_ok())
+        });
+    let dns_name = status
+        .pointer("/Self/DNSName")
+        .and_then(serde_json::Value::as_str)
+        .map(|value| value.trim_end_matches('.'))
+        .filter(|value| !value.is_empty());
+    let health = status
+        .get("Health")
+        .and_then(serde_json::Value::as_array)
+        .map_or(0, Vec::len);
+
+    serde_json::json!({
+        "status": if backend_running && ipv4.is_some() { "up" } else { "down" },
+        "ipv4": ipv4,
+        "dns_name": dns_name,
+        "health_warnings": health,
+    })
+}
+
+fn host_tailscale_status() -> serde_json::Value {
+    let socket = std::env::var("LLAMAFARM_TAILSCALE_SOCKET")
+        .unwrap_or_else(|_| "/run/tailscale-host/tailscaled.sock".to_string());
+    if !std::path::Path::new(&socket).exists() {
+        return serde_json::json!({"status": "unavailable"});
+    }
+
+    let output = std::process::Command::new("curl")
+        .args([
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--max-time",
+            "2",
+            "--unix-socket",
+            &socket,
+            "http://local-tailscaled.sock/localapi/v0/status",
+        ])
+        .output();
+    let Ok(output) = output else {
+        return serde_json::json!({"status": "unavailable"});
+    };
+    if !output.status.success() {
+        return serde_json::json!({"status": "down"});
+    }
+    let Ok(status) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
+        return serde_json::json!({"status": "unavailable"});
+    };
+
+    let mut parsed = parse_host_tailscale_status(&status);
+    if parsed["status"] == "up" {
+        let ipv4 = parsed["ipv4"].as_str().unwrap_or_default();
+        let port = std::env::var("LLAMAFARM_GATEWAY_PORT")
+            .unwrap_or_else(|_| "42617".to_string());
+        let health_url = format!("http://{ipv4}:{port}/health");
+        let reachable = std::process::Command::new("curl")
+            .args(["--fail", "--silent", "--max-time", "2", &health_url])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success());
+        if !reachable {
+            parsed["status"] = serde_json::Value::String("down".to_string());
+        }
+    }
+    parsed
+}
+
 /// GET /api/connections — friendly settings state for the Connections UI.
 /// Reports live status per integration; never returns secrets.
 pub async fn handle_api_connections(
@@ -3533,11 +3613,7 @@ pub async fn handle_api_connections(
             .as_ref()
             .is_some_and(|d| !d.bot_token.trim().is_empty())
     };
-    // Tailscale runs as an opt-in sidecar; the gateway can't see the tailnet
-    // from inside its container, so report configuration readiness honestly.
-    let tailscale_key_present = std::env::var("TS_AUTHKEY")
-        .map(|v| !v.trim().is_empty())
-        .unwrap_or(false);
+    let tailscale = host_tailscale_status();
 
     Json(serde_json::json!({
         "github": match github {
@@ -3552,7 +3628,7 @@ pub async fn handle_api_connections(
         "ollama": {"status": "configured", "model": model, "provider": provider},
         "memory": {"status": "configured", "backend": memory_backend},
         "discord": {"status": if discord_connected { "connected" } else { "not_connected" }},
-        "tailscale": {"status": if tailscale_key_present { "configured" } else { "not_configured" }},
+        "tailscale": tailscale,
     }))
     .into_response()
 }
@@ -3905,6 +3981,9 @@ fn mask_sensitive_fields(config: &crate::config::Config) -> crate::config::Confi
     if let Some(ngrok) = masked.tunnel.ngrok.as_mut() {
         mask_required_secret(&mut ngrok.auth_token);
     }
+    for connection in &mut masked.db_connections {
+        mask_required_secret(&mut connection.uri);
+    }
 
     for agent in masked.agents.values_mut() {
         mask_optional_secret(&mut agent.api_key);
@@ -4020,6 +4099,15 @@ fn restore_masked_sensitive_fields(
         current.tunnel.ngrok.as_ref(),
     ) {
         restore_required_secret(&mut incoming_tunnel.auth_token, &current_tunnel.auth_token);
+    }
+    for connection in &mut incoming.db_connections {
+        if let Some(current_connection) = current
+            .db_connections
+            .iter()
+            .find(|candidate| candidate.name == connection.name)
+        {
+            restore_required_secret(&mut connection.uri, &current_connection.uri);
+        }
     }
 
     for (name, agent) in &mut incoming.agents {
@@ -4192,7 +4280,7 @@ pub async fn handle_api_db_connections(
             serde_json::json!({
                 "name": c.name,
                 "driver": format!("{:?}", c.driver).to_lowercase(),
-                "uri": c.uri,
+                "uri": MASKED_SECRET,
                 "database": c.database,
                 "read_only": c.read_only,
                 "max_rows": c.max_rows,
@@ -4238,6 +4326,14 @@ pub async fn handle_api_db_add_connection(
                 .into_response();
         }
     };
+
+    if body.uri.trim().is_empty() || is_masked_secret(body.uri.trim()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "a new connection URI is required" })),
+        )
+            .into_response();
+    }
 
     let new_conn = crate::config::DbConnectionConfig {
         name: body.name.clone(),
@@ -4318,7 +4414,9 @@ pub async fn handle_api_db_update_connection(
     };
 
     conn.driver = driver;
-    conn.uri = body.uri;
+    if !body.uri.trim().is_empty() && !is_masked_secret(body.uri.trim()) {
+        conn.uri = body.uri;
+    }
     conn.database = body.database;
     conn.read_only = body.read_only.unwrap_or(conn.read_only);
     conn.max_rows = body.max_rows.unwrap_or(conn.max_rows);
@@ -4422,10 +4520,31 @@ pub async fn handle_api_db_test_connection(
         }
     };
 
+    let uri = if body.uri.trim().is_empty() || is_masked_secret(body.uri.trim()) {
+        let config = state.config.lock();
+        let Some(existing) = config
+            .db_connections
+            .iter()
+            .find(|connection| connection.name == body.name)
+        else {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "ok": false,
+                    "error": "stored connection URI was not found"
+                })),
+            )
+                .into_response();
+        };
+        existing.uri.clone()
+    } else {
+        body.uri.clone()
+    };
+
     let conn_cfg = crate::config::DbConnectionConfig {
         name: body.name.clone(),
         driver,
-        uri: body.uri,
+        uri,
         database: body.database,
         read_only: true,
         max_rows: 1,
@@ -4579,6 +4698,15 @@ mod tests {
         let mut cfg = crate::config::Config::default();
         cfg.api_key = Some("sk-live-123".to_string());
         cfg.reliability.api_keys = vec!["rk-1".to_string(), "rk-2".to_string()];
+        cfg.db_connections.push(crate::config::DbConnectionConfig {
+            name: "secret-db".to_string(),
+            driver: crate::config::DbDriver::Mongodb,
+            uri: "mongodb://user:password@db.internal:27017".to_string(),
+            database: Some("papers".to_string()),
+            read_only: true,
+            max_rows: 100,
+            label: Some("Secret DB".to_string()),
+        });
 
         let masked = mask_sensitive_fields(&cfg);
         let toml = toml::to_string_pretty(&masked).expect("masked config should serialize");
@@ -4590,6 +4718,7 @@ mod tests {
             parsed.reliability.api_keys,
             vec![MASKED_SECRET.to_string(), MASKED_SECRET.to_string()]
         );
+        assert_eq!(parsed.db_connections[0].uri, MASKED_SECRET);
     }
 
     #[test]
@@ -4599,6 +4728,17 @@ mod tests {
         current.workspace_dir = std::path::PathBuf::from("/tmp/current/workspace");
         current.api_key = Some("real-key".to_string());
         current.reliability.api_keys = vec!["r1".to_string(), "r2".to_string()];
+        current
+            .db_connections
+            .push(crate::config::DbConnectionConfig {
+                name: "arxiv".to_string(),
+                driver: crate::config::DbDriver::Mongodb,
+                uri: "mongodb://reader:real-password@db.internal:27017".to_string(),
+                database: Some("ArXivDB".to_string()),
+                read_only: true,
+                max_rows: 100,
+                label: None,
+            });
 
         let mut incoming = mask_sensitive_fields(&current);
         incoming.default_model = Some("gpt-4.1-mini".to_string());
@@ -4614,6 +4754,10 @@ mod tests {
         assert_eq!(
             hydrated.reliability.api_keys,
             vec!["r1".to_string(), "r2-new".to_string()]
+        );
+        assert_eq!(
+            hydrated.db_connections[0].uri,
+            "mongodb://reader:real-password@db.internal:27017"
         );
     }
 
@@ -4938,6 +5082,30 @@ mod tests {
         };
 
         assert!(!should_rebalance_ollama_models(&config, &config));
+    }
+
+    #[test]
+    fn host_tailscale_status_requires_running_backend_and_ipv4() {
+        let up = parse_host_tailscale_status(&serde_json::json!({
+            "BackendState": "Running",
+            "Self": {
+                "Online": false,
+                "TailscaleIPs": ["100.107.226.49", "fd7a:115c:a1e0::1"],
+                "DNSName": "pop-os.tail.example.ts.net."
+            },
+            "Health": []
+        }));
+        assert_eq!(up["status"], "up");
+        assert_eq!(up["ipv4"], "100.107.226.49");
+        assert_eq!(up["dns_name"], "pop-os.tail.example.ts.net");
+
+        let down = parse_host_tailscale_status(&serde_json::json!({
+            "BackendState": "Stopped",
+            "Self": {"Online": false, "TailscaleIPs": []},
+            "Health": ["not running"]
+        }));
+        assert_eq!(down["status"], "down");
+        assert_eq!(down["health_warnings"], 1);
     }
 
     #[test]

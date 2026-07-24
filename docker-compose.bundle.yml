@@ -75,6 +75,18 @@ services:
       - LLAMAFARM_ALLOW_REMOTE_SUBAGENTS=${LLAMAFARM_ALLOW_REMOTE_SUBAGENTS:-true}
       - LLAMAFARM_RUNTIME_UID=${LLAMAFARM_RUNTIME_UID:-0}
       - LLAMAFARM_RUNTIME_GID=${LLAMAFARM_RUNTIME_GID:-0}
+      # Runtime topology is injected into the agent prompt so it can publish
+      # generated apps truthfully and understand that this socket controls the
+      # host daemon (this is not an isolated Docker-in-Docker daemon).
+      - LLAMAFARM_HOST_DOCKER=${LLAMAFARM_HOST_DOCKER:-true}
+      - LLAMAFARM_RESERVED_APP_PORTS=${LLAMAFARM_RESERVED_APP_PORTS:-5000}
+      - LLAMAFARM_MANAGED_APP_PORTS=${LLAMAFARM_MANAGED_APP_PORTS:-8501-8510}
+      - LLAMAFARM_PUBLIC_APP_HOSTS=${LLAMAFARM_PUBLIC_APP_HOSTS:-}
+      - LLAMAFARM_LAN_IP=${LLAMAFARM_LAN_IP:-}
+      - LLAMAFARM_TAILSCALE_IP=${LLAMAFARM_TAILSCALE_IP:-}
+      - LLAMAFARM_TAILSCALE_SOCKET=${LLAMAFARM_TAILSCALE_SOCKET:-/run/tailscale-host/tailscaled.sock}
+      - LLAMAFARM_STOCK_APP_ENABLED=${LLAMAFARM_STOCK_APP_ENABLED:-auto}
+      - LLAMAFARM_STOCK_APP_DIR=${LLAMAFARM_STOCK_APP_DIR:-/llamafarm-data/workspace/stock_trading_platform}
       - OLLAMA_HOST=0.0.0.0:11434
       # This platform is local-first: never route inference to an Ollama cloud
       # model. Model pulls still use the registry, while generation stays on
@@ -118,11 +130,13 @@ services:
       # deliberate, separately secured integration.
       - "${LLAMAFARM_HOST_BIND_IP:-127.0.0.1}:${HOST_PORT:-42617}:${LLAMAFARM_GATEWAY_PORT:-42617}"
       - "${OLLAMA_HOST_BIND_IP:-127.0.0.1}:${OLLAMA_PORT:-11434}:11434"
-      # Ad-hoc dev-server port: whatever the agent's own in-workspace projects
-      # bind to (e.g. a Flask/Node dev server) so the operator can actually
-      # open them in a browser instead of only curling from inside the
-      # container. Same bind-IP override as the gateway port above.
+      # Port 5000 is reserved for the existing stock-trading gateway. Keep the
+      # DEV_APP_PORT name for deployment compatibility, but generated apps
+      # must use the separately published managed range below.
       - "${LLAMAFARM_HOST_BIND_IP:-127.0.0.1}:${DEV_APP_PORT:-5000}:5000"
+      # One-to-one host/container mappings for generated Streamlit and other
+      # development apps. Agents choose the first free port and bind 0.0.0.0.
+      - "${LLAMAFARM_HOST_BIND_IP:-127.0.0.1}:8501-8510:8501-8510"
 
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:${LLAMAFARM_GATEWAY_PORT:-42617}/health >/dev/null && curl -fsS http://127.0.0.1:11434/api/tags >/dev/null && curl -fsS http://127.0.0.1:9515/status >/dev/null"]
@@ -154,48 +168,8 @@ services:
       retries: 3
       start_period: 15s
 
-  # ── Optional internal VPN (opt-in) ──────────────────────────────────────
-  # Joins this node to your private Tailscale tailnet (WireGuard), giving it a
-  # stable 100.x address reachable from anywhere without port-forwarding and
-  # without exposing 42617 to the internet. Strictly opt-in via profile:
-  #
-  #   export TS_AUTHKEY=tskey-auth-...           # from the Tailscale admin console
-  #   ./scripts/docker/up-node.sh rtx4070-laptop --profile vpn up -d
-  #
-  # Then reach the node at http://<node>.<your-tailnet>.ts.net:42617 or its
-  # 100.x IP. Use tailnet ACLs to restrict who may reach the port; keep the
-  # federation token as defence-in-depth. Leave allow_public_bind = false.
-  tailscale:
-    image: tailscale/tailscale:latest
-    container_name: LlamaFarm-VPN
-    profiles: ["vpn"]
-    restart: unless-stopped
-    hostname: ${LLAMAFARM_NODE_NAME:-llamafarm-node}
-    environment:
-      # Empty default keeps non-VPN deploys valid; the vpn profile requires it.
-      - TS_AUTHKEY=${TS_AUTHKEY:-}
-      - TS_STATE_DIR=/var/lib/tailscale
-      - TS_USERSPACE=false
-      # Advertise nothing by default; opt into subnet routes explicitly.
-      - TS_EXTRA_ARGS=${TS_EXTRA_ARGS:---accept-dns=false}
-    volumes:
-      - tailscale-state:/var/lib/tailscale
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    cap_add:
-      - NET_ADMIN
-      - SYS_MODULE
-    healthcheck:
-      test: ["CMD", "tailscale", "status"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 20s
-
 volumes:
   llamafarm-bundle-data:
     name: llamafarm-bundle-data
   qdrant-data:
     name: qdrant-data
-  tailscale-state:
-    name: tailscale-state
