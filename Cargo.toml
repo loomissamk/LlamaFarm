@@ -196,6 +196,10 @@ wa-rs-tokio-transport = { version = "0.2", optional = true, default-features = f
 rppal = { version = "0.22", optional = true }
 landlock = { version = "0.4", optional = true }
 
+# Safe Unix process-group signaling for shell/process cleanup.
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.30", default-features = false, features = ["process", "signal"] }
+
 [features]
 default = ["channel-lark", "web-fetch-html2md"]
 hardware = ["nusb", "tokio-serial"]

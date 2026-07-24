@@ -58,6 +58,7 @@ pub mod package_manager;
 pub mod packet_capture;
 pub mod pdf_read;
 pub mod process;
+mod process_group;
 pub mod proxy_config;
 pub mod pushover;
 pub mod schedule;

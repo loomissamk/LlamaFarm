@@ -5,10 +5,14 @@ use crate::security::{NoopSandbox, Sandbox, SecurityPolicy};
 use async_trait::async_trait;
 use serde_json::json;
 use std::collections::HashSet;
-use std::io::Read;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::AsyncReadExt;
+
+use super::process_group::{self, ProcessGroupGuard};
 
 /// Maximum shell command execution time before kill.
 const SHELL_TIMEOUT_SECS: u64 = 60;
@@ -398,6 +402,134 @@ pub(crate) fn build_shell_execution_plan(
     }
 }
 
+struct ShellCommandOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+enum ShellCommandExecution {
+    Completed(ShellCommandOutput),
+    TimedOut { termination_detail: String },
+}
+
+/// Run a finite command while retaining ownership of its child so timeout and
+/// cancellation paths can terminate the entire process group.
+async fn run_command_with_timeout(
+    mut cmd: tokio::process::Command,
+    timeout: Duration,
+) -> io::Result<ShellCommandExecution> {
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    process_group::configure(&mut cmd);
+
+    let mut child = cmd.spawn()?;
+    let pid = child
+        .id()
+        .ok_or_else(|| io::Error::other("spawned command did not expose a process ID"))?;
+    let mut process_group = ProcessGroupGuard::new(pid);
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    let execution = async {
+        let (status, stdout, stderr) = tokio::join!(
+            child.wait(),
+            read_capped_output(stdout, MAX_OUTPUT_BYTES),
+            read_capped_output(stderr, MAX_OUTPUT_BYTES),
+        );
+        Ok::<ShellCommandOutput, io::Error>(ShellCommandOutput {
+            status: status?,
+            stdout: stdout?,
+            stderr: stderr?,
+        })
+    };
+    let mut execution = Box::pin(execution);
+
+    match tokio::time::timeout(timeout, execution.as_mut()).await {
+        Ok(result) => {
+            drop(execution);
+            match result {
+                Ok(output) => {
+                    process_group.disarm();
+                    Ok(ShellCommandExecution::Completed(output))
+                }
+                Err(error) => {
+                    let _ = process_group.terminate();
+                    let _ = child.start_kill();
+                    let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+                    Err(error)
+                }
+            }
+        }
+        Err(_) => {
+            drop(execution);
+            let process_group_error = process_group.terminate().err();
+            // This is redundant on Unix when group signaling succeeds, but is
+            // the required fallback on platforms without process groups.
+            let direct_child_error = child.start_kill().err();
+            let wait_result =
+                tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+            let direct_child_exited = matches!(&wait_result, Ok(Ok(_)));
+
+            let termination_detail = if process_group::is_supported() {
+                match process_group_error {
+                    None => "SIGKILL was sent to its process group".to_string(),
+                    Some(error) => {
+                        let fallback = if direct_child_exited {
+                            "the direct child exited"
+                        } else if let Some(child_error) = direct_child_error {
+                            return Ok(ShellCommandExecution::TimedOut {
+                                termination_detail: format!(
+                                    "process-group termination failed ({error}) and direct-child termination failed ({child_error})"
+                                ),
+                            });
+                        } else {
+                            "direct-child termination was attempted"
+                        };
+                        format!("process-group termination failed ({error}); {fallback}")
+                    }
+                }
+            } else if direct_child_exited {
+                "the direct child was killed (process groups are unavailable on this platform)"
+                    .to_string()
+            } else if let Some(error) = direct_child_error {
+                format!("direct-child termination failed ({error})")
+            } else {
+                "direct-child termination was attempted but exit was not confirmed".to_string()
+            };
+
+            Ok(ShellCommandExecution::TimedOut { termination_detail })
+        }
+    }
+}
+
+/// Drain a child pipe fully so it cannot block, while retaining at most one
+/// byte beyond the output limit so the caller can preserve truncation notices.
+async fn read_capped_output<R>(handle: Option<R>, max_bytes: usize) -> io::Result<Vec<u8>>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let Some(mut reader) = handle else {
+        return Ok(Vec::new());
+    };
+    let retained_limit = max_bytes.saturating_add(1);
+    let mut output = Vec::with_capacity(retained_limit.min(8192));
+    let mut chunk = [0_u8; 8192];
+
+    loop {
+        let count = reader.read(&mut chunk).await?;
+        if count == 0 {
+            break;
+        }
+        let remaining = retained_limit.saturating_sub(output.len());
+        let retained = count.min(remaining);
+        output.extend_from_slice(&chunk[..retained]);
+    }
+
+    Ok(output)
+}
+
 #[async_trait]
 impl Tool for ShellTool {
     fn name(&self) -> &str {
@@ -405,7 +537,7 @@ impl Tool for ShellTool {
     }
 
     fn description(&self) -> &str {
-        "Execute a shell command in the workspace directory. Bare local script paths are accepted and normalized to an explicit interpreter when possible. Leading forms like `cd /path && ./script.sh` are supported."
+        "Execute a finite-duration shell command in the workspace directory (60-second limit). Bare local script paths are accepted and normalized to an explicit interpreter when possible. Leading forms like `cd /path && ./script.sh` are supported. Use the process tool with action='spawn' for web apps, development servers, daemons, and other long-running commands."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -414,7 +546,7 @@ impl Tool for ShellTool {
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "The shell command to execute. Bare local script paths like ./test.sh or script.py are supported, as are leading forms like `cd /path && ./script.sh`."
+                    "description": "A finite shell command to execute (60-second limit). Bare local script paths like ./test.sh or script.py are supported, as are leading forms like `cd /path && ./script.sh`. Use process.spawn for long-running services."
                 },
                 "approved": {
                     "type": "boolean",
@@ -554,11 +686,10 @@ impl Tool for ShellTool {
             });
         }
 
-        let result =
-            tokio::time::timeout(Duration::from_secs(SHELL_TIMEOUT_SECS), cmd.output()).await;
+        let result = run_command_with_timeout(cmd, Duration::from_secs(SHELL_TIMEOUT_SECS)).await;
 
         match result {
-            Ok(Ok(output)) => {
+            Ok(ShellCommandExecution::Completed(output)) => {
                 let mut stdout = String::from_utf8_lossy(&output.stdout).to_string();
                 let mut stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
@@ -597,16 +728,16 @@ impl Tool for ShellTool {
                     },
                 })
             }
-            Ok(Err(e)) => Ok(ToolResult {
+            Err(e) => Ok(ToolResult {
                 success: false,
                 output: String::new(),
                 error: Some(format!("Failed to execute command: {e}")),
             }),
-            Err(_) => Ok(ToolResult {
+            Ok(ShellCommandExecution::TimedOut { termination_detail }) => Ok(ToolResult {
                 success: false,
                 output: String::new(),
                 error: Some(format!(
-                    "Command timed out after {SHELL_TIMEOUT_SECS}s and was killed"
+                    "Command timed out after {SHELL_TIMEOUT_SECS}s; {termination_detail}"
                 )),
             }),
         }
@@ -1203,6 +1334,36 @@ mod tests {
     #[test]
     fn shell_timeout_constant_is_reasonable() {
         assert_eq!(SHELL_TIMEOUT_SECS, 60, "shell timeout must be 60 seconds");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shell_timeout_kills_descendant_process_group() {
+        let temp = tempfile::tempdir().expect("temp directory should be created");
+        let started = temp.path().join("started");
+        let leaked = temp.path().join("descendant-survived");
+        let command = format!(
+            "touch {}; (sleep 1; touch {}) & wait",
+            shell_quote_single(&started.to_string_lossy()),
+            shell_quote_single(&leaked.to_string_lossy())
+        );
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.arg("-c").arg(command).current_dir(temp.path());
+
+        let result = run_command_with_timeout(cmd, Duration::from_millis(500))
+            .await
+            .expect("timed command should return an execution outcome");
+
+        assert!(
+            matches!(result, ShellCommandExecution::TimedOut { .. }),
+            "command should time out"
+        );
+        assert!(started.exists(), "fixture command should have started");
+        tokio::time::sleep(Duration::from_millis(1_100)).await;
+        assert!(
+            !leaked.exists(),
+            "a descendant must not survive the shell timeout"
+        );
     }
 
     #[test]

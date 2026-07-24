@@ -21,6 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 
+use super::shell::apply_workspace_venv_env;
 use super::traits::{Tool, ToolResult};
 use crate::security::{NoopSandbox, Sandbox, SecurityPolicy};
 
@@ -136,7 +137,14 @@ impl Tool for PackageManagerTool {
             });
         }
 
-        run_command(&argv[0], &argv[1..], timeout_secs, self.sandbox.as_ref()).await
+        run_command(
+            &argv[0],
+            &argv[1..],
+            timeout_secs,
+            self.sandbox.as_ref(),
+            &self.security.workspace_dir,
+        )
+        .await
     }
 }
 
@@ -336,12 +344,14 @@ async fn run_command(
     argv: &[String],
     timeout_secs: u64,
     sandbox: &dyn Sandbox,
+    workspace_dir: &std::path::Path,
 ) -> anyhow::Result<ToolResult> {
     let mut cmd = tokio::process::Command::new(program);
     cmd.args(argv)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("DEBIAN_FRONTEND", "noninteractive");
+    apply_workspace_venv_env(&mut cmd, workspace_dir);
     if let Err(e) = sandbox.wrap_command(cmd.as_std_mut()) {
         return Ok(ToolResult {
             success: false,
@@ -442,6 +452,8 @@ async fn read_capped(
 mod tests {
     use super::*;
     use crate::security::SecurityPolicy;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     fn permissive() -> Arc<SecurityPolicy> {
         let mut p = SecurityPolicy::default();
@@ -516,5 +528,53 @@ mod tests {
             .await
             .unwrap();
         assert!(!result.success);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pip_uses_workspace_virtual_environment_when_present() {
+        let temp = tempfile::tempdir().expect("temp directory should be created");
+        let venv_bin = temp.path().join(".venv/bin");
+        std::fs::create_dir_all(&venv_bin).expect("venv bin directory should be created");
+        let fake_pip = venv_bin.join("pip");
+        std::fs::write(
+            &fake_pip,
+            "#!/bin/sh\nprintf 'LLAMAFARM_VENV_PIP=%s\\n' \"$VIRTUAL_ENV\"\n",
+        )
+        .expect("fake pip should be written");
+        let mut permissions = std::fs::metadata(&fake_pip)
+            .expect("fake pip metadata should exist")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&fake_pip, permissions).expect("fake pip should be executable");
+
+        let security = Arc::new(SecurityPolicy {
+            block_high_risk_commands: false,
+            workspace_dir: temp.path().to_path_buf(),
+            ..SecurityPolicy::default()
+        });
+        let tool = PackageManagerTool::new(security);
+        let result = tool
+            .execute(json!({"manager": "pip", "operation": "list"}))
+            .await
+            .expect("pip list should return a result");
+
+        assert!(
+            result.success,
+            "fake workspace pip should run: {:?}",
+            result.error
+        );
+        assert!(
+            result.output.contains("LLAMAFARM_VENV_PIP="),
+            "workspace pip marker missing: {}",
+            result.output
+        );
+        assert!(
+            result
+                .output
+                .contains(&temp.path().join(".venv").to_string_lossy().to_string()),
+            "VIRTUAL_ENV should point at the workspace .venv: {}",
+            result.output
+        );
     }
 }

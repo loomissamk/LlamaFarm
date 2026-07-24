@@ -26,6 +26,9 @@ const ESSENTIAL_TOOLS: &[&str] = &[
     "memory_recall",
     "memory_store",
     "code_run",
+    // Long-running services must not be forced through the synchronous shell
+    // tool merely because their prompt has no lexical overlap with "process".
+    "process",
     // Fans out a subtask to a specialized agent.planner/coder/verifier/
     // operator persona (see config.toml [agents.*]). Lexical routing rarely
     // surfaces "delegate" on its own merits — a request like "build a
@@ -570,6 +573,10 @@ mod tests {
             ("task_plan", "break work into steps"),
             ("file_read", "read a file"),
             ("shell", "run a shell command"),
+            (
+                "process",
+                "start and manage long-running services and development servers",
+            ),
             ("docker", "manage Docker containers and images"),
             ("packet_capture", "capture network packets with tshark"),
             ("git_operations", "clone pull push and commit git repositories"),
@@ -594,6 +601,13 @@ mod tests {
         assert!(route.selected.contains(&"web_fetch".to_string()));
         assert!(route.selected.contains(&"shell".to_string()));
         assert!(route.excluded.contains(&"pushover".to_string()));
+    }
+
+    #[test]
+    fn process_remains_available_when_routing_selects_other_tools() {
+        let route = route_tools(&registry(), "find the latest news online", 1);
+        assert_eq!(route.strategy, ToolRouteStrategy::Lexical);
+        assert!(route.selected.contains(&"process".to_string()));
     }
 
     #[test]

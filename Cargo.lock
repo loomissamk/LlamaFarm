@@ -3564,6 +3564,7 @@ dependencies = [
  "mongodb",
  "mysql",
  "nanohtml2text",
+ "nix 0.30.1",
  "nostr-sdk",
  "nusb",
  "opentelemetry",

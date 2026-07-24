@@ -2,6 +2,7 @@ use super::shell::{
     apply_workspace_venv_env, build_shell_execution_plan, collect_allowed_shell_env_vars,
 };
 use super::traits::{Tool, ToolResult};
+use super::{process_group, process_group::ProcessGroupGuard};
 use crate::runtime::RuntimeAdapter;
 use crate::security::SyscallAnomalyDetector;
 use crate::security::policy::ToolOperation;
@@ -40,8 +41,8 @@ struct ProcessEntry {
 /// Background process management tool.
 ///
 /// Allows the agent to spawn long-running commands, check their output,
-/// and terminate them. Complements the synchronous `ShellTool` for commands
-/// that need to run beyond the 60-second shell timeout.
+/// and terminate their complete process groups. Complements the synchronous
+/// `ShellTool` for commands that need to run beyond the 60-second shell timeout.
 pub struct ProcessTool {
     security: Arc<SecurityPolicy>,
     runtime: Arc<dyn RuntimeAdapter>,
@@ -235,6 +236,7 @@ impl ProcessTool {
                 )),
             });
         }
+        process_group::configure(&mut cmd);
 
         let mut child = match cmd.spawn() {
             Ok(child) => child,
@@ -257,6 +259,7 @@ impl ProcessTool {
                 ),
             });
         };
+        let mut process_group = ProcessGroupGuard::new(pid);
 
         // Set up background output readers.
         let stdout_buf = Arc::new(Mutex::new(OutputBuffer::default()));
@@ -288,6 +291,7 @@ impl ProcessTool {
         };
 
         self.processes.write().unwrap().insert(id, entry);
+        process_group.disarm();
 
         Ok(ToolResult {
             success: true,
@@ -444,35 +448,60 @@ impl ProcessTool {
             Err(poisoned) => poisoned.into_inner(),
         };
 
-        if let Ok(Some(status)) = child.try_wait() {
-            return Ok(ToolResult {
-                success: true,
-                output: format!(
-                    "Process {id} (pid {pid}) already exited with status {:?}",
-                    status.code()
-                ),
-                error: None,
-            });
-        }
+        let prior_status = child.try_wait().ok().flatten();
+        let process_group_error = process_group::terminate(pid)
+            .err()
+            .filter(|error| error.kind() != std::io::ErrorKind::Unsupported);
+        let direct_child_error = if prior_status.is_none() {
+            child.start_kill().err()
+        } else {
+            None
+        };
+        let termination_error = if process_group::is_supported() {
+            process_group_error
+        } else {
+            direct_child_error
+        };
 
-        if let Err(e) = child.start_kill() {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!(
-                    "Failed to initiate termination for process {id} (pid {pid}): {e}"
-                )),
+        if let Some(status) = prior_status {
+            return Ok(match termination_error {
+                Some(error) => ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!(
+                        "Process {id} (pid {pid}) exited with status {:?}, but its process group could not be terminated: {error}",
+                        status.code()
+                    )),
+                },
+                None => ToolResult {
+                    success: true,
+                    output: format!(
+                        "Process {id} (pid {pid}) already exited with status {:?}; its process group is no longer running",
+                        status.code()
+                    ),
+                    error: None,
+                },
             });
         }
 
         match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
-            Ok(Ok(status)) => Ok(ToolResult {
-                success: true,
-                output: format!(
-                    "Terminated process {id} (pid {pid}) with exit status {:?}",
-                    status.code()
-                ),
-                error: None,
+            Ok(Ok(status)) => Ok(match termination_error {
+                Some(error) => ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!(
+                        "Terminated direct process {id} (pid {pid}) with exit status {:?}, but process-group termination failed: {error}",
+                        status.code()
+                    )),
+                },
+                None => ToolResult {
+                    success: true,
+                    output: format!(
+                        "Terminated process group {id} (leader pid {pid}) with exit status {:?}",
+                        status.code()
+                    ),
+                    error: None,
+                },
             }),
             Ok(Err(e)) => Ok(ToolResult {
                 success: false,
@@ -498,6 +527,7 @@ impl ProcessTool {
             for (id, entry) in processes.iter() {
                 if let Ok(mut child) = entry.child.lock() {
                     if matches!(child.try_wait(), Ok(Some(_))) {
+                        let _ = process_group::terminate(entry.pid);
                         to_remove.push(*id);
                     }
                 }
@@ -596,7 +626,7 @@ impl Tool for ProcessTool {
     }
 
     fn description(&self) -> &str {
-        "Manage background processes: spawn long-running commands, check output, and terminate them"
+        "Start and manage long-running background processes. Use action='spawn' for web apps, Streamlit, development servers, daemons, and commands that must outlive the shell tool's 60-second limit; use output/list to inspect them and kill to terminate their complete process group."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -650,6 +680,7 @@ impl Drop for ProcessTool {
         if let Ok(processes) = self.processes.read() {
             for entry in processes.values() {
                 if let Ok(mut child) = entry.child.lock() {
+                    let _ = process_group::terminate(entry.pid);
                     let _ = child.start_kill();
                 }
             }
@@ -706,6 +737,8 @@ mod tests {
     #[test]
     fn process_tool_description_not_empty() {
         assert!(!make_tool().description().is_empty());
+        assert!(make_tool().description().contains("Streamlit"));
+        assert!(make_tool().description().contains("process group"));
     }
 
     #[test]
@@ -838,6 +871,60 @@ mod tests {
             .await
             .unwrap();
         assert!(kill_result.success);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn kill_terminates_descendant_processes() {
+        let temp = tempfile::tempdir().expect("temp directory should be created");
+        let security = Arc::new(SecurityPolicy {
+            autonomy: AutonomyLevel::Full,
+            workspace_dir: temp.path().to_path_buf(),
+            ..SecurityPolicy::default()
+        });
+        let tool = ProcessTool::new(security, test_runtime());
+        let started = temp.path().join("started");
+        let leaked = temp.path().join("descendant-survived");
+        let command = "touch started; (sleep 1; touch descendant-survived) & wait";
+
+        let spawn_result = tool
+            .execute(json!({"action": "spawn", "command": command}))
+            .await
+            .expect("spawn should return a result");
+        assert!(
+            spawn_result.success,
+            "spawn should succeed: {:?}",
+            spawn_result.error
+        );
+        let spawn_output: serde_json::Value =
+            serde_json::from_str(&spawn_result.output).expect("spawn output should be JSON");
+        let id = spawn_output["id"]
+            .as_u64()
+            .expect("spawn output should include an ID");
+
+        for _ in 0..50 {
+            if started.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(started.exists(), "fixture process should have started");
+
+        let kill_result = tool
+            .execute(json!({"action": "kill", "id": id}))
+            .await
+            .expect("kill should return a result");
+        assert!(
+            kill_result.success,
+            "process-group kill should succeed: {:?}",
+            kill_result.error
+        );
+
+        tokio::time::sleep(Duration::from_millis(1_100)).await;
+        assert!(
+            !leaked.exists(),
+            "a descendant must not survive process.kill"
+        );
     }
 
     #[tokio::test]
