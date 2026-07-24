@@ -498,15 +498,31 @@ def credential_classes(raw: str, payload: Any | None = None) -> set[str]:
     if any(pattern.search(raw) for pattern in TOKEN_PATTERNS):
         classes.add("token-shaped value")
 
-    def walk(value: Any) -> None:
+    def walk(value: Any, container_key: str | None = None) -> None:
         if isinstance(value, dict):
             for key, child in value.items():
-                if sensitive_key(str(key)) and not is_masked_value(child):
+                # Tool registries expose JSON Schema under `properties`, where
+                # an `api_key` key names an input field and its value is a
+                # schema definition, not a credential. Keep traversing the
+                # definition so a real sensitive default would still be seen.
+                schema_property = (
+                    container_key == "properties"
+                    and isinstance(child, dict)
+                    and any(
+                        marker in child
+                        for marker in ("type", "description", "enum", "items", "oneOf", "anyOf")
+                    )
+                )
+                if (
+                    sensitive_key(str(key))
+                    and not schema_property
+                    and not is_masked_value(child)
+                ):
                     classes.add("unmasked sensitive field")
-                walk(child)
+                walk(child, str(key))
         elif isinstance(value, list):
             for child in value:
-                walk(child)
+                walk(child, container_key)
 
     if payload is not None:
         walk(payload)

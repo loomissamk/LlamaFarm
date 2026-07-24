@@ -475,6 +475,34 @@ class NodeAcceptanceTests(unittest.TestCase):
         }
         self.assertEqual(NODE.credential_classes(json.dumps(masked), masked), set())
 
+    def test_json_schema_sensitive_property_names_are_not_secret_values(self) -> None:
+        tool_registry = {
+            "tools": [
+                {
+                    "name": "web_search",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "api_key": {
+                                "type": "string",
+                                "description": "Optional API key supplied at execution time",
+                            }
+                        },
+                    },
+                }
+            ]
+        }
+
+        self.assertEqual(
+            NODE.credential_classes(json.dumps(tool_registry), tool_registry),
+            set(),
+        )
+        tool_registry["tools"][0]["parameters"]["api_key"] = "fixture-secret"
+        self.assertIn(
+            "unmasked sensitive field",
+            NODE.credential_classes(json.dumps(tool_registry), tool_registry),
+        )
+
     def test_managed_port_parser_supports_ranges_and_rejects_bad_input(self) -> None:
         self.assertEqual(NODE.parse_ports("8501-8503,8599"), (8501, 8502, 8503, 8599))
         expected = NODE.parse_ports(NODE.DEFAULT_MANAGED_PORTS)
