@@ -99,7 +99,8 @@ cargo build -p llamafarm-robot-kit --release
 # Copy config
 mkdir -p ~/.llamafarm
 cp crates/robot-kit/robot.toml ~/.llamafarm/
-cp crates/robot-kit/SOUL.md ~/.llamafarm/workspace/
+mkdir -p ~/.llamafarm/workspace
+cp crates/robot-kit/workspace.robot.AGENTS.md ~/.llamafarm/workspace/AGENTS.md
 
 # Edit for your hardware
 nano ~/.llamafarm/robot.toml

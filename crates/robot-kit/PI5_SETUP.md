@@ -372,8 +372,10 @@ level = "supervised"
 workspace_only = true
 EOF
 
-# Copy robot personality
-cp ~/llamafarm/crates/robot-kit/SOUL.md ~/.llamafarm/workspace/
+# Install the robot's runtime behavior and safety rules
+mkdir -p ~/.llamafarm/workspace
+cp ~/llamafarm/crates/robot-kit/workspace.robot.AGENTS.md \
+  ~/.llamafarm/workspace/AGENTS.md
 
 # Start agent
 ./target/release/llamafarm agent

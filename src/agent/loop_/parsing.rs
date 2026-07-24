@@ -240,12 +240,10 @@ fn normalize_known_workspace_file_path(raw: &str) -> String {
 
     match lowered.as_str() {
         "agents.md" | "agent.md" | "agen.md" => "AGENTS.md".to_string(),
-        "soul.md" => "SOUL.md".to_string(),
         "tools.md" | "tool.md" => "TOOLS.md".to_string(),
         "identity.md" => "IDENTITY.md".to_string(),
         "user.md" => "USER.md".to_string(),
         "./agents.md" | "./agent.md" | "./agen.md" => "./AGENTS.md".to_string(),
-        "./soul.md" => "./SOUL.md".to_string(),
         "./tools.md" | "./tool.md" => "./TOOLS.md".to_string(),
         "./identity.md" => "./IDENTITY.md".to_string(),
         "./user.md" => "./USER.md".to_string(),
@@ -5085,6 +5083,15 @@ pub(super) fn parse_structured_tool_calls(tool_calls: &[ToolCall]) -> Vec<Parsed
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn workspace_path_normalization_has_no_removed_persona_alias() {
+        assert_eq!(normalize_known_workspace_file_path("soul.md"), "soul.md");
+        assert_eq!(
+            normalize_known_workspace_file_path("./soul.md"),
+            "./soul.md"
+        );
+    }
 
     #[test]
     fn normalize_ollama_model_arguments_recovers_action_and_name_from_hint() {

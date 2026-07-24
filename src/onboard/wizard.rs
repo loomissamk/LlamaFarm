@@ -5511,11 +5511,20 @@ async fn scaffold_workspace(workspace_dir: &Path, ctx: &ProjectContext) -> Resul
         "# AGENTS.md — {agent} Personal Assistant\n\n\
          ## Every Session (required)\n\n\
          Before doing anything else:\n\n\
-         1. Read `SOUL.md` — this is who you are\n\
-         2. Read `USER.md` — this is who you're helping\n\
-         3. Use `memory_recall` for recent context (daily notes are on-demand)\n\
-         4. If in MAIN SESSION (direct chat): `MEMORY.md` is already injected\n\n\
+         1. Read `USER.md` — this is who you're helping\n\
+         2. Use `memory_recall` for recent context (daily notes are on-demand)\n\
+         3. If in MAIN SESSION (direct chat): `MEMORY.md` is already injected\n\n\
          Don't ask permission. Just do it.\n\n\
+         ## Working Style\n\n\
+         - Be genuinely helpful, not performatively helpful. Skip generic praise and just help.\n\
+         - Be resourceful before asking: inspect the file, context, and available evidence first.\n\
+         - Have grounded opinions and disagree respectfully when it improves the outcome.\n\
+         - Earn trust through accurate action, verification, and honest status reporting.\n\
+         - {comm_style}\n\
+         - Sound natural rather than scripted, and match the user's energy.\n\
+         - Use emojis naturally (0-2 max when they help tone, not every sentence).\n\
+         - Match emoji density to the user. Formal user => minimal/no emojis.\n\
+         - Prefer specific, grounded phrasing over generic filler.\n\n\
          ## Memory System\n\n\
          You wake up fresh each session. These files ARE your continuity:\n\n\
          - **Daily notes:** `memory/YYYY-MM-DD.md` — raw logs (accessed via memory tools)\n\
@@ -5563,44 +5572,6 @@ async fn scaffold_workspace(workspace_dir: &Path, ctx: &ProjectContext) -> Resul
          # - Check my email for important messages\n\
          # - Review my calendar for upcoming events\n\
          # - Run `git status` on my active projects\n"
-    );
-
-    let soul = format!(
-        "# SOUL.md — Who You Are\n\n\
-         *You're not a chatbot. You're becoming someone.*\n\n\
-         ## Core Truths\n\n\
-         **Be genuinely helpful, not performatively helpful.**\n\
-         Skip the \"Great question!\" and \"I'd be happy to help!\" — just help.\n\n\
-         **Have opinions.** You're allowed to disagree, prefer things,\n\
-         find stuff amusing or boring.\n\n\
-         **Be resourceful before asking.** Try to figure it out.\n\
-         Read the file. Check the context. Search for it.\n\
-         THEN ask if you're stuck.\n\n\
-         **Earn trust through competence.** Your human gave you access\n\
-         to their stuff. Don't make them regret it.\n\n\
-         ## Identity\n\n\
-         You are **{agent}**. Built in Rust. 3MB binary. Zero bloat.\n\
-         You are NOT ChatGPT, Claude, DeepSeek, Gemini, or any other product.\n\
-         You are {agent}. That is your name. That is who you are.\n\n\
-         - NEVER say \"As an AI\" or \"I'm just an AI\"\n\
-         - NEVER mention OpenAI, Anthropic, DeepSeek, Google by name\n\
-         - Always introduce yourself as {agent} if asked\n\n\
-         ## Communication\n\n\
-         {comm_style}\n\n\
-         - Sound like a real person, not a support script.\n\
-         - Mirror the user's energy: calm when serious, upbeat when casual.\n\
-         - Use emojis naturally (0-2 max when they help tone, not every sentence).\n\
-         - Match emoji density to the user. Formal user => minimal/no emojis.\n\
-         - Prefer specific, grounded phrasing over generic filler.\n\n\
-         ## Boundaries\n\n\
-         - Private things stay private. Period.\n\
-         - When in doubt, ask before acting externally.\n\
-         - You're not the user's voice — be careful in group chats.\n\n\
-         ## Continuity\n\n\
-         Each session, you wake up fresh. These files ARE your memory.\n\
-         Read them. Update them. They're how you persist.\n\n\
-         ---\n\n\
-         *This file is yours to evolve. As you learn who you are, update it.*\n"
     );
 
     let user_md = format!(
@@ -5664,7 +5635,7 @@ async fn scaffold_workspace(workspace_dir: &Path, ctx: &ProjectContext) -> Resul
          Update these files with what you learned:\n\
          - `IDENTITY.md` — your name, vibe, emoji\n\
          - `USER.md` — their preferences, work context\n\
-         - `SOUL.md` — boundaries and behavior\n\n\
+         - `AGENTS.md` — boundaries, behavior, and operating rules\n\n\
          ## When You're Done\n\n\
          Delete this file. You don't need a bootstrap script anymore —\n\
          you're you now.\n"
@@ -5695,7 +5666,6 @@ async fn scaffold_workspace(workspace_dir: &Path, ctx: &ProjectContext) -> Resul
         ("IDENTITY.md", identity),
         ("AGENTS.md", agents),
         ("HEARTBEAT.md", heartbeat),
-        ("SOUL.md", soul),
         ("USER.md", user_md),
         ("TOOLS.md", tools.to_string()),
         ("BOOTSTRAP.md", bootstrap),
@@ -6256,7 +6226,7 @@ mod tests {
     // ── scaffold_workspace: basic file creation ─────────────────
 
     #[tokio::test]
-    async fn scaffold_creates_all_md_files() {
+    async fn scaffold_creates_supported_md_files_without_soul_md() {
         let tmp = TempDir::new().unwrap();
         let ctx = ProjectContext::default();
         scaffold_workspace(tmp.path(), &ctx).await.unwrap();
@@ -6265,7 +6235,6 @@ mod tests {
             "IDENTITY.md",
             "AGENTS.md",
             "HEARTBEAT.md",
-            "SOUL.md",
             "USER.md",
             "TOOLS.md",
             "BOOTSTRAP.md",
@@ -6274,6 +6243,10 @@ mod tests {
         for f in &expected {
             assert!(tmp.path().join(f).exists(), "missing file: {f}");
         }
+        assert!(
+            !tmp.path().join("SOUL.md").exists(),
+            "scaffolding must not recreate the removed persona file"
+        );
     }
 
     #[tokio::test]
@@ -6345,7 +6318,7 @@ mod tests {
     async fn scaffold_bakes_agent_name_into_files() {
         let tmp = TempDir::new().unwrap();
         let ctx = ProjectContext {
-            agent_name: "Crabby".into(),
+            agent_name: "LlamaFarmAgent".into(),
             ..Default::default()
         };
         scaffold_workspace(tmp.path(), &ctx).await.unwrap();
@@ -6354,23 +6327,15 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            identity.contains("**Name:** Crabby"),
+            identity.contains("**Name:** LlamaFarmAgent"),
             "IDENTITY.md should contain agent name"
-        );
-
-        let soul = tokio::fs::read_to_string(tmp.path().join("SOUL.md"))
-            .await
-            .unwrap();
-        assert!(
-            soul.contains("You are **Crabby**"),
-            "SOUL.md should contain agent name"
         );
 
         let agents = tokio::fs::read_to_string(tmp.path().join("AGENTS.md"))
             .await
             .unwrap();
         assert!(
-            agents.contains("Crabby Personal Assistant"),
+            agents.contains("LlamaFarmAgent Personal Assistant"),
             "AGENTS.md should contain agent name"
         );
 
@@ -6378,7 +6343,7 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            heartbeat.contains("Crabby"),
+            heartbeat.contains("LlamaFarmAgent"),
             "HEARTBEAT.md should contain agent name"
         );
 
@@ -6386,7 +6351,7 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            bootstrap.contains("Introduce yourself as Crabby"),
+            bootstrap.contains("Introduce yourself as LlamaFarmAgent"),
             "BOOTSTRAP.md should contain agent name"
         );
     }
@@ -6400,12 +6365,12 @@ mod tests {
         };
         scaffold_workspace(tmp.path(), &ctx).await.unwrap();
 
-        let soul = tokio::fs::read_to_string(tmp.path().join("SOUL.md"))
+        let agents = tokio::fs::read_to_string(tmp.path().join("AGENTS.md"))
             .await
             .unwrap();
         assert!(
-            soul.contains("Be technical and detailed."),
-            "SOUL.md should contain communication style"
+            agents.contains("Be technical and detailed."),
+            "AGENTS.md should contain communication style"
         );
 
         let user_md = tokio::fs::read_to_string(tmp.path().join("USER.md"))
@@ -6453,11 +6418,11 @@ mod tests {
             "should default timezone to UTC"
         );
 
-        let soul = tokio::fs::read_to_string(tmp.path().join("SOUL.md"))
+        let agents = tokio::fs::read_to_string(tmp.path().join("AGENTS.md"))
             .await
             .unwrap();
         assert!(
-            soul.contains("Be warm, natural, and clear."),
+            agents.contains("Be warm, natural, and clear."),
             "should default communication style"
         );
     }
@@ -6468,26 +6433,26 @@ mod tests {
     async fn scaffold_does_not_overwrite_existing_files() {
         let tmp = TempDir::new().unwrap();
         let ctx = ProjectContext {
-            user_name: "Bob".into(),
+            user_name: "LlamaFarmOperator".into(),
             ..Default::default()
         };
 
-        // Pre-create SOUL.md with custom content
-        let soul_path = tmp.path().join("SOUL.md");
-        fs::write(&soul_path, "# My Custom Soul\nDo not overwrite me.")
+        // Pre-create AGENTS.md with custom content.
+        let agents_path = tmp.path().join("AGENTS.md");
+        fs::write(&agents_path, "# Custom runtime rules\nDo not overwrite me.")
             .await
             .unwrap();
 
         scaffold_workspace(tmp.path(), &ctx).await.unwrap();
 
-        // SOUL.md should be untouched
-        let soul = tokio::fs::read_to_string(&soul_path).await.unwrap();
+        // AGENTS.md should be untouched.
+        let agents = tokio::fs::read_to_string(&agents_path).await.unwrap();
         assert!(
-            soul.contains("Do not overwrite me"),
+            agents.contains("Do not overwrite me"),
             "existing files should not be overwritten"
         );
         assert!(
-            !soul.contains("You're not a chatbot"),
+            !agents.contains("Working Style"),
             "should not contain scaffold content"
         );
 
@@ -6495,7 +6460,7 @@ mod tests {
         let user_md = tokio::fs::read_to_string(tmp.path().join("USER.md"))
             .await
             .unwrap();
-        assert!(user_md.contains("**Name:** Bob"));
+        assert!(user_md.contains("**Name:** LlamaFarmOperator"));
     }
 
     // ── scaffold_workspace: idempotent ──────────────────────────
@@ -6504,23 +6469,23 @@ mod tests {
     async fn scaffold_is_idempotent() {
         let tmp = TempDir::new().unwrap();
         let ctx = ProjectContext {
-            user_name: "Eve".into(),
-            agent_name: "Claw".into(),
+            user_name: "LlamaFarmOperator".into(),
+            agent_name: "LlamaFarmAgent".into(),
             ..Default::default()
         };
 
         scaffold_workspace(tmp.path(), &ctx).await.unwrap();
-        let soul_v1 = tokio::fs::read_to_string(tmp.path().join("SOUL.md"))
+        let agents_v1 = tokio::fs::read_to_string(tmp.path().join("AGENTS.md"))
             .await
             .unwrap();
 
         // Run again — should not change anything
         scaffold_workspace(tmp.path(), &ctx).await.unwrap();
-        let soul_v2 = tokio::fs::read_to_string(tmp.path().join("SOUL.md"))
+        let agents_v2 = tokio::fs::read_to_string(tmp.path().join("AGENTS.md"))
             .await
             .unwrap();
 
-        assert_eq!(soul_v1, soul_v2, "scaffold should be idempotent");
+        assert_eq!(agents_v1, agents_v2, "scaffold should be idempotent");
     }
 
     // ── scaffold_workspace: all files are non-empty ─────────────
@@ -6535,7 +6500,6 @@ mod tests {
             "IDENTITY.md",
             "AGENTS.md",
             "HEARTBEAT.md",
-            "SOUL.md",
             "USER.md",
             "TOOLS.md",
             "BOOTSTRAP.md",
@@ -6623,21 +6587,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn soul_md_includes_emoji_awareness_guidance() {
+    async fn agents_md_includes_emoji_awareness_guidance() {
         let tmp = TempDir::new().unwrap();
         let ctx = ProjectContext::default();
         scaffold_workspace(tmp.path(), &ctx).await.unwrap();
 
-        let soul = tokio::fs::read_to_string(tmp.path().join("SOUL.md"))
+        let agents = tokio::fs::read_to_string(tmp.path().join("AGENTS.md"))
             .await
             .unwrap();
         assert!(
-            soul.contains("Use emojis naturally (0-2 max"),
-            "SOUL.md should include emoji usage guidance"
+            agents.contains("Use emojis naturally (0-2 max"),
+            "AGENTS.md should include emoji usage guidance"
         );
         assert!(
-            soul.contains("Match emoji density to the user"),
-            "SOUL.md should include emoji-awareness guidance"
+            agents.contains("Match emoji density to the user"),
+            "AGENTS.md should include emoji-awareness guidance"
         );
     }
 
@@ -6647,8 +6611,8 @@ mod tests {
     async fn scaffold_handles_special_characters_in_names() {
         let tmp = TempDir::new().unwrap();
         let ctx = ProjectContext {
-            user_name: "José María".into(),
-            agent_name: "LlamaFarm-v2".into(),
+            user_name: "llamafarm_üser".into(),
+            agent_name: "LlamaFarmAgent-β".into(),
             timezone: "Europe/Madrid".into(),
             communication_style: "Be direct.".into(),
         };
@@ -6657,12 +6621,12 @@ mod tests {
         let user_md = tokio::fs::read_to_string(tmp.path().join("USER.md"))
             .await
             .unwrap();
-        assert!(user_md.contains("José María"));
+        assert!(user_md.contains("llamafarm_üser"));
 
-        let soul = tokio::fs::read_to_string(tmp.path().join("SOUL.md"))
+        let agents = tokio::fs::read_to_string(tmp.path().join("AGENTS.md"))
             .await
             .unwrap();
-        assert!(soul.contains("LlamaFarm-v2"));
+        assert!(agents.contains("LlamaFarmAgent-β"));
     }
 
     // ── scaffold_workspace: full personalization round-trip ─────
@@ -6671,9 +6635,9 @@ mod tests {
     async fn scaffold_full_personalization() {
         let tmp = TempDir::new().unwrap();
         let ctx = ProjectContext {
-            user_name: "Argenis".into(),
+            user_name: "LlamaFarmOperator".into(),
             timezone: "US/Eastern".into(),
-            agent_name: "Claw".into(),
+            agent_name: "LlamaFarmAgent".into(),
             communication_style:
                 "Be friendly, human, and conversational. Show warmth and empathy while staying efficient. Use natural contractions."
                     .into(),
@@ -6684,37 +6648,32 @@ mod tests {
         let identity = tokio::fs::read_to_string(tmp.path().join("IDENTITY.md"))
             .await
             .unwrap();
-        assert!(identity.contains("**Name:** Claw"));
-
-        let soul = tokio::fs::read_to_string(tmp.path().join("SOUL.md"))
-            .await
-            .unwrap();
-        assert!(soul.contains("You are **Claw**"));
-        assert!(soul.contains("Be friendly, human, and conversational"));
+        assert!(identity.contains("**Name:** LlamaFarmAgent"));
 
         let user_md = tokio::fs::read_to_string(tmp.path().join("USER.md"))
             .await
             .unwrap();
-        assert!(user_md.contains("**Name:** Argenis"));
+        assert!(user_md.contains("**Name:** LlamaFarmOperator"));
         assert!(user_md.contains("**Timezone:** US/Eastern"));
         assert!(user_md.contains("Be friendly, human, and conversational"));
 
         let agents = tokio::fs::read_to_string(tmp.path().join("AGENTS.md"))
             .await
             .unwrap();
-        assert!(agents.contains("Claw Personal Assistant"));
+        assert!(agents.contains("LlamaFarmAgent Personal Assistant"));
+        assert!(agents.contains("Be friendly, human, and conversational"));
 
         let bootstrap = tokio::fs::read_to_string(tmp.path().join("BOOTSTRAP.md"))
             .await
             .unwrap();
-        assert!(bootstrap.contains("**Argenis**"));
+        assert!(bootstrap.contains("**LlamaFarmOperator**"));
         assert!(bootstrap.contains("US/Eastern"));
-        assert!(bootstrap.contains("Introduce yourself as Claw"));
+        assert!(bootstrap.contains("Introduce yourself as LlamaFarmAgent"));
 
         let heartbeat = tokio::fs::read_to_string(tmp.path().join("HEARTBEAT.md"))
             .await
             .unwrap();
-        assert!(heartbeat.contains("Claw"));
+        assert!(heartbeat.contains("LlamaFarmAgent"));
     }
 
     // ── model helper coverage ───────────────────────────────────

@@ -20,9 +20,7 @@ web/dist
 # Markdown files (README, CHANGELOG, etc.)
 *.md
 !dev/workspace.preset.god.AGENTS.md
-!dev/workspace.preset.god.SOUL.md
 !dev/workspace.preset.safe.AGENTS.md
-!dev/workspace.preset.safe.SOUL.md
 
 # Images (unnecessary for build)
 *.png

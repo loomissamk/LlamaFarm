@@ -3,19 +3,17 @@ import { BookText, RefreshCw, Save } from 'lucide-react';
 import type { WorkspaceFileResponse } from '@/types/api';
 import { getWorkspaceFile, putWorkspaceFile } from '@/lib/api';
 
-type WorkspaceFileName = 'AGENTS.md' | 'SOUL.md';
+type WorkspaceFileName = 'AGENTS.md';
 
-const WORKSPACE_FILES: WorkspaceFileName[] = ['AGENTS.md', 'SOUL.md'];
+const WORKSPACE_FILES: WorkspaceFileName[] = ['AGENTS.md'];
 
 export default function WorkspacePrompts() {
   const [activeFile, setActiveFile] = useState<WorkspaceFileName>('AGENTS.md');
   const [files, setFiles] = useState<Record<WorkspaceFileName, WorkspaceFileResponse>>({
     'AGENTS.md': { name: 'AGENTS.md', content: '', exists: false },
-    'SOUL.md': { name: 'SOUL.md', content: '', exists: false },
   });
   const [drafts, setDrafts] = useState<Record<WorkspaceFileName, string>>({
     'AGENTS.md': '',
-    'SOUL.md': '',
   });
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -38,16 +36,10 @@ export default function WorkspacePrompts() {
           content: '',
           exists: false,
         },
-        'SOUL.md': results.find((file) => file.name === 'SOUL.md') ?? {
-          name: 'SOUL.md',
-          content: '',
-          exists: false,
-        },
       };
       setFiles(nextFiles);
       setDrafts({
         'AGENTS.md': nextFiles['AGENTS.md'].content,
-        'SOUL.md': nextFiles['SOUL.md'].content,
       });
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to load workspace prompt files');
@@ -104,8 +96,8 @@ export default function WorkspacePrompts() {
             <h2 className="text-base font-semibold text-white">Prompt Files</h2>
           </div>
           <p className="mt-2 max-w-3xl text-sm text-gray-400">
-            Edit the live workspace copies of <code>AGENTS.md</code> and <code>SOUL.md</code>.
-            New agent turns pick up these files directly from the running workspace after save.
+            Edit the live workspace copy of <code>AGENTS.md</code>. New agent turns pick up this
+            file directly from the running workspace after save.
           </p>
         </div>
       </div>

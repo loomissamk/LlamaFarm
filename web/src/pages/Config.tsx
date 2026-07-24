@@ -64,7 +64,7 @@ export default function Config() {
     setConfig(selectedPreset.content);
     setError(null);
     setSuccess(
-      `${selectedPreset.label} preset loaded into the editor. Use Apply Live to sync config plus AGENTS.md and SOUL.md.`,
+      `${selectedPreset.label} preset loaded into the editor. Use Apply Live to sync config plus AGENTS.md.`,
     );
   };
 
@@ -84,7 +84,7 @@ export default function Config() {
       setLiveConfig(selectedPreset.content);
       setConfig(selectedPreset.content);
       setSuccess(
-        `${selectedPreset.label} bundle applied live. Configuration, AGENTS.md, and SOUL.md are now in sync.`,
+        `${selectedPreset.label} bundle applied live. Configuration and AGENTS.md are now in sync.`,
       );
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to apply preset bundle');
@@ -206,7 +206,7 @@ export default function Config() {
             <p className="text-sm font-medium text-white">Preset controls</p>
             <p className="mt-1 text-sm text-gray-400">
               Loading a preset only replaces the editor contents. Apply Live also syncs the
-              preset&apos;s AGENTS.md and SOUL.md bundle into the workspace.
+              preset&apos;s AGENTS.md into the workspace.
             </p>
             <button
               type="button"

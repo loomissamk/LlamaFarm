@@ -36,7 +36,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 const MASKED_SECRET: &str = "***MASKED***";
-const WORKSPACE_EDITOR_FILES: &[&str] = &["AGENTS.md", "SOUL.md"];
+const WORKSPACE_EDITOR_FILES: &[&str] = &["AGENTS.md"];
 const GOD_CONFIG_PRESET_FILE: &str = "config.template.toml";
 const SAFE_CONFIG_PRESET_FILE: &str = "config.preset.safe.toml";
 const GOD_WORKSPACE_AGENTS_PRESET_FILE: &str = "workspace.preset.god.AGENTS.md";
@@ -915,7 +915,6 @@ fn build_runtime_shell_info() -> RuntimeShellInfo {
 fn normalize_workspace_editor_name(name: &str) -> Option<&'static str> {
     match name.trim() {
         "AGENTS.md" => Some("AGENTS.md"),
-        "SOUL.md" => Some("SOUL.md"),
         _ => None,
     }
 }
@@ -1629,7 +1628,7 @@ pub async fn handle_api_config_presets(
     .into_response()
 }
 
-/// GET /api/workspace-files/:name — load AGENTS.md or SOUL.md from the live workspace
+/// GET /api/workspace-files/:name — load AGENTS.md from the live workspace
 pub async fn handle_api_workspace_file_get(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1677,7 +1676,7 @@ pub async fn handle_api_workspace_file_get(
     }
 }
 
-/// PUT /api/workspace-files/:name — save AGENTS.md or SOUL.md into the live workspace
+/// PUT /api/workspace-files/:name — save AGENTS.md into the live workspace
 pub async fn handle_api_workspace_file_put(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -3603,7 +3602,7 @@ pub async fn handle_api_context_get(
     // Rough token budget so the operator can see if the .md files + tool
     // schemas are eating the window (~4 chars/token). Persona files:
     let est_tokens = |chars: usize| chars / 4;
-    let md_chars: usize = ["AGENTS.md", "AGENT.md", "SOUL.md"]
+    let md_chars: usize = ["AGENTS.md", "AGENT.md"]
         .iter()
         .filter_map(|f| std::fs::metadata(workspace_dir.join(f)).ok().map(|m| m.len() as usize))
         .sum();
@@ -4564,6 +4563,16 @@ mod tests {
         CloudflareTunnelConfig, LarkReceiveMode, NgrokTunnelConfig, WatiConfig,
     };
     use std::collections::BTreeMap;
+
+    #[test]
+    fn workspace_prompt_editor_exposes_only_agents_md() {
+        assert_eq!(WORKSPACE_EDITOR_FILES, &["AGENTS.md"]);
+        assert_eq!(
+            normalize_workspace_editor_name("AGENTS.md"),
+            Some("AGENTS.md")
+        );
+        assert_eq!(normalize_workspace_editor_name("SOUL.md"), None);
+    }
 
     #[test]
     fn masking_keeps_toml_valid_and_preserves_api_keys_type() {
