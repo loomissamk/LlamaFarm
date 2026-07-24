@@ -2,10 +2,10 @@
 
 These profiles turn the two NVIDIA hosts into an asymmetric local agent cluster:
 
-| Node | Role | Default interactive lane |
+| Node | Role | Inference profile |
 | --- | --- | --- |
-| RTX 4070 Laptop, 8 GB | fast IDE / fallback worker | `qwen3.5:9b`, Q4, 32K, one stream |
-| RTX 5070 Ti, 16 GB | coordinator / RAG / quality worker | `qwen3.5:9b`, Q4, 64K, one stream |
+| RTX 4070 Laptop, 8 GB | fast IDE / fallback worker | 32K, one stream |
+| RTX 5070 Ti, 16 GB | coordinator / RAG / quality worker | 64K, one stream |
 
 They deliberately do **not** turn the model's 262K architectural context into
 an allocation target. Context, model concurrency, and KV cache all compete for
@@ -26,7 +26,11 @@ chmod 600 ~/.config/llamafarm/node.env
 Set `LLAMAFARM_MANUAL_PEERS` on each host to the other host's gateway address,
 and set the same long random `LLAMAFARM_FEDERATION_TOKEN` on both hosts. The
 token authenticates node-to-node task traffic in addition to the LAN-only
-network check. Then run the matching profile:
+network check. The selected Ollama model comes from LlamaFarm's persisted
+configuration, so changing it in the dashboard survives profile-driven
+container restarts. Set `LLAMAFARM_MODEL` in the private `node.env` (or export
+it before launch) only when an immutable deployment-level override is
+intentional. Then run the matching profile:
 
 ```bash
 ./scripts/docker/up-node.sh rtx4070-laptop
