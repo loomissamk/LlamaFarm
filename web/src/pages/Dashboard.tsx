@@ -1,9 +1,17 @@
 import { DiagnosticsPanel } from './Doctor';
 import { LogsPanel } from './Logs';
 import { useEffect, useState } from 'react';
-import { Activity, Cpu, Database, Radio, RefreshCw, Server } from 'lucide-react';
+import {
+  Activity,
+  CheckCircle2,
+  Cpu,
+  Database,
+  Radio,
+  RefreshCw,
+  Server,
+} from 'lucide-react';
 import type { StatusResponse } from '@/types/api';
-import { getStatus } from '@/lib/api';
+import { getStatus, putIntegrationCredentials } from '@/lib/api';
 
 function formatUptime(seconds: number): string {
   const d = Math.floor(seconds / 86400);
@@ -42,15 +50,35 @@ function healthBorder(status: string): string {
   }
 }
 
+function canonicalOllamaModelName(model: string): string {
+  const trimmed = model.trim();
+  const parts = trimmed.split('/');
+  const leaf = parts[parts.length - 1] ?? trimmed;
+  return leaf.includes(':') ? trimmed : `${trimmed}:latest`;
+}
+
 export default function Dashboard() {
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [selectedModel, setSelectedModel] = useState('');
+  const [switchingModel, setSwitchingModel] = useState(false);
+  const [switchError, setSwitchError] = useState<string | null>(null);
+  const [switchSuccess, setSwitchSuccess] = useState<string | null>(null);
 
   const fetchStatus = () => {
     setRefreshing(true);
     getStatus()
-      .then((s) => { setStatus(s); setError(null); })
+      .then((s) => {
+        setStatus(s);
+        const configuredModel = canonicalOllamaModelName(s.ollama.configured_model);
+        setSelectedModel(
+          s.ollama.installed_models.find(
+            (model) => canonicalOllamaModelName(model) === configuredModel,
+          ) ?? s.ollama.installed_models[0] ?? '',
+        );
+        setError(null);
+      })
       .catch((err) => setError(err.message))
       .finally(() => setRefreshing(false));
   };
@@ -80,6 +108,35 @@ export default function Dashboard() {
 
   const installedModels = status.ollama.installed_models;
   const loadedModels = status.ollama.loaded_models;
+  const configuredModel = status.ollama.configured_model || status.model;
+  const modelSelectionChanged =
+    selectedModel.length > 0 &&
+    canonicalOllamaModelName(selectedModel) !== canonicalOllamaModelName(configuredModel);
+
+  const switchDefaultModel = async () => {
+    const targetModel = selectedModel.trim();
+    if (!targetModel || !modelSelectionChanged) return;
+
+    setSwitchingModel(true);
+    setSwitchError(null);
+    setSwitchSuccess(null);
+    try {
+      await putIntegrationCredentials('ollama', {
+        revision: status.ollama.revision,
+        fields: { default_model: targetModel },
+      });
+      const refreshed = await getStatus();
+      setStatus(refreshed);
+      setSelectedModel(targetModel);
+      setSwitchSuccess(
+        `${targetModel} is now the default for new chat turns and was saved to config.`,
+      );
+    } catch (err: unknown) {
+      setSwitchError(err instanceof Error ? err.message : 'Failed to switch the Ollama model');
+    } finally {
+      setSwitchingModel(false);
+    }
+  };
 
   return (
     <div className="p-6 space-y-6">
@@ -99,6 +156,115 @@ export default function Dashboard() {
           Refresh
         </button>
       </div>
+
+      <section className="rounded-xl border border-blue-800/60 bg-gray-900 p-5">
+        <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <Server className="h-5 w-5 text-blue-400" />
+              <h2 className="text-base font-semibold text-white">Ollama Model Control</h2>
+              <span
+                className={`rounded-full px-2.5 py-1 text-xs font-medium ${
+                  status.ollama.reachable
+                    ? 'bg-emerald-900/40 text-emerald-300'
+                    : 'bg-red-900/40 text-red-300'
+                }`}
+              >
+                {status.ollama.reachable ? 'Ollama reachable' : 'Ollama unavailable'}
+              </span>
+            </div>
+            <p className="mt-2 text-sm text-gray-400">
+              Choose an installed model for subsequent chat turns. Switching updates the live
+              gateway and atomically persists the default; it does not pull, delete, or unload
+              Ollama models.
+            </p>
+
+            <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+              <select
+                aria-label="Installed Ollama model"
+                value={selectedModel}
+                onChange={(event) => {
+                  setSelectedModel(event.target.value);
+                  setSwitchError(null);
+                  setSwitchSuccess(null);
+                }}
+                disabled={switchingModel || installedModels.length === 0}
+                className="min-w-0 flex-1 rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+              >
+                {installedModels.length === 0 && (
+                  <option value="">No installed models reported</option>
+                )}
+                {installedModels.map((model) => (
+                  <option key={model} value={model}>
+                    {model}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => void switchDefaultModel()}
+                disabled={switchingModel || !modelSelectionChanged}
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <RefreshCw className={`h-4 w-4 ${switchingModel ? 'animate-spin' : ''}`} />
+                {switchingModel ? 'Switching…' : 'Use for New Chats'}
+              </button>
+            </div>
+
+            {switchSuccess && (
+              <div className="mt-3 flex items-start gap-2 rounded-lg border border-emerald-800 bg-emerald-950/30 p-3 text-sm text-emerald-300">
+                <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                <span>{switchSuccess}</span>
+              </div>
+            )}
+            {switchError && (
+              <div className="mt-3 rounded-lg border border-red-800 bg-red-950/30 p-3 text-sm text-red-300">
+                {switchError}
+              </div>
+            )}
+            {status.ollama.model_environment_override && (
+              <div className="mt-3 rounded-lg border border-amber-800 bg-amber-950/30 p-3 text-sm text-amber-200">
+                {status.ollama.model_environment_override} currently overrides the saved model on
+                process restart. Remove that environment override to make dashboard selections
+                restart-persistent.
+              </div>
+            )}
+          </div>
+
+          <div className="grid min-w-0 gap-3 sm:grid-cols-2 xl:w-[38rem]">
+            <div className="rounded-lg border border-gray-800 bg-gray-950/60 p-4">
+              <p className="text-xs font-medium uppercase tracking-[0.16em] text-gray-500">
+                Configured default
+              </p>
+              <p className="mt-2 break-all text-sm font-semibold text-white">{configuredModel}</p>
+              <p className="mt-2 text-xs text-gray-500">Used by the next dashboard chat turn</p>
+            </div>
+            <div className="rounded-lg border border-gray-800 bg-gray-950/60 p-4">
+              <p className="text-xs font-medium uppercase tracking-[0.16em] text-gray-500">
+                Resident now
+              </p>
+              {loadedModels.length === 0 ? (
+                <p className="mt-2 text-sm text-gray-500">None reported</p>
+              ) : (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {loadedModels.map((model) => (
+                    <span
+                      key={model}
+                      className="max-w-full break-all rounded-full bg-emerald-900/40 px-2.5 py-1 text-xs text-emerald-300"
+                    >
+                      {model}
+                    </span>
+                  ))}
+                </div>
+              )}
+              <p className="mt-2 text-xs text-gray-500">
+                Ollama loads the configured model on first use
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-gray-900 rounded-xl p-5 border border-gray-800">
           <div className="flex items-center gap-3 mb-3">
@@ -107,7 +273,7 @@ export default function Dashboard() {
             </div>
             <span className="text-sm text-gray-400">Current Model</span>
           </div>
-          <p className="text-lg font-semibold text-white truncate">{status.model}</p>
+          <p className="text-lg font-semibold text-white truncate">{configuredModel}</p>
           <p className="text-sm text-gray-400">
             {status.ollama.active_model_loaded ? 'Loaded in Ollama' : 'Configured, not loaded'}
           </p>

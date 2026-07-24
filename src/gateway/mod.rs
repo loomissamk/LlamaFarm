@@ -2722,6 +2722,7 @@ Reminder set successfully."#;
     #[derive(Default)]
     struct MockProvider {
         calls: AtomicUsize,
+        models: Mutex<Vec<String>>,
     }
 
     #[async_trait]
@@ -2730,10 +2731,11 @@ Reminder set successfully."#;
             &self,
             _system_prompt: Option<&str>,
             _message: &str,
-            _model: &str,
+            model: &str,
             _temperature: f64,
         ) -> anyhow::Result<String> {
             self.calls.fetch_add(1, Ordering::SeqCst);
+            self.models.lock().push(model.to_string());
             Ok("ok".into())
         }
     }
@@ -2801,6 +2803,72 @@ Reminder set successfully."#;
 
     fn test_public_connect_info() -> ConnectInfo<SocketAddr> {
         ConnectInfo(SocketAddr::from(([203, 0, 113, 10], 30_300)))
+    }
+
+    #[tokio::test]
+    async fn subsequent_gateway_chat_uses_replaced_runtime_model() {
+        let provider_impl = Arc::new(MockProvider::default());
+        let provider: Arc<dyn Provider> = provider_impl.clone();
+        let memory: Arc<dyn Memory> = Arc::new(MockMemory);
+        let initial_snapshot = Arc::new(GatewayRuntimeSnapshot {
+            provider: Arc::clone(&provider),
+            model: "model-before-switch".to_string(),
+            temperature: 0.0,
+            mem: Arc::clone(&memory),
+            tools_registry: Arc::new(Vec::new()),
+            tools_registry_exec: Arc::new(Vec::new()),
+        });
+        let state = AppState {
+            config: Arc::new(Mutex::new(Config::default())),
+            provider: Arc::clone(&provider),
+            model: initial_snapshot.model.clone(),
+            temperature: 0.0,
+            mem: Arc::clone(&memory),
+            auto_save: false,
+            webhook_secret_hash: None,
+            pairing: Arc::new(PairingGuard::new(false, &[])),
+            trust_forwarded_headers: false,
+            rate_limiter: Arc::new(GatewayRateLimiter::new(100, 100, 100)),
+            idempotency_store: Arc::new(IdempotencyStore::new(Duration::from_secs(300), 1000)),
+            whatsapp: None,
+            whatsapp_app_secret: None,
+            linq: None,
+            linq_signing_secret: None,
+            nextcloud_talk: None,
+            nextcloud_talk_webhook_secret: None,
+            wati: None,
+            qq: None,
+            qq_webhook_enabled: false,
+            observer: Arc::new(crate::observability::NoopObserver),
+            tools_registry: Arc::new(Vec::new()),
+            tools_registry_exec: Arc::new(Vec::new()),
+            multimodal: crate::config::MultimodalConfig::default(),
+            max_tool_iterations: 10,
+            cost_tracker: None,
+            event_tx: tokio::sync::broadcast::channel(16).0,
+            runtime_state: Some(Arc::new(RwLock::new(initial_snapshot))),
+            federation: None,
+            federation_tasks: None,
+        };
+
+        state.replace_runtime_snapshot(GatewayRuntimeSnapshot {
+            provider,
+            model: "model-after-switch".to_string(),
+            temperature: 0.0,
+            mem: memory,
+            tools_registry: Arc::new(Vec::new()),
+            tools_registry_exec: Arc::new(Vec::new()),
+        });
+
+        let response = run_gateway_chat_simple(&state, "use the current default")
+            .await
+            .expect("subsequent chat should use the live runtime snapshot");
+
+        assert_eq!(response, "ok");
+        assert_eq!(
+            provider_impl.models.lock().as_slice(),
+            ["model-after-switch"]
+        );
     }
 
     #[tokio::test]

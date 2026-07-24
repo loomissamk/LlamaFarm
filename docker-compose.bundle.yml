@@ -49,7 +49,11 @@ services:
       # The local bundle is direct-access by design. This fixed value also
       # overrides stale persisted config from an older paired deployment.
       - LLAMAFARM_GATEWAY_PORT=${LLAMAFARM_GATEWAY_PORT:-42617}
-      - LLAMAFARM_MODEL=${LLAMAFARM_MODEL:-qwen3.5:9b}
+      # Leave empty by default so a model selected and persisted in the
+      # dashboard remains authoritative after the container restarts.
+      # Set LLAMAFARM_MODEL explicitly only when an immutable deployment-level
+      # override is intentional.
+      - LLAMAFARM_MODEL=${LLAMAFARM_MODEL:-}
       - LLAMAFARM_AGENT_COMPACT_CONTEXT=${LLAMAFARM_AGENT_COMPACT_CONTEXT:-true}
       - LLAMAFARM_AGENT_TOOL_ROUTING_ENABLED=${LLAMAFARM_AGENT_TOOL_ROUTING_ENABLED:-true}
       - LLAMAFARM_AGENT_TOOL_ROUTING_TOP_K=${LLAMAFARM_AGENT_TOOL_ROUTING_TOP_K:-12}

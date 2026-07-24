@@ -224,6 +224,7 @@ RUN chmod 755 /usr/local/bin/bundle-entrypoint.sh /usr/bin/ollama && \
     sed -i \
       -e 's|http://host.docker.internal:11434|http://127.0.0.1:11434|g' \
       -e 's|http://chromium:4444|http://127.0.0.1:9515|g' \
+      -e 's|default_model = "qwen3-coder:30b"|default_model = "qwen3.5:9b"|g' \
       /usr/share/llamafarm/config.template.toml /usr/share/llamafarm/config.preset.safe.toml && \
     sed -i '/native_webdriver_url =/a native_chrome_path = "/usr/bin/chromium"' \
       /usr/share/llamafarm/config.template.toml /usr/share/llamafarm/config.preset.safe.toml && \

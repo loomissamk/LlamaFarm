@@ -21,9 +21,12 @@ export interface RuntimeShell {
 export interface OllamaStatus {
   endpoint: string;
   reachable: boolean;
+  configured_model: string;
   installed_models: string[];
   loaded_models: string[];
   active_model_loaded: boolean;
+  revision: string;
+  model_environment_override: string | null;
 }
 
 export interface HealthSnapshot {
