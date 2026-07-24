@@ -37,7 +37,10 @@ import {
   removeDbConnection,
   testDbConnection,
 } from '@/lib/api';
-import { pickDiscoveredConnection } from '@/lib/databaseDiscovery';
+import {
+  LatestRequestLifecycle,
+  pickDiscoveredConnection,
+} from '@/lib/databaseDiscovery';
 
 // ── Driver badge ──────────────────────────────────────────────────────────────
 
@@ -476,6 +479,8 @@ export default function DatabasePage() {
   const discoveryProbeRef = useRef(
     new Map<string, { schema?: DbSchema; error?: string }>(),
   );
+  const schemaLifecycleRef = useRef(new LatestRequestLifecycle());
+  const queryLifecycleRef = useRef(new LatestRequestLifecycle());
 
   const loadConnections = async () => {
     setLoadingConns(true);
@@ -499,11 +504,22 @@ export default function DatabasePage() {
   }, []);
 
   useEffect(() => {
-    if (!activeConn || activeConn === MEMORY_CONN) return;
+    const request = schemaLifecycleRef.current.begin();
+    queryLifecycleRef.current.invalidate();
+    const cancelRequest = () => {
+      request.cancel();
+      queryLifecycleRef.current.invalidate();
+    };
+    setRunning(false);
+    if (!activeConn || activeConn === MEMORY_CONN) {
+      setLoadingSchema(false);
+      return cancelRequest;
+    }
     setSchema(null); setSchemaError(null); setLoadingSchema(true);
     setResult(null); setQueryError(null); setActiveTable(null); setQuery('');
     const connName = activeConn;
     const applySchema = (loadedSchema: DbSchema) => {
+      if (!request.isCurrent()) return;
       setSchema(loadedSchema);
       // Auto-browse first table on connect (Compass-style).
       if (loadedSchema.tables.length > 0) {
@@ -524,25 +540,38 @@ export default function DatabasePage() {
     if (discoveryProbe) {
       discoveryProbeRef.current.delete(connName);
       if (discoveryProbe.schema) applySchema(discoveryProbe.schema);
-      if (discoveryProbe.error) setSchemaError(discoveryProbe.error);
-      setLoadingSchema(false);
-      return;
+      if (discoveryProbe.error && request.isCurrent()) {
+        setSchemaError(discoveryProbe.error);
+      }
+      if (request.isCurrent()) setLoadingSchema(false);
+      return cancelRequest;
     }
 
     getDbSchema(connName)
       .then(applySchema)
-      .catch((e) => setSchemaError(String(e)))
-      .finally(() => setLoadingSchema(false));
+      .catch((e) => {
+        if (request.isCurrent()) setSchemaError(String(e));
+      })
+      .finally(() => {
+        if (request.isCurrent()) setLoadingSchema(false);
+      });
+    return cancelRequest;
   }, [activeConn, connectionRevision]);
 
   const runQuery = useCallback(async (q: string, connName: string, offset: number, ps: number) => {
     if (!connName || !q.trim()) return;
+    const request = queryLifecycleRef.current.begin();
     const conn = connections.find((c) => c.name === connName);
     const paginated = conn ? injectPagination(q, conn.driver, offset, ps) : q;
     setRunning(true); setResult(null); setQueryError(null);
-    try { setResult(await runDbQuery(connName, paginated, ps)); }
-    catch (e) { setQueryError(String(e)); }
-    finally { setRunning(false); }
+    try {
+      const nextResult = await runDbQuery(connName, paginated, ps);
+      if (request.isCurrent()) setResult(nextResult);
+    } catch (e) {
+      if (request.isCurrent()) setQueryError(String(e));
+    } finally {
+      if (request.isCurrent()) setRunning(false);
+    }
   }, [connections]);
 
   const handleRun = useCallback(() => {

@@ -1,5 +1,32 @@
 import type { DbDiscoveryResult } from '../types/api';
 
+export interface LatestRequest {
+  isCurrent: () => boolean;
+  cancel: () => void;
+}
+
+/**
+ * Tracks the latest async request in a UI lifecycle. Starting or explicitly
+ * invalidating a request makes every older completion stale.
+ */
+export class LatestRequestLifecycle {
+  private generation = 0;
+
+  begin(): LatestRequest {
+    const generation = ++this.generation;
+    return {
+      isCurrent: () => generation === this.generation,
+      cancel: () => {
+        if (generation === this.generation) this.generation += 1;
+      },
+    };
+  }
+
+  invalidate(): void {
+    this.generation += 1;
+  }
+}
+
 /**
  * Select a newly connected database first, then any connected database. When
  * every usable probe needs credentials/routing, select that saved connection

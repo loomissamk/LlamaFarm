@@ -3,7 +3,10 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import type { DbDiscoveryResult } from '../src/types/api.ts';
-import { pickDiscoveredConnection } from '../src/lib/databaseDiscovery.ts';
+import {
+  LatestRequestLifecycle,
+  pickDiscoveredConnection,
+} from '../src/lib/databaseDiscovery.ts';
 
 function result(
   connection_name: string | undefined,
@@ -49,4 +52,47 @@ test('database explorer automatically runs discovery after loading saved connect
   );
 
   assert.match(page, /loadConnections\(\)\.then\(handleScan\)/);
+});
+
+test('late schema completion cannot replace the latest database selection', async () => {
+  const lifecycle = new LatestRequestLifecycle();
+  let displayedSchema = '';
+  let resolveFirst!: (schema: string) => void;
+  const firstSchema = new Promise<string>((resolve) => {
+    resolveFirst = resolve;
+  });
+
+  const firstRequest = lifecycle.begin();
+  const firstCompletion = firstSchema.then((schema) => {
+    if (firstRequest.isCurrent()) displayedSchema = schema;
+  });
+
+  const secondRequest = lifecycle.begin();
+  if (secondRequest.isCurrent()) displayedSchema = 'schema-b';
+  resolveFirst('schema-a');
+  await firstCompletion;
+
+  assert.equal(displayedSchema, 'schema-b');
+});
+
+test('late query completion cannot replace the latest database result', async () => {
+  const lifecycle = new LatestRequestLifecycle();
+  let displayedResult = '';
+  let resolveFirst!: (result: string) => void;
+  const firstQuery = new Promise<string>((resolve) => {
+    resolveFirst = resolve;
+  });
+
+  const firstRequest = lifecycle.begin();
+  const firstCompletion = firstQuery.then((result) => {
+    if (firstRequest.isCurrent()) displayedResult = result;
+  });
+
+  lifecycle.invalidate();
+  const secondRequest = lifecycle.begin();
+  if (secondRequest.isCurrent()) displayedResult = 'result-b';
+  resolveFirst('result-a');
+  await firstCompletion;
+
+  assert.equal(displayedResult, 'result-b');
 });
