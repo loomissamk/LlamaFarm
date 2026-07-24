@@ -33,6 +33,31 @@ max_iterations = 12
 
 
 class MergeBuiltinAgentsTests(unittest.TestCase):
+    def test_agent_extraction_stops_before_following_global_table(self):
+        template = (
+            TEMPLATE
+            + """
+
+[arxiv_rag]
+enabled = true
+collection = "arxiv_papers"
+"""
+        )
+        original = """
+[arxiv_rag]
+enabled = true
+collection = "existing-corpus"
+"""
+
+        merged, additions = MIGRATION.merge_builtin_agents(original, template)
+
+        self.assertEqual(
+            additions, ["model_routes:devsecops", "agents:devsecops"]
+        )
+        parsed = tomllib.loads(merged)
+        self.assertEqual(parsed["arxiv_rag"]["collection"], "existing-corpus")
+        self.assertIn("devsecops", parsed["agents"])
+
     def test_adds_missing_route_and_agent_without_rewriting_existing_text(self):
         original = (
             'api_key = "enc:v1:sensitive-value" # preserve this exact line\n'

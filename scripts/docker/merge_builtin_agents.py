@@ -19,7 +19,13 @@ import tomllib
 
 
 BUILTIN_AGENT_NAMES = ("devsecops",)
-_TABLE_BOUNDARY = r"(?=^\s*\[\[?[^\]\n]+\]\]?\s*(?:#.*)?$|\Z)"
+# Horizontal whitespace is intentional here. ``\s`` also consumes newlines
+# under the multiline/DOTALL matcher and can make a block swallow every table
+# that follows it (for example the global ``[arxiv_rag]`` table).
+_HSPACE = r"[ \t]*"
+_TABLE_BOUNDARY = (
+    rf"(?=^{_HSPACE}\[\[?[^\]\n]+\]\]?{_HSPACE}(?:\#[^\n]*)?$|\Z)"
+)
 
 
 def _parse(raw: str, source: Path) -> dict:
@@ -34,7 +40,8 @@ def _parse(raw: str, source: Path) -> dict:
 
 def _extract_agent_table(template: str, name: str) -> str:
     pattern = re.compile(
-        rf"(?ms)^\s*\[agents\.{re.escape(name)}\]\s*(?:#.*)?\n.*?{_TABLE_BOUNDARY}"
+        rf"(?ms)^{_HSPACE}\[agents\.{re.escape(name)}\]"
+        rf"{_HSPACE}(?:\#[^\n]*)?\n.*?{_TABLE_BOUNDARY}"
     )
     match = pattern.search(template)
     if match is None:
@@ -48,7 +55,8 @@ def _extract_agent_table(template: str, name: str) -> str:
 
 def _extract_model_route(template: str, hint: str) -> str:
     pattern = re.compile(
-        rf"(?ms)^\s*\[\[model_routes\]\]\s*(?:#.*)?\n.*?{_TABLE_BOUNDARY}"
+        rf"(?ms)^{_HSPACE}\[\[model_routes\]\]"
+        rf"{_HSPACE}(?:\#[^\n]*)?\n.*?{_TABLE_BOUNDARY}"
     )
     for match in pattern.finditer(template):
         block = match.group(0).strip()
