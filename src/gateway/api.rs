@@ -3466,23 +3466,12 @@ fn host_tailscale_status() -> serde_json::Value {
         return serde_json::json!({"status": "unavailable"});
     };
 
-    let mut parsed = parse_host_tailscale_status(&status);
-    if parsed["status"] == "up" {
-        let ipv4 = parsed["ipv4"].as_str().unwrap_or_default();
-        let port = std::env::var("LLAMAFARM_GATEWAY_PORT")
-            .unwrap_or_else(|_| "42617".to_string());
-        let health_url = format!("http://{ipv4}:{port}/health");
-        let reachable = std::process::Command::new("curl")
-            .args(["--fail", "--silent", "--max-time", "2", &health_url])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_ok_and(|status| status.success());
-        if !reachable {
-            parsed["status"] = serde_json::Value::String("down".to_string());
-        }
-    }
-    parsed
+    // The host LocalAPI is authoritative for whether Tailscale is running and
+    // which Tailnet address belongs to this node. Do not probe that same
+    // host-published address from a bridge-networked container: Docker
+    // hairpin routing commonly rejects it even though remote Tailnet peers can
+    // reach the published gateway just fine.
+    parse_host_tailscale_status(&status)
 }
 
 /// GET /api/connections — friendly settings state for the Connections UI.
