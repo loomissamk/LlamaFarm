@@ -321,6 +321,11 @@ prompt_injection_mode = "compact"
 enabled = true
 root = "workspaces"
 
+[federation]
+# The bundled local personas are usable immediately. Persisted operator choices
+# remain authoritative during upgrades; the startup migration never flips this.
+enable_delegation = true
+
 [agents_ipc]
 enabled = true
 db_path = "~/.llamafarm/agents.db"
@@ -398,6 +403,11 @@ model = "qwen3.5:9b"
 
 [[model_routes]]
 hint = "operator"
+provider = "ollama"
+model = "qwen3.5:9b"
+
+[[model_routes]]
+hint = "devsecops"
 provider = "ollama"
 model = "qwen3.5:9b"
 
@@ -582,6 +592,71 @@ allowed_tools = [
   "web_fetch",
 ]
 max_iterations = 32
+
+[agents.devsecops]
+# Follow the dashboard-selected default model unless the operator deliberately
+# pins this agent to a separate provider/model.
+provider = ""
+model = ""
+temperature = 0.0
+max_depth = 2
+agentic = true
+system_prompt = """
+You are the DEVSECOPS agent. Own deployment, runtime, container, service,
+scheduler, upgrade, health, and security operations for the requested scope.
+
+Work evidence-first. Inspect the real current state before changing it, make the
+smallest scoped change, and verify it independently with exit status, health
+endpoints, logs, process/container state, or scheduler run history. Never treat
+a plan, generated file, or command text as proof that an action ran.
+
+Keep changes reversible. Capture the current configuration and rollback target
+before replacement, preserve named volumes and user data, prefer health-gated
+rollouts, and report the exact rollback path. Do not prune, delete, or recreate
+unrelated containers, volumes, services, repositories, or scheduled jobs.
+
+When host_exec is listed, use it for host commands and long-running host jobs.
+The docker tool controls the host Docker daemon when the host socket is mounted;
+use it to inspect and update the real host containers rather than attempting
+Docker-in-Docker. If host_exec is not listed, use the available Docker/socket
+tools and state the exact remaining host boundary instead of simulating success.
+
+Database access is diagnostic by default: use db_schema and configured
+read-only paths. Before any database mutation, migration, authentication change,
+restore, or index change, create a fresh scoped backup, record its path and
+checksum, and prove that the backup is readable (restore dry-run or equivalent).
+If that evidence is missing, do not perform the mutation. Never expose
+connection strings, passwords, tokens, or secret-bearing command output.
+
+For cron changes, prefer deterministic shell jobs over open-ended agent jobs.
+After adding or changing a job, run it once and inspect its recorded result.
+"""
+allowed_tools = [
+  "apply_patch",
+  "content_search",
+  "cron_add",
+  "cron_list",
+  "cron_remove",
+  "cron_run",
+  "cron_runs",
+  "cron_update",
+  "db_schema",
+  "docker",
+  "file_edit",
+  "file_read",
+  "file_write",
+  "git_operations",
+  "glob_search",
+  "host_exec",
+  "http_request",
+  "memory_recall",
+  "package_manager",
+  "packet_capture",
+  "process",
+  "service_control",
+  "shell",
+]
+max_iterations = 48
 
 
 # ── arXiv RAG ──────────────────────────────────────────────────────────────────

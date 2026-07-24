@@ -127,7 +127,8 @@ COPY dev/config.preset.safe.toml /usr/share/llamafarm/config.preset.safe.toml
 COPY dev/workspace.preset.god.AGENTS.md /usr/share/llamafarm/workspace.preset.god.AGENTS.md
 COPY dev/workspace.preset.safe.AGENTS.md /usr/share/llamafarm/workspace.preset.safe.AGENTS.md
 COPY scripts/docker/dev-entrypoint.sh /usr/local/bin/dev-entrypoint.sh
-RUN chmod 755 /usr/local/bin/dev-entrypoint.sh && \
+COPY scripts/docker/merge_builtin_agents.py /usr/local/lib/llamafarm/merge_builtin_agents.py
+RUN chmod 755 /usr/local/bin/dev-entrypoint.sh /usr/local/lib/llamafarm/merge_builtin_agents.py && \
     chmod 644 /usr/share/llamafarm/config.template.toml /usr/share/llamafarm/config.preset.safe.toml && \
     rm -f /llamafarm-data/.llamafarm/config.toml
 
@@ -218,7 +219,8 @@ COPY dev/config.preset.safe.toml /usr/share/llamafarm/config.preset.safe.toml
 COPY dev/workspace.preset.god.AGENTS.md /usr/share/llamafarm/workspace.preset.god.AGENTS.md
 COPY dev/workspace.preset.safe.AGENTS.md /usr/share/llamafarm/workspace.preset.safe.AGENTS.md
 COPY scripts/docker/bundle-entrypoint.sh /usr/local/bin/bundle-entrypoint.sh
-RUN chmod 755 /usr/local/bin/bundle-entrypoint.sh /usr/bin/ollama && \
+COPY scripts/docker/merge_builtin_agents.py /usr/local/lib/llamafarm/merge_builtin_agents.py
+RUN chmod 755 /usr/local/bin/bundle-entrypoint.sh /usr/bin/ollama /usr/local/lib/llamafarm/merge_builtin_agents.py && \
     ln -sf /usr/bin/ollama /usr/local/bin/ollama && \
     chmod 644 /usr/share/llamafarm/config.template.toml /usr/share/llamafarm/config.preset.safe.toml && \
     sed -i \

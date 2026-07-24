@@ -6,6 +6,7 @@ CONFIG_DIR="$DATA_DIR/.llamafarm"
 WORKSPACE_DIR="$DATA_DIR/workspace"
 CONFIG_TEMPLATE="/usr/share/llamafarm/config.template.toml"
 DEFAULT_AGENTS="/usr/share/llamafarm/workspace.preset.god.AGENTS.md"
+BUILTIN_AGENT_MIGRATION="/usr/local/lib/llamafarm/merge_builtin_agents.py"
 
 ensure_runtime_layout() {
   mkdir -p "$CONFIG_DIR" "$WORKSPACE_DIR"
@@ -17,6 +18,11 @@ ensure_runtime_layout() {
 
   if [ ! -f "$WORKSPACE_DIR/AGENTS.md" ] && [ -f "$DEFAULT_AGENTS" ]; then
     cp "$DEFAULT_AGENTS" "$WORKSPACE_DIR/AGENTS.md"
+  fi
+
+  if [ -f "$BUILTIN_AGENT_MIGRATION" ] && [ -f "$CONFIG_TEMPLATE" ]; then
+    python3 "$BUILTIN_AGENT_MIGRATION" \
+      "$CONFIG_DIR/config.toml" "$CONFIG_TEMPLATE"
   fi
 
   # SOUL.md is never injected into the prompt; remove any stale copy.

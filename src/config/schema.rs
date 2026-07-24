@@ -8229,6 +8229,7 @@ calc = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         assert!(parsed.web_fetch.enabled);
         assert!(parsed.web_search.enabled);
         assert!(parsed.workspaces.enabled);
+        assert!(parsed.federation.enable_delegation);
         assert!(parsed.agents_ipc.enabled);
         assert!(parsed.security.estop.enabled);
         assert!(
@@ -8237,6 +8238,58 @@ calc = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                 .auto_approve
                 .contains(&"delegate".to_string())
         );
+        assert_devsecops_agent_is_visible_and_scoped(&parsed);
+    }
+
+    #[test]
+    async fn safe_preset_exposes_scoped_devsecops_agent() {
+        let raw = include_str!("../../dev/config.preset.safe.toml");
+        let parsed: Config = toml::from_str(raw).expect("safe preset should parse");
+
+        assert!(parsed.federation.enable_delegation);
+        assert_devsecops_agent_is_visible_and_scoped(&parsed);
+    }
+
+    fn assert_devsecops_agent_is_visible_and_scoped(config: &Config) {
+        let agent = config
+            .agents
+            .get("devsecops")
+            .expect("devsecops must be visible to delegation and dashboard config");
+        assert!(agent.agentic);
+        for required_tool in [
+            "shell",
+            "process",
+            "docker",
+            "host_exec",
+            "service_control",
+            "http_request",
+            "file_read",
+            "git_operations",
+            "package_manager",
+            "cron_list",
+            "cron_run",
+            "db_schema",
+        ] {
+            assert!(
+                agent.allowed_tools.iter().any(|tool| tool == required_tool),
+                "devsecops missing required tool {required_tool}"
+            );
+        }
+        assert!(
+            !agent.allowed_tools.iter().any(|tool| tool == "db_query"),
+            "devsecops must not receive a potentially writable database query tool by default"
+        );
+        let prompt = agent
+            .system_prompt
+            .as_deref()
+            .expect("devsecops must have an operational system prompt");
+        assert!(prompt.contains("evidence-first"));
+        assert!(prompt.contains("create a fresh scoped backup"));
+        assert!(prompt.contains("host_exec"));
+        assert!(config
+            .model_routes
+            .iter()
+            .any(|route| route.hint == "devsecops"));
     }
 
     #[test]
