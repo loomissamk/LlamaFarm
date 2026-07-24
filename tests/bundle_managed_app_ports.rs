@@ -37,3 +37,20 @@ fn launcher_status_and_operator_docs_match_the_published_range() {
     assert!(!launcher.contains("8501-8510"));
     assert!(!node_profiles.contains("8501-8510"));
 }
+
+#[test]
+fn docker_build_invalidates_embedded_dashboard_when_web_assets_change() {
+    let dockerfile = read_repo_file("Dockerfile");
+    let copy_assets = dockerfile
+        .find("COPY --from=web_builder /web/dist/ web/dist/")
+        .expect("Dockerfile must copy the production dashboard");
+    let dirty_embed = dockerfile
+        .find("RUN touch src/gateway/static_files.rs")
+        .expect("Dockerfile must invalidate the rust-embed source");
+    let compile_binary = dockerfile[dirty_embed..]
+        .find("cargo build --release --locked")
+        .expect("Dockerfile must compile after invalidating rust-embed");
+
+    assert!(copy_assets < dirty_embed);
+    assert!(compile_binary > 0);
+}

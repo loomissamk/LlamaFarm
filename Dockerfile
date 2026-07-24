@@ -56,6 +56,10 @@ COPY data/ data/
 COPY skills/ skills/
 RUN mkdir -p web/dist
 COPY --from=web_builder /web/dist/ web/dist/
+# rust-embed inputs are outside Cargo's normal Rust source graph. Force the
+# embedding module dirty whenever this COPY layer changes so a UI-only rebuild
+# cannot reuse a binary containing the previous dashboard bundle.
+RUN touch src/gateway/static_files.rs
 RUN --mount=type=cache,id=llamafarm-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=llamafarm-cargo-git,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,id=llamafarm-target,target=/app/target,sharing=locked \

@@ -477,19 +477,26 @@ export default function DatabasePage() {
     new Map<string, { schema?: DbSchema; error?: string }>(),
   );
 
-  const loadConnections = () => {
+  const loadConnections = async () => {
     setLoadingConns(true);
-    getDbConnections()
-      .then((r) => {
-        setConnections(r.connections);
-        const first = r.connections[0];
-        if (first && !activeConn) setActiveConn(first.name);
-      })
-      .catch((e) => setConnsError(String(e)))
-      .finally(() => setLoadingConns(false));
+    try {
+      const response = await getDbConnections();
+      setConnections(response.connections);
+      const first = response.connections[0];
+      if (first && !activeConn) setActiveConn(first.name);
+    } catch (error) {
+      setConnsError(String(error));
+    } finally {
+      setLoadingConns(false);
+    }
   };
 
-  useEffect(loadConnections, []);
+  useEffect(() => {
+    // Reconcile reachable open databases as soon as the explorer opens. The
+    // same pass schema-probes saved connections and feeds auth/routing
+    // failures into the existing Update connection / Retry UI.
+    void loadConnections().then(handleScan);
+  }, []);
 
   useEffect(() => {
     if (!activeConn || activeConn === MEMORY_CONN) return;
@@ -579,7 +586,7 @@ export default function DatabasePage() {
   const activeCfg = connections.find((c) => c.name === activeConn);
   const isMongo = activeCfg?.driver === 'mongodb';
 
-  const handleScan = async () => {
+  async function handleScan() {
     setScanning(true);
     setConnsError(null);
     try {
@@ -607,7 +614,7 @@ export default function DatabasePage() {
     } finally {
       setScanning(false);
     }
-  };
+  }
 
   if (loadingConns) return (
     <div className="flex items-center justify-center h-64 text-gray-400">

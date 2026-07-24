@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import type { DbDiscoveryResult } from '../src/types/api.ts';
 import { pickDiscoveredConnection } from '../src/lib/databaseDiscovery.ts';
 
@@ -38,4 +40,13 @@ test('auto-select falls back to a saved connection that needs configuration', ()
 
 test('auto-select ignores unsupported services without explorer connections', () => {
   assert.equal(pickDiscoveredConnection([result(undefined, 'unsupported')]), null);
+});
+
+test('database explorer automatically runs discovery after loading saved connections', () => {
+  const page = readFileSync(
+    fileURLToPath(new URL('../src/pages/Database.tsx', import.meta.url)),
+    'utf8',
+  );
+
+  assert.match(page, /loadConnections\(\)\.then\(handleScan\)/);
 });
