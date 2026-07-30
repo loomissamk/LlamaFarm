@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   CheckCircle2,
   Circle,
   Copy,
@@ -7,6 +8,7 @@ import {
   Github,
   Loader2,
   Plug,
+  RefreshCw,
   Unplug,
 } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
@@ -69,10 +71,18 @@ function StatusDot({ connected }: { connected: boolean }) {
 
 export function ConnectionsPanel() {
   const [data, setData] = useState<ConnectionsResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [contextError, setContextError] = useState<string | null>(null);
+  const [contextStatus, setContextStatus] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [device, setDevice] = useState<DeviceStart | null>(null);
   const [connecting, setConnecting] = useState(false);
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const disconnectCancelRef = useRef<HTMLButtonElement | null>(null);
+  const contextSaveInFlightRef = useRef<number | null>(null);
   const [ctx, setCtx] = useState<ContextInfo | null>(null);
   const [ctxDraft, setCtxDraft] = useState<number>(0);
   const [ctxSaving, setCtxSaving] = useState(false);
@@ -82,28 +92,43 @@ export function ConnectionsPanel() {
       const info = await apiFetch<ContextInfo>('/api/context');
       setCtx(info);
       setCtxDraft(info.num_ctx ?? 0);
-    } catch {
-      /* non-fatal */
+      setContextError(null);
+    } catch (err) {
+      setContextError(err instanceof Error ? err.message : 'Failed to load context settings');
     }
   }, []);
 
   const saveContext = async (value: number) => {
+    if (value === (ctx?.num_ctx ?? 0) || contextSaveInFlightRef.current !== null) {
+      return;
+    }
+    contextSaveInFlightRef.current = value;
     setCtxSaving(true);
+    setContextError(null);
+    setContextStatus(null);
     try {
       await apiFetch('/api/context', {
         method: 'PUT',
         body: JSON.stringify({ num_ctx: value === 0 ? null : value }),
       });
       await loadContext();
+      setContextStatus(
+        value === 0
+          ? 'Context window reset to the model default.'
+          : `Context window saved at ${value.toLocaleString()} tokens.`,
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to set context');
+      setContextError(err instanceof Error ? err.message : 'Failed to set context');
     } finally {
+      contextSaveInFlightRef.current = null;
       setCtxSaving(false);
     }
   };
 
   const saveGpuLayers = async (value: number) => {
     setCtxSaving(true);
+    setContextError(null);
+    setContextStatus(null);
     try {
       await apiFetch('/api/context', {
         method: 'PUT',
@@ -114,34 +139,50 @@ export function ConnectionsPanel() {
         }),
       });
       await loadContext();
+      setContextStatus('GPU layer preference saved.');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to set GPU layers');
+      setContextError(err instanceof Error ? err.message : 'Failed to set GPU layers');
     } finally {
       setCtxSaving(false);
     }
   };
 
   const refresh = useCallback(async () => {
+    setRefreshing(true);
     try {
       setData(await apiFetch<ConnectionsResponse>('/api/connections'));
-      setError(null);
+      setLoadError(null);
+      setLastUpdated(new Date());
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load connections');
+      setLoadError(err instanceof Error ? err.message : 'Failed to load connections');
+    } finally {
+      setRefreshing(false);
     }
   }, []);
 
   useEffect(() => {
-    refresh();
-    loadContext();
-    const connectionRefresh = setInterval(refresh, 30_000);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      void refresh();
+      void loadContext();
+    };
+
+    refreshWhenVisible();
+    const connectionRefresh = setInterval(refreshWhenVisible, 30_000);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
     return () => {
       clearInterval(connectionRefresh);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
       if (pollTimer.current) clearTimeout(pollTimer.current);
     };
   }, [refresh, loadContext]);
 
   const poll = useCallback(
     async (deviceCode: string, intervalSecs: number) => {
+      if (document.visibilityState === 'hidden') {
+        pollTimer.current = setTimeout(() => poll(deviceCode, intervalSecs), 1000);
+        return;
+      }
       try {
         const result = await apiFetch<PollResult>('/api/connections/github/poll', {
           method: 'POST',
@@ -154,7 +195,7 @@ export function ConnectionsPanel() {
           return;
         }
         if (result.status === 'failed') {
-          setError(`GitHub: ${result.error}`);
+          setActionError(`GitHub: ${result.error}`);
           setDevice(null);
           setConnecting(false);
           return;
@@ -162,7 +203,8 @@ export function ConnectionsPanel() {
         const next = result.status === 'slow_down' ? result.interval : intervalSecs;
         pollTimer.current = setTimeout(() => poll(deviceCode, next), next * 1000);
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'GitHub poll failed');
+        setActionError(err instanceof Error ? err.message : 'GitHub poll failed');
+        setDevice(null);
         setConnecting(false);
       }
     },
@@ -170,7 +212,7 @@ export function ConnectionsPanel() {
   );
 
   const connectGithub = async () => {
-    setError(null);
+    setActionError(null);
     setConnecting(true);
     try {
       const start = await apiFetch<DeviceStart>('/api/connections/github/start', {
@@ -181,39 +223,139 @@ export function ConnectionsPanel() {
       window.open(start.verification_uri, '_blank', 'noopener,noreferrer');
       poll(start.device_code, start.interval);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not start GitHub sign-in');
+      setActionError(err instanceof Error ? err.message : 'Could not start GitHub sign-in');
       setConnecting(false);
     }
   };
 
   const disconnectGithub = async () => {
-    if (!window.confirm('Disconnect GitHub from this node?')) return;
+    setConfirmDisconnect(false);
+    setActionError(null);
     try {
       await apiFetch('/api/connections/github/disconnect', { method: 'POST' });
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Disconnect failed');
+      setActionError(err instanceof Error ? err.message : 'Disconnect failed');
     }
   };
 
+  useEffect(() => {
+    if (!confirmDisconnect) return;
+    disconnectCancelRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setConfirmDisconnect(false);
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [confirmDisconnect]);
+
   const githubConnected = data?.github.status === 'connected';
+  const contextDirty = ctxDraft !== (ctx?.num_ctx ?? 0);
+  const saveRangeFromKeyboard = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (
+      [
+        'ArrowLeft',
+        'ArrowRight',
+        'ArrowUp',
+        'ArrowDown',
+        'Home',
+        'End',
+        'PageUp',
+        'PageDown',
+      ].includes(event.key)
+    ) {
+      void saveContext(ctxDraft);
+    }
+  };
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <Plug className="h-5 w-5 text-blue-400" />
-        <div>
-          <h2 className="text-base font-semibold text-white">Connections</h2>
-          <p className="text-xs text-gray-500">
-            Services this node can use. Credentials are stored owner-only on the node and are
-            never exposed to the model, tools, or this browser.
-          </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <Plug className="h-5 w-5 text-blue-400" />
+          <div>
+            <h2 className="text-base font-semibold text-white">Connections</h2>
+            <p className="text-xs text-gray-500">
+              Services and runtime capacity currently available to this node.
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-gray-500">
+            {lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()}` : 'Not updated yet'}
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              void refresh();
+              void loadContext();
+            }}
+            disabled={refreshing}
+            className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-gray-700 px-3 text-sm text-gray-300 transition-colors hover:bg-gray-800 disabled:cursor-wait disabled:opacity-60"
+          >
+            <RefreshCw
+              className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`}
+              aria-hidden="true"
+            />
+            Refresh
+          </button>
         </div>
       </div>
 
-      {error && (
-        <div className="rounded-md border border-red-700/40 bg-red-900/10 px-3 py-2 text-sm text-red-300">
-          {error}
+      {[loadError, actionError, contextError].filter(Boolean).map((message, index) => (
+        <div
+          key={`${index}-${message}`}
+          role="alert"
+          className="rounded-md border border-red-700/40 bg-red-900/10 px-3 py-2 text-sm text-red-300"
+        >
+          {message}
+        </div>
+      ))}
+
+      {contextStatus && (
+        <div role="status" className="rounded-md border border-green-700/40 bg-green-900/10 px-3 py-2 text-sm text-green-300">
+          {contextStatus}
+        </div>
+      )}
+
+      {confirmDisconnect && (
+        <div
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="disconnect-github-title"
+          aria-describedby="disconnect-github-description"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+        >
+          <div className="w-full max-w-md rounded-xl border border-gray-700 bg-gray-900 p-5 shadow-xl">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="mt-0.5 h-5 w-5 text-yellow-400" aria-hidden="true" />
+              <div>
+                <h3 id="disconnect-github-title" className="font-semibold text-white">
+                  Disconnect GitHub?
+                </h3>
+                <p id="disconnect-github-description" className="mt-1 text-sm text-gray-400">
+                  GitHub operations will remain unavailable until this node is connected again.
+                </p>
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                ref={disconnectCancelRef}
+                type="button"
+                onClick={() => setConfirmDisconnect(false)}
+                className="rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-300 hover:bg-gray-800"
+              >
+                Keep connected
+              </button>
+              <button
+                type="button"
+                onClick={() => void disconnectGithub()}
+                className="rounded-lg bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-700"
+              >
+                Disconnect
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -241,7 +383,8 @@ export function ConnectionsPanel() {
           </div>
           {githubConnected ? (
             <button
-              onClick={disconnectGithub}
+              type="button"
+              onClick={() => setConfirmDisconnect(true)}
               className="inline-flex items-center gap-1.5 rounded-lg border border-gray-700 px-3 py-1.5 text-sm text-gray-300 hover:border-red-700 hover:text-red-300"
             >
               <Unplug className="h-4 w-4" />
@@ -330,23 +473,40 @@ export function ConnectionsPanel() {
             </div>
           )}
           <div className="flex items-center justify-between">
-            <span className="font-medium text-white">Chat context window</span>
+            <label htmlFor="connection-context-window" className="font-medium text-white">
+              Chat context window
+            </label>
             <span className="font-mono text-sm text-blue-300">
               {ctxDraft === 0 ? 'auto (model native)' : `${ctxDraft.toLocaleString()} tokens`}
             </span>
           </div>
           <input
+            id="connection-context-window"
             type="range"
             min={0}
             max={ctx.max}
             step={2048}
             value={ctxDraft}
             onChange={(e) => setCtxDraft(Number(e.target.value))}
-            onMouseUp={() => saveContext(ctxDraft)}
-            onTouchEnd={() => saveContext(ctxDraft)}
+            onPointerUp={() => void saveContext(ctxDraft)}
+            onKeyUp={saveRangeFromKeyboard}
+            onBlur={() => void saveContext(ctxDraft)}
+            aria-valuetext={
+              ctxDraft === 0 ? 'Automatic model-native context' : `${ctxDraft} tokens`
+            }
             disabled={ctxSaving}
             className="mt-3 w-full accent-blue-500"
           />
+          <div className="mt-2 flex justify-end">
+            <button
+              type="button"
+              onClick={() => void saveContext(ctxDraft)}
+              disabled={!contextDirty || ctxSaving}
+              className="rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-300 transition-colors hover:bg-gray-800 disabled:opacity-50"
+            >
+              {ctxSaving ? 'Saving…' : 'Apply context window'}
+            </button>
+          </div>
           <div className="mt-1 flex justify-between text-[10px] text-gray-600">
             <span>auto</span>
             <span>{(ctx.max / 1024).toFixed(0)}k</span>
