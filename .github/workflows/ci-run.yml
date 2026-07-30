@@ -56,7 +56,11 @@ jobs:
             echo "No changed Rust files."
             exit 0
           fi
-          rustfmt --edition 2021 --check "${changed_rust_files[@]}"
+          # Keep the gate scoped to the files in this change. Without
+          # `skip_children`, rustfmt follows `mod` declarations and reports
+          # unrelated baseline drift in unchanged sibling modules.
+          rustfmt --edition 2021 --config skip_children=true --check \
+            "${changed_rust_files[@]}"
 
       - name: Run Clippy
         run: cargo clippy --locked --all-targets -- -D clippy::correctness

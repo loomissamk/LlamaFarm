@@ -115,11 +115,8 @@ mod tests {
 
     #[test]
     fn validate_schedule_rejects_interval_overflow() {
-        let error = validate_schedule(
-            &Schedule::Every { every_ms: u64::MAX },
-            Utc::now(),
-        )
-        .expect_err("oversized interval should fail validation");
+        let error = validate_schedule(&Schedule::Every { every_ms: u64::MAX }, Utc::now())
+            .expect_err("oversized interval should fail validation");
         assert!(error.to_string().contains("too large"));
     }
 }
