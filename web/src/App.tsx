@@ -1,20 +1,22 @@
+import { lazy } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import Layout from './components/layout/Layout';
-import Dashboard from './pages/Dashboard';
-import FederationPage from './pages/Federation';
-import Tools from './pages/Tools';
-import Cron from './pages/Cron';
-import Integrations from './pages/Integrations';
-import Memory from './pages/Memory';
-import Config from './pages/Config';
-import Logs from './pages/Logs';
-import Runs from './pages/Runs';
-import Doctor from './pages/Doctor';
-import WorkspaceIde from './pages/WorkspaceIde';
-import WorkspaceFiles from './pages/WorkspaceFiles';
-import WorkspacePrompts from './pages/WorkspacePrompts';
-import DatabasePage from './pages/Database';
-import NotFound from './pages/NotFound';
+
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const FederationPage = lazy(() => import('./pages/Federation'));
+const Tools = lazy(() => import('./pages/Tools'));
+const Cron = lazy(() => import('./pages/Cron'));
+const Integrations = lazy(() => import('./pages/Integrations'));
+const Memory = lazy(() => import('./pages/Memory'));
+const Config = lazy(() => import('./pages/Config'));
+const Logs = lazy(() => import('./pages/Logs'));
+const Runs = lazy(() => import('./pages/Runs'));
+const Doctor = lazy(() => import('./pages/Doctor'));
+const WorkspaceIde = lazy(() => import('./pages/WorkspaceIde'));
+const WorkspaceFiles = lazy(() => import('./pages/WorkspaceFiles'));
+const WorkspacePrompts = lazy(() => import('./pages/WorkspacePrompts'));
+const DatabasePage = lazy(() => import('./pages/Database'));
+const NotFound = lazy(() => import('./pages/NotFound'));
 
 export default function App() {
   return (

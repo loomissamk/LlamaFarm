@@ -1,11 +1,19 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Outlet, useMatch } from 'react-router-dom';
 import Sidebar from '@/components/layout/Sidebar';
 import Header from '@/components/layout/Header';
-import AgentChat from '@/pages/AgentChat';
 import { useLocale } from '@/lib/i18n';
 
 const SIDEBAR_COLLAPSED_KEY = 'llamafarm.sidebar_collapsed.v1';
+const AgentChat = lazy(() => import('@/pages/AgentChat'));
+
+function PageLoading() {
+  return (
+    <div className="flex h-64 items-center justify-center text-sm text-gray-500" role="status">
+      Loading page…
+    </div>
+  );
+}
 
 function loadSidebarCollapsed(): boolean {
   try {
@@ -97,10 +105,16 @@ export default function Layout() {
         <main id="main-content" tabIndex={-1} className="flex-1 overflow-y-auto">
           {(agentMounted || isAgentRoute) && (
             <div className={isAgentRoute ? '' : 'hidden'}>
-              <AgentChat />
+              <Suspense fallback={<PageLoading />}>
+                <AgentChat />
+              </Suspense>
             </div>
           )}
-          {!isAgentRoute && <Outlet />}
+          {!isAgentRoute && (
+            <Suspense fallback={<PageLoading />}>
+              <Outlet />
+            </Suspense>
+          )}
         </main>
       </div>
     </div>
