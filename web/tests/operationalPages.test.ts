@@ -38,6 +38,7 @@ test('runs poll live work with visibility awareness and bounded backoff', () => 
   assert.match(runs, /document\.addEventListener\('visibilitychange'/);
   assert.match(runs, /selectedIsLive/);
   assert.match(runs, /liveIdsRef\.current\.length > 0/);
+  assert.match(runs, /liveIdsRef\.current\.length > 0 \? 3000 : 15000/);
   assert.match(runs, /Math\.min\(1000 \* 2 \*\*/);
   assert.doesNotMatch(runs, /setInterval/);
 });

@@ -65,6 +65,9 @@ test('workspace browser preserves its location across refresh failures and stale
   assert.match(workspaceFiles, /path = currentPathRef\.current/);
   assert.match(workspaceFiles, /browserRequestRef\.current !== requestId/);
   assert.match(workspaceFiles, /currentPathRef\.current = nextBrowser\.current_path/);
+  assert.match(workspaceFiles, /currentPathRef\.current === destinationPath/);
+  assert.match(workspaceFiles, /const workspaceMutationInFlight =/);
+  assert.match(workspaceFiles, /disabled=\{workspaceMutationInFlight\}/);
 });
 
 test('workspace uploads are confirmed, counted, and announced', () => {

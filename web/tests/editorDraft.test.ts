@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { createBackupFilename, summarizeTextChange } from '../src/lib/editorDraft.ts';
 
 test('text change summary isolates the changed middle block', () => {
@@ -28,4 +30,15 @@ test('backup filename is deterministic and filesystem friendly', () => {
     createBackupFilename('AGENTS.md live', new Date('2026-07-30T18:30:00.000Z')),
     'AGENTS.md-live.2026-07-30T18-30-00-000Z.bak',
   );
+});
+
+test('dirty draft guard covers browser history navigation', () => {
+  const guard = readFileSync(
+    fileURLToPath(new URL('../src/hooks/useDirtyDraftGuard.ts', import.meta.url)),
+    'utf8',
+  );
+
+  assert.match(guard, /window\.addEventListener\('popstate', handlePopState\)/);
+  assert.match(guard, /currentHistoryIndex - nextHistoryIndex/);
+  assert.match(guard, /window\.history\.go\(restoreDelta\)/);
 });

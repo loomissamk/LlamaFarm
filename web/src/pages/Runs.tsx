@@ -459,9 +459,11 @@ export default function Runs() {
       const succeeded = await refreshList();
       if (cancelled) return;
 
-      if (succeeded && liveIdsRef.current.length > 0) {
-        schedule(3000);
-      } else if (!succeeded) {
+      if (succeeded) {
+        // Keep a restrained idle poll so work started in another tab or on a
+        // peer appears without requiring a manual refresh.
+        schedule(liveIdsRef.current.length > 0 ? 3000 : 15000);
+      } else {
         schedule(Math.min(1000 * 2 ** listFailureCountRef.current, 30000));
       }
     };

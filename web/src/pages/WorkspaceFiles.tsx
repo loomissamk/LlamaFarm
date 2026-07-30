@@ -71,6 +71,7 @@ export default function WorkspaceFiles() {
     total: number;
     currentFile: string;
   } | null>(null);
+  const workspaceMutationInFlight = uploading || creatingFolder || deletingPath !== null;
 
   const loadBrowser = async (path = currentPathRef.current, showLoading = true) => {
     const requestId = browserRequestRef.current + 1;
@@ -163,14 +164,18 @@ export default function WorkspaceFiles() {
           currentFile: file.name,
         });
       }
-      await loadBrowser(currentPathRef.current, false);
+      if (currentPathRef.current === destinationPath) {
+        await loadBrowser(destinationPath, false);
+      }
       setBrowserSuccess(
         `${files.length} file${files.length === 1 ? '' : 's'} uploaded to ${
           destinationPath || '.'
         }.`,
       );
     } catch (err: unknown) {
-      await loadBrowser(currentPathRef.current, false);
+      if (currentPathRef.current === destinationPath) {
+        await loadBrowser(destinationPath, false);
+      }
       const message = err instanceof Error ? err.message : 'Failed to upload workspace files';
       setBrowserError(
         completed > 0
@@ -188,13 +193,16 @@ export default function WorkspaceFiles() {
   };
 
   const doDelete = async (entry: WorkspaceBrowserEntry) => {
+    const destinationPath = currentPathRef.current;
     setConfirmDeleteEntry(null);
     setDeletingPath(entry.path);
     setBrowserError(null);
     setBrowserSuccess(null);
     try {
       await deleteWorkspacePath(entry.path);
-      await loadBrowser(currentPathRef.current, false);
+      if (currentPathRef.current === destinationPath) {
+        await loadBrowser(destinationPath, false);
+      }
       setBrowserSuccess(`${entry.path} deleted from the live workspace.`);
     } catch (err: unknown) {
       setBrowserError(err instanceof Error ? err.message : 'Failed to delete workspace path');
@@ -475,7 +483,8 @@ export default function WorkspaceFiles() {
                   {index > 0 && <ChevronRight className="h-3.5 w-3.5 text-gray-600" />}
                   <button
                     onClick={() => void loadBrowser(crumb.path, false)}
-                    className="rounded px-2 py-1 transition-colors hover:bg-gray-800 hover:text-white"
+                    disabled={workspaceMutationInFlight}
+                    className="rounded px-2 py-1 transition-colors hover:bg-gray-800 hover:text-white disabled:opacity-50"
                   >
                     {crumb.label}
                   </button>
@@ -496,7 +505,7 @@ export default function WorkspaceFiles() {
             <button
               type="button"
               onClick={() => void loadBrowser(currentPathRef.current, false)}
-              disabled={refreshingBrowser || uploading || deletingPath !== null}
+              disabled={refreshingBrowser || workspaceMutationInFlight}
               className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-300 transition-colors hover:bg-gray-800 hover:text-white disabled:opacity-50"
             >
               <RefreshCw
@@ -592,7 +601,8 @@ export default function WorkspaceFiles() {
                     <button
                       type="button"
                       onClick={() => void loadBrowser(browser.parent_path || '', false)}
-                      className="inline-flex items-center gap-2 text-gray-300 transition-colors hover:text-white"
+                      disabled={workspaceMutationInFlight}
+                      className="inline-flex items-center gap-2 text-gray-300 transition-colors hover:text-white disabled:opacity-50"
                     >
                       <Folder className="h-4 w-4 text-yellow-400" aria-hidden="true" />
                       ..
@@ -630,7 +640,8 @@ export default function WorkspaceFiles() {
                         <button
                           type="button"
                           onClick={() => void loadBrowser(entry.path, false)}
-                          className="flex min-w-0 items-center gap-2 text-left text-gray-200 transition-colors hover:text-white"
+                          disabled={workspaceMutationInFlight}
+                          className="flex min-w-0 items-center gap-2 text-left text-gray-200 transition-colors hover:text-white disabled:opacity-50"
                         >
                           <Folder className="h-4 w-4 shrink-0 text-yellow-400" aria-hidden="true" />
                           <span className="break-all">{entry.name}</span>
@@ -663,7 +674,8 @@ export default function WorkspaceFiles() {
                           <button
                             type="button"
                             onClick={() => void loadBrowser(entry.path, false)}
-                            className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-gray-700 px-2.5 py-1.5 text-xs text-gray-300 transition-colors hover:bg-gray-800 hover:text-white sm:px-3"
+                            disabled={workspaceMutationInFlight}
+                            className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-gray-700 px-2.5 py-1.5 text-xs text-gray-300 transition-colors hover:bg-gray-800 hover:text-white disabled:opacity-50 sm:px-3"
                           >
                             Open
                           </button>
