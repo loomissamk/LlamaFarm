@@ -26,19 +26,19 @@ use crate::federation::remote_subagent::{FederationRemoteSubagentAdapter, Federa
 use crate::memory::{self, Memory, MemoryCategory};
 use crate::providers::{self, ChatMessage, Provider};
 use crate::runtime;
+use crate::security::pairing::{constant_time_eq, is_public_bind, PairingGuard};
 use crate::security::SecurityPolicy;
-use crate::security::pairing::{PairingGuard, constant_time_eq, is_public_bind};
 use crate::tools::traits::ToolSpec;
 use crate::tools::{self, Tool};
 use crate::util::truncate_with_ellipsis;
 use anyhow::Result;
 use axum::{
-    Router,
     body::Bytes,
     extract::{ConnectInfo, Query, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Json},
     routing::{delete, get, post, put},
+    Router,
 };
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
@@ -303,6 +303,16 @@ pub struct GatewayRuntimeSnapshot {
     /// listener, so these values remain stable until gateway restart.
     pub effective_gateway_host: String,
     pub effective_gateway_port: u16,
+    /// Expensive local fleet facts (Ollama inventory and GPU capacity) are
+    /// shared briefly across dashboard and peer capability requests.
+    pub local_capabilities_cache: Arc<
+        tokio::sync::Mutex<
+            Option<(
+                Instant,
+                crate::federation::peer_registry::FederationCapabilities,
+            )>,
+        >,
+    >,
 }
 
 fn default_gateway_model(config: &Config) -> String {
@@ -397,6 +407,7 @@ pub(crate) fn build_gateway_runtime_snapshot_with_federation(
         max_tool_iterations: config.agent.max_tool_iterations,
         effective_gateway_host: config.gateway.host.clone(),
         effective_gateway_port: config.gateway.port,
+        local_capabilities_cache: Arc::new(tokio::sync::Mutex::new(None)),
     })
 }
 
@@ -465,6 +476,7 @@ impl AppState {
             max_tool_iterations: self.max_tool_iterations,
             effective_gateway_host: String::new(),
             effective_gateway_port: 0,
+            local_capabilities_cache: Arc::new(tokio::sync::Mutex::new(None)),
         })
     }
 
@@ -2844,6 +2856,7 @@ Reminder set successfully."#;
             max_tool_iterations: 10,
             effective_gateway_host: "127.0.0.1".to_string(),
             effective_gateway_port: 42617,
+            local_capabilities_cache: Arc::new(tokio::sync::Mutex::new(None)),
         });
         let state = AppState {
             config: Arc::new(Mutex::new(Config::default())),
@@ -2889,6 +2902,7 @@ Reminder set successfully."#;
             max_tool_iterations: 20,
             effective_gateway_host: "0.0.0.0".to_string(),
             effective_gateway_port: 9999,
+            local_capabilities_cache: Arc::new(tokio::sync::Mutex::new(None)),
         });
 
         let response = run_gateway_chat_simple(&state, "use the current default")

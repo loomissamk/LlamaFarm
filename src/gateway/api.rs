@@ -32,7 +32,7 @@ use std::{
     net::SocketAddr,
     path::{Component, Path as FsPath, PathBuf},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -391,8 +391,26 @@ fn federation_event_from_delta(task_id: &str, delta: &str) -> Option<FederationT
     })
 }
 
+const LOCAL_CAPABILITIES_CACHE_TTL: Duration = Duration::from_secs(15);
+
 async fn build_local_capabilities(state: &AppState) -> FederationCapabilities {
     let runtime = state.runtime_snapshot();
+    let mut cache = runtime.local_capabilities_cache.lock().await;
+    if let Some((refreshed_at, capabilities)) = cache.as_ref() {
+        if refreshed_at.elapsed() < LOCAL_CAPABILITIES_CACHE_TTL {
+            return capabilities.clone();
+        }
+    }
+
+    let capabilities = build_local_capabilities_uncached(state, &runtime).await;
+    *cache = Some((Instant::now(), capabilities.clone()));
+    capabilities
+}
+
+async fn build_local_capabilities_uncached(
+    state: &AppState,
+    runtime: &super::GatewayRuntimeSnapshot,
+) -> FederationCapabilities {
     let config = state.config.lock().clone();
     let local = state.federation.as_ref().map_or_else(
         || FederationLocalNodeSummary {
@@ -425,7 +443,7 @@ async fn build_local_capabilities(state: &AppState) -> FederationCapabilities {
             expires_at: model.expires_at.clone(),
         })
         .collect::<Vec<_>>();
-    let capacity = node_capacity(&config.workspace_dir, &loaded_models);
+    let capacity = node_capacity(&config.workspace_dir, &loaded_models).await;
     let gateway_restart_required = config.gateway.host != runtime.effective_gateway_host
         || config.gateway.port != runtime.effective_gateway_port;
 
@@ -769,9 +787,9 @@ struct OllamaModelListResponse {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct OllamaModelListEntry {
     name: String,
-    #[serde(default)]
+    #[serde(default, rename = "size_bytes", alias = "size")]
     size: u64,
-    #[serde(default)]
+    #[serde(default, rename = "size_vram_bytes", alias = "size_vram")]
     size_vram: u64,
     #[serde(default)]
     context_length: Option<u64>,
@@ -1064,7 +1082,11 @@ fn workspace_parent_path(relative: &str) -> Option<String> {
 }
 
 fn workspace_entry_kind(is_dir: bool) -> &'static str {
-    if is_dir { "directory" } else { "file" }
+    if is_dir {
+        "directory"
+    } else {
+        "file"
+    }
 }
 
 pub(super) async fn create_workspace_directory(
@@ -1273,7 +1295,15 @@ fn build_time() -> Option<String> {
 }
 
 fn parse_total_memory_bytes(meminfo: &str) -> Option<u64> {
-    let line = meminfo.lines().find(|line| line.starts_with("MemTotal:"))?;
+    parse_meminfo_bytes(meminfo, "MemTotal:")
+}
+
+fn parse_available_memory_bytes(meminfo: &str) -> Option<u64> {
+    parse_meminfo_bytes(meminfo, "MemAvailable:")
+}
+
+fn parse_meminfo_bytes(meminfo: &str, field: &str) -> Option<u64> {
+    let line = meminfo.lines().find(|line| line.starts_with(field))?;
     let kib = line
         .split_whitespace()
         .nth(1)
@@ -1281,11 +1311,12 @@ fn parse_total_memory_bytes(meminfo: &str) -> Option<u64> {
     kib.checked_mul(1024)
 }
 
-fn total_memory_bytes() -> Option<u64> {
-    std::fs::read_to_string("/proc/meminfo")
-        .ok()
-        .as_deref()
-        .and_then(parse_total_memory_bytes)
+fn host_memory_bytes() -> (Option<u64>, Option<u64>) {
+    let meminfo = std::fs::read_to_string("/proc/meminfo").ok();
+    (
+        meminfo.as_deref().and_then(parse_total_memory_bytes),
+        meminfo.as_deref().and_then(parse_available_memory_bytes),
+    )
 }
 
 fn parse_cgroup_memory_value(value: &str) -> Option<u64> {
@@ -1305,20 +1336,43 @@ fn read_first_cgroup_memory_value(paths: &[&str]) -> Option<u64> {
     })
 }
 
-fn node_capacity(
+fn effective_memory_available_bytes(
+    host_available_bytes: Option<u64>,
+    cgroup_limit_bytes: Option<u64>,
+    cgroup_current_bytes: Option<u64>,
+) -> Option<u64> {
+    match (cgroup_limit_bytes, cgroup_current_bytes) {
+        (Some(limit), Some(current)) => {
+            let cgroup_available = limit.saturating_sub(current);
+            Some(host_available_bytes.map_or(cgroup_available, |available| {
+                available.min(cgroup_available)
+            }))
+        }
+        (Some(limit), None) => {
+            Some(host_available_bytes.map_or(limit, |available| available.min(limit)))
+        }
+        (None, _) => host_available_bytes,
+    }
+}
+
+async fn node_capacity(
     workspace_dir: &FsPath,
     loaded_models: &[FederationLoadedModel],
 ) -> FederationNodeCapacity {
     const MIB: u64 = 1024 * 1024;
-    let (gpu_total_memory_bytes, gpu_used_memory_bytes, gpu_free_memory_bytes) = query_gpu_memory()
-        .map_or((None, None, None), |(total, used, free)| {
+    let gpu_memory = tokio::task::spawn_blocking(query_gpu_memory)
+        .await
+        .ok()
+        .flatten();
+    let (gpu_total_memory_bytes, gpu_used_memory_bytes, gpu_free_memory_bytes) =
+        gpu_memory.map_or((None, None, None), |(total, used, free)| {
             (
                 total.checked_mul(MIB),
                 used.checked_mul(MIB),
                 free.checked_mul(MIB),
             )
         });
-    let total_memory_bytes = total_memory_bytes();
+    let (total_memory_bytes, host_memory_available_bytes) = host_memory_bytes();
     let memory_limit_bytes = read_first_cgroup_memory_value(&[
         "/sys/fs/cgroup/memory.max",
         "/sys/fs/cgroup/memory/memory.limit_in_bytes",
@@ -1328,21 +1382,18 @@ fn node_capacity(
         "/sys/fs/cgroup/memory.current",
         "/sys/fs/cgroup/memory/memory.usage_in_bytes",
     ]);
-    let effective_memory_bytes = match (total_memory_bytes, memory_limit_bytes) {
-        (Some(total), Some(limit)) => Some(total.min(limit)),
-        (Some(total), None) => Some(total),
-        (None, Some(limit)) => Some(limit),
-        (None, None) => None,
-    };
+    let memory_available_bytes = effective_memory_available_bytes(
+        host_memory_available_bytes,
+        memory_limit_bytes,
+        memory_current_bytes,
+    );
 
     FederationNodeCapacity {
         logical_cpus: std::thread::available_parallelism().map_or(1, std::num::NonZero::get),
         total_memory_bytes,
         memory_limit_bytes,
         memory_current_bytes,
-        memory_available_bytes: effective_memory_bytes
-            .zip(memory_current_bytes)
-            .map(|(capacity, current)| capacity.saturating_sub(current)),
+        memory_available_bytes,
         gpu_total_memory_bytes,
         gpu_used_memory_bytes,
         gpu_free_memory_bytes,
@@ -1598,7 +1649,7 @@ pub async fn handle_api_status(
             expires_at: model.expires_at.clone(),
         })
         .collect::<Vec<_>>();
-    let capacity = node_capacity(&config.workspace_dir, &loaded_models);
+    let capacity = node_capacity(&config.workspace_dir, &loaded_models).await;
     let gateway_restart_required = config.gateway.host != runtime.effective_gateway_host
         || config.gateway.port != runtime.effective_gateway_port;
     let federation_effective = state.federation.is_some();
@@ -3579,8 +3630,7 @@ pub async fn handle_api_memory_clear(
         if let Ok(dir_entries) = std::fs::read_dir(&runs_dir) {
             for entry in dir_entries.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
-                let is_run_artifact =
-                    name.ends_with(".ledger.json") || name.ends_with(".jsonl");
+                let is_run_artifact = name.ends_with(".ledger.json") || name.ends_with(".jsonl");
                 let is_live = live.iter().any(|id| name.starts_with(id.as_str()));
                 if is_run_artifact && !is_live && std::fs::remove_file(entry.path()).is_ok() {
                     runs_removed += 1;
@@ -3692,8 +3742,7 @@ pub async fn handle_api_history_clear(
     let mut runs_removed = 0usize;
     let mut bytes_freed = 0u64;
     let live = crate::agent::run_ledger::live_run_ids();
-    if let Ok(dir_entries) = std::fs::read_dir(crate::agent::run_ledger::runs_dir(&workspace_dir))
-    {
+    if let Ok(dir_entries) = std::fs::read_dir(crate::agent::run_ledger::runs_dir(&workspace_dir)) {
         for entry in dir_entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             let is_run_artifact = name.ends_with(".ledger.json") || name.ends_with(".jsonl");
@@ -3926,7 +3975,11 @@ pub async fn handle_api_context_get(
     let est_tokens = |chars: usize| chars / 4;
     let md_chars: usize = ["AGENTS.md", "AGENT.md"]
         .iter()
-        .filter_map(|f| std::fs::metadata(workspace_dir.join(f)).ok().map(|m| m.len() as usize))
+        .filter_map(|f| {
+            std::fs::metadata(workspace_dir.join(f))
+                .ok()
+                .map(|m| m.len() as usize)
+        })
         .sum();
     // Tool schemas dominate the fixed prompt cost; estimate from names+descriptions.
     let tool_count = runtime.tools_registry.len();
@@ -4985,14 +5038,16 @@ pub async fn handle_api_db_test_connection(
                     crate::db::sanitize_connection_error(&e, &conn_cfg.uri)
                 )
             })),
-        ).into_response(),
+        )
+            .into_response(),
         Ok(adapter) => match adapter.schema().await {
             Ok(schema) => Json(serde_json::json!({
                 "ok": true,
                 "tables": schema.tables.len(),
                 "driver": schema.driver,
                 "database": schema.database,
-            })).into_response(),
+            }))
+            .into_response(),
             Err(e) => (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({
@@ -5002,7 +5057,8 @@ pub async fn handle_api_db_test_connection(
                         crate::db::sanitize_connection_error(&e, &conn_cfg.uri)
                     )
                 })),
-            ).into_response(),
+            )
+                .into_response(),
         },
     }
 }
@@ -5304,10 +5360,10 @@ mod tests {
             .reliability
             .fallback_api_keys
             .remove("old-provider");
-        incoming.reliability.fallback_api_keys.insert(
-            "renamed-provider".to_string(),
-            MASKED_SECRET.to_string(),
-        );
+        incoming
+            .reliability
+            .fallback_api_keys
+            .insert("renamed-provider".to_string(), MASKED_SECRET.to_string());
 
         let error = hydrate_config_for_save(incoming, &current)
             .expect_err("a masked renamed key has no credential to restore");
@@ -5712,17 +5768,49 @@ mod tests {
         assert_eq!(model.size_vram, 5_000_000_000);
         assert_eq!(model.context_length, Some(32_768));
         assert_eq!(model.details.parameter_size, "9B");
+
+        let serialized = serde_json::to_value(model).expect("model details should serialize");
+        assert_eq!(serialized["size_bytes"], 6_000_000_000_u64);
+        assert_eq!(serialized["size_vram_bytes"], 5_000_000_000_u64);
+        assert!(
+            serialized.get("size").is_none() && serialized.get("size_vram").is_none(),
+            "dashboard payload should use the public byte-suffixed field names"
+        );
     }
 
     #[test]
     fn total_memory_parser_converts_kib_to_bytes() {
         assert_eq!(
-            parse_total_memory_bytes("MemTotal:       16384 kB\nMemFree: 42 kB\n"),
+            parse_total_memory_bytes(
+                "MemTotal:       16384 kB\nMemAvailable:   4096 kB\nMemFree: 42 kB\n"
+            ),
             Some(16 * 1024 * 1024)
         );
+        assert_eq!(
+            parse_available_memory_bytes(
+                "MemTotal:       16384 kB\nMemAvailable:   4096 kB\nMemFree: 42 kB\n"
+            ),
+            Some(4 * 1024 * 1024)
+        );
         assert_eq!(parse_total_memory_bytes("MemFree: 42 kB\n"), None);
+        assert_eq!(parse_available_memory_bytes("MemFree: 42 kB\n"), None);
         assert_eq!(parse_cgroup_memory_value("1073741824\n"), Some(1 << 30));
         assert_eq!(parse_cgroup_memory_value("max\n"), None);
+        assert_eq!(
+            effective_memory_available_bytes(Some(4_000), None, Some(900)),
+            Some(4_000),
+            "unlimited cgroups must report host MemAvailable"
+        );
+        assert_eq!(
+            effective_memory_available_bytes(Some(4_000), Some(8_000), Some(1_000)),
+            Some(4_000),
+            "host pressure must cap finite-cgroup availability"
+        );
+        assert_eq!(
+            effective_memory_available_bytes(Some(9_000), Some(8_000), Some(1_000)),
+            Some(7_000),
+            "finite cgroup headroom must cap host availability"
+        );
     }
 
     #[test]
