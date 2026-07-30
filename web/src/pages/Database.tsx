@@ -19,6 +19,8 @@ import {
   Pencil,
   CheckCircle,
   Radar,
+  Download,
+  Search,
 } from 'lucide-react';
 import type {
   DbConnection,
@@ -41,6 +43,7 @@ import {
   LatestRequestLifecycle,
   pickDiscoveredConnection,
 } from '@/lib/databaseDiscovery';
+import { databaseResultToCsv } from '@/lib/databaseResults';
 
 // ── Driver badge ──────────────────────────────────────────────────────────────
 
@@ -78,24 +81,25 @@ interface ConnForm {
 }
 
 function ConnectionFormFields({
-  form, set, testStatus, onTest,
+  form, set, testStatus, onTest, idPrefix,
 }: {
   form: ConnForm;
   set: (k: string, v: string | boolean | number) => void;
   testStatus: { state: 'idle' | 'testing' | 'ok' | 'err'; msg: string };
   onTest: () => void;
+  idPrefix: string;
 }) {
   const usingStoredUri = form.uri === '***MASKED***';
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="text-xs text-gray-400 mb-1 block">Name *</label>
-          <input value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="arxiv" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-blue-500" />
+          <label htmlFor={`${idPrefix}-name`} className="text-xs text-gray-400 mb-1 block">Name *</label>
+          <input id={`${idPrefix}-name`} autoFocus value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="research_db" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-blue-500" />
         </div>
         <div>
-          <label className="text-xs text-gray-400 mb-1 block">Driver</label>
-          <select value={form.driver} onChange={(e) => set('driver', e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-blue-500">
+          <label htmlFor={`${idPrefix}-driver`} className="text-xs text-gray-400 mb-1 block">Driver</label>
+          <select id={`${idPrefix}-driver`} value={form.driver} onChange={(e) => set('driver', e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-blue-500">
             <option value="mongodb">MongoDB</option>
             <option value="sqlite">SQLite</option>
             <option value="postgres">PostgreSQL</option>
@@ -106,7 +110,7 @@ function ConnectionFormFields({
 
       <div>
         <div className="flex items-center justify-between mb-1">
-          <label className="text-xs text-gray-400">
+          <label htmlFor={`${idPrefix}-uri`} className="text-xs text-gray-400">
             {usingStoredUri ? 'Connection URI (stored)' : 'Connection URI *'}
           </label>
           <button
@@ -120,6 +124,7 @@ function ConnectionFormFields({
           </button>
         </div>
         <input
+          id={`${idPrefix}-uri`}
           value={form.uri}
           onChange={(e) => set('uri', e.target.value)}
           placeholder={usingStoredUri ? 'Enter a new URI only to replace the stored connection' : (URI_PLACEHOLDER[form.driver] ?? '')}
@@ -131,23 +136,23 @@ function ConnectionFormFields({
           </p>
         )}
         {testStatus.state === 'ok' && (
-          <p className="mt-1 text-xs text-green-400 flex items-center gap-1"><CheckCircle className="h-3 w-3" />{testStatus.msg}</p>
+          <p role="status" className="mt-1 text-xs text-green-400 flex items-center gap-1"><CheckCircle className="h-3 w-3" />{testStatus.msg}</p>
         )}
         {testStatus.state === 'err' && (
-          <p className="mt-1 text-xs text-red-400">{testStatus.msg}</p>
+          <p role="alert" className="mt-1 text-xs text-red-400">{testStatus.msg}</p>
         )}
       </div>
 
       {form.driver === 'mongodb' && (
         <div>
-          <label className="text-xs text-gray-400 mb-1 block">Database name</label>
-          <input value={form.database} onChange={(e) => set('database', e.target.value)} placeholder="MyDatabase" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-blue-500" />
+          <label htmlFor={`${idPrefix}-database`} className="text-xs text-gray-400 mb-1 block">Database name</label>
+          <input id={`${idPrefix}-database`} value={form.database} onChange={(e) => set('database', e.target.value)} placeholder="MyDatabase" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-blue-500" />
         </div>
       )}
 
       <div>
-        <label className="text-xs text-gray-400 mb-1 block">Display label</label>
-        <input value={form.label} onChange={(e) => set('label', e.target.value)} placeholder={form.name || 'My Database'} className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-blue-500" />
+        <label htmlFor={`${idPrefix}-label`} className="text-xs text-gray-400 mb-1 block">Display label</label>
+        <input id={`${idPrefix}-label`} value={form.label} onChange={(e) => set('label', e.target.value)} placeholder={form.name || 'My Database'} className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-blue-500" />
       </div>
 
       <div className="flex items-center gap-4">
@@ -156,8 +161,8 @@ function ConnectionFormFields({
           Read-only
         </label>
         <div className="flex items-center gap-2 text-sm text-gray-300">
-          <span className="text-xs text-gray-400">Max rows</span>
-          <input type="number" min={1} max={5000} value={form.max_rows} onChange={(e) => set('max_rows', parseInt(e.target.value) || 500)} className="w-20 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 focus:outline-none focus:border-blue-500" />
+          <label htmlFor={`${idPrefix}-max-rows`} className="text-xs text-gray-400">Max rows</label>
+          <input id={`${idPrefix}-max-rows`} type="number" min={1} max={5000} value={form.max_rows} onChange={(e) => set('max_rows', parseInt(e.target.value) || 500)} className="w-20 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-gray-200 focus:outline-none focus:border-blue-500" />
         </div>
       </div>
     </div>
@@ -175,6 +180,14 @@ function AddConnectionModal({ onClose, onAdd }: { onClose: () => void; onAdd: (c
   const [testStatus, setTestStatus] = useState<{ state: 'idle' | 'testing' | 'ok' | 'err'; msg: string }>({ state: 'idle', msg: '' });
 
   const set = (k: string, v: string | boolean | number) => setForm((f) => ({ ...f, [k]: v }));
+
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !saving) onClose();
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [onClose, saving]);
 
   const handleTest = async () => {
     setTestStatus({ state: 'testing', msg: '' });
@@ -197,16 +210,16 @@ function AddConnectionModal({ onClose, onAdd }: { onClose: () => void; onAdd: (c
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center" onClick={onClose}>
-      <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-md p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div role="dialog" aria-modal="true" aria-labelledby="add-connection-title" className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-md p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-5">
-          <h2 className="text-white font-semibold text-lg">Add Connection</h2>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-300"><X className="h-5 w-5" /></button>
+          <h2 id="add-connection-title" className="text-white font-semibold text-lg">Add Connection</h2>
+          <button type="button" onClick={onClose} aria-label="Close add connection dialog" className="text-gray-500 hover:text-gray-300"><X className="h-5 w-5" /></button>
         </div>
 
-        <ConnectionFormFields form={form} set={set} testStatus={testStatus} onTest={handleTest} />
+        <ConnectionFormFields form={form} set={set} testStatus={testStatus} onTest={handleTest} idPrefix="add-connection" />
 
-        {err && <p className="mt-3 text-red-400 text-xs">{err}</p>}
+        {err && <p role="alert" className="mt-3 text-red-400 text-xs">{err}</p>}
 
         <div className="flex justify-end gap-2 mt-5">
           <button onClick={onClose} className="px-4 py-1.5 text-sm text-gray-400 hover:text-gray-200">Cancel</button>
@@ -238,6 +251,14 @@ function EditConnectionModal({ conn, onClose, onSave }: { conn: DbConnection; on
 
   const set = (k: string, v: string | boolean | number) => setForm((f) => ({ ...f, [k]: v }));
 
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !saving) onClose();
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [onClose, saving]);
+
   const handleTest = async () => {
     setTestStatus({ state: 'testing', msg: '' });
     try {
@@ -261,16 +282,16 @@ function EditConnectionModal({ conn, onClose, onSave }: { conn: DbConnection; on
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center" onClick={onClose}>
-      <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-md p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div role="dialog" aria-modal="true" aria-labelledby="edit-connection-title" className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-md p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-5">
-          <h2 className="text-white font-semibold text-lg">Edit Connection</h2>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-300"><X className="h-5 w-5" /></button>
+          <h2 id="edit-connection-title" className="text-white font-semibold text-lg">Edit Connection</h2>
+          <button type="button" onClick={onClose} aria-label="Close edit connection dialog" className="text-gray-500 hover:text-gray-300"><X className="h-5 w-5" /></button>
         </div>
 
-        <ConnectionFormFields form={form} set={set} testStatus={testStatus} onTest={handleTest} />
+        <ConnectionFormFields form={form} set={set} testStatus={testStatus} onTest={handleTest} idPrefix="edit-connection" />
 
-        {err && <p className="mt-3 text-red-400 text-xs">{err}</p>}
+        {err && <p role="alert" className="mt-3 text-red-400 text-xs">{err}</p>}
 
         <div className="flex justify-end gap-2 mt-5">
           <button onClick={onClose} className="px-4 py-1.5 text-sm text-gray-400 hover:text-gray-200">Cancel</button>
@@ -291,6 +312,7 @@ function SchemaTree({ schema, activeTable, onClickTable }: {
   activeTable: string | null;
   onClickTable: (t: DbTableInfo) => void;
 }) {
+  const [filter, setFilter] = useState('');
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {};
     schema.tables.forEach((t) => { init[t.name] = true; });
@@ -301,24 +323,46 @@ function SchemaTree({ schema, activeTable, onClickTable }: {
     return <p className="text-gray-500 text-xs px-3 py-2">No tables or collections found.</p>;
   }
 
+  const visibleTables = schema.tables.filter((table) =>
+    table.name.toLocaleLowerCase().includes(filter.trim().toLocaleLowerCase()),
+  );
+
   return (
     <div className="text-sm select-none">
-      {schema.tables.map((table) => (
+      <div className="relative border-b border-gray-800 p-2">
+        <Search className="absolute left-4 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-600" aria-hidden="true" />
+        <input
+          type="search"
+          value={filter}
+          onChange={(event) => setFilter(event.target.value)}
+          aria-label="Filter tables and collections"
+          placeholder={`Filter ${schema.tables.length} items`}
+          className="w-full rounded border border-gray-800 bg-gray-950 py-1.5 pl-8 pr-2 text-xs text-gray-300 placeholder-gray-600 focus:border-blue-500 focus:outline-none"
+        />
+      </div>
+      {visibleTables.length === 0 && (
+        <p className="px-3 py-3 text-xs text-gray-500">No schema items match “{filter}”.</p>
+      )}
+      {visibleTables.map((table) => (
         <div key={table.name}>
           <div
-            className={`flex items-center gap-1 px-2 py-1 cursor-pointer group ${activeTable === table.name ? 'bg-blue-600/20 border-l-2 border-blue-500' : 'hover:bg-gray-800'}`}
-            onClick={() => onClickTable(table)}
+            className={`flex items-center gap-1 px-2 py-1 group ${activeTable === table.name ? 'bg-blue-600/20 border-l-2 border-blue-500' : 'hover:bg-gray-800'}`}
           >
             <button
+              type="button"
+              aria-label={`${expanded[table.name] ? 'Collapse' : 'Expand'} ${table.name} columns`}
+              aria-expanded={expanded[table.name]}
               className="flex-shrink-0 text-gray-500"
-              onClick={(e) => { e.stopPropagation(); setExpanded((p) => ({ ...p, [table.name]: !p[table.name] })); }}
+              onClick={() => setExpanded((previous) => ({ ...previous, [table.name]: !previous[table.name] }))}
             >
               {expanded[table.name]
                 ? <ChevronDown className="h-3 w-3" />
                 : <ChevronRight className="h-3 w-3" />}
             </button>
             <Table className="h-3 w-3 text-blue-400 flex-shrink-0" />
-            <span className="text-gray-200 font-mono text-xs truncate flex-1">{table.name}</span>
+            <button type="button" onClick={() => onClickTable(table)} className="min-w-0 flex-1 truncate text-left font-mono text-xs text-gray-200">
+              {table.name}
+            </button>
             <span className="text-gray-600 text-xs opacity-0 group-hover:opacity-60">{table.kind}</span>
           </div>
           {expanded[table.name] && (
@@ -475,6 +519,7 @@ export default function DatabasePage() {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<DbQueryResult | null>(null);
   const [queryError, setQueryError] = useState<string | null>(null);
+  const [queryNotice, setQueryNotice] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const discoveryProbeRef = useRef(
     new Map<string, { schema?: DbSchema; error?: string }>(),
@@ -497,10 +542,7 @@ export default function DatabasePage() {
   };
 
   useEffect(() => {
-    // Reconcile reachable open databases as soon as the explorer opens. The
-    // same pass schema-probes saved connections and feeds auth/routing
-    // failures into the existing Update connection / Retry UI.
-    void loadConnections().then(handleScan);
+    void loadConnections();
   }, []);
 
   useEffect(() => {
@@ -564,6 +606,7 @@ export default function DatabasePage() {
     const conn = connections.find((c) => c.name === connName);
     const paginated = conn ? injectPagination(q, conn.driver, offset, ps) : q;
     setRunning(true); setResult(null); setQueryError(null);
+    setQueryNotice(null);
     try {
       const nextResult = await runDbQuery(connName, paginated, ps);
       if (request.isCurrent()) setResult(nextResult);
@@ -580,6 +623,24 @@ export default function DatabasePage() {
       runQuery(query, activeConn, 0, pageSize);
     }
   }, [activeConn, query, pageSize, runQuery]);
+
+  const handleCancelQuery = () => {
+    queryLifecycleRef.current.invalidate();
+    setRunning(false);
+    setQueryNotice('Stopped waiting for this query. Any late response will be ignored.');
+  };
+
+  const handleDownloadResult = () => {
+    if (!result) return;
+    const csv = databaseResultToCsv(result);
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    const anchor = document.createElement('a');
+    const connectionName = (activeConn ?? 'database').replace(/[^a-zA-Z0-9_-]/g, '_');
+    anchor.href = url;
+    anchor.download = `${connectionName}-results.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
 
   const handlePage = useCallback((newOffset: number) => {
     if (!activeConn || !query.trim()) return;
@@ -652,7 +713,7 @@ export default function DatabasePage() {
   );
 
   return (
-    <div className="flex h-[calc(100vh-4rem)] overflow-hidden">
+    <div className="flex min-h-[calc(100vh-4rem)] flex-col overflow-hidden md:h-[calc(100vh-4rem)] md:flex-row">
       {showAddModal && (
         <AddConnectionModal
           onClose={() => setShowAddModal(false)}
@@ -677,18 +738,20 @@ export default function DatabasePage() {
       )}
 
       {/* Left sidebar */}
-      <div className="w-52 flex-shrink-0 border-r border-gray-800 flex flex-col bg-gray-950 overflow-hidden">
+      <aside aria-label="Database connections and schema" className="flex max-h-[45vh] w-full flex-shrink-0 flex-col overflow-hidden border-b border-gray-800 bg-gray-950 md:max-h-none md:w-52 md:border-b-0 md:border-r">
         {/* Connections header */}
         <div className="flex items-center gap-1.5 px-2 py-2 border-b border-gray-800 flex-shrink-0">
           <Database className="h-3.5 w-3.5 text-gray-500" />
           <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider flex-1">Connections</span>
           <button
+            type="button"
             onClick={handleScan}
             disabled={scanning}
-            className="p-0.5 text-gray-600 hover:text-blue-400 rounded disabled:opacity-40"
+            className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs text-gray-500 hover:bg-gray-800 hover:text-blue-400 disabled:opacity-40"
             title="Scan the local network for databases"
           >
             {scanning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Radar className="h-3.5 w-3.5" />}
+            Scan LAN
           </button>
           <button
             onClick={() => setShowAddModal(true)}
@@ -857,15 +920,15 @@ export default function DatabasePage() {
         </div>
         </>
         )}
-      </div>
+      </aside>
 
       {/* Main panel: agent memory browser, or the SQL/Mongo explorer */}
       {activeConn === MEMORY_CONN ? (
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto">
           <MemoryPanel />
         </div>
       ) : (
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex min-h-[36rem] flex-1 flex-col overflow-hidden md:min-h-0">
         {/* Query bar */}
         <div className="border-b border-gray-800 flex-shrink-0">
           <div className="flex items-center gap-2 px-3 py-1 border-b border-gray-800/50 bg-gray-950/50">
@@ -898,6 +961,15 @@ export default function DatabasePage() {
               {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
               Run
             </button>
+            {running && (
+              <button
+                type="button"
+                onClick={handleCancelQuery}
+                className="rounded border border-gray-700 px-3 py-1 text-sm text-gray-300 hover:bg-gray-800 hover:text-white"
+              >
+                Stop waiting
+              </button>
+            )}
             <div className="flex items-center gap-1 text-xs text-gray-500">
               <span>Page</span>
               <select
@@ -919,6 +991,11 @@ export default function DatabasePage() {
               <pre className="whitespace-pre-wrap font-mono text-xs">{queryError}</pre>
             </div>
           )}
+          {queryNotice && (
+            <div role="status" className="flex-shrink-0 border-b border-blue-900/50 bg-blue-950/20 px-4 py-2 text-sm text-blue-300">
+              {queryNotice}
+            </div>
+          )}
           {result && !queryError && (
             <>
               {/* Pagination toolbar */}
@@ -937,6 +1014,15 @@ export default function DatabasePage() {
                   {result.row_count < pageSize ? ` of ${Math.floor(pageOffset / pageSize) + 1}` : '+'}
                 </span>
                 <div className="ml-auto flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={handleDownloadResult}
+                    className="flex items-center gap-1 rounded px-2 py-0.5 hover:bg-gray-800 hover:text-white"
+                    title="Download the current page as CSV"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    CSV
+                  </button>
                   <button
                     onClick={() => handlePage(Math.max(0, pageOffset - pageSize))}
                     disabled={running || pageOffset === 0}

@@ -45,13 +45,15 @@ test('auto-select ignores unsupported services without explorer connections', ()
   assert.equal(pickDiscoveredConnection([result(undefined, 'unsupported')]), null);
 });
 
-test('database explorer automatically runs discovery after loading saved connections', () => {
+test('database explorer leaves LAN discovery as an explicit action', () => {
   const page = readFileSync(
     fileURLToPath(new URL('../src/pages/Database.tsx', import.meta.url)),
     'utf8',
   );
 
-  assert.match(page, /loadConnections\(\)\.then\(handleScan\)/);
+  assert.match(page, /void loadConnections\(\)/);
+  assert.doesNotMatch(page, /loadConnections\(\)\.then\(handleScan\)/);
+  assert.match(page, /Scan LAN/);
 });
 
 test('late schema completion cannot replace the latest database selection', async () => {
