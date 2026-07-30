@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+  pull_request:
+    branches:
+      - main
+      - dev
+  merge_group:
+    branches:
+      - main
+      - dev
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-lint:
+    name: Rust Format and Clippy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+        with:
+          toolchain: 1.92.0
+          components: rustfmt, clippy
+
+      - name: Check formatting of changed Rust files
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        run: |
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            BASE_SHA="$(git rev-parse HEAD^)"
+          fi
+          mapfile -t changed_rust_files < <(
+            git diff --name-only --diff-filter=ACMR "$BASE_SHA" HEAD -- '*.rs'
+          )
+          if [ "${#changed_rust_files[@]}" -eq 0 ]; then
+            echo "No changed Rust files."
+            exit 0
+          fi
+          rustfmt --edition 2021 --check "${changed_rust_files[@]}"
+
+      - name: Run Clippy
+        run: cargo clippy --locked --all-targets -- -D clippy::correctness
+
+  rust-test:
+    name: Rust Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+        with:
+          toolchain: 1.92.0
+
+      - name: Run tests
+        run: cargo test --locked
+
+  web:
+    name: Web Tests and Build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build dashboard
+        run: npm run build
+
+  required:
+    name: CI Required Gate
+    if: always()
+    needs:
+      - rust-lint
+      - rust-test
+      - web
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require all delivery checks
+        env:
+          RUST_LINT_RESULT: ${{ needs.rust-lint.result }}
+          RUST_TEST_RESULT: ${{ needs.rust-test.result }}
+          WEB_RESULT: ${{ needs.web.result }}
+        run: |
+          test "$RUST_LINT_RESULT" = "success"
+          test "$RUST_TEST_RESULT" = "success"
+          test "$WEB_RESULT" = "success"

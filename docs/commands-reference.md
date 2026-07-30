@@ -2,7 +2,7 @@
 
 This reference is derived from the current CLI surface (`llamafarm --help`).
 
-Last verified: **February 25, 2026**.
+Last verified: **July 30, 2026**.
 
 ## Top-Level Commands
 
@@ -61,10 +61,11 @@ Tip:
 
 ### `gateway` / `daemon`
 
-- `llamafarm gateway [--host <HOST>] [--port <PORT>] [--new-pairing]`
+- `llamafarm gateway [--host <HOST>] [--port <PORT>]`
 - `llamafarm daemon [--host <HOST>] [--port <PORT>]`
 
-`--new-pairing` clears all stored paired tokens and forces generation of a fresh pairing code on gateway startup.
+Pairing and the former `--new-pairing` flag are retired. The gateway starts
+directly with the configured runtime settings.
 
 ### `estop`
 

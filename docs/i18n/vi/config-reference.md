@@ -2,7 +2,7 @@
 
 Các mục cấu hình thường dùng và giá trị mặc định.
 
-Xác minh lần cuối: **2026-02-19**.
+Xác minh lần cuối: **2026-07-30**.
 
 Thứ tự tìm config khi khởi động:
 
@@ -76,14 +76,14 @@ Lưu ý cho người dùng container:
 | `compact_context` | `false` | Khi bật: bootstrap_max_chars=6000, rag_chunk_limit=2. Dùng cho model 13B trở xuống |
 | `tool_routing_enabled` | `true` | Chọn registry tool theo từng lượt cho WebSocket Agent Chat, dựa trên yêu cầu hiện tại và ngữ cảnh tác vụ gần đây |
 | `tool_routing_top_k` | `12` | Số tool không thiết yếu liên quan tối đa trước khi thêm tool lõi và các phụ thuộc bắt buộc; `0` tắt định tuyến |
-| `max_tool_iterations` | `20` | Số vòng lặp tool-call tối đa mỗi tin nhắn trên CLI, gateway và channels |
+| `max_tool_iterations` | `100000` | Số vòng lặp tool-call gần như không giới hạn cho mỗi tin nhắn; bộ phát hiện đình trệ chuyên dụng dừng tiến trình không có tiến triển lặp lại |
 | `max_history_messages` | `50` | Số tin nhắn lịch sử tối đa giữ lại mỗi phiên |
 | `parallel_tools` | `false` | Bật thực thi tool song song trong một lượt |
 | `tool_dispatcher` | `auto` | Chiến lược dispatch tool |
 
 Lưu ý:
 
-- Đặt `max_tool_iterations = 0` sẽ dùng giá trị mặc định an toàn `20`.
+- Đặt `max_tool_iterations = 0` sẽ dùng giá trị mặc định `100000`.
 - Định tuyến tool hiện áp dụng cho các lượt WebSocket Agent Chat. Cùng một tập
   tool được dùng cho mô tả prompt, schema XML/native, chế độ fallback tương
   thích và bộ lọc thực thi. Khi truy vấn không đủ tín hiệu hoặc không khớp, hệ
@@ -290,7 +290,7 @@ Lưu ý:
 |---|---|---|
 | `host` | `127.0.0.1` | Địa chỉ bind |
 | `port` | `3000` | Cổng lắng nghe gateway |
-| `require_pairing` | `true` | Yêu cầu ghép nối trước khi xác thực bearer |
+| `require_pairing` | `false` | Trường tương thích cũ; pairing đã ngừng dùng và giá trị này bị bỏ qua khi chạy |
 | `allow_public_bind` | `false` | Chặn lộ public do vô ý |
 | `request_timeout_secs` | `30` | Timeout HTTP cho các route của gateway |
 
@@ -554,10 +554,10 @@ Lưu ý:
 - Đặt file `.md`/`.txt` datasheet đặt tên theo bo mạch (ví dụ `nucleo-f401re.md`, `rpi-gpio.md`) trong `datasheet_dir` cho RAG.
 - Xem [hardware-peripherals-design.md](hardware-peripherals-design.md) để biết giao thức bo mạch và ghi chú firmware.
 
-## Giá trị mặc định liên quan bảo mật
+## Giá trị mặc định của ranh giới runtime
 
 - Allowlist kênh mặc định từ chối tất cả (`[]` nghĩa là từ chối tất cả)
-- Gateway mặc định yêu cầu ghép nối
+- Pairing của gateway đã ngừng dùng; `require_pairing` chỉ được giữ để tương thích cấu hình
 - Mặc định chặn public bind
 
 ## Lệnh kiểm tra

@@ -20,5 +20,6 @@ Source anglaise:
 ## Notes de mise à jour
 
 - Ajout de `provider.reasoning_level` (OpenAI Codex `/responses`). Voir la source anglaise pour les détails.
-- Valeur par défaut de `agent.max_tool_iterations` augmentée à `20` (fallback sûr si `0`).
+- La valeur par défaut de `agent.max_tool_iterations` est `100000`; `0` revient également à cette valeur, tandis que des détecteurs dédiés arrêtent les répétitions sans progrès.
+- `gateway.require_pairing` est un ancien champ de compatibilité dont la valeur par défaut est `false`; le pairing est retiré et cette valeur est ignorée à l'exécution.
 - Ajout de `model_routes[].api_url` pour remplacer `api_url` route par route. Utile pour cibler plusieurs endpoints locaux séparés du même type de provider.

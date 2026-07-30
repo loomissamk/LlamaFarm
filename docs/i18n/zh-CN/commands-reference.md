@@ -19,4 +19,4 @@
 
 ## 最近更新
 
-- `llamafarm gateway` 新增 `--new-pairing` 参数，可清空已配对 token 并在网关启动时生成新的配对码。
+- Pairing 与旧版 `--new-pairing` 参数已停用；gateway 直接使用已配置的运行时设置启动。

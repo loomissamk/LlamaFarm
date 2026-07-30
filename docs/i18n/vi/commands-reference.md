@@ -2,7 +2,7 @@
 
 Dựa trên CLI hiện tại (`llamafarm --help`).
 
-Xác minh lần cuối: **2026-02-20**.
+Xác minh lần cuối: **2026-07-30**.
 
 ## Lệnh cấp cao nhất
 
@@ -46,10 +46,11 @@ Xác minh lần cuối: **2026-02-20**.
 
 ### `gateway` / `daemon`
 
-- `llamafarm gateway [--host <HOST>] [--port <PORT>] [--new-pairing]`
+- `llamafarm gateway [--host <HOST>] [--port <PORT>]`
 - `llamafarm daemon [--host <HOST>] [--port <PORT>]`
 
-`--new-pairing` sẽ xóa toàn bộ token đã ghép đôi và tạo mã ghép đôi mới khi gateway khởi động.
+Pairing và flag cũ `--new-pairing` đã ngừng dùng. Gateway khởi động trực tiếp
+với các thiết lập runtime đã cấu hình.
 
 ### `service`
 

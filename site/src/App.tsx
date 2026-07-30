@@ -432,7 +432,7 @@ const commandLane: Array<{ command: string; hint: Localized }> = [
     hint: { en: "Run interactive agent mode", zh: "运行交互式 Agent 模式" },
   },
   {
-    command: "llamafarm gateway && llamafarm daemon",
+    command: "llamafarm daemon",
     hint: { en: "Start runtime services", zh: "启动运行时服务" },
   },
   {

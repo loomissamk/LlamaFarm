@@ -19,5 +19,7 @@
 
 ## 更新メモ
 
+- `agent.max_tool_iterations` の既定値は `100000` です。`0` もこの既定値にフォールバックし、反復する進捗停止は専用の停滞検出で処理します。
+- `gateway.require_pairing` は既定値 `false` の旧互換フィールドです。pairing は廃止され、実行時にはこの値を無視します。
 - `model_routes[].api_url` が追加され、特定の route だけで上位の `api_url` を上書きできます。
 - 同じ provider 種別の複数ローカル推論 endpoint に hint ごとで振り分けたい場合に使います。

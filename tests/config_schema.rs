@@ -67,15 +67,18 @@ port = 99999
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GatewayConfig boundary tests
+// GatewayConfig compatibility tests
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
-fn gateway_config_defaults_are_secure() {
+fn gateway_config_defaults_match_runtime_contract() {
     let gw = GatewayConfig::default();
     assert_eq!(gw.port, 42617);
     assert_eq!(gw.host, "127.0.0.1");
-    assert!(gw.require_pairing, "pairing should be required by default");
+    assert!(
+        !gw.require_pairing,
+        "the retired pairing compatibility field should default to false"
+    );
     assert!(
         !gw.allow_public_bind,
         "public bind should be denied by default"
@@ -126,7 +129,7 @@ default_temperature = 0.5
     let parsed: Config = toml::from_str(toml_str).expect("missing gateway section should parse");
     assert_eq!(parsed.gateway.port, 42617);
     assert_eq!(parsed.gateway.host, "127.0.0.1");
-    assert!(parsed.gateway.require_pairing);
+    assert!(!parsed.gateway.require_pairing);
     assert!(!parsed.gateway.allow_public_bind);
 }
 
@@ -141,7 +144,7 @@ port = 9090
     let parsed: Config = toml::from_str(toml_str).expect("partial gateway should parse");
     assert_eq!(parsed.gateway.port, 9090);
     assert_eq!(parsed.gateway.host, "127.0.0.1");
-    assert!(parsed.gateway.require_pairing);
+    assert!(!parsed.gateway.require_pairing);
     assert_eq!(parsed.gateway.pair_rate_limit_per_minute, 10);
 }
 

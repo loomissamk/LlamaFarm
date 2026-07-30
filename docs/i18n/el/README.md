@@ -2,7 +2,7 @@
 
 Αυτή η σελίδα αποτελεί το κεντρικό σημείο πρόσβασης για το σύστημα τεκμηρίωσης του LlamaFarm.
 
-Τελευταία ενημέρωση: **21 Φεβρουαρίου 2026**.
+Τελευταία ενημέρωση: **30 Ιουλίου 2026**.
 
 Τοπικοποιημένα κέντρα: [简体中文](../zh-CN/README.md) · [日本語](../ja/README.md) · [Русский](../ru/README.md) · [Français](../fr/README.md) · [Tiếng Việt](../vi/README.md) · [Ελληνικά](README.md).
 
@@ -64,7 +64,7 @@
 
 ### Συνεισφέροντες και Συντηρητές (Maintainers)
 
-- [../../../CONTRIBUTING.el.md](../../../CONTRIBUTING.el.md) — Οδηγός συνεισφοράς.
+- [../../../CONTRIBUTING.md](../../../CONTRIBUTING.md) — Οδηγός συνεισφοράς.
 - [pr-workflow.md](pr-workflow.md) — Διαδικασία υποβολής Pull Requests.
 - [reviewer-playbook.md](reviewer-playbook.md) — Οδηγός για αναθεωρητές κώδικα.
 - [ci-map.md](ci-map.md) — Διάγραμμα διαδικασιών CI.

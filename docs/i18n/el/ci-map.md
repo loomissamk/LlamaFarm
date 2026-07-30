@@ -1,47 +1,80 @@
-# Οδηγός Αυτόματων Ελέγχων (CI Map)
+# Χάρτης Ροών CI
 
-Το παρόν έγγραφο περιγράφει τη δομή και τις λειτουργίες των αυτοματοποιημένων ελέγχων (GitHub Actions) στο LlamaFarm.
+Η σελίδα περιγράφει τα GitHub Actions που υπάρχουν και εκτελούνται στο
+repository. Ονόματα από παλαιότερα έγγραφα δεν είναι ενεργά χωρίς αντίστοιχο
+αρχείο στο `.github/workflows/`.
 
-## 1. Έλεγχοι Υποχρεωτικής Έγκρισης (Merge-Blocking)
+Για τη ροή ανά συμβάν, δείτε το
+[`.github/workflows/main-branch-flow.md`](../../../.github/workflows/main-branch-flow.md).
 
-Αυτοί οι έλεγχοι είναι ντετερμινιστικοί και αποτελούν προϋπόθεση για τη συγχώνευση οποιασδήποτε αλλαγής στον κλάδο `main`.
+## Εκτελέσιμη Βάση Ροών
 
-- **CI (`ci-run.yml`)**
-    - **Σκοπός**: Επαλήθευση σύνταξης Rust, εκτέλεση test suite και ποιοτικός έλεγχος τεκμηρίωσης (docs).
-    - **Σημείωση**: Αλλαγές στο CI απαιτούν ρητή έγκριση από τους Maintainers.
-- **Workflow Sanity (`workflow-sanity.yml`)**
-    - **Σκοπός**: Επαλήθευση της ακεραιότητας των αρχείων YAML των GitHub Actions.
-- **PR Intake Checks (`pr-intake-checks.yml`)**
-    - **Σκοπός**: Ταχεία διαλογή PR, έλεγχος πληρότητας πληροφοριών και συμμόρφωση με τα πρότυπα κώδικα (linting).
+| Workflow | Συμβάν | Κύριο αποτέλεσμα |
+| --- | --- | --- |
+| `ci-run.yml` | push/PR/merge queue σε `main`, `dev` και manual | έλεγχοι Rust και web |
+| `docs-deploy.yml` | docs/site PR σε `main`, push σε `main` και manual | build Pages και deploy από `main` |
 
-## 2. Προαιρετικοί και Συμπληρωματικοί Έλεγχοι
+## Βασική Σύμβαση CI
 
-- **Docker (`pub-docker-img.yml`)**: Επαλήθευση containerization και κατασκευή images για πολλαπλές αρχιτεκτονικές.
-- **Security Audit (`sec-audit.yml`)**: Σάρωση εξαρτήσεων για γνωστές ευπάθειες.
-- **CodeQL Analysis (`sec-codeql.yml`)**: Στατική ανάλυση κώδικα για τον εντοπισμό κινδύνων ασφαλείας.
-- **Release Automation (`pub-release.yml`)**: Διαδικασία δημιουργίας επίσημων releases.
+Το `.github/workflows/ci-run.yml` εκτελεί:
 
-## 3. Αυτοματοποίηση Διεργασιών
+- format check στα αλλαγμένα Rust αρχεία με Rust 1.92.0,
+- `cargo clippy --locked --all-targets -- -D clippy::correctness`,
+- `cargo test --locked`,
+- `npm ci`, `npm test` και `npm run build` στο `web/`.
 
-- **PR Labeler**: Αυτόματη ταξινόμηση PR βάσει μεγέθους (`size:*`) και κινδύνου (`risk:*`).
-- **PR Auto Responder**: Αυτοματοποιημένη υποδοχή νέων συνεισφερόντων.
-- **Stale Manager**: Διαχείριση ανενεργών Issues και PRs.
-- **Dependabot**: Αυτόματη ενημέρωση εξαρτήσεων.
+Το σταθερό συγκεντρωτικό check είναι το `CI Required Gate`. Αποτυγχάνει όταν
+αποτύχει οποιοδήποτε job Rust lint, Rust test ή web.
 
-## 4. Προγραμματισμός Εκτέλεσης
+Το format check είναι σταδιακό, επειδή υπάρχει προϋπάρχον rustfmt drift σε όλο
+το repository. Τα νέα και αλλαγμένα Rust αρχεία συνεχίζουν να ελέγχονται.
 
-| Έλεγχος | Συχνότητα / Ερέθισμα |
-|:---|:---|
-| CI / Security | Push, Pull Request |
-| Docker / Release | Tag Push (`v*`) |
-| Hygiene (Stale) | Καθημερινά |
+## Σύμβαση Docs Pages
 
-## 5. Οδηγίες Αντιμετώπισης Αποτυχιών
+Το `.github/workflows/docs-deploy.yml`:
 
-1. **CI Gate Failure**: Ανατρέξτε στα logs της εργασίας `ci-run.yml`.
-2. **Docker Build Failure**: Ελέγξτε το `pub-docker-img.yml` για σφάλματα στο Dockerfile.
-3. **Security Findings**: Συμβουλευτείτε την αναφορά του `sec-audit.yml` για απαρχαιωμένες βιβλιοθήκες.
-4. **Documentation Issues**: Ελέγξτε την ενότητα `docs-quality` στο `ci-run.yml`.
+- κάνει build το `site/` με Node.js 22,
+- υπολογίζει το Vite base path από το όνομα του repository,
+- επιβεβαιώνει ότι το docs manifest είναι ενημερωμένο και committed,
+- κάνει μόνο build στα pull requests,
+- ανεβάζει και κάνει deploy το `gh-pages/` μόνο από το `main`.
 
-> [!IMPORTANT]
-> Οι έλεγχοι Merge-Blocking πρέπει να παραμένουν σταθεροί και γρήγοροι. Αποφύγετε την προσθήκη χρονοβόρων διαδικασιών στην κύρια ροή του CI.
+Η πηγή του GitHub Pages πρέπει να είναι **GitHub Actions**. Δείτε το
+[runbook ανάπτυξης docs](../../operations/docs-deploy-runbook.md).
+
+## Τοπική Αναπαραγωγή
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D clippy::correctness
+cargo test --locked
+
+cd web
+npm ci
+npm test
+npm run build
+
+cd ../site
+npm ci
+VITE_BASE_PATH=/llamafarm/ npm run build
+git diff --exit-code -- src/generated/docs-manifest.json
+```
+
+## Γρήγορη Διάγνωση
+
+1. Για `CI Required Gate`, ανοίξτε το `ci-run.yml` και δείτε το πρώτο
+   αποτυχημένο dependency job.
+2. Για `Build Docs Site`, επαναλάβετε το build του `site/` και ελέγξτε αν
+   άλλαξε το docs manifest.
+3. Για Pages, επιβεβαιώστε ότι το run είναι στο `main`, το build πέτυχε και η
+   πηγή Pages είναι **GitHub Actions**.
+4. Για asset paths, ελέγξτε το HTML στο `gh-pages/` και το base path των URL.
+
+## Κανόνες Συντήρησης
+
+- Κρατήστε σταθερό το `CI Required Gate` ή ενημερώστε μαζί τα branch rules.
+- Κρατήστε σαφείς τις εκδόσεις Rust και Node.
+- Κλειδώστε τα GitHub Actions σε αμετάβλητα revisions.
+- Κάντε commit το docs manifest μαζί με τις αλλαγές πηγής.
+- Ενημερώστε αυτόν τον χάρτη, τις μεταφράσεις και το required-check mapping όταν
+  αλλάζουν οι εκτελέσιμες ροές.

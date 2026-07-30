@@ -20,13 +20,13 @@ npm run build
 Build output is generated at:
 
 ```text
-/home/ubuntu/llamafarm/gh-pages
+../gh-pages
 ```
 
 Notes:
 
 - Output directory is intentionally `gh-pages/` (not `out/`).
-- Vite base is configured to `/llamafarm/` for `https://llamafarm-labs.github.io/llamafarm/`.
+- Vite defaults to `/llamafarm/`; deployment supplies `VITE_BASE_PATH` from the repository name so forks and repository renames publish at the correct project path.
 - Docs links in UI point to rendered GitHub docs pages for direct reading.
 - Docs Navigator supports:
   - keyword search with weighted ranking
@@ -57,11 +57,11 @@ Notes:
 The repository includes workflow:
 
 ```text
-.github/workflows/pages-deploy.yml
+.github/workflows/docs-deploy.yml
 ```
 
 Behavior:
 
-- Trigger on pushes to `main` when `site/**`, `docs/**`, or `README.md` changes.
-- Build runs in `site/` and publishes artifact from `gh-pages/`.
-- Deploys with GitHub Pages official actions.
+- Pull requests build and validate the Pages artifact.
+- Pushes to `main` build `site/` and publish `gh-pages/`.
+- Deployment uses the official GitHub Pages actions.

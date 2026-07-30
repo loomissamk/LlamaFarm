@@ -2,7 +2,7 @@
 
 This is a high-signal reference for common config sections and defaults.
 
-Last verified: **February 25, 2026**.
+Last verified: **July 30, 2026**.
 
 Config path resolution at startup:
 
@@ -106,14 +106,14 @@ Operational note for container users:
 | `compact_context` | `false` | When true: bootstrap_max_chars=6000, rag_chunk_limit=2. Use for 13B or smaller models |
 | `tool_routing_enabled` | `true` | Route the WebSocket Agent Chat registry per turn using the current request plus recent user-task context |
 | `tool_routing_top_k` | `12` | Maximum relevant non-essential tools to select before adding core tools and required workflow dependencies; `0` disables routing |
-| `max_tool_iterations` | `20` | Maximum tool-call loop turns per user message across CLI, gateway, and channels |
+| `max_tool_iterations` | `100000` | Effectively unbounded tool-call loop turns per user message; dedicated stall detectors stop repeated non-progress |
 | `max_history_messages` | `50` | Maximum conversation history messages retained per session |
 | `parallel_tools` | `false` | Enable parallel tool execution within a single iteration |
 | `tool_dispatcher` | `auto` | Tool dispatch strategy |
 
 Notes:
 
-- Setting `max_tool_iterations = 0` falls back to safe default `20`.
+- Setting `max_tool_iterations = 0` falls back to `100000`.
 - Tool routing is currently applied to WebSocket Agent Chat turns. The selected
   set is used consistently for prompt descriptions, XML/native schemas,
   compatibility fallback, and execution filtering. Empty, context-free,
@@ -513,7 +513,7 @@ Notes:
 |---|---|---|
 | `host` | `127.0.0.1` | bind address |
 | `port` | `42617` | gateway listen port |
-| `require_pairing` | `true` | require pairing before bearer auth |
+| `require_pairing` | `false` | Legacy compatibility field; pairing is retired and this value is ignored at runtime |
 | `allow_public_bind` | `false` | block accidental public exposure |
 | `request_timeout_secs` | `30` | HTTP request timeout for gateway routes |
 
@@ -901,10 +901,10 @@ db_path = "~/.llamafarm/agents.db"
 staleness_secs = 300
 ```
 
-## Security-Relevant Defaults
+## Runtime Boundary Defaults
 
 - deny-by-default channel allowlists (`[]` means deny all)
-- pairing required on gateway by default
+- gateway pairing is retired; `require_pairing` is retained only for config compatibility
 - public bind disabled by default
 
 ## Validation Commands

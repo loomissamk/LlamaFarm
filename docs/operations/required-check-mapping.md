@@ -1,44 +1,51 @@
 # Required Check Mapping
 
-This document maps merge-critical workflows to expected check names.
+This document maps the current executable workflows to stable check names.
 
-## Merge to `dev` / `main`
-
-| Required check name | Source workflow | Scope |
-| --- | --- | --- |
-| `CI Required Gate` | `.github/workflows/ci-run.yml` | core Rust/doc merge gate |
-| `Security Audit` | `.github/workflows/sec-audit.yml` | dependencies, secrets, governance |
-| `Feature Matrix Summary` | `.github/workflows/feature-matrix.yml` | feature-combination compile matrix |
-| `Workflow Sanity` | `.github/workflows/workflow-sanity.yml` | workflow syntax and lint |
-
-Feature matrix lane check names (informational, non-required):
-
-- `Matrix Lane (default)`
-- `Matrix Lane (whatsapp-web)`
-- `Matrix Lane (browser-native)`
-- `Matrix Lane (nightly-all-features)`
-
-## Release / Pre-release
+## Merge to `main` or `dev`
 
 | Required check name | Source workflow | Scope |
 | --- | --- | --- |
-| `Verify Artifact Set` | `.github/workflows/pub-release.yml` | release completeness |
-| `Pre-release Guard` | `.github/workflows/pub-prerelease.yml` | stage progression + tag integrity |
-| `Nightly Summary & Routing` | `.github/workflows/feature-matrix.yml` (`profile=nightly`) | overnight integration signal |
+| `CI Required Gate` | `.github/workflows/ci-run.yml` | aggregate Rust lint/test and web test/build gate |
+
+Dependency jobs that feed the aggregate check:
+
+- `Rust Format and Clippy`
+- `Rust Tests`
+- `Web Tests and Build`
+
+Configure branch protection or rulesets against `CI Required Gate` rather than
+the dependency jobs so the required-check surface stays stable.
+
+## Docs and Pages
+
+| Check name | Source workflow | Scope |
+| --- | --- | --- |
+| `Build Docs Site` | `.github/workflows/docs-deploy.yml` | path-scoped site build and manifest verification |
+| `Deploy Docs to GitHub Pages` | `.github/workflows/docs-deploy.yml` | `main` Pages deployment |
+
+`Build Docs Site` is a pull-request validation check when docs/site paths change.
+The deployment check runs only from `main`; it must not be a pull-request
+required check.
 
 ## Verification Procedure
 
-1. Resolve latest workflow run IDs:
-   - `gh run list --repo llamafarm-labs/llamafarm --workflow feature-matrix.yml --limit 1`
-   - `gh run list --repo llamafarm-labs/llamafarm --workflow ci-run.yml --limit 1`
-2. Enumerate check/job names and compare to this mapping:
-   - `gh run view <run_id> --repo llamafarm-labs/llamafarm --json jobs --jq '.jobs[].name'`
-3. If any merge-critical check name changed, update this file before changing branch protection policy.
-4. Export and commit branch/ruleset snapshots as documented in `docs/operations/branch-protection.md`.
+1. Resolve the latest workflow runs:
 
-## Notes
+   ```bash
+   gh run list --workflow ci-run.yml --limit 1
+   gh run list --workflow docs-deploy.yml --limit 1
+   ```
 
-- Use pinned `uses:` references for all workflow actions.
-- Keep check names stable; renaming check jobs can break branch protection rules.
-- GitHub scheduled/manual discovery for workflows is default-branch driven. If a release/nightly workflow only exists on a non-default branch, merge it into the default branch before expecting schedule visibility.
-- Update this mapping whenever merge-critical workflows/jobs are added or renamed.
+2. Enumerate job names:
+
+   ```bash
+   gh run view <run_id> --json jobs --jq '.jobs[].name'
+   ```
+
+3. Compare the names with this mapping.
+4. If a required name changes, update this file and repository branch rules in
+   the same delivery change.
+
+GitHub discovers manual workflows from the default branch. Merge a new workflow
+before expecting it to appear in the manual-run interface.

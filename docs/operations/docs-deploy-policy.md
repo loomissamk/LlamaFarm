@@ -1,41 +1,44 @@
 # Docs Deploy Policy
 
-This document defines the promotion and rollback validation contract for docs deployment.
+This document describes the policy enforced by the current
+`.github/workflows/docs-deploy.yml`.
 
-## Policy Source
+## Build Policy
 
-- Machine policy: `.github/release/docs-deploy-policy.json`
-- Enforcement script: `scripts/ci/docs_deploy_guard.py`
-- Workflow integration: `.github/workflows/docs-deploy.yml` (`docs-quality` job)
+- Docs and site pull requests to `main` must build successfully.
+- The generated docs manifest must match the committed source tree.
+- The Pages base path is derived from the repository name in CI.
+- Pull-request runs never upload or deploy a Pages artifact.
 
-## Promotion Contract
+## Production Policy
 
-For production deploys:
+- Production deployment is allowed only from `refs/heads/main`.
+- The build job must succeed before deployment.
+- The deployed artifact is the repository-root `gh-pages/` directory.
+- GitHub Pages must use **GitHub Actions** as its source.
 
-1. Source branch must be production branch (`main`).
-2. Manual production dispatch must include preview promotion evidence (`preview_evidence_run_url`) when policy requires it.
-3. Guard output must be `ready=true` before `Deploy Docs to GitHub Pages` lane can run.
+## Manual Dispatch
 
-## Rollback Contract
+A manual run is validation-only unless `main` is selected as the workflow ref.
+Selecting `main` runs the same build and deployment path as a matching push.
 
-For manual production rollback:
+## Rollback Policy
 
-1. Set `deploy_target=production`.
-2. Provide `rollback_ref` (tag/sha/ref).
-3. Guard resolves rollback ref to commit SHA.
-4. If policy enables ancestor validation, rollback ref must be an ancestor of production branch history.
+Rollback is performed by reverting the regression through the normal branch
+workflow and producing a new deployment from `main`. This keeps the deployed
+state tied to a repository commit.
 
-## Artifacts and Retention
+The legacy `.github/release/docs-deploy-policy.json` and
+`scripts/ci/docs_deploy_guard.py` are not invoked by the current workflow. They
+are not part of the executable deployment contract unless a future change wires
+them into `docs-deploy.yml` and updates this document.
 
-Guard emits:
+## Change Checklist
 
-- `docs-deploy-guard.json`
-- `docs-deploy-guard.md`
-- `audit-event-docs-deploy-guard.json`
+When deployment behavior changes:
 
-Retention defaults:
-
-- Docs preview artifacts: `14` days
-- Docs deploy guard artifacts: `21` days
-
-Retention values are configured in `.github/release/docs-deploy-policy.json`.
+1. update the workflow, this policy, and the runbook together;
+2. run `actionlint`;
+3. run the site production build and verify a clean generated manifest;
+4. confirm pull-request runs remain build-only;
+5. confirm production deploys remain limited to `main`.

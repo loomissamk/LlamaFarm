@@ -2,7 +2,7 @@
 
 Αυτό το αρχείο αποτελεί τον κανονικό (canonical) πίνακα περιεχομένων για το σύστημα τεκμηρίωσης.
 
-Τελευταία ενημέρωση: **18 Φεβρουαρίου 2026**.
+Τελευταία ενημέρωση: **30 Ιουλίου 2026**.
 
 ## Είσοδος ανά γλώσσα
 
@@ -62,7 +62,7 @@
 
 ### 6) Συνεισφορά και CI
 
-- [../CONTRIBUTING.el.md](../CONTRIBUTING.el.md)
+- [../CONTRIBUTING.md](../CONTRIBUTING.md)
 - [i18n/el/pr-workflow.md](i18n/el/pr-workflow.md)
 - [i18n/el/reviewer-playbook.md](i18n/el/reviewer-playbook.md)
 - [i18n/el/ci-map.md](i18n/el/ci-map.md)

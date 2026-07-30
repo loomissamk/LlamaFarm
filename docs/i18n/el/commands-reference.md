@@ -2,7 +2,7 @@
 
 Αυτός ο οδηγός περιλαμβάνει το πλήρες σύνολο των εντολών που είναι διαθέσιμες στη διεπαφή γραμμής εντολών (CLI) του LlamaFarm.
 
-Τελευταία ενημέρωση: 20 Φεβρουαρίου 2026.
+Τελευταία ενημέρωση: 30 Ιουλίου 2026.
 
 ## Σύνοψη Εντολών
 
@@ -40,9 +40,10 @@
 
 ### 2.1 `gateway` / `daemon`
 
-- `llamafarm gateway [--host <HOST>] [--port <PORT>] [--new-pairing]`
+- `llamafarm gateway [--host <HOST>] [--port <PORT>]`
 - `llamafarm daemon [--host <HOST>] [--port <PORT>]`
-- Το `--new-pairing` καθαρίζει όλα τα αποθηκευμένα paired tokens και δημιουργεί νέο pairing code κατά την εκκίνηση του gateway.
+- Το pairing και η παλιά σημαία `--new-pairing` έχουν αποσυρθεί. Το gateway
+  ξεκινά απευθείας με τις διαμορφωμένες ρυθμίσεις runtime.
 
 ### 3. `cron` (Προγραμματισμός Εργασιών)
 

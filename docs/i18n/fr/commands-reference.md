@@ -19,4 +19,4 @@ Source anglaise:
 
 ## Mise à jour récente
 
-- `llamafarm gateway` prend en charge `--new-pairing` pour effacer les tokens appairés et générer un nouveau code d'appairage.
+- Le pairing et l'ancien flag `--new-pairing` sont retirés ; le gateway démarre directement avec la configuration runtime.

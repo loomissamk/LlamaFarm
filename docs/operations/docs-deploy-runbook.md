@@ -2,57 +2,76 @@
 
 Workflow: `.github/workflows/docs-deploy.yml`
 
-## Policy Contract
+## Current Lanes
 
-- Policy file: `.github/release/docs-deploy-policy.json`
-- Guard script: `scripts/ci/docs_deploy_guard.py`
-- Guard artifacts:
-  - `docs-deploy-guard.json`
-  - `docs-deploy-guard.md`
-  - `audit-event-docs-deploy-guard.json`
+- `Build Docs Site`: installs dependencies, generates the docs manifest, builds
+  the Vite site, and confirms the committed manifest is current.
+- `Deploy Docs to GitHub Pages`: deploys the uploaded Pages artifact from
+  `main`.
 
-## Lanes
+Pull requests run the build lane only. Pushes and manual runs deploy only when
+the workflow ref is `refs/heads/main`.
 
-- `Docs Quality Gate`: markdown quality + added-link checks
-- `Docs Preview Artifact`: PR/manual preview package
-- `Deploy Docs to GitHub Pages`: production deployment lane
+## One-Time Repository Setup
 
-## Triggering
+1. Open **Settings > Pages**.
+2. Under **Build and deployment**, set **Source** to **GitHub Actions**.
+3. Confirm the workflow may create/use the `github-pages` environment.
+4. Merge the workflow to `main` before expecting manual dispatch to be
+   discoverable.
 
-- PR/push when docs or README markdown changes
-- manual dispatch for preview or production
-- manual production supports optional rollback via `rollback_ref`
+## Local Build
 
-## Quality Controls
+```bash
+cd site
+npm ci
+VITE_BASE_PATH=/llamafarm/ npm run build
+git diff --exit-code -- src/generated/docs-manifest.json
+```
 
-- `scripts/ci/docs_quality_gate.sh`
-- `scripts/ci/collect_changed_links.py` + lychee added-link checks
+The build output is written to the repository-root `gh-pages/` directory. Use a
+different base path when the repository slug differs:
 
-## Deployment Rules
+```bash
+VITE_BASE_PATH=/repository-name/ npm run build
+```
 
-- preview: upload `docs-preview` artifact only
-- production: deploy to GitHub Pages on `main` push or manual production dispatch from `main`
-- manual production promotion requires `preview_evidence_run_url` when policy requires it
-- `rollback_ref` (manual production only) must resolve to a commit that is an ancestor of production branch (`main`) when policy requires ancestor validation
+## Normal Deployment
+
+1. Merge a docs/site change to `main`, or manually dispatch `Docs Pages` with
+   `main` selected as the ref.
+2. Confirm `Build Docs Site` succeeds.
+3. Confirm `Deploy Docs to GitHub Pages` reports a Pages URL.
+4. Open that URL and check top-level navigation, a nested docs route, and static
+   assets.
 
 ## Failure Handling
 
-1. Re-run markdown and link gates locally.
-2. Fix broken links / markdown regressions first.
-3. Re-dispatch production deploy only after preview artifact checks pass.
-4. Inspect `docs-deploy-guard.json` / `audit-event-docs-deploy-guard.json` for promotion/rollback contract violations.
+### Manifest verification failed
 
-## Rollback Validation (Manual Drill)
+Run the local build, review
+`site/src/generated/docs-manifest.json`, and commit the regenerated file with
+the source-doc changes.
 
-Use `workflow_dispatch` with:
+### Pages artifact was not uploaded
 
-- `deploy_target=production`
-- `preview_evidence_run_url=<link to successful preview run>`
-- `rollback_ref=<known-good commit/tag>`
+Confirm the event is not a pull request and the selected workflow ref is
+`main`. Pull-request runs intentionally stop after build verification.
 
-Validation expectations:
+### Deployment job was skipped
 
-1. Guard mode resolves to `rollback`.
-2. Guard `ready=true` and no violations.
-3. Deploy summary shows source ref equal to rollback commit SHA.
-4. Pages deployment completes successfully.
+Confirm `github.ref` is `refs/heads/main`. A manual run from another branch is
+validation-only.
+
+### Published paths return 404
+
+Confirm the Pages source is **GitHub Actions** and the build log shows
+`VITE_BASE_PATH` matching `/${repository-name}/`.
+
+## Rollback
+
+Revert the docs/site regression on `main`, then rerun `Docs Pages` from `main`.
+For an urgent return to a known-good version, revert to the known-good commit
+through the normal branch workflow and let that commit produce a fresh Pages
+deployment. Each deployment remains visible in the `github-pages` environment
+history.

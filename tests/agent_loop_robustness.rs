@@ -9,16 +9,16 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::json;
-use std::sync::{Arc, Mutex};
 use llamafarm::agent::agent::Agent;
 use llamafarm::agent::dispatcher::NativeToolDispatcher;
-use llamafarm::config::MemoryConfig;
+use llamafarm::config::{AgentConfig, MemoryConfig};
 use llamafarm::memory;
 use llamafarm::memory::Memory;
 use llamafarm::observability::{NoopObserver, Observer};
 use llamafarm::providers::{ChatRequest, ChatResponse, Provider, ToolCall};
 use llamafarm::tools::{Tool, ToolResult};
+use serde_json::json;
+use std::sync::{Arc, Mutex};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Mock infrastructure
@@ -199,12 +199,21 @@ fn tool_response(calls: Vec<ToolCall>) -> ChatResponse {
 }
 
 fn build_agent(provider: Box<dyn Provider>, tools: Vec<Box<dyn Tool>>) -> Agent {
+    build_agent_with_config(provider, tools, AgentConfig::default())
+}
+
+fn build_agent_with_config(
+    provider: Box<dyn Provider>,
+    tools: Vec<Box<dyn Tool>>,
+    config: AgentConfig,
+) -> Agent {
     Agent::builder()
         .provider(provider)
         .tools(tools)
         .memory(make_memory())
         .observer(make_observer())
         .tool_dispatcher(Box::new(NativeToolDispatcher))
+        .config(config)
         .workspace_dir(std::env::temp_dir())
         .build()
         .unwrap()
@@ -323,6 +332,8 @@ async fn agent_handles_mixed_tool_success_and_failure() {
 #[tokio::test]
 async fn agent_respects_max_tool_iterations() {
     let (counting_tool, count) = CountingTool::new();
+    let mut config = AgentConfig::default();
+    config.max_tool_iterations = 20;
 
     // Create 30 tool call responses - more than the explicit test limit of 20.
     let mut responses: Vec<ChatResponse> = (0..30)
@@ -338,18 +349,7 @@ async fn agent_respects_max_tool_iterations() {
     responses.push(text_response("Final response after iterations"));
 
     let provider = Box::new(MockProvider::new(responses));
-    let mut config = llamafarm::config::AgentConfig::default();
-    config.max_tool_iterations = 20;
-    let mut agent = Agent::builder()
-        .provider(provider)
-        .tools(vec![Box::new(counting_tool)])
-        .memory(make_memory())
-        .observer(make_observer())
-        .tool_dispatcher(Box::new(NativeToolDispatcher))
-        .workspace_dir(std::env::temp_dir())
-        .config(config)
-        .build()
-        .unwrap();
+    let mut agent = build_agent_with_config(provider, vec![Box::new(counting_tool)], config);
 
     // Agent should complete (either by hitting iteration limit or running out of responses)
     let result = agent.turn("keep calling tools").await;
