@@ -28,14 +28,91 @@ pub struct FederationToolCapability {
     pub local_only: bool,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FederationLoadedModel {
+    pub name: String,
+    #[serde(default)]
+    pub size_bytes: u64,
+    #[serde(default)]
+    pub size_vram_bytes: u64,
+    #[serde(default)]
+    pub context_length: Option<u64>,
+    #[serde(default)]
+    pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FederationNodeCapacity {
+    #[serde(default)]
+    pub logical_cpus: usize,
+    #[serde(default)]
+    pub total_memory_bytes: Option<u64>,
+    #[serde(default)]
+    pub memory_limit_bytes: Option<u64>,
+    #[serde(default)]
+    pub memory_current_bytes: Option<u64>,
+    #[serde(default)]
+    pub memory_available_bytes: Option<u64>,
+    #[serde(default)]
+    pub gpu_total_memory_bytes: Option<u64>,
+    #[serde(default)]
+    pub gpu_used_memory_bytes: Option<u64>,
+    #[serde(default)]
+    pub gpu_free_memory_bytes: Option<u64>,
+    #[serde(default)]
+    pub loaded_model_vram_bytes: u64,
+    #[serde(default)]
+    pub active_runs: usize,
+    /// Ollama does not expose scheduler queue depth. `None` means the value is
+    /// unavailable rather than incorrectly reporting an empty queue.
+    #[serde(default)]
+    pub queued_runs: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FederationRuntimeFacts {
+    #[serde(default)]
+    pub gateway_host: String,
+    #[serde(default)]
+    pub gateway_port: u16,
+    #[serde(default)]
+    pub configured_gateway_host: String,
+    #[serde(default)]
+    pub configured_gateway_port: u16,
+    #[serde(default)]
+    pub gateway_restart_required: bool,
+    #[serde(default)]
+    pub federation_configured: bool,
+    #[serde(default)]
+    pub federation_effective: bool,
+    #[serde(default)]
+    pub delegation_enabled: bool,
+    #[serde(default)]
+    pub max_tool_iterations: usize,
+    #[serde(default)]
+    pub config_revision: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FederationCapabilities {
     pub node_id: String,
     pub display_name: String,
     pub app_version: String,
+    #[serde(default)]
+    pub build_commit: Option<String>,
+    #[serde(default)]
+    pub build_time: Option<String>,
     pub provider: Option<String>,
     pub model: String,
     pub installed_models: Vec<String>,
+    #[serde(default)]
+    pub loaded_models: Vec<FederationLoadedModel>,
+    #[serde(default)]
+    pub active_model_loaded: bool,
+    #[serde(default)]
+    pub capacity: FederationNodeCapacity,
+    #[serde(default)]
+    pub runtime: FederationRuntimeFacts,
     pub tools: Vec<FederationToolCapability>,
     pub role_support: FederationRole,
     pub allow_remote_subagents: bool,
@@ -77,6 +154,18 @@ pub struct FederationPeerSummary {
     pub model_summary: String,
     pub tool_summary: String,
     pub installed_models: Vec<String>,
+    #[serde(default)]
+    pub loaded_models: Vec<FederationLoadedModel>,
+    #[serde(default)]
+    pub active_model_loaded: bool,
+    #[serde(default)]
+    pub capacity: FederationNodeCapacity,
+    #[serde(default)]
+    pub runtime: FederationRuntimeFacts,
+    #[serde(default)]
+    pub build_commit: Option<String>,
+    #[serde(default)]
+    pub build_time: Option<String>,
     pub tools: Vec<FederationToolCapability>,
     pub last_seen: Option<String>,
     pub specialization: String,
@@ -86,7 +175,12 @@ pub struct FederationPeerSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FederationPeersResponse {
     pub enabled: bool,
+    /// Persisted operator intent; can differ from `enabled` until restart.
+    #[serde(default)]
+    pub configured_enabled: bool,
     pub local_node: FederationLocalNodeSummary,
+    #[serde(default)]
+    pub local_capabilities: Option<FederationCapabilities>,
     pub peers: Vec<FederationPeerSummary>,
 }
 
@@ -148,6 +242,12 @@ struct FederationPeerRecord {
     model_summary: String,
     tool_summary: String,
     installed_models: Vec<String>,
+    loaded_models: Vec<FederationLoadedModel>,
+    active_model_loaded: bool,
+    capacity: FederationNodeCapacity,
+    runtime: FederationRuntimeFacts,
+    build_commit: Option<String>,
+    build_time: Option<String>,
     tools: Vec<FederationToolCapability>,
     last_seen: Option<DateTime<Utc>>,
     /// Free-text hint injected into the system prompt so the LLM knows what to send here.
@@ -195,6 +295,12 @@ impl FederationPeerRegistry {
                 model_summary: String::new(),
                 tool_summary: String::new(),
                 installed_models: Vec::new(),
+                loaded_models: Vec::new(),
+                active_model_loaded: false,
+                capacity: FederationNodeCapacity::default(),
+                runtime: FederationRuntimeFacts::default(),
+                build_commit: None,
+                build_time: None,
                 tools: Vec::new(),
                 last_seen: None,
                 specialization: String::new(),
@@ -252,6 +358,12 @@ impl FederationPeerRegistry {
                 model_summary: discovered.model_summary,
                 tool_summary: discovered.tool_summary,
                 installed_models: Vec::new(),
+                loaded_models: Vec::new(),
+                active_model_loaded: false,
+                capacity: FederationNodeCapacity::default(),
+                runtime: FederationRuntimeFacts::default(),
+                build_commit: None,
+                build_time: None,
                 tools: Vec::new(),
                 last_seen: Some(now),
                 specialization: String::new(),
@@ -291,6 +403,12 @@ impl FederationPeerRegistry {
             record.model_summary = capabilities.model.clone();
             record.tool_summary = summarize_tool_names(&capabilities.tools);
             record.installed_models = capabilities.installed_models.clone();
+            record.loaded_models = capabilities.loaded_models.clone();
+            record.active_model_loaded = capabilities.active_model_loaded;
+            record.capacity = capabilities.capacity.clone();
+            record.runtime = capabilities.runtime.clone();
+            record.build_commit = capabilities.build_commit.clone();
+            record.build_time = capabilities.build_time.clone();
             record.tools = capabilities.tools.clone();
             record.online = true;
             record.health = capabilities.health.clone();
@@ -325,6 +443,12 @@ impl FederationPeerRegistry {
                 model_summary: capabilities.model,
                 tool_summary: summarize_tool_names(&capabilities.tools),
                 installed_models: capabilities.installed_models,
+                loaded_models: capabilities.loaded_models,
+                active_model_loaded: capabilities.active_model_loaded,
+                capacity: capabilities.capacity,
+                runtime: capabilities.runtime,
+                build_commit: capabilities.build_commit,
+                build_time: capabilities.build_time,
                 tools: capabilities.tools,
                 last_seen: Some(now),
                 specialization: String::new(),
@@ -483,7 +607,9 @@ impl FederationPeerRegistry {
 
         FederationPeersResponse {
             enabled,
+            configured_enabled: enabled,
             local_node,
+            local_capabilities: None,
             peers,
         }
     }
@@ -508,6 +634,12 @@ fn record_to_summary(record: &FederationPeerRecord) -> FederationPeerSummary {
         model_summary: record.model_summary.clone(),
         tool_summary: record.tool_summary.clone(),
         installed_models: record.installed_models.clone(),
+        loaded_models: record.loaded_models.clone(),
+        active_model_loaded: record.active_model_loaded,
+        capacity: record.capacity.clone(),
+        runtime: record.runtime.clone(),
+        build_commit: record.build_commit.clone(),
+        build_time: record.build_time.clone(),
         tools: record.tools.clone(),
         last_seen: record.last_seen.map(|value| value.to_rfc3339()),
         specialization: record.specialization.clone(),
@@ -611,5 +743,72 @@ mod tests {
         assert_eq!(peers.peers.len(), 1);
         assert!(!peers.peers[0].online);
         assert_eq!(peers.peers[0].health, "offline");
+    }
+
+    #[test]
+    fn capability_refresh_preserves_runtime_and_capacity_truth() {
+        let registry = FederationPeerRegistry::new(Duration::from_secs(30), FederationRole::Both);
+        registry.upsert_discovered_peer(discovered_peer("alpha", FederationRole::Both));
+        registry.apply_capabilities(
+            "http://alpha.local:8080",
+            FederationPeerSource::Mdns,
+            FederationCapabilities {
+                node_id: "node-alpha".to_string(),
+                display_name: "Peer alpha".to_string(),
+                app_version: "0.1.8".to_string(),
+                build_commit: Some("abc123".to_string()),
+                build_time: Some("2026-07-30T18:00:00+00:00".to_string()),
+                provider: Some("ollama".to_string()),
+                model: "qwen3.5:9b".to_string(),
+                installed_models: vec!["qwen3.5:9b".to_string()],
+                loaded_models: vec![FederationLoadedModel {
+                    name: "qwen3.5:9b".to_string(),
+                    size_bytes: 6_000,
+                    size_vram_bytes: 5_000,
+                    context_length: Some(32_768),
+                    expires_at: None,
+                }],
+                active_model_loaded: true,
+                capacity: FederationNodeCapacity {
+                    logical_cpus: 16,
+                    total_memory_bytes: Some(64_000),
+                    loaded_model_vram_bytes: 5_000,
+                    active_runs: 2,
+                    ..FederationNodeCapacity::default()
+                },
+                runtime: FederationRuntimeFacts {
+                    gateway_host: "0.0.0.0".to_string(),
+                    gateway_port: 8080,
+                    max_tool_iterations: 100_000,
+                    ..FederationRuntimeFacts::default()
+                },
+                tools: Vec::new(),
+                role_support: FederationRole::Both,
+                allow_remote_subagents: true,
+                health: "online".to_string(),
+                api_port: 8080,
+                last_seen: Utc::now().to_rfc3339(),
+            },
+        );
+
+        let peers = registry.peers_response(
+            true,
+            FederationLocalNodeSummary {
+                node_id: "local-node".to_string(),
+                display_name: "Local".to_string(),
+                api_port: 8080,
+                role: FederationRole::Both,
+                allow_remote_subagents: true,
+                discovery_mode: FederationDiscoveryMode::Mdns,
+                service_name: "_llamafarm._tcp".to_string(),
+                gateway_host: "127.0.0.1".to_string(),
+            },
+        );
+        let peer = &peers.peers[0];
+        assert_eq!(peer.build_commit.as_deref(), Some("abc123"));
+        assert!(peer.active_model_loaded);
+        assert_eq!(peer.capacity.active_runs, 2);
+        assert_eq!(peer.runtime.max_tool_iterations, 100_000);
+        assert_eq!(peer.loaded_models[0].size_vram_bytes, 5_000);
     }
 }

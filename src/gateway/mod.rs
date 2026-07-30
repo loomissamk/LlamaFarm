@@ -291,11 +291,18 @@ fn normalize_max_keys(configured: usize, fallback: usize) -> usize {
 #[derive(Clone)]
 pub struct GatewayRuntimeSnapshot {
     pub provider: Arc<dyn Provider>,
+    pub provider_name: String,
     pub model: String,
     pub temperature: f64,
     pub mem: Arc<dyn Memory>,
     pub tools_registry: Arc<Vec<ToolSpec>>,
     pub tools_registry_exec: Arc<Vec<Box<dyn Tool>>>,
+    pub max_tool_iterations: usize,
+    /// Listener address that is actually serving requests. Config edits can
+    /// change the requested address but cannot rebind an already-running
+    /// listener, so these values remain stable until gateway restart.
+    pub effective_gateway_host: String,
+    pub effective_gateway_port: u16,
 }
 
 fn default_gateway_model(config: &Config) -> String {
@@ -381,11 +388,15 @@ pub(crate) fn build_gateway_runtime_snapshot_with_federation(
 
     Ok(GatewayRuntimeSnapshot {
         provider,
+        provider_name: provider_name.to_string(),
         model: default_gateway_model(config),
         temperature: config.default_temperature,
         mem,
         tools_registry,
         tools_registry_exec,
+        max_tool_iterations: config.agent.max_tool_iterations,
+        effective_gateway_host: config.gateway.host.clone(),
+        effective_gateway_port: config.gateway.port,
     })
 }
 
@@ -445,19 +456,27 @@ impl AppState {
 
         Arc::new(GatewayRuntimeSnapshot {
             provider: Arc::clone(&self.provider),
+            provider_name: "unknown".to_string(),
             model: self.model.clone(),
             temperature: self.temperature,
             mem: Arc::clone(&self.mem),
             tools_registry: Arc::clone(&self.tools_registry),
             tools_registry_exec: Arc::clone(&self.tools_registry_exec),
+            max_tool_iterations: self.max_tool_iterations,
+            effective_gateway_host: String::new(),
+            effective_gateway_port: 0,
         })
     }
 
-    pub(crate) fn replace_runtime_snapshot(&self, snapshot: GatewayRuntimeSnapshot) {
+    pub(crate) fn replace_runtime_snapshot(&self, mut snapshot: GatewayRuntimeSnapshot) {
         if let Some(federation) = &self.federation {
             sync_federation_runtime_metadata(federation, &snapshot);
         }
         if let Some(runtime_state) = &self.runtime_state {
+            let current = runtime_state.read();
+            snapshot.effective_gateway_host = current.effective_gateway_host.clone();
+            snapshot.effective_gateway_port = current.effective_gateway_port;
+            drop(current);
             *runtime_state.write() = Arc::new(snapshot);
         }
     }
@@ -513,10 +532,13 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
     let federation_tasks = federation
         .as_ref()
         .map(|_| Arc::new(FederationTaskManager::new()));
-    let runtime_snapshot = Arc::new(build_gateway_runtime_snapshot_with_federation(
+    let mut runtime_snapshot = build_gateway_runtime_snapshot_with_federation(
         &config,
         federation.as_ref().map(|service| service.remote_adapter()),
-    )?);
+    )?;
+    runtime_snapshot.effective_gateway_host = host.to_string();
+    runtime_snapshot.effective_gateway_port = actual_port;
+    let runtime_snapshot = Arc::new(runtime_snapshot);
     let provider = Arc::clone(&runtime_snapshot.provider);
     let model = runtime_snapshot.model.clone();
     let temperature = runtime_snapshot.temperature;
@@ -2812,11 +2834,15 @@ Reminder set successfully."#;
         let memory: Arc<dyn Memory> = Arc::new(MockMemory);
         let initial_snapshot = Arc::new(GatewayRuntimeSnapshot {
             provider: Arc::clone(&provider),
+            provider_name: "ollama".to_string(),
             model: "model-before-switch".to_string(),
             temperature: 0.0,
             mem: Arc::clone(&memory),
             tools_registry: Arc::new(Vec::new()),
             tools_registry_exec: Arc::new(Vec::new()),
+            max_tool_iterations: 10,
+            effective_gateway_host: "127.0.0.1".to_string(),
+            effective_gateway_port: 42617,
         });
         let state = AppState {
             config: Arc::new(Mutex::new(Config::default())),
@@ -2853,11 +2879,15 @@ Reminder set successfully."#;
 
         state.replace_runtime_snapshot(GatewayRuntimeSnapshot {
             provider,
+            provider_name: "ollama".to_string(),
             model: "model-after-switch".to_string(),
             temperature: 0.0,
             mem: memory,
             tools_registry: Arc::new(Vec::new()),
             tools_registry_exec: Arc::new(Vec::new()),
+            max_tool_iterations: 20,
+            effective_gateway_host: "0.0.0.0".to_string(),
+            effective_gateway_port: 9999,
         });
 
         let response = run_gateway_chat_simple(&state, "use the current default")
@@ -2869,6 +2899,10 @@ Reminder set successfully."#;
             provider_impl.models.lock().as_slice(),
             ["model-after-switch"]
         );
+        let snapshot = state.runtime_snapshot();
+        assert_eq!(snapshot.max_tool_iterations, 20);
+        assert_eq!(snapshot.effective_gateway_host, "127.0.0.1");
+        assert_eq!(snapshot.effective_gateway_port, 42617);
     }
 
     #[tokio::test]

@@ -2,23 +2,24 @@
 //!
 //! All `/api/*` routes require bearer token authentication (PairingGuard).
 
-use super::{AppState, build_gateway_runtime_snapshot_with_federation, client_key_from_request};
+use super::{build_gateway_runtime_snapshot_with_federation, client_key_from_request, AppState};
 use crate::config::FederationRole;
 use crate::federation::peer_registry::{
-    FederationCapabilities, FederationLocalNodeSummary, FederationPeersResponse,
+    FederationCapabilities, FederationLoadedModel, FederationLocalNodeSummary,
+    FederationNodeCapacity, FederationPeersResponse, FederationRuntimeFacts,
 };
 use crate::federation::remote_subagent::{
-    FEDERATION_AUTH_HEADER, FederationTaskAccepted, FederationTaskEvent, FederationTaskManager,
-    FederationTaskRequest,
+    FederationTaskAccepted, FederationTaskEvent, FederationTaskManager, FederationTaskRequest,
+    FEDERATION_AUTH_HEADER,
 };
 use crate::security::pairing::constant_time_eq;
 use axum::{
     body::{Body, Bytes},
     extract::{ConnectInfo, Path, Query, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{
-        IntoResponse, Json, Response,
         sse::{Event, KeepAlive, Sse},
+        IntoResponse, Json, Response,
     },
 };
 use chrono::{DateTime, Utc};
@@ -130,28 +131,34 @@ fn require_federation_peer_auth(
     }
 }
 
-fn build_federation_peers_response(state: &AppState) -> FederationPeersResponse {
+async fn build_federation_peers_response(state: &AppState) -> FederationPeersResponse {
     let config = state.config.lock().clone();
-    if let Some(federation) = &state.federation {
+    let mut response = if let Some(federation) = &state.federation {
         let mut response = federation.peers_response();
-        response.local_node.gateway_host = config.gateway.host;
+        let runtime = state.runtime_snapshot();
+        response.local_node.gateway_host = runtime.effective_gateway_host.clone();
         response
     } else {
         FederationPeersResponse {
             enabled: false,
+            configured_enabled: config.federation.enabled,
             local_node: FederationLocalNodeSummary {
                 node_id: config.federation.node_name.clone(),
                 display_name: config.federation.node_name,
-                api_port: config.federation.api_port.unwrap_or(config.gateway.port),
+                api_port: state.runtime_snapshot().effective_gateway_port,
                 role: config.federation.default_role,
                 allow_remote_subagents: config.federation.allow_remote_subagents,
                 discovery_mode: config.federation.discovery_mode,
                 service_name: config.federation.service_name,
-                gateway_host: config.gateway.host,
+                gateway_host: state.runtime_snapshot().effective_gateway_host.clone(),
             },
+            local_capabilities: None,
             peers: Vec::new(),
         }
-    }
+    };
+    response.configured_enabled = config.federation.enabled;
+    response.local_capabilities = Some(build_local_capabilities(state).await);
+    response
 }
 
 fn parse_memory_category(raw: &str) -> crate::memory::MemoryCategory {
@@ -377,36 +384,82 @@ fn federation_event_from_delta(task_id: &str, delta: &str) -> Option<FederationT
     })
 }
 
-async fn build_federation_capabilities(state: &AppState) -> anyhow::Result<FederationCapabilities> {
-    let federation = state
-        .federation
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("Federation is disabled"))?;
-    let local = federation.local_node_summary();
+async fn build_local_capabilities(state: &AppState) -> FederationCapabilities {
     let runtime = state.runtime_snapshot();
     let config = state.config.lock().clone();
+    let local = state.federation.as_ref().map_or_else(
+        || FederationLocalNodeSummary {
+            node_id: config.federation.node_name.clone(),
+            display_name: config.federation.node_name.clone(),
+            api_port: runtime.effective_gateway_port,
+            role: config.federation.default_role,
+            allow_remote_subagents: config.federation.allow_remote_subagents,
+            discovery_mode: config.federation.discovery_mode,
+            service_name: config.federation.service_name.clone(),
+            gateway_host: runtime.effective_gateway_host.clone(),
+        },
+        |federation| federation.local_node_summary(),
+    );
     let ollama = fetch_ollama_dashboard_info(&config).await;
-    let mut installed_models = ollama.installed_models;
+    let mut installed_models = ollama.installed_models.clone();
     if installed_models.is_empty() {
         installed_models.push(runtime.model.clone());
     }
     installed_models.sort();
     installed_models.dedup();
+    let loaded_models = ollama
+        .loaded_model_details
+        .iter()
+        .map(|model| FederationLoadedModel {
+            name: model.name.clone(),
+            size_bytes: model.size,
+            size_vram_bytes: model.size_vram,
+            context_length: model.context_length,
+            expires_at: model.expires_at.clone(),
+        })
+        .collect::<Vec<_>>();
+    let capacity = node_capacity(&config.workspace_dir, &loaded_models);
+    let gateway_restart_required = config.gateway.host != runtime.effective_gateway_host
+        || config.gateway.port != runtime.effective_gateway_port;
 
-    Ok(FederationCapabilities {
+    FederationCapabilities {
         node_id: local.node_id,
         display_name: local.display_name,
         app_version: env!("CARGO_PKG_VERSION").to_string(),
-        provider: config.default_provider.clone(),
+        build_commit: build_commit(),
+        build_time: build_time(),
+        provider: Some(runtime.provider_name.clone()),
         model: runtime.model.clone(),
         installed_models,
+        loaded_models,
+        active_model_loaded: ollama.active_model_loaded,
+        capacity,
+        runtime: FederationRuntimeFacts {
+            gateway_host: runtime.effective_gateway_host.clone(),
+            gateway_port: runtime.effective_gateway_port,
+            configured_gateway_host: config.gateway.host.clone(),
+            configured_gateway_port: config.gateway.port,
+            gateway_restart_required,
+            federation_configured: config.federation.enabled,
+            federation_effective: state.federation.is_some(),
+            delegation_enabled: config.federation.enable_delegation,
+            max_tool_iterations: runtime.max_tool_iterations,
+            config_revision: config_revision(&config),
+        },
         tools: crate::federation::tools_to_capabilities(runtime.tools_registry.as_ref()),
         role_support: local.role,
         allow_remote_subagents: local.allow_remote_subagents,
         health: "online".to_string(),
         api_port: local.api_port,
         last_seen: Utc::now().to_rfc3339(),
-    })
+    }
+}
+
+async fn build_federation_capabilities(state: &AppState) -> anyhow::Result<FederationCapabilities> {
+    if state.federation.is_none() {
+        anyhow::bail!("Federation is disabled");
+    }
+    Ok(build_local_capabilities(state).await)
 }
 
 async fn execute_federation_task(
@@ -693,6 +746,8 @@ struct OllamaDashboardInfo {
     reachable: bool,
     installed_models: Vec<String>,
     loaded_models: Vec<String>,
+    installed_model_details: Vec<OllamaModelListEntry>,
+    loaded_model_details: Vec<OllamaModelListEntry>,
     active_model_loaded: bool,
 }
 
@@ -702,9 +757,31 @@ struct OllamaModelListResponse {
     models: Vec<OllamaModelListEntry>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct OllamaModelListEntry {
     name: String,
+    #[serde(default)]
+    size: u64,
+    #[serde(default)]
+    size_vram: u64,
+    #[serde(default)]
+    context_length: Option<u64>,
+    #[serde(default)]
+    expires_at: Option<String>,
+    #[serde(default)]
+    digest: String,
+    #[serde(default)]
+    details: OllamaModelDetails,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+struct OllamaModelDetails {
+    #[serde(default)]
+    family: String,
+    #[serde(default)]
+    parameter_size: String,
+    #[serde(default)]
+    quantization_level: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1086,12 +1163,12 @@ fn download_content_disposition(filename: &str) -> String {
     )
 }
 
-async fn fetch_ollama_model_names(
+async fn fetch_ollama_models(
     client: &reqwest::Client,
     endpoint: &str,
     auth_token: Option<&str>,
     suffix: &str,
-) -> Option<Vec<String>> {
+) -> Option<Vec<OllamaModelListEntry>> {
     let url = format!("{endpoint}{suffix}");
     let mut request = client.get(url);
     if let Some(token) = auth_token {
@@ -1108,15 +1185,17 @@ async fn fetch_ollama_model_names(
         return None;
     };
 
-    let mut names: Vec<String> = payload
+    let mut models: Vec<OllamaModelListEntry> = payload
         .models
         .into_iter()
-        .map(|model| model.name.trim().to_string())
-        .filter(|name| !name.is_empty())
+        .filter_map(|mut model| {
+            model.name = model.name.trim().to_string();
+            (!model.name.is_empty()).then_some(model)
+        })
         .collect();
-    names.sort();
-    names.dedup();
-    Some(names)
+    models.sort_by(|left, right| left.name.cmp(&right.name));
+    models.dedup_by(|left, right| left.name == right.name);
+    Some(models)
 }
 
 fn canonical_ollama_model_name(model: &str) -> String {
@@ -1143,17 +1222,149 @@ fn active_model_environment_override() -> Option<&'static str> {
         .then_some("MODEL")
 }
 
+fn non_empty_build_value(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let value = value.trim();
+        (!value.is_empty()).then(|| value.to_string())
+    })
+}
+
+fn build_commit() -> Option<String> {
+    non_empty_build_value(std::env::var("LLAMAFARM_BUILD_COMMIT").ok())
+        .or_else(|| {
+            non_empty_build_value(option_env!("LLAMAFARM_BUILD_COMMIT").map(str::to_string))
+        })
+        .or_else(|| non_empty_build_value(option_env!("GITHUB_SHA").map(str::to_string)))
+}
+
+fn normalize_build_time(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if let Ok(epoch) = value.parse::<i64>() {
+        return DateTime::<Utc>::from_timestamp(epoch, 0).map(|time| time.to_rfc3339());
+    }
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|time| time.to_rfc3339())
+        .or_else(|| Some(value.to_string()))
+}
+
+fn build_time() -> Option<String> {
+    std::env::var("LLAMAFARM_BUILD_TIME")
+        .ok()
+        .as_deref()
+        .and_then(normalize_build_time)
+        .or_else(|| {
+            option_env!("LLAMAFARM_BUILD_TIME")
+                .and_then(normalize_build_time)
+                .or_else(|| option_env!("SOURCE_DATE_EPOCH").and_then(normalize_build_time))
+        })
+}
+
+fn parse_total_memory_bytes(meminfo: &str) -> Option<u64> {
+    let line = meminfo.lines().find(|line| line.starts_with("MemTotal:"))?;
+    let kib = line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|value| value.parse::<u64>().ok())?;
+    kib.checked_mul(1024)
+}
+
+fn total_memory_bytes() -> Option<u64> {
+    std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .as_deref()
+        .and_then(parse_total_memory_bytes)
+}
+
+fn parse_cgroup_memory_value(value: &str) -> Option<u64> {
+    let value = value.trim();
+    if value.is_empty() || value == "max" {
+        return None;
+    }
+    value.parse::<u64>().ok()
+}
+
+fn read_first_cgroup_memory_value(paths: &[&str]) -> Option<u64> {
+    paths.iter().find_map(|path| {
+        std::fs::read_to_string(path)
+            .ok()
+            .as_deref()
+            .and_then(parse_cgroup_memory_value)
+    })
+}
+
+fn node_capacity(
+    workspace_dir: &FsPath,
+    loaded_models: &[FederationLoadedModel],
+) -> FederationNodeCapacity {
+    const MIB: u64 = 1024 * 1024;
+    let (gpu_total_memory_bytes, gpu_used_memory_bytes, gpu_free_memory_bytes) = query_gpu_memory()
+        .map_or((None, None, None), |(total, used, free)| {
+            (
+                total.checked_mul(MIB),
+                used.checked_mul(MIB),
+                free.checked_mul(MIB),
+            )
+        });
+    let total_memory_bytes = total_memory_bytes();
+    let memory_limit_bytes = read_first_cgroup_memory_value(&[
+        "/sys/fs/cgroup/memory.max",
+        "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+    ])
+    .filter(|limit| total_memory_bytes.is_none_or(|total| *limit < total));
+    let memory_current_bytes = read_first_cgroup_memory_value(&[
+        "/sys/fs/cgroup/memory.current",
+        "/sys/fs/cgroup/memory/memory.usage_in_bytes",
+    ]);
+    let effective_memory_bytes = match (total_memory_bytes, memory_limit_bytes) {
+        (Some(total), Some(limit)) => Some(total.min(limit)),
+        (Some(total), None) => Some(total),
+        (None, Some(limit)) => Some(limit),
+        (None, None) => None,
+    };
+
+    FederationNodeCapacity {
+        logical_cpus: std::thread::available_parallelism().map_or(1, std::num::NonZero::get),
+        total_memory_bytes,
+        memory_limit_bytes,
+        memory_current_bytes,
+        memory_available_bytes: effective_memory_bytes
+            .zip(memory_current_bytes)
+            .map(|(capacity, current)| capacity.saturating_sub(current)),
+        gpu_total_memory_bytes,
+        gpu_used_memory_bytes,
+        gpu_free_memory_bytes,
+        loaded_model_vram_bytes: loaded_models
+            .iter()
+            .map(|model| model.size_vram_bytes)
+            .sum(),
+        active_runs: crate::agent::run_ledger::live_run_count(workspace_dir),
+        queued_runs: None,
+    }
+}
+
 async fn fetch_ollama_dashboard_info(config: &crate::config::Config) -> OllamaDashboardInfo {
     let endpoint = normalize_ollama_base_url(config);
     let client = crate::config::build_runtime_proxy_client_with_timeouts("provider.ollama", 30, 5);
     let auth_token = ollama_auth_token(config);
-    let (installed_models, loaded_models) = tokio::join!(
-        fetch_ollama_model_names(&client, &endpoint, auth_token.as_deref(), "/api/tags"),
-        fetch_ollama_model_names(&client, &endpoint, auth_token.as_deref(), "/api/ps")
+    let (installed_model_details, loaded_model_details) = tokio::join!(
+        fetch_ollama_models(&client, &endpoint, auth_token.as_deref(), "/api/tags"),
+        fetch_ollama_models(&client, &endpoint, auth_token.as_deref(), "/api/ps")
     );
-    let reachable = installed_models.is_some() || loaded_models.is_some();
-    let installed_models = installed_models.unwrap_or_default();
-    let loaded_models = loaded_models.unwrap_or_default();
+    let reachable = installed_model_details.is_some() || loaded_model_details.is_some();
+    let installed_model_details = installed_model_details.unwrap_or_default();
+    let loaded_model_details = loaded_model_details.unwrap_or_default();
+    let installed_models = installed_model_details
+        .iter()
+        .map(|model| model.name.clone())
+        .collect::<Vec<_>>();
+    let loaded_models = loaded_model_details
+        .iter()
+        .map(|model| model.name.clone())
+        .collect::<Vec<_>>();
     let active_model = config.default_model.as_deref().unwrap_or_default().trim();
 
     OllamaDashboardInfo {
@@ -1165,6 +1376,8 @@ async fn fetch_ollama_dashboard_info(config: &crate::config::Config) -> OllamaDa
                 .any(|model| ollama_model_names_match(model, active_model)),
         installed_models,
         loaded_models,
+        installed_model_details,
+        loaded_model_details,
     }
 }
 
@@ -1362,13 +1575,24 @@ pub async fn handle_api_status(
 
     let runtime = state.runtime_snapshot();
     let config = state.config.lock().clone();
-    let provider = config
-        .default_provider
-        .clone()
-        .unwrap_or_else(|| OLLAMA_INTEGRATION_ID.to_string());
     let health = crate::health::snapshot();
     let ollama = fetch_ollama_dashboard_info(&config).await;
     let shell = build_runtime_shell_info();
+    let loaded_models = ollama
+        .loaded_model_details
+        .iter()
+        .map(|model| FederationLoadedModel {
+            name: model.name.clone(),
+            size_bytes: model.size,
+            size_vram_bytes: model.size_vram,
+            context_length: model.context_length,
+            expires_at: model.expires_at.clone(),
+        })
+        .collect::<Vec<_>>();
+    let capacity = node_capacity(&config.workspace_dir, &loaded_models);
+    let gateway_restart_required = config.gateway.host != runtime.effective_gateway_host
+        || config.gateway.port != runtime.effective_gateway_port;
+    let federation_effective = state.federation.is_some();
 
     let mut channels = serde_json::Map::new();
 
@@ -1377,25 +1601,68 @@ pub async fn handle_api_status(
     }
 
     let body = serde_json::json!({
-        "provider": provider,
+        "version": env!("CARGO_PKG_VERSION"),
+        "app_version": env!("CARGO_PKG_VERSION"),
+        "build_commit": build_commit(),
+        "build_time": build_time(),
+        "build": {
+            "commit": build_commit(),
+            "time": build_time(),
+        },
+        "provider": runtime.provider_name,
         "model": runtime.model,
         "temperature": runtime.temperature,
         "uptime_seconds": health.uptime_seconds,
-        "gateway_port": config.gateway.port,
+        "gateway_port": runtime.effective_gateway_port,
         "locale": "en",
         "memory_backend": runtime.mem.name(),
         "shell": shell,
         "channels": channels,
         "health": health,
+        "runtime": {
+            "provider": runtime.provider_name,
+            "model": runtime.model,
+            "temperature": runtime.temperature,
+            "memory_backend": runtime.mem.name(),
+            "max_tool_iterations": runtime.max_tool_iterations,
+            "tool_count": runtime.tools_registry.len(),
+            "config_revision": config_revision(&config),
+            "gateway": {
+                "host": runtime.effective_gateway_host,
+                "port": runtime.effective_gateway_port,
+                "configured_host": config.gateway.host,
+                "configured_port": config.gateway.port,
+                "restart_required": gateway_restart_required,
+            },
+            "federation": {
+                "configured_enabled": config.federation.enabled,
+                "effective_enabled": federation_effective,
+                "delegation_enabled": config.federation.enable_delegation,
+            },
+        },
+        "capacity": &capacity,
+        "queue": {
+            "active_runs": capacity.active_runs,
+            "queued_runs": capacity.queued_runs,
+            "queue_depth_available": capacity.queued_runs.is_some(),
+        },
         "ollama": {
             "endpoint": ollama.endpoint,
             "reachable": ollama.reachable,
             "configured_model": runtime.model,
             "installed_models": ollama.installed_models,
             "loaded_models": ollama.loaded_models,
+            "installed_model_details": ollama.installed_model_details,
+            "loaded_model_details": ollama.loaded_model_details,
             "active_model_loaded": ollama.active_model_loaded,
             "revision": config_revision(&config),
             "model_environment_override": active_model_environment_override(),
+            "server": {
+                "max_loaded_models": std::env::var("OLLAMA_MAX_LOADED_MODELS").ok(),
+                "keep_alive": std::env::var("OLLAMA_KEEP_ALIVE").ok(),
+                "num_parallel": std::env::var("OLLAMA_NUM_PARALLEL").ok(),
+                "kv_cache_type": std::env::var("OLLAMA_KV_CACHE_TYPE").ok(),
+            },
         },
     });
 
@@ -2263,7 +2530,7 @@ pub async fn handle_api_federation_peers(
         return error.into_response();
     }
 
-    Json(build_federation_peers_response(&state)).into_response()
+    Json(build_federation_peers_response(&state).await).into_response()
 }
 
 /// PUT /api/federation/peers/:peer_id/role — update an operator-assigned peer role.
@@ -2440,6 +2707,7 @@ pub async fn handle_federation_health(
         return federation_disabled_response();
     };
     let local = federation.local_node_summary();
+    let runtime = state.runtime_snapshot();
     Json(serde_json::json!({
         "status": "ok",
         "node_id": local.node_id,
@@ -2448,6 +2716,13 @@ pub async fn handle_federation_health(
         "allow_remote_subagents": local.allow_remote_subagents,
         "api_port": local.api_port,
         "app_version": env!("CARGO_PKG_VERSION"),
+        "build_commit": build_commit(),
+        "build_time": build_time(),
+        "gateway_host": runtime.effective_gateway_host,
+        "gateway_port": runtime.effective_gateway_port,
+        "provider": runtime.provider_name,
+        "model": runtime.model,
+        "max_tool_iterations": runtime.max_tool_iterations,
         "last_seen": Utc::now().to_rfc3339(),
     }))
     .into_response()
@@ -2491,6 +2766,9 @@ pub async fn handle_federation_models(
             "display_name": capabilities.display_name,
             "model": capabilities.model,
             "installed_models": capabilities.installed_models,
+            "loaded_models": capabilities.loaded_models,
+            "active_model_loaded": capabilities.active_model_loaded,
+            "capacity": capabilities.capacity,
         }))
         .into_response(),
         Err(error) => (
@@ -3531,6 +3809,27 @@ pub async fn handle_api_connections(
 }
 
 /// Query GPU memory (total, used, free) in MiB via nvidia-smi. None if no GPU.
+fn parse_gpu_memory_output(output: &str) -> Option<(u64, u64, u64)> {
+    let mut totals = (0_u64, 0_u64, 0_u64);
+    let mut found = false;
+    for line in output.lines().filter(|line| !line.trim().is_empty()) {
+        let values = line
+            .split(',')
+            .map(str::trim)
+            .map(str::parse::<u64>)
+            .collect::<Result<Vec<_>, _>>()
+            .ok()?;
+        if values.len() != 3 {
+            return None;
+        }
+        totals.0 = totals.0.saturating_add(values[0]);
+        totals.1 = totals.1.saturating_add(values[1]);
+        totals.2 = totals.2.saturating_add(values[2]);
+        found = true;
+    }
+    found.then_some(totals)
+}
+
 fn query_gpu_memory() -> Option<(u64, u64, u64)> {
     let out = std::process::Command::new("nvidia-smi")
         .args([
@@ -3542,10 +3841,7 @@ fn query_gpu_memory() -> Option<(u64, u64, u64)> {
     if !out.status.success() {
         return None;
     }
-    let line = String::from_utf8_lossy(&out.stdout);
-    let first = line.lines().next()?;
-    let mut parts = first.split(',').map(|s| s.trim().parse::<u64>().ok());
-    Some((parts.next()??, parts.next()??, parts.next()??))
+    parse_gpu_memory_output(&String::from_utf8_lossy(&out.stdout))
 }
 
 /// GET /api/context — current chat context window (num_ctx) + bounds.
@@ -5298,6 +5594,65 @@ mod tests {
             "registry.local/team/model:latest"
         ));
         assert!(!ollama_model_names_match("llama3.2:latest", "llama3.2:8b"));
+    }
+
+    #[test]
+    fn ollama_running_model_details_preserve_capacity_facts() {
+        let payload: OllamaModelListResponse = serde_json::from_value(serde_json::json!({
+            "models": [{
+                "name": "qwen3.5:9b",
+                "size": 6_000_000_000_u64,
+                "size_vram": 5_000_000_000_u64,
+                "context_length": 32_768,
+                "expires_at": "2026-07-30T19:00:00Z",
+                "details": {
+                    "family": "qwen3",
+                    "parameter_size": "9B",
+                    "quantization_level": "Q4_K_M"
+                }
+            }]
+        }))
+        .expect("Ollama model details should deserialize");
+
+        let model = &payload.models[0];
+        assert_eq!(model.name, "qwen3.5:9b");
+        assert_eq!(model.size_vram, 5_000_000_000);
+        assert_eq!(model.context_length, Some(32_768));
+        assert_eq!(model.details.parameter_size, "9B");
+    }
+
+    #[test]
+    fn total_memory_parser_converts_kib_to_bytes() {
+        assert_eq!(
+            parse_total_memory_bytes("MemTotal:       16384 kB\nMemFree: 42 kB\n"),
+            Some(16 * 1024 * 1024)
+        );
+        assert_eq!(parse_total_memory_bytes("MemFree: 42 kB\n"), None);
+        assert_eq!(parse_cgroup_memory_value("1073741824\n"), Some(1 << 30));
+        assert_eq!(parse_cgroup_memory_value("max\n"), None);
+    }
+
+    #[test]
+    fn gpu_memory_parser_sums_all_visible_devices() {
+        assert_eq!(
+            parse_gpu_memory_output("8192, 4096, 4096\n24576, 6144, 18432\n"),
+            Some((32_768, 10_240, 22_528))
+        );
+        assert_eq!(parse_gpu_memory_output(""), None);
+        assert_eq!(parse_gpu_memory_output("not, valid, values\n"), None);
+    }
+
+    #[test]
+    fn build_time_normalizes_source_date_epoch() {
+        assert_eq!(
+            normalize_build_time("0").as_deref(),
+            Some("1970-01-01T00:00:00+00:00")
+        );
+        assert_eq!(
+            normalize_build_time("2026-07-30T18:00:00Z").as_deref(),
+            Some("2026-07-30T18:00:00+00:00")
+        );
+        assert_eq!(normalize_build_time("  "), None);
     }
 
     #[test]

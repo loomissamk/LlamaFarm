@@ -719,6 +719,17 @@ pub fn live_run_ids() -> Vec<String> {
     ACTIVE_RUNS.read().unwrap().keys().cloned().collect()
 }
 
+/// Number of currently registered runs belonging to one workspace.
+pub fn live_run_count(workspace_dir: &Path) -> usize {
+    let dir = runs_dir(workspace_dir);
+    ACTIVE_RUNS
+        .read()
+        .unwrap()
+        .values()
+        .filter(|ledger| ledger.path.starts_with(&dir))
+        .count()
+}
+
 // ── Disk enumeration for the inspector API ───────────────────────
 
 pub fn runs_dir(workspace_dir: &Path) -> PathBuf {

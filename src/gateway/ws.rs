@@ -2587,7 +2587,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                     Some(&approval_manager),
                                     "webchat",
                                     &state.multimodal,
-                                    state.max_tool_iterations,
+                                    runtime.max_tool_iterations,
                                     Some(cancellation_token.clone()),
                                     Some(delta_tx),
                                     None,
