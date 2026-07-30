@@ -8,6 +8,8 @@ import {
   Package,
   CircleCheck,
   CircleAlert,
+  Copy,
+  RefreshCw,
 } from 'lucide-react';
 import type { ToolSpec, CliTool, StatusResponse } from '@/types/api';
 import { getTools, getCliTools, getStatus } from '@/lib/api';
@@ -147,33 +149,68 @@ export default function Tools() {
   const [search, setSearch] = useState('');
   const [expandedTool, setExpandedTool] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [errors, setErrors] = useState<string[]>([]);
+  const [toolsLoaded, setToolsLoaded] = useState(false);
+  const [cliLoaded, setCliLoaded] = useState(false);
+  const [copiedTool, setCopiedTool] = useState<string | null>(null);
+
+  const loadTools = async () => {
+    setLoading(true);
+    setErrors([]);
+    const [toolResult, cliResult, statusResult] = await Promise.allSettled([
+      getTools(),
+      getCliTools(),
+      getStatus(),
+    ]);
+    const nextErrors: string[] = [];
+    if (toolResult.status === 'fulfilled') {
+      setTools(toolResult.value);
+      setToolsLoaded(true);
+    } else {
+      nextErrors.push(`Agent tools: ${String(toolResult.reason)}`);
+    }
+    if (cliResult.status === 'fulfilled') {
+      setCliTools(cliResult.value);
+      setCliLoaded(true);
+    } else {
+      nextErrors.push(`Local commands: ${String(cliResult.reason)}`);
+    }
+    if (statusResult.status === 'fulfilled') {
+      setStatus(statusResult.value);
+    } else {
+      nextErrors.push(`Runtime status: ${String(statusResult.reason)}`);
+    }
+    setErrors(nextErrors);
+    setLoading(false);
+  };
 
   useEffect(() => {
-    Promise.all([getTools(), getCliTools(), getStatus()])
-      .then(([t, c, s]) => {
-        setTools(t);
-        setCliTools(c);
-        setStatus(s);
-      })
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
+    void loadTools();
   }, []);
 
-  if (error) {
-    return (
-      <div className="p-6">
-        <div className="rounded-lg bg-red-900/30 border border-red-700 p-4 text-red-300">
-          Failed to load tools: {error}
-        </div>
-      </div>
-    );
-  }
+  useEffect(() => {
+    if (!copiedTool) return;
+    const timer = window.setTimeout(() => setCopiedTool(null), 2_000);
+    return () => window.clearTimeout(timer);
+  }, [copiedTool]);
 
-  if (loading || !status) {
+  const copySchema = async (tool: ToolSpec) => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(tool.parameters ?? {}, null, 2));
+      setCopiedTool(tool.name);
+    } catch (copyError: unknown) {
+      setErrors((previous) => [
+        ...previous,
+        `Could not copy ${tool.name}: ${copyError instanceof Error ? copyError.message : String(copyError)}`,
+      ]);
+    }
+  };
+
+  if (loading && !toolsLoaded && !cliLoaded && !status) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-500 border-t-transparent" />
+      <div className="flex h-64 items-center justify-center" role="status">
+        <RefreshCw className="h-8 w-8 animate-spin text-blue-400" aria-hidden="true" />
+        <span className="sr-only">Loading local tooling</span>
       </div>
     );
   }
@@ -192,26 +229,41 @@ export default function Tools() {
   );
   const availableCli = new Set(cliTools.map((tool) => tool.name.toLowerCase()));
   const localChecks = [
-    buildOllamaRuntimeCard(status),
-    ...commandChecks.map((check) => buildCommandCheckCard(check, availableCli)),
+    ...(status ? [buildOllamaRuntimeCard(status)] : []),
+    ...(cliLoaded ? commandChecks.map((check) => buildCommandCheckCard(check, availableCli)) : []),
   ];
 
   return (
-    <div className="p-6 space-y-6">
-      <div>
-        <div className="flex items-center gap-2">
-          <Wrench className="h-5 w-5 text-blue-400" />
-          <h2 className="text-base font-semibold text-white">Local Tooling</h2>
+    <div className="space-y-6 p-4 sm:p-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <Wrench className="h-5 w-5 text-blue-400" aria-hidden="true" />
+            <h2 className="text-base font-semibold text-white">Local Tooling</h2>
+          </div>
+          <p className="mt-2 max-w-3xl text-sm text-gray-400">
+            Review the registered agent tools and the binaries this running LlamaFarm deployment
+            can actually see.
+          </p>
         </div>
-        <p className="mt-2 text-sm text-gray-400">
-          Review the registered agent tools and the binaries this running LlamaFarm deployment can
-          actually see inside its local runtime.
-        </p>
+        <button type="button" onClick={() => void loadTools()} disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-300 hover:bg-gray-800 hover:text-white disabled:opacity-50">
+          <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} aria-hidden="true" />
+          Refresh inventory
+        </button>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {localChecks.map((check) => {
-          return (
+      {errors.length > 0 && (
+        <div role="alert" className="rounded-lg border border-amber-700/50 bg-amber-950/20 p-3 text-sm text-amber-200">
+          <p className="font-medium">Some inventory sources could not be refreshed.</p>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-300/80">
+            {errors.map((error) => <li key={error}>{error}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {localChecks.length > 0 && (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {localChecks.map((check) => (
             <div
               key={check.id}
               className={`rounded-xl border p-4 ${cardToneClasses(check.tone)}`}
@@ -225,14 +277,16 @@ export default function Tools() {
                 {check.status}
               </p>
             </div>
-          );
-        })}
-      </div>
+          ))}
+        </div>
+      )}
 
       <div className="relative max-w-md">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-500" />
+        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" aria-hidden="true" />
+        <label htmlFor="tool-search" className="sr-only">Search tools and commands</label>
         <input
-          type="text"
+          id="tool-search"
+          type="search"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search tools..."
@@ -260,9 +314,11 @@ export default function Tools() {
                   className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden"
                 >
                   <button
+                    type="button"
                     onClick={() =>
                       setExpandedTool(isExpanded ? null : tool.name)
                     }
+                    aria-expanded={isExpanded}
                     className="w-full text-left p-4 hover:bg-gray-800/50 transition-colors"
                   >
                     <div className="flex items-start justify-between gap-2">
@@ -285,9 +341,13 @@ export default function Tools() {
 
                   {isExpanded && tool.parameters && (
                     <div className="border-t border-gray-800 p-4">
-                      <p className="text-xs text-gray-500 mb-2 font-medium uppercase tracking-wider">
-                        Parameter Schema
-                      </p>
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <p className="text-xs font-medium uppercase tracking-wider text-gray-500">Parameter Schema</p>
+                        <button type="button" onClick={() => void copySchema(tool)} className="inline-flex items-center gap-1 text-xs text-blue-300 hover:text-blue-200">
+                          <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+                          {copiedTool === tool.name ? 'Copied' : 'Copy JSON'}
+                        </button>
+                      </div>
                       <pre className="text-xs text-gray-300 bg-gray-950 rounded-lg p-3 overflow-x-auto max-h-64 overflow-y-auto">
                         {JSON.stringify(tool.parameters, null, 2)}
                       </pre>
