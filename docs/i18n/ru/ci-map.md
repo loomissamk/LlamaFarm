@@ -1,8 +1,7 @@
 # Локализованный bridge: CI Workflow Map
 
 Это расширенная bridge-страница к английскому нормативному описанию CI.
-Сейчас исполняемый набор GitHub Actions состоит из `ci-run.yml` и
-`docs-deploy.yml`.
+Сейчас исполняемый набор GitHub Actions состоит из `ci-run.yml`.
 
 Английский оригинал:
 
@@ -18,7 +17,6 @@
 
 - [Executable Workflow Baseline](../../ci-map.md#executable-workflow-baseline)
 - [Core CI Contract](../../ci-map.md#core-ci-contract)
-- [Docs Pages Contract](../../ci-map.md#docs-pages-contract)
 - [Local Reproduction](../../ci-map.md#local-reproduction)
 - [Fast Triage](../../ci-map.md#fast-triage)
 - [Maintenance Rules](../../ci-map.md#maintenance-rules)
@@ -26,8 +24,7 @@
 ## Практические рекомендации
 
 - Стабильное имя merge-проверки: `CI Required Gate`.
-- PR документации только собирает сайт; GitHub Pages публикуется только из
-  `main`.
+- Сайт документации можно собрать локально из `site/`.
 - Имена команд, ключей конфигурации, API-пути и идентификаторы кода остаются
   на английском.
 - При расхождениях трактовки приоритет имеет английский оригинал.

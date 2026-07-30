@@ -14,9 +14,9 @@ Use this with:
 | Workflow | Events | Outcome |
 | --- | --- | --- |
 | `ci-run.yml` | push, pull request, merge queue, manual | Rust format/Clippy/tests and web tests/build |
-| `docs-deploy.yml` | docs/site pull request, `main` push, manual | docs-site build; Pages deploy from `main` |
 
-No release or container-publish workflow is part of this executable baseline.
+No documentation publishing, release, or container-publish workflow is part of
+this executable baseline.
 
 ## Pull Requests
 
@@ -31,32 +31,22 @@ No release or container-publish workflow is part of this executable baseline.
 `CI Required Gate` succeeds only when all three jobs succeed. Configure branch
 protection or rulesets against this stable aggregate check name.
 
-### Docs or site PR to `main`
-
-`docs-deploy.yml` builds the Pages bundle and verifies that
-`site/src/generated/docs-manifest.json` is current. Pull requests do not upload or
-deploy a Pages artifact.
+Documentation-site changes are validated locally with the commands below. There
+is no GitHub Actions workflow that publishes or deploys the site.
 
 ## Push and Merge Queue
 
 - A push to `main` or `dev` runs `ci-run.yml`.
 - A merge-queue candidate for `main` or `dev` runs `ci-run.yml`.
-- A matching docs/site push to `main` also runs `docs-deploy.yml`.
-- The docs workflow deploys only when the run is on `refs/heads/main` and is not
-  a pull request.
 
 ## Manual Runs
 
 - `ci-run.yml` may be dispatched from any branch for validation.
-- `docs-deploy.yml` may be dispatched manually, but its deployment job runs only
-  when the selected ref is `main`.
 
-## Pages Prerequisites
+## Documentation Site
 
-Repository **Settings > Pages > Build and deployment > Source** must be set to
-**GitHub Actions**. The workflow builds with a repository-derived Vite base path,
-uploads the generated `gh-pages/` directory, and deploys it through the
-`github-pages` environment.
+The documentation frontend is a local build and preview tool. The repository
+does not automatically publish or deploy its output.
 
 ## Local Reproduction
 
@@ -72,7 +62,8 @@ npm run build
 
 cd ../site
 npm ci
-VITE_BASE_PATH=/llamafarm/ npm run build
+npm run build
+git diff --exit-code -- src/generated/docs-manifest.json
 ```
 
 The CI formatting job is incremental while the repository-wide formatting

@@ -1,6 +1,6 @@
-# LlamaFarm GitHub Pages Frontend (Vite)
+# LlamaFarm Documentation Frontend (Vite)
 
-This is the standalone frontend for GitHub Pages.
+This is the standalone local documentation frontend.
 
 ## Commands
 
@@ -10,7 +10,7 @@ npm install
 npm run dev
 ```
 
-Build for GitHub Pages:
+Build locally:
 
 ```bash
 cd site
@@ -20,13 +20,13 @@ npm run build
 Build output is generated at:
 
 ```text
-../gh-pages
+dist
 ```
 
 Notes:
 
-- Output directory is intentionally `gh-pages/` (not `out/`).
-- Vite defaults to `/llamafarm/`; deployment supplies `VITE_BASE_PATH` from the repository name so forks and repository renames publish at the correct project path.
+- Output is written to `site/dist/`.
+- Vite uses `/` as the local base path.
 - Docs links in UI point to rendered GitHub docs pages for direct reading.
 - Docs Navigator supports:
   - keyword search with weighted ranking
@@ -52,16 +52,8 @@ Notes:
   - container query used for doc-card compact mode
   - desktop section rail + mobile quick dock for faster long-page navigation
 
-## Deployment
+## Publishing
 
-The repository includes workflow:
-
-```text
-.github/workflows/docs-deploy.yml
-```
-
-Behavior:
-
-- Pull requests build and validate the Pages artifact.
-- Pushes to `main` build `site/` and publish `gh-pages/`.
-- Deployment uses the official GitHub Pages actions.
+The repository does not automatically publish or deploy this frontend. Use
+`npm run preview` to inspect the production build locally. Any external
+publishing requires a separate, explicit maintainer request.

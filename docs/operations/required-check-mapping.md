@@ -17,16 +17,10 @@ Dependency jobs that feed the aggregate check:
 Configure branch protection or rulesets against `CI Required Gate` rather than
 the dependency jobs so the required-check surface stays stable.
 
-## Docs and Pages
+## Documentation Site
 
-| Check name | Source workflow | Scope |
-| --- | --- | --- |
-| `Build Docs Site` | `.github/workflows/docs-deploy.yml` | path-scoped site build and manifest verification |
-| `Deploy Docs to GitHub Pages` | `.github/workflows/docs-deploy.yml` | `main` Pages deployment |
-
-`Build Docs Site` is a pull-request validation check when docs/site paths change.
-The deployment check runs only from `main`; it must not be a pull-request
-required check.
+There is no documentation-site publishing, deployment, or required-check
+workflow. Build and manifest validation are local-only.
 
 ## Verification Procedure
 
@@ -34,7 +28,6 @@ required check.
 
    ```bash
    gh run list --workflow ci-run.yml --limit 1
-   gh run list --workflow docs-deploy.yml --limit 1
    ```
 
 2. Enumerate job names:

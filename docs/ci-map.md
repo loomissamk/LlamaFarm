@@ -12,7 +12,6 @@ For event-by-event behavior, see
 | Workflow | Trigger | Primary result |
 | --- | --- | --- |
 | `ci-run.yml` | push/PR/merge queue for `main` and `dev`; manual | core Rust and web validation |
-| `docs-deploy.yml` | docs/site PR to `main`; matching `main` push; manual | Pages build and `main` deployment |
 
 ## Core CI Contract
 
@@ -30,19 +29,12 @@ Formatting is incremental because the existing tree has repository-wide
 rustfmt drift. New and modified Rust files remain gated without turning baseline
 cleanup into an unrelated blocker.
 
-## Docs Pages Contract
+## Documentation Site Contract
 
-`.github/workflows/docs-deploy.yml`:
-
-- builds `site/` with Node.js 22;
-- derives the Vite base path from the repository name;
-- verifies the generated docs manifest is committed;
-- builds but does not deploy on pull requests;
-- uploads and deploys `gh-pages/` only from `main`.
-
-The repository Pages source must be configured as **GitHub Actions**. See the
-[docs deploy runbook](operations/docs-deploy-runbook.md) for setup, diagnosis,
-and rollback steps.
+The documentation frontend is built and previewed locally. No executable
+GitHub Actions workflow publishes or deploys it. See the
+[local docs build runbook](operations/docs-deploy-runbook.md) for commands and
+troubleshooting.
 
 ## Local Reproduction
 
@@ -58,7 +50,7 @@ npm run build
 
 cd ../site
 npm ci
-VITE_BASE_PATH=/llamafarm/ npm run build
+npm run build
 git diff --exit-code -- src/generated/docs-manifest.json
 ```
 
@@ -69,12 +61,10 @@ against only the changed `.rs` paths.
 
 1. For `CI Required Gate`, open `ci-run.yml` and inspect the first failed
    dependency job.
-2. For `Build Docs Site`, reproduce the `site/` build and check whether the docs
-   manifest changed.
-3. For Pages deployment, verify the run is on `main`, the build job succeeded,
-   and the Pages source is set to **GitHub Actions**.
-4. For asset paths, inspect the generated HTML under `gh-pages/` and confirm its
-   URLs include the configured repository base path.
+2. For documentation-site failures, reproduce the local `site/` build and check
+   whether the docs manifest changed.
+3. For asset paths, run the local preview server and inspect the generated
+   output under `site/dist/`.
 
 ## Maintenance Rules
 

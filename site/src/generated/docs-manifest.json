@@ -6243,7 +6243,7 @@
     "id": "docs-i18n-zh-cn-ci-map-md",
     "path": "docs/i18n/zh-CN/ci-map.md",
     "title": "本地化桥接文档：CI Workflow Map",
-    "summary": "这是英文 CI 规范的增强桥接页。当前仓库只有两个可执行 GitHub Actions",
+    "summary": "这是英文 CI 规范的增强桥接页。当前仓库的可执行 GitHub Actions",
     "section": "i18n/zh-CN",
     "language": "zh-CN",
     "journey": "localize",
@@ -7276,8 +7276,8 @@
   {
     "id": "docs-operations-docs-deploy-policy-md",
     "path": "docs/operations/docs-deploy-policy.md",
-    "title": "Docs Deploy Policy",
-    "summary": "This document describes the policy enforced by the current",
+    "title": "Local Docs Build Policy",
+    "summary": "The documentation frontend is a local development and validation surface. The",
     "section": "operations",
     "language": "en",
     "journey": "operate",
@@ -7290,15 +7290,15 @@
       "operator",
       "runbook"
     ],
-    "readingMinutes": 2,
+    "readingMinutes": 1,
     "startHere": false,
     "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/operations/docs-deploy-policy.md"
   },
   {
     "id": "docs-operations-docs-deploy-runbook-md",
     "path": "docs/operations/docs-deploy-runbook.md",
-    "title": "Docs Deploy Runbook",
-    "summary": "Workflow: .github/workflows/docs-deploy.yml",
+    "title": "Local Docs Build Runbook",
+    "summary": "The documentation frontend is built and previewed locally. There is no",
     "section": "operations",
     "language": "en",
     "journey": "operate",
@@ -7311,7 +7311,7 @@
       "operator",
       "runbook"
     ],
-    "readingMinutes": 2,
+    "readingMinutes": 1,
     "startHere": false,
     "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/operations/docs-deploy-runbook.md"
   },
@@ -7478,7 +7478,7 @@
       "operator",
       "runbook"
     ],
-    "readingMinutes": 2,
+    "readingMinutes": 1,
     "startHere": false,
     "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/operations/required-check-mapping.md"
   },

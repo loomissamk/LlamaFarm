@@ -12,7 +12,6 @@ Xem luồng theo sự kiện tại
 | Workflow | Kích hoạt | Kết quả chính |
 | --- | --- | --- |
 | `ci-run.yml` | push/PR/merge queue cho `main`, `dev`; thủ công | xác thực Rust và web |
-| `docs-deploy.yml` | PR docs/site vào `main`; push `main`; thủ công | build Pages và deploy từ `main` |
 
 ## Hợp đồng CI Cốt lõi
 
@@ -29,18 +28,10 @@ bất kỳ job Rust lint, Rust test hoặc web nào thất bại.
 Kiểm tra định dạng là gia tăng vì cây hiện tại còn drift rustfmt toàn repository.
 File Rust mới hoặc đã sửa vẫn luôn được kiểm tra.
 
-## Hợp đồng Docs Pages
+## Build Trang Tài liệu Cục bộ
 
-`.github/workflows/docs-deploy.yml`:
-
-- build `site/` bằng Node.js 22;
-- suy ra Vite base path từ tên repository;
-- xác nhận docs manifest đã được commit và cập nhật;
-- chỉ build, không deploy trên pull request;
-- chỉ upload và deploy `gh-pages/` từ `main`.
-
-Nguồn GitHub Pages của repository phải là **GitHub Actions**. Xem
-[runbook deploy docs](../../operations/docs-deploy-runbook.md).
+Có thể build `site/` cục bộ bằng Node.js 22. Quá trình build cũng xác nhận docs
+manifest đã được cập nhật và commit.
 
 ## Tái hiện Cục bộ
 
@@ -65,9 +56,7 @@ git diff --exit-code -- src/generated/docs-manifest.json
 1. Với `CI Required Gate`, mở `ci-run.yml` và xem job phụ thuộc đầu tiên thất bại.
 2. Với `Build Docs Site`, build lại `site/` và kiểm tra docs manifest có thay đổi
    hay không.
-3. Với Pages, xác nhận run ở `main`, build thành công và nguồn Pages là
-   **GitHub Actions**.
-4. Với lỗi asset, kiểm tra HTML trong `gh-pages/` và base path của URL.
+3. Với lỗi asset, kiểm tra HTML được tạo và base path của URL.
 
 ## Quy tắc Bảo trì
 

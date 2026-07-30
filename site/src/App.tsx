@@ -278,7 +278,7 @@ const copy = {
     engineeringTitle: "Engineering foundations",
     docsWorkspace: "Documentation Workspace",
     docsLead:
-      "All repository docs are indexed and readable directly on this GitHub Pages site with engineering-first layout and typography.",
+      "All repository docs are indexed and readable directly in this local documentation workspace with engineering-first layout and typography.",
     docsIndexed: "Indexed",
     docsFiltered: "Filtered",
     docsActive: "Active",
@@ -359,7 +359,7 @@ const copy = {
     engineeringTitle: "工程基础",
     docsWorkspace: "文档工作区",
     docsLead:
-      "仓库全量文档已建立索引并支持在 GitHub Pages 页面内直接阅读，采用工程化排版与阅读体验。",
+      "仓库全量文档已建立索引并支持在本地文档工作区内直接阅读，采用工程化排版与阅读体验。",
     docsIndexed: "总文档",
     docsFiltered: "筛选后",
     docsActive: "当前文档",

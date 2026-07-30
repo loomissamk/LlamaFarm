@@ -39,8 +39,9 @@ npm run build
 ```
 
 The `CI Required Gate` checks formatting for changed Rust files, runs Clippy and
-tests, and enforces the dashboard test/build contract. The Docs Pages workflow
-builds every documentation change and deploys the `main` branch to GitHub Pages.
+tests, and enforces the dashboard test/build contract. Documentation-site builds
+are local-only; the repository has no automatic documentation publishing or
+deployment workflow.
 
 ## Pull request checklist
 

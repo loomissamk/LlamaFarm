@@ -1,44 +1,31 @@
-# Docs Deploy Policy
+# Local Docs Build Policy
 
-This document describes the policy enforced by the current
-`.github/workflows/docs-deploy.yml`.
+The documentation frontend is a local development and validation surface. The
+repository does not automatically publish or deploy it.
 
 ## Build Policy
 
-- Docs and site pull requests to `main` must build successfully.
+- Documentation and site changes should build successfully before review.
 - The generated docs manifest must match the committed source tree.
-- The Pages base path is derived from the repository name in CI.
-- Pull-request runs never upload or deploy a Pages artifact.
+- Builds use a root-relative base path and write to `site/dist/`.
+- Validation is run locally with the commands in the build runbook.
 
-## Production Policy
+## Publishing Policy
 
-- Production deployment is allowed only from `refs/heads/main`.
-- The build job must succeed before deployment.
-- The deployed artifact is the repository-root `gh-pages/` directory.
-- GitHub Pages must use **GitHub Actions** as its source.
-
-## Manual Dispatch
-
-A manual run is validation-only unless `main` is selected as the workflow ref.
-Selecting `main` runs the same build and deployment path as a matching push.
-
-## Rollback Policy
-
-Rollback is performed by reverting the regression through the normal branch
-workflow and producing a new deployment from `main`. This keeps the deployed
-state tied to a repository commit.
+- There is no GitHub Pages workflow or other automatic publishing path.
+- Builds do not upload artifacts or modify an external hosting service.
+- Publishing requires a separate, explicit maintainer decision and is outside
+  this repository's current delivery contract.
 
 The legacy `.github/release/docs-deploy-policy.json` and
-`scripts/ci/docs_deploy_guard.py` are not invoked by the current workflow. They
-are not part of the executable deployment contract unless a future change wires
-them into `docs-deploy.yml` and updates this document.
+`scripts/ci/docs_deploy_guard.py` are not invoked by an executable workflow.
+They are not part of the current build contract.
 
 ## Change Checklist
 
-When deployment behavior changes:
+When documentation-site build behavior changes:
 
-1. update the workflow, this policy, and the runbook together;
-2. run `actionlint`;
-3. run the site production build and verify a clean generated manifest;
-4. confirm pull-request runs remain build-only;
-5. confirm production deploys remain limited to `main`.
+1. update this policy and the local build runbook together;
+2. run the site build and verify a clean generated manifest;
+3. preview the output locally;
+4. confirm no automatic publishing or deployment workflow was introduced.

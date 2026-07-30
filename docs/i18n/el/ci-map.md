@@ -12,7 +12,6 @@ repository. Ονόματα από παλαιότερα έγγραφα δεν ε�
 | Workflow | Συμβάν | Κύριο αποτέλεσμα |
 | --- | --- | --- |
 | `ci-run.yml` | push/PR/merge queue σε `main`, `dev` και manual | έλεγχοι Rust και web |
-| `docs-deploy.yml` | docs/site PR σε `main`, push σε `main` και manual | build Pages και deploy από `main` |
 
 ## Βασική Σύμβαση CI
 
@@ -29,18 +28,10 @@ repository. Ονόματα από παλαιότερα έγγραφα δεν ε�
 Το format check είναι σταδιακό, επειδή υπάρχει προϋπάρχον rustfmt drift σε όλο
 το repository. Τα νέα και αλλαγμένα Rust αρχεία συνεχίζουν να ελέγχονται.
 
-## Σύμβαση Docs Pages
+## Τοπικό Build Ιστοτόπου Τεκμηρίωσης
 
-Το `.github/workflows/docs-deploy.yml`:
-
-- κάνει build το `site/` με Node.js 22,
-- υπολογίζει το Vite base path από το όνομα του repository,
-- επιβεβαιώνει ότι το docs manifest είναι ενημερωμένο και committed,
-- κάνει μόνο build στα pull requests,
-- ανεβάζει και κάνει deploy το `gh-pages/` μόνο από το `main`.
-
-Η πηγή του GitHub Pages πρέπει να είναι **GitHub Actions**. Δείτε το
-[runbook ανάπτυξης docs](../../operations/docs-deploy-runbook.md).
+Το `site/` μπορεί να γίνει build τοπικά με Node.js 22. Το build επιβεβαιώνει
+επίσης ότι το docs manifest είναι ενημερωμένο και committed.
 
 ## Τοπική Αναπαραγωγή
 
@@ -66,9 +57,7 @@ git diff --exit-code -- src/generated/docs-manifest.json
    αποτυχημένο dependency job.
 2. Για `Build Docs Site`, επαναλάβετε το build του `site/` και ελέγξτε αν
    άλλαξε το docs manifest.
-3. Για Pages, επιβεβαιώστε ότι το run είναι στο `main`, το build πέτυχε και η
-   πηγή Pages είναι **GitHub Actions**.
-4. Για asset paths, ελέγξτε το HTML στο `gh-pages/` και το base path των URL.
+3. Για asset paths, ελέγξτε το παραγόμενο HTML και το base path των URL.
 
 ## Κανόνες Συντήρησης
 
