@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   CheckCircle,
@@ -7,11 +7,15 @@ import {
   ClipboardList,
   FileText,
   Filter,
+  Link2,
   Loader2,
+  RefreshCw,
+  Search,
   ShieldAlert,
   ShieldCheck,
   XCircle,
 } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 import { apiFetch } from '@/lib/api';
 
 interface RunMeta {
@@ -90,6 +94,16 @@ const STATUS_STYLES: Record<RunMeta['status'], string> = {
   failed: 'bg-red-900/40 text-red-300 border-red-700/40',
   cancelled: 'bg-gray-800 text-gray-300 border-gray-600/40',
 };
+
+const RUN_STATUSES = [
+  'all',
+  'running',
+  'completed',
+  'completed_unverified',
+  'failed',
+  'cancelled',
+] as const;
+type RunStatusFilter = (typeof RUN_STATUSES)[number];
 
 function statusLabel(status: RunMeta['status']): string {
   if (status === 'completed_unverified') return 'unverified claim';
@@ -379,69 +393,259 @@ function ToolRoutingPanel({
 }
 
 export default function Runs() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [runs, setRuns] = useState<RunMeta[]>([]);
   const [liveIds, setLiveIds] = useState<string[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(() => searchParams.get('run'));
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [listError, setListError] = useState<string | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [statusFilter, setStatusFilter] = useState<RunStatusFilter>('all');
+  const [query, setQuery] = useState('');
+  const [linkCopied, setLinkCopied] = useState(false);
+  const liveIdsRef = useRef<string[]>([]);
+  const listFailureCountRef = useRef(0);
+  const detailRequestRef = useRef(0);
 
-  const refreshList = useCallback(async () => {
+  const refreshList = useCallback(async (): Promise<boolean> => {
+    setRefreshing(true);
     try {
       const data = await apiFetch<{ runs: RunMeta[]; live: string[] }>('/api/runs');
       setRuns(data.runs);
       setLiveIds(data.live);
-      setError(null);
+      liveIdsRef.current = data.live;
+      listFailureCountRef.current = 0;
+      setLastUpdated(new Date());
+      setListError(null);
+      return true;
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to load runs');
+      listFailureCountRef.current += 1;
+      setListError(err instanceof Error ? err.message : 'Failed to load runs');
+      return false;
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
-  const refreshDetail = useCallback(async (runId: string) => {
+  const refreshDetail = useCallback(async (runId: string): Promise<boolean> => {
+    const requestId = ++detailRequestRef.current;
     try {
       const data = await apiFetch<{ run: RunDetail }>(`/api/runs/${encodeURIComponent(runId)}`);
+      if (requestId !== detailRequestRef.current) return true;
       setDetail(data.run);
+      setDetailError(null);
+      return true;
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to load run detail');
+      if (requestId !== detailRequestRef.current) return false;
+      setDetailError(err instanceof Error ? err.message : 'Failed to load run detail');
+      return false;
     }
   }, []);
 
   useEffect(() => {
-    refreshList();
-    const timer = setInterval(refreshList, 5000);
-    return () => clearInterval(timer);
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const schedule = (delayMs: number) => {
+      globalThis.clearTimeout(timer);
+      timer = globalThis.setTimeout(() => void poll(), delayMs);
+    };
+    const poll = async () => {
+      if (document.visibilityState === 'hidden') return;
+      const succeeded = await refreshList();
+      if (cancelled) return;
+
+      if (succeeded && liveIdsRef.current.length > 0) {
+        schedule(3000);
+      } else if (!succeeded) {
+        schedule(Math.min(1000 * 2 ** listFailureCountRef.current, 30000));
+      }
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      globalThis.clearTimeout(timer);
+      void poll();
+    };
+
+    void poll();
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => {
+      cancelled = true;
+      globalThis.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
   }, [refreshList]);
+
+  const selectedIsLive = selected ? liveIds.includes(selected) : false;
 
   useEffect(() => {
     if (!selected) return;
-    refreshDetail(selected);
-    const timer = setInterval(() => refreshDetail(selected), 5000);
-    return () => clearInterval(timer);
-  }, [selected, refreshDetail]);
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let failures = 0;
+
+    const schedule = (delayMs: number) => {
+      globalThis.clearTimeout(timer);
+      timer = globalThis.setTimeout(() => void poll(), delayMs);
+    };
+    const poll = async () => {
+      if (document.visibilityState === 'hidden') return;
+      const succeeded = await refreshDetail(selected);
+      if (cancelled) return;
+
+      failures = succeeded ? 0 : failures + 1;
+      if (selectedIsLive) {
+        schedule(succeeded ? 3000 : Math.min(1000 * 2 ** failures, 30000));
+      } else if (!succeeded && failures < 5) {
+        schedule(Math.min(1000 * 2 ** failures, 30000));
+      }
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      globalThis.clearTimeout(timer);
+      void poll();
+    };
+
+    setDetail(null);
+    setDetailError(null);
+    void poll();
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => {
+      cancelled = true;
+      detailRequestRef.current += 1;
+      globalThis.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
+  }, [selected, selectedIsLive, refreshDetail]);
+
+  useEffect(() => {
+    const runId = searchParams.get('run');
+    setSelected((current) => {
+      if (current === runId) return current;
+      setDetail(null);
+      setDetailError(null);
+      return runId;
+    });
+  }, [searchParams]);
+
+  const selectRun = (runId: string) => {
+    if (selected === runId) {
+      void refreshDetail(runId);
+    } else {
+      setSelected(runId);
+      setDetail(null);
+      setDetailError(null);
+    }
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.set('run', runId);
+      return next;
+    });
+  };
+
+  const filteredRuns = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return runs.filter((run) => {
+      if (statusFilter !== 'all' && run.status !== statusFilter) return false;
+      if (!normalizedQuery) return true;
+      return [
+        run.run_id,
+        run.session_id ?? '',
+        run.channel,
+        run.provider,
+        run.model,
+        run.mode,
+      ].some((value) => value.toLowerCase().includes(normalizedQuery));
+    });
+  }, [query, runs, statusFilter]);
+
+  const copyRunLink = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setLinkCopied(true);
+      globalThis.setTimeout(() => setLinkCopied(false), 1500);
+    } catch {
+      setDetailError('Could not copy the run link.');
+    }
+  };
 
   return (
     <div className="p-6 space-y-6">
-      <div className="flex items-center gap-3">
-        <ClipboardList className="h-6 w-6 text-blue-400" />
-        <div>
-          <h1 className="text-xl font-semibold">Run Inspector</h1>
-          <p className="text-sm text-gray-400">
-            Plan state, tool evidence, and verifier results for every agent run. Completion is
-            recorded from tool evidence, not model prose.
-          </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <ClipboardList className="h-6 w-6 text-blue-400" />
+          <div>
+            <h1 className="text-xl font-semibold">Run Inspector</h1>
+            <p className="text-sm text-gray-400">
+              Plan state, tool evidence, and verifier results for every agent run. Completion is
+              recorded from tool evidence, not model prose.
+            </p>
+          </div>
         </div>
+        <button
+          type="button"
+          onClick={() => void refreshList()}
+          disabled={refreshing}
+          className="inline-flex min-h-10 items-center gap-2 rounded-md border border-gray-700 px-3 text-sm text-gray-300 transition-colors hover:bg-gray-800 disabled:cursor-wait disabled:opacity-60"
+        >
+          <RefreshCw
+            className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`}
+            aria-hidden="true"
+          />
+          Refresh
+        </button>
       </div>
 
-      {error && (
+      {listError && (
         <div className="border border-red-700/40 bg-red-900/10 text-red-300 text-sm rounded-md px-3 py-2">
-          {error}
+          {listError} Retrying with backoff.
         </div>
       )}
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         <div className="space-y-2">
+          <div className="space-y-2 rounded-md border border-gray-800 bg-gray-900/40 p-3">
+            <label className="relative block">
+              <span className="sr-only">Search runs</span>
+              <Search
+                className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-gray-500"
+                aria-hidden="true"
+              />
+              <input
+                type="search"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search ID, model, provider…"
+                className="w-full rounded-md border border-gray-700 bg-gray-950 py-2 pl-9 pr-3 text-sm text-gray-200 placeholder:text-gray-600"
+              />
+            </label>
+            <label className="flex items-center gap-2 text-xs text-gray-400">
+              <Filter className="h-4 w-4" aria-hidden="true" />
+              <span>Status</span>
+              <select
+                value={statusFilter}
+                onChange={(event) => setStatusFilter(event.target.value as RunStatusFilter)}
+                className="min-w-0 flex-1 rounded-md border border-gray-700 bg-gray-950 px-2 py-1.5 text-gray-200"
+              >
+                {RUN_STATUSES.map((status) => (
+                  <option key={status} value={status}>
+                    {status === 'all' ? 'All statuses' : statusLabel(status)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="text-xs text-gray-500">
+              {filteredRuns.length}/{runs.length} runs
+              {lastUpdated ? ` · updated ${lastUpdated.toLocaleTimeString()}` : ''}
+              {liveIds.length > 0
+                ? ` · polling ${liveIds.length} live`
+                : ' · historical runs refresh on demand'}
+            </p>
+          </div>
           {loading ? (
             <div className="flex items-center gap-2 text-gray-400 text-sm">
               <Loader2 className="h-4 w-4 animate-spin" /> Loading runs…
@@ -451,15 +655,14 @@ export default function Runs() {
               No runs recorded yet. Start an agent chat or autonomous run and its ledger will
               appear here.
             </p>
+          ) : filteredRuns.length === 0 ? (
+            <p className="text-sm text-gray-500">No runs match the current filters.</p>
           ) : (
-            runs.map((run) => (
+            filteredRuns.map((run) => (
               <button
                 type="button"
                 key={run.run_id}
-                onClick={() => {
-                  setSelected(run.run_id);
-                  setDetail(null);
-                }}
+                onClick={() => selectRun(run.run_id)}
                 className={`w-full text-left border rounded-md px-3 py-2 space-y-1 transition-colors ${
                   selected === run.run_id
                     ? 'border-blue-600/60 bg-blue-900/10'
@@ -487,6 +690,11 @@ export default function Runs() {
         </div>
 
         <div className="xl:col-span-2 space-y-6">
+          {detailError && (
+            <div className="rounded-md border border-red-700/40 bg-red-900/10 px-3 py-2 text-sm text-red-300">
+              {detailError}
+            </div>
+          )}
           {!selected ? (
             <p className="text-sm text-gray-500">Select a run to inspect its ledger.</p>
           ) : !detail ? (
@@ -505,6 +713,14 @@ export default function Runs() {
                       run
                     </span>
                   )}
+                  <button
+                    type="button"
+                    onClick={() => void copyRunLink()}
+                    className="ml-auto inline-flex min-h-9 items-center gap-1.5 rounded-md border border-gray-700 px-2.5 text-xs text-gray-300 transition-colors hover:bg-gray-800"
+                  >
+                    <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
+                    {linkCopied ? 'Copied' : 'Copy link'}
+                  </button>
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-1 text-sm text-gray-300">
                   <span>model: {detail.meta.model}</span>

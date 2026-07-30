@@ -115,6 +115,7 @@ const EMPTY_DONE_FALLBACK =
   'Tool execution completed, but no final response text was returned.';
 const CHAT_SESSIONS_STORAGE_KEY = 'llamafarm.agent_chat.sessions.v2';
 const ACTIVE_CHAT_STORAGE_KEY = 'llamafarm.agent_chat.active_session.v2';
+const CHAT_DRAFT_STORAGE_KEY = 'llamafarm.agent_chat.draft.v1';
 const CHAT_SIDEBAR_COLLAPSED_STORAGE_KEY = 'llamafarm.agent_chat.sidebar_collapsed.v1';
 const CHAT_IDE_OPEN_STORAGE_KEY = 'llamafarm.agent_chat.ide_open.v1';
 const CHAT_IDE_WIDTH_STORAGE_KEY = 'llamafarm.agent_chat.ide_width.v1';
@@ -131,6 +132,14 @@ const MAX_PERSISTED_MESSAGES = 500;
 const TEST_ALL_TOOLS_PROMPT =
   'Look at the entire tool catalogue available to you right now. Create a task_plan with one pending step per tool in that catalogue — do not group tools together or skip any. Then execute the plan step by step: call each tool once with a safe, minimal, non-destructive test input, mark the step completed or blocked based on the real result, and immediately continue to the next pending step without stopping to ask me anything. When every step has reached a terminal state, report a pass/fail summary for the whole catalogue.';
 const MAX_PERSISTED_SESSIONS = 40;
+
+type AgentConnectionState = 'connecting' | 'connected' | 'reconnecting';
+
+function connectionLabel(state: AgentConnectionState): string {
+  if (state === 'connected') return 'Connected';
+  if (state === 'reconnecting') return 'Reconnecting…';
+  return 'Connecting…';
+}
 
 function CopyButton({ text }: Readonly<{ text: string }>) {
   const [copied, setCopied] = useState(false);
@@ -440,6 +449,18 @@ function loadInitialChatState(): InitialChatState {
   return { sessions, activeSessionId };
 }
 
+function loadDraft(): string {
+  if (typeof globalThis.window === 'undefined') {
+    return '';
+  }
+
+  try {
+    return localStorage.getItem(CHAT_DRAFT_STORAGE_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
 function loadSidebarCollapsed(): boolean {
   if (typeof globalThis.window === 'undefined') {
     return false;
@@ -725,7 +746,7 @@ export default function AgentChat() {
 
   const [sessions, setSessions] = useState<ChatSession[]>(initialStateRef.current.sessions);
   const [activeSessionId, setActiveSessionId] = useState(initialStateRef.current.activeSessionId);
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState(() => loadDraft());
   const [typingSessionIds, setTypingSessionIds] = useState<string[]>([]);
   const [stoppingSessionIds, setStoppingSessionIds] = useState<string[]>([]);
   const [streamingContentBySession, setStreamingContentBySession] = useState<
@@ -743,7 +764,8 @@ export default function AgentChat() {
   const [federationBarCollapsed, setFederationBarCollapsed] = useState(() => loadFederationBarCollapsed());
   const [chatControlsCollapsed, setChatControlsCollapsed] = useState(() => loadChatControlsCollapsed());
   const [confirmDeleteSessionId, setConfirmDeleteSessionId] = useState<string | null>(null);
-  const [connected, setConnected] = useState(false);
+  const [connectionState, setConnectionState] =
+    useState<AgentConnectionState>('connecting');
   const [error, setError] = useState<string | null>(null);
   const [tps, setTps] = useState(0);
   const [realMetrics, setRealMetrics] = useState<{
@@ -783,6 +805,8 @@ export default function AgentChat() {
   const streamStartRef = useRef<number | null>(null);
   const charCountRef = useRef(0);
   const activeSessionIdRef = useRef(activeSessionId);
+  const hasConnectedRef = useRef(false);
+  const connected = connectionState === 'connected';
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) ?? sessions[0],
@@ -949,12 +973,18 @@ export default function AgentChat() {
     const ws = new WebSocketClient();
 
     ws.onOpen = () => {
-      setConnected(true);
+      hasConnectedRef.current = true;
+      setConnectionState('connected');
       setError(null);
     };
 
     ws.onClose = () => {
-      setConnected(false);
+      setConnectionState(hasConnectedRef.current ? 'reconnecting' : 'connecting');
+      setError(
+        hasConnectedRef.current
+          ? 'Connection lost. Reconnecting automatically…'
+          : 'Unable to connect yet. Retrying automatically…',
+      );
       responseStartRef.current = null;
       streamStartRef.current = null;
       charCountRef.current = 0;
@@ -967,7 +997,7 @@ export default function AgentChat() {
     };
 
     ws.onError = () => {
-      setError('Connection error. Attempting to reconnect...');
+      setError('Connection error. Retrying automatically…');
       setStreaming(false);
     };
 
@@ -1447,6 +1477,18 @@ export default function AgentChat() {
   }, [activeSession]);
 
   useEffect(() => {
+    try {
+      if (input) {
+        localStorage.setItem(CHAT_DRAFT_STORAGE_KEY, input);
+      } else {
+        localStorage.removeItem(CHAT_DRAFT_STORAGE_KEY);
+      }
+    } catch {
+      // Keep the in-memory draft when localStorage is unavailable.
+    }
+  }, [input]);
+
+  useEffect(() => {
     persistFederationPeerSelections(selectedFederationPeerIdsBySession);
   }, [selectedFederationPeerIdsBySession]);
 
@@ -1613,10 +1655,15 @@ export default function AgentChat() {
   // been created in the same event handler — so it takes `session` and
   // `content` explicitly rather than reading `activeSession`/`input` state,
   // which would not have settled yet in that same-tick scenario.
-  const dispatchUserMessage = (session: ChatSession, content: string) => {
+  const dispatchUserMessage = (session: ChatSession, content: string): boolean => {
     const trimmed = content.trim();
-    if (!trimmed || !wsRef.current?.connected) {
-      return;
+    if (!trimmed) {
+      return false;
+    }
+    if (!wsRef.current?.connected) {
+      setConnectionState(hasConnectedRef.current ? 'reconnecting' : 'connecting');
+      setError('Message kept as a draft while the connection recovers.');
+      return false;
     }
 
     const timestamp = new Date();
@@ -1634,10 +1681,6 @@ export default function AgentChat() {
       updatedAt: timestamp,
     });
 
-    setSessions((prev) =>
-      sortSessions(prev.map((s) => (s.id === session.id ? updatedSession : s))),
-    );
-
     try {
       deletedSessionIdsRef.current.delete(session.id);
       completedResponseSessionIdsRef.current.delete(session.id);
@@ -1648,6 +1691,10 @@ export default function AgentChat() {
         historySeed: buildHistorySeed(updatedSession.messages),
         federationPeerIds: federationEnabled ? selectedFederationPeerIds : [],
       });
+      setSessions((prev) =>
+        sortSessions(prev.map((s) => (s.id === session.id ? updatedSession : s))),
+      );
+      setError(null);
       responseStartRef.current = performance.now();
       streamStartRef.current = null;
       charCountRef.current = 0;
@@ -1659,8 +1706,11 @@ export default function AgentChat() {
       pendingContentRef.current[session.id] = '';
       setStreamingContentBySession((prev) => ({ ...prev, [session.id]: '' }));
       setStreamingPreviewCollapsedBySession((prev) => ({ ...prev, [session.id]: false }));
+      return true;
     } catch {
-      setError('Failed to send message. Please try again.');
+      setConnectionState('reconnecting');
+      setError('Message kept as a draft because it could not be sent. Reconnecting…');
+      return false;
     }
   };
 
@@ -1668,7 +1718,12 @@ export default function AgentChat() {
     if (!activeSession) {
       return;
     }
-    dispatchUserMessage(activeSession, input);
+    const sent = dispatchUserMessage(activeSession, input);
+    if (!sent) {
+      inputRef.current?.focus();
+      return;
+    }
+
     setInput('');
     if (inputRef.current) {
       inputRef.current.style.height = 'auto';
@@ -1699,7 +1754,11 @@ export default function AgentChat() {
   };
 
   const handleKeyDown = (event: React.KeyboardEvent) => {
-    if (event.key === 'Enter' && !event.shiftKey) {
+    if (
+      event.key === 'Enter' &&
+      !event.shiftKey &&
+      !event.nativeEvent.isComposing
+    ) {
       event.preventDefault();
       handleSend();
     }
@@ -1939,9 +1998,12 @@ export default function AgentChat() {
         </div>
 
         {error && (
-          <div className="flex items-center gap-2 border-b border-red-700 bg-red-900/30 px-4 py-2 text-sm text-red-300">
+          <div
+            role="alert"
+            className="flex items-center gap-2 border-b border-red-700 bg-red-900/30 px-4 py-2 text-sm text-red-300"
+          >
             <AlertCircle className="h-4 w-4 flex-shrink-0" />
-            {error}
+            <span className="flex-1">{error}</span>
           </div>
         )}
 
@@ -2110,7 +2172,7 @@ export default function AgentChat() {
                     </div>
                     {!activeStreamingPreviewCollapsed &&
                       (activeStreamingContent ? (
-                        <p aria-live="polite" className="mt-3 whitespace-pre-wrap break-words text-sm">
+                        <p className="mt-3 whitespace-pre-wrap break-words text-sm">
                           {activeStreamingContent}
                         </p>
                       ) : (
@@ -2153,18 +2215,24 @@ export default function AgentChat() {
                   el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
                 }}
                 onKeyDown={handleKeyDown}
+                aria-label="Message the agent"
+                aria-describedby="agent-composer-help agent-connection-status"
                 placeholder={
                   !connected
-                    ? 'Connecting...'
+                    ? 'Write a draft while the connection recovers…'
                     : activeSessionStopping
                       ? 'Stopping the active run...'
                       : activeSessionTyping
                         ? 'Add a follow-up to redirect the active run…'
                         : 'Type a message...'
                 }
-                disabled={!connected || !activeSession}
+                disabled={!activeSession}
                 className="w-full resize-none overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 px-4 py-3 text-sm text-white placeholder-gray-500 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
               />
+              <p id="agent-composer-help" className="mt-1.5 px-1 text-xs text-gray-500">
+                Enter to send · Shift+Enter for a new line
+                {!connected && ' · your draft is preserved while reconnecting'}
+              </p>
             </div>
             {activeSessionTyping && activeSession && (
               <button
@@ -2182,22 +2250,35 @@ export default function AgentChat() {
               </button>
             )}
             <button
+              type="button"
               onClick={handleSend}
               data-testid="agent-chat-send"
               disabled={!connected || !input.trim() || !activeSession}
+              aria-label="Send message"
+              title={connected ? 'Send message' : 'Waiting for the agent connection'}
               className="flex-shrink-0 rounded-xl bg-blue-600 p-3 text-white transition-colors hover:bg-blue-700 disabled:bg-gray-700 disabled:text-gray-500"
             >
-              <Send className="h-5 w-5" />
+              <Send className="h-5 w-5" aria-hidden="true" />
             </button>
           </div>
-          <div className="mt-2 flex items-center justify-center gap-2">
+          <div
+            id="agent-connection-status"
+            role="status"
+            aria-live="polite"
+            className="mt-2 flex items-center justify-center gap-2"
+          >
             <span
               className={`inline-block h-2 w-2 rounded-full ${
-                connected ? 'bg-green-500' : 'bg-red-500'
+                connected
+                  ? 'bg-green-500'
+                  : connectionState === 'reconnecting'
+                    ? 'bg-yellow-500'
+                    : 'bg-blue-500'
               }`}
             />
             <span className="text-xs text-gray-500">
-              {connected ? 'Connected' : 'Disconnected'}
+              {connectionLabel(connectionState)}
+              {activeSessionTyping && connected ? ' · response streaming' : ''}
             </span>
           </div>
         </div>
