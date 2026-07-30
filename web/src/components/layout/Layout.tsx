@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Outlet, useMatch } from 'react-router-dom';
 import Sidebar from '@/components/layout/Sidebar';
 import Header from '@/components/layout/Header';
 import AgentChat from '@/pages/AgentChat';
+import { useLocale } from '@/lib/i18n';
 
 const SIDEBAR_COLLAPSED_KEY = 'llamafarm.sidebar_collapsed.v1';
 
@@ -16,14 +17,38 @@ function loadSidebarCollapsed(): boolean {
 
 export default function Layout() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => loadSidebarCollapsed());
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const isAgentRoute = useMatch({ path: '/agent', end: true }) !== null;
   const [agentMounted, setAgentMounted] = useState(isAgentRoute);
+  const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const { t } = useLocale();
 
   useEffect(() => {
     if (isAgentRoute) {
       setAgentMounted(true);
     }
   }, [isAgentRoute]);
+
+  useEffect(() => {
+    if (!mobileSidebarOpen) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [mobileSidebarOpen]);
+
+  useEffect(() => {
+    const desktopQuery = window.matchMedia('(min-width: 768px)');
+    const closeMobileSidebar = (event: MediaQueryListEvent) => {
+      if (event.matches) setMobileSidebarOpen(false);
+    };
+
+    desktopQuery.addEventListener('change', closeMobileSidebar);
+    return () => desktopQuery.removeEventListener('change', closeMobileSidebar);
+  }, []);
 
   const toggleSidebar = () => {
     setSidebarCollapsed((prev) => {
@@ -37,14 +62,39 @@ export default function Layout() {
     });
   };
 
+  const closeMobileSidebar = useCallback((restoreFocus = true) => {
+    setMobileSidebarOpen(false);
+    if (restoreFocus) {
+      requestAnimationFrame(() => mobileMenuButtonRef.current?.focus());
+    }
+  }, []);
+
   return (
     <div className="min-h-screen bg-gray-950 text-white">
-      <Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
+      <a href="#main-content" className="skip-link">
+        {t('a11y.skip_to_content')}
+      </a>
 
-      <div className={`flex flex-col min-h-screen transition-[margin] duration-200 ${sidebarCollapsed ? 'ml-14' : 'ml-60'}`}>
-        <Header />
+      <Sidebar
+        collapsed={sidebarCollapsed}
+        mobileOpen={mobileSidebarOpen}
+        onMobileClose={closeMobileSidebar}
+        onNavigate={() => closeMobileSidebar(false)}
+        onToggle={toggleSidebar}
+      />
 
-        <main className="flex-1 overflow-y-auto">
+      <div
+        className={`flex min-h-screen min-w-0 flex-col transition-[margin] duration-200 ${
+          sidebarCollapsed ? 'md:ml-14' : 'md:ml-60'
+        }`}
+      >
+        <Header
+          mobileMenuButtonRef={mobileMenuButtonRef}
+          mobileMenuOpen={mobileSidebarOpen}
+          onMobileMenuOpen={() => setMobileSidebarOpen(true)}
+        />
+
+        <main id="main-content" tabIndex={-1} className="flex-1 overflow-y-auto">
           {(agentMounted || isAgentRoute) && (
             <div className={isAgentRoute ? '' : 'hidden'}>
               <AgentChat />

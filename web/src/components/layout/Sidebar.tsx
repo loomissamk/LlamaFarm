@@ -1,86 +1,191 @@
+import { useEffect, useRef, useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import {
+  Activity,
+  Brain,
   Network,
   BookText,
+  FileText,
   FolderOpen,
   LayoutDashboard,
   MessageSquare,
+  Plug,
+  ScrollText,
+  Stethoscope,
   Wrench,
   Clock,
   Settings,
   Database,
   PanelLeftClose,
   PanelLeftOpen,
+  X,
+  type LucideIcon,
 } from 'lucide-react';
-import { t } from '@/lib/i18n';
+import { useLocale } from '@/lib/i18n';
+import { navigationItems, type NavigationIcon } from '@/lib/navigation';
 
-const navItems = [
-  { to: '/', icon: LayoutDashboard, labelKey: 'nav.dashboard' },
-  { to: '/agent', icon: MessageSquare, labelKey: 'nav.agent' },
-  { to: '/federation', icon: Network, labelKey: 'nav.federation' },
-  { to: '/tools', icon: Wrench, labelKey: 'nav.tools' },
-  { to: '/cron', icon: Clock, labelKey: 'nav.cron' },
-  { to: '/database', icon: Database, labelKey: 'nav.database' },
-  { to: '/workspace', icon: FolderOpen, labelKey: 'nav.workspace' },
-  { to: '/workspace/prompts', icon: BookText, labelKey: 'nav.prompts' },
-  { to: '/config', icon: Settings, labelKey: 'nav.config' },
-];
+const navigationIcons: Record<NavigationIcon, LucideIcon> = {
+  dashboard: LayoutDashboard,
+  agent: MessageSquare,
+  runs: Activity,
+  federation: Network,
+  tools: Wrench,
+  cron: Clock,
+  integrations: Plug,
+  memory: Brain,
+  database: Database,
+  workspace: FolderOpen,
+  files: FileText,
+  prompts: BookText,
+  logs: ScrollText,
+  doctor: Stethoscope,
+  config: Settings,
+};
 
 interface SidebarProps {
   collapsed: boolean;
+  mobileOpen: boolean;
+  onMobileClose: () => void;
+  onNavigate: () => void;
   onToggle: () => void;
 }
 
-export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
+export default function Sidebar({
+  collapsed,
+  mobileOpen,
+  onMobileClose,
+  onNavigate,
+  onToggle,
+}: SidebarProps) {
+  const { t } = useLocale();
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const sidebarRef = useRef<HTMLElement>(null);
+  const [desktopNavigation, setDesktopNavigation] = useState(() =>
+    window.matchMedia('(min-width: 768px)').matches,
+  );
+
+  useEffect(() => {
+    const desktopQuery = window.matchMedia('(min-width: 768px)');
+    const updateDesktopNavigation = () => setDesktopNavigation(desktopQuery.matches);
+
+    updateDesktopNavigation();
+    desktopQuery.addEventListener('change', updateDesktopNavigation);
+    return () => desktopQuery.removeEventListener('change', updateDesktopNavigation);
+  }, []);
+
+  useEffect(() => {
+    if (!mobileOpen) return;
+
+    closeButtonRef.current?.focus();
+    const handleDrawerKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onMobileClose();
+        return;
+      }
+
+      if (event.key !== 'Tab' || !sidebarRef.current) return;
+      const focusable = Array.from(
+        sidebarRef.current.querySelectorAll<HTMLElement>('a[href], button:not([disabled])'),
+      ).filter((element) => element.getClientRects().length > 0 && element.tabIndex >= 0);
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!first || !last) return;
+
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', handleDrawerKeyDown);
+    return () => document.removeEventListener('keydown', handleDrawerKeyDown);
+  }, [mobileOpen, onMobileClose]);
+
   return (
-    <aside
-      className={`fixed top-0 left-0 h-screen bg-gray-900 flex flex-col border-r border-gray-800 transition-[width] duration-200 z-30 ${
-        collapsed ? 'w-14' : 'w-60'
-      }`}
-    >
-      {/* Logo / Title */}
-      <div className="px-3 py-4 border-b border-gray-800 flex items-center justify-between min-h-[60px]">
-        {!collapsed && (
-          <span className="text-lg font-semibold text-white tracking-wide truncate">
+    <>
+      <button
+        type="button"
+        aria-label={t('nav.close_menu')}
+        className={`fixed inset-0 z-30 bg-black/65 transition-opacity md:hidden ${
+          mobileOpen ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0'
+        }`}
+        onClick={onMobileClose}
+        tabIndex={mobileOpen ? 0 : -1}
+      />
+
+      <aside
+        ref={sidebarRef}
+        id="primary-navigation"
+        aria-label={t('nav.primary')}
+        aria-hidden={!desktopNavigation && !mobileOpen}
+        inert={!desktopNavigation && !mobileOpen ? true : undefined}
+        className={`fixed left-0 top-0 z-40 flex h-dvh w-[min(18rem,calc(100vw-3rem))] flex-col border-r border-gray-800 bg-gray-900 transition-[transform,width] duration-200 md:translate-x-0 ${
+          collapsed ? 'md:w-14' : 'md:w-60'
+        } ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}
+      >
+        <div className="flex min-h-[60px] items-center justify-between border-b border-gray-800 px-3 py-2">
+          <span
+            className={`truncate text-lg font-semibold tracking-wide text-white ${
+              collapsed ? 'md:hidden' : ''
+            }`}
+          >
             LlamaFarm
           </span>
-        )}
-        <button
-          onClick={onToggle}
-          className={`flex-shrink-0 rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-800 hover:text-white ${collapsed ? 'mx-auto' : ''}`}
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        >
-          {collapsed ? (
-            <PanelLeftOpen className="h-4 w-4" />
-          ) : (
-            <PanelLeftClose className="h-4 w-4" />
-          )}
-        </button>
-      </div>
-
-      {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto py-4 px-2 space-y-1">
-        {navItems.map(({ to, icon: Icon, labelKey }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end
-            title={collapsed ? t(labelKey) : undefined}
-            className={({ isActive }) =>
-              [
-                'flex items-center rounded-lg text-sm font-medium transition-colors',
-                collapsed ? 'justify-center px-2 py-2.5' : 'gap-3 px-3 py-2.5',
-                isActive
-                  ? 'bg-blue-600 text-white'
-                  : 'text-gray-300 hover:bg-gray-800 hover:text-white',
-              ].join(' ')
-            }
+          <button
+            ref={closeButtonRef}
+            type="button"
+            onClick={onMobileClose}
+            className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-800 hover:text-white md:hidden"
+            aria-label={t('nav.close_menu')}
           >
-            <Icon className="h-5 w-5 flex-shrink-0" />
-            {!collapsed && <span>{t(labelKey)}</span>}
-          </NavLink>
-        ))}
-      </nav>
-    </aside>
+            <X className="h-5 w-5" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            onClick={onToggle}
+            className={`hidden min-h-9 min-w-9 flex-shrink-0 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-800 hover:text-white md:inline-flex ${
+              collapsed ? 'mx-auto' : ''
+            }`}
+            title={collapsed ? t('nav.expand') : t('nav.collapse')}
+            aria-label={collapsed ? t('nav.expand') : t('nav.collapse')}
+          >
+            {collapsed ? (
+              <PanelLeftOpen className="h-4 w-4" aria-hidden="true" />
+            ) : (
+              <PanelLeftClose className="h-4 w-4" aria-hidden="true" />
+            )}
+          </button>
+        </div>
+
+        <nav className="flex-1 space-y-1 overflow-y-auto px-2 py-3">
+          {navigationItems.map(({ to, icon, labelKey }) => {
+            const Icon = navigationIcons[icon];
+            return (
+              <NavLink
+                key={to}
+                to={to}
+                end
+                onClick={onNavigate}
+                title={collapsed ? t(labelKey) : undefined}
+                className={({ isActive }) =>
+                  [
+                    'flex min-h-11 items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
+                    collapsed ? 'md:justify-center md:px-2' : '',
+                    isActive
+                      ? 'bg-blue-600 text-white'
+                      : 'text-gray-300 hover:bg-gray-800 hover:text-white',
+                  ].join(' ')
+                }
+              >
+                <Icon className="h-5 w-5 flex-shrink-0" aria-hidden="true" />
+                <span className={collapsed ? 'md:hidden' : ''}>{t(labelKey)}</span>
+              </NavLink>
+            );
+          })}
+        </nav>
+      </aside>
+    </>
   );
 }

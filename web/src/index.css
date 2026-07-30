@@ -33,6 +33,25 @@ body {
   min-height: 100dvh;
 }
 
+.skip-link {
+  position: fixed;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 100;
+  border-radius: 0.5rem;
+  background: #ffffff;
+  color: #081126;
+  padding: 0.65rem 0.9rem;
+  font-size: 0.875rem;
+  font-weight: 700;
+  transform: translateY(calc(-100% - 1rem));
+  transition: transform 150ms ease;
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
+}
+
 .app-shell {
   position: relative;
   isolation: isolate;
@@ -582,6 +601,15 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
   .hero-panel::after,
   .hero-panel::before,
   .glass-header::after,

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useSyncExternalStore } from 'react';
 import { getStatus } from './api';
 
 // ---------------------------------------------------------------------------
@@ -19,12 +19,25 @@ const translations: Record<Locale, Record<string, string>> = {
     'nav.memory': 'Memory',
     'nav.database': 'Database',
     'nav.workspace': 'Workspace',
+    'nav.files': 'Files',
     'nav.prompts': 'Prompt Files',
     'nav.config': 'Configuration',
     'nav.cost': 'Models',
     'nav.runs': 'Runs',
     'nav.logs': 'Logs',
     'nav.doctor': 'Doctor',
+    'nav.primary': 'Primary navigation',
+    'nav.open_menu': 'Open navigation',
+    'nav.close_menu': 'Close navigation',
+    'nav.expand': 'Expand sidebar',
+    'nav.collapse': 'Collapse sidebar',
+
+    // Application shell
+    'app.runtime': 'Local LlamaFarm runtime',
+    'a11y.skip_to_content': 'Skip to main content',
+    'not_found.title': 'Page not found',
+    'not_found.description': 'The page you requested does not exist or has moved.',
+    'not_found.home': 'Back to dashboard',
 
     // Dashboard
     'dashboard.title': 'Dashboard',
@@ -207,11 +220,25 @@ const translations: Record<Locale, Record<string, string>> = {
     'nav.memory': 'Hafiza',
     'nav.database': 'Veritabani',
     'nav.workspace': 'Calisma Alani',
+    'nav.files': 'Dosyalar',
     'nav.prompts': 'Istem Dosyalari',
     'nav.config': 'Yapilandirma',
     'nav.cost': 'Maliyet Takibi',
+    'nav.runs': 'Calistirmalar',
     'nav.logs': 'Kayitlar',
     'nav.doctor': 'Doktor',
+    'nav.primary': 'Ana gezinme',
+    'nav.open_menu': 'Gezinmeyi ac',
+    'nav.close_menu': 'Gezinmeyi kapat',
+    'nav.expand': 'Kenar cubugunu genislet',
+    'nav.collapse': 'Kenar cubugunu daralt',
+
+    // Application shell
+    'app.runtime': 'Yerel LlamaFarm calisma zamani',
+    'a11y.skip_to_content': 'Ana icerige gec',
+    'not_found.title': 'Sayfa bulunamadi',
+    'not_found.description': 'Istediginiz sayfa mevcut degil veya tasinmis.',
+    'not_found.home': 'Kontrol paneline don',
 
     // Dashboard
     'dashboard.title': 'Kontrol Paneli',
@@ -394,11 +421,25 @@ const translations: Record<Locale, Record<string, string>> = {
     'nav.memory': '记忆',
     'nav.database': '数据库',
     'nav.workspace': '工作区',
+    'nav.files': '文件',
     'nav.prompts': '提示文件',
     'nav.config': '配置',
     'nav.cost': '成本追踪',
+    'nav.runs': '运行记录',
     'nav.logs': '日志',
     'nav.doctor': '诊断',
+    'nav.primary': '主导航',
+    'nav.open_menu': '打开导航',
+    'nav.close_menu': '关闭导航',
+    'nav.expand': '展开侧边栏',
+    'nav.collapse': '收起侧边栏',
+
+    // Application shell
+    'app.runtime': '本地 LlamaFarm 运行时',
+    'a11y.skip_to_content': '跳至主要内容',
+    'not_found.title': '页面未找到',
+    'not_found.description': '您请求的页面不存在或已被移动。',
+    'not_found.home': '返回仪表盘',
 
     // Dashboard
     'dashboard.title': '仪表盘',
@@ -576,13 +617,20 @@ const translations: Record<Locale, Record<string, string>> = {
 // ---------------------------------------------------------------------------
 
 let currentLocale: Locale = 'en';
+const localeListeners = new Set<() => void>();
+let localeRequest: Promise<void> | null = null;
 
 export function getLocale(): Locale {
   return currentLocale;
 }
 
 export function setLocale(locale: Locale): void {
+  if (locale === currentLocale) return;
   currentLocale = locale;
+  if (typeof document !== 'undefined') {
+    document.documentElement.lang = locale;
+  }
+  localeListeners.forEach((listener) => listener());
 }
 
 // ---------------------------------------------------------------------------
@@ -609,7 +657,7 @@ export function tLocale(key: string, locale: Locale): string {
 // React hook
 // ---------------------------------------------------------------------------
 
-function normalizeLocale(locale: string | undefined): Locale {
+export function normalizeLocale(locale: string | undefined): Locale {
   const lowered = locale?.toLowerCase();
   if (lowered?.startsWith('tr')) return 'tr';
   if (lowered === 'zh' || lowered?.startsWith('zh-')) return 'zh-CN';
@@ -621,25 +669,25 @@ function normalizeLocale(locale: string | undefined): Locale {
  * i18n module in sync. Returns the current locale and a `t` helper bound to it.
  */
 export function useLocale(): { locale: Locale; t: (key: string) => string } {
-  const [locale, setLocaleState] = useState<Locale>(currentLocale);
+  const locale = useSyncExternalStore<Locale>(
+    (listener) => {
+      localeListeners.add(listener);
+      return () => localeListeners.delete(listener);
+    },
+    getLocale,
+    () => 'en',
+  );
 
   useEffect(() => {
-    let cancelled = false;
+    document.documentElement.lang = locale;
+  }, [locale]);
 
-    getStatus()
-      .then((status) => {
-        if (cancelled) return;
-        const detected = normalizeLocale(status.locale);
-        setLocale(detected);
-        setLocaleState(detected);
-      })
+  useEffect(() => {
+    localeRequest ??= getStatus()
+      .then((status) => setLocale(normalizeLocale(status.locale)))
       .catch(() => {
-        // Keep default locale on error
+        // Keep the default locale when status is unavailable.
       });
-
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
   return {

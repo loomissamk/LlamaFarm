@@ -14,6 +14,7 @@ import WorkspaceIde from './pages/WorkspaceIde';
 import WorkspaceFiles from './pages/WorkspaceFiles';
 import WorkspacePrompts from './pages/WorkspacePrompts';
 import DatabasePage from './pages/Database';
+import NotFound from './pages/NotFound';
 
 export default function App() {
   return (
@@ -36,7 +37,7 @@ export default function App() {
         <Route path="/runs" element={<Runs />} />
         <Route path="/logs" element={<Logs />} />
         <Route path="/doctor" element={<Doctor />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>
   );
