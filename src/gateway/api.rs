@@ -3431,7 +3431,12 @@ pub async fn handle_api_memory_list(
     if let Some(ref query) = params.query {
         // Search mode
         match runtime.mem.recall(query, 50, None).await {
-            Ok(entries) => Json(serde_json::json!({"entries": entries})).into_response(),
+            Ok(mut entries) => {
+                if let Some(category) = params.category.as_deref().map(parse_memory_category) {
+                    entries.retain(|entry| entry.category == category);
+                }
+                Json(serde_json::json!({"entries": entries})).into_response()
+            }
             Err(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": format!("Memory recall failed: {e}")})),
