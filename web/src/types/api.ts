@@ -58,6 +58,7 @@ export interface CronJob {
   schedule: {
     kind: 'cron' | 'at' | 'every';
     expr?: string;
+    tz?: string;
     at?: string;
     every_ms?: number;
   };
@@ -66,6 +67,16 @@ export interface CronJob {
   last_status: string | null;
   last_output: string | null;
   enabled: boolean;
+}
+
+export interface CronRun {
+  id: number;
+  job_id: string;
+  started_at: string;
+  finished_at: string;
+  status: string;
+  output: string | null;
+  duration_ms: number | null;
 }
 
 export interface Integration {

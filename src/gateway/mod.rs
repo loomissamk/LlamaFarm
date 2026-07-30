@@ -907,6 +907,7 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .route("/api/cron", post(api::handle_api_cron_add))
         .route("/api/cron/{id}", put(api::handle_api_cron_update))
         .route("/api/cron/{id}", delete(api::handle_api_cron_delete))
+        .route("/api/cron/{id}/runs", get(api::handle_api_cron_runs))
         .route("/api/cron/{id}/run", post(api::handle_api_cron_run))
         .route("/api/integrations", get(api::handle_api_integrations))
         .route(

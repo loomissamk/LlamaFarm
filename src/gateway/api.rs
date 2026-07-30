@@ -175,6 +175,7 @@ fn parse_cron_schedule(
     schedule: Option<&str>,
     run_at: Option<&str>,
     every_ms: Option<u64>,
+    timezone: Option<&str>,
 ) -> Result<crate::cron::Schedule, String> {
     match schedule_kind
         .unwrap_or("cron")
@@ -189,7 +190,10 @@ fn parse_cron_schedule(
                 .ok_or_else(|| "schedule is required for cron jobs".to_string())?;
             Ok(crate::cron::Schedule::Cron {
                 expr: expr.to_string(),
-                tz: None,
+                tz: timezone
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string),
             })
         }
         "at" => {
@@ -657,6 +661,7 @@ pub struct CronAddBody {
     pub schedule: Option<String>,
     pub run_at: Option<String>,
     pub every_ms: Option<u64>,
+    pub timezone: Option<String>,
     pub command: String,
     pub enabled: Option<bool>,
 }
@@ -668,6 +673,7 @@ pub struct CronUpdateBody {
     pub schedule: Option<String>,
     pub run_at: Option<String>,
     pub every_ms: Option<u64>,
+    pub timezone: Option<String>,
     pub command: Option<String>,
     pub enabled: Option<bool>,
 }
@@ -2995,6 +3001,7 @@ pub async fn handle_api_cron_add(
         body.schedule.as_deref(),
         body.run_at.as_deref(),
         body.every_ms,
+        body.timezone.as_deref(),
     ) {
         Ok(schedule) => schedule,
         Err(error) => {
@@ -3080,12 +3087,14 @@ pub async fn handle_api_cron_update(
         || body.schedule.is_some()
         || body.run_at.is_some()
         || body.every_ms.is_some()
+        || body.timezone.is_some()
     {
         match parse_cron_schedule(
             body.schedule_kind.as_deref(),
             body.schedule.as_deref(),
             body.run_at.as_deref(),
             body.every_ms,
+            body.timezone.as_deref(),
         ) {
             Ok(schedule) => Some(schedule),
             Err(error) => {
@@ -3120,6 +3129,42 @@ pub async fn handle_api_cron_update(
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": format!("Failed to update cron job: {error}")})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct CronRunsQuery {
+    pub limit: Option<usize>,
+}
+
+/// GET /api/cron/:id/runs — list recent executions for a cron job.
+pub async fn handle_api_cron_runs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(query): Query<CronRunsQuery>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let config = state.config.lock().clone();
+    if crate::cron::get_job(&config, &id).is_err() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("Cron job '{id}' not found")})),
+        )
+            .into_response();
+    }
+
+    let limit = query.limit.unwrap_or(10).clamp(1, 100);
+    match crate::cron::list_runs(&config, &id, limit) {
+        Ok(runs) => Json(serde_json::json!({"runs": runs})).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to list cron runs: {error}")})),
         )
             .into_response(),
     }
@@ -5094,6 +5139,33 @@ mod tests {
             Some("AGENTS.md")
         );
         assert_eq!(normalize_workspace_editor_name("SOUL.md"), None);
+    }
+
+    #[test]
+    fn cron_schedule_parser_preserves_explicit_timezone() {
+        let schedule = parse_cron_schedule(
+            Some("cron"),
+            Some("0 9 * * 1-5"),
+            None,
+            None,
+            Some("America/New_York"),
+        )
+        .expect("cron schedule should parse");
+
+        assert_eq!(
+            schedule,
+            crate::cron::Schedule::Cron {
+                expr: "0 9 * * 1-5".to_string(),
+                tz: Some("America/New_York".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn cron_schedule_parser_rejects_empty_intervals() {
+        let error = parse_cron_schedule(Some("every"), None, None, Some(0), None)
+            .expect_err("zero interval should fail");
+        assert_eq!(error, "every_ms must be greater than 0");
     }
 
     #[test]

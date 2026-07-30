@@ -3,6 +3,7 @@ import type {
   StatusResponse,
   ToolSpec,
   CronJob,
+  CronRun,
   Integration,
   IntegrationSettingsPayload,
   DiagResult,
@@ -393,6 +394,7 @@ export function addCronJob(body: {
   schedule?: string;
   run_at?: string;
   every_ms?: number;
+  timezone?: string;
   enabled?: boolean;
 }): Promise<CronJob> {
   return apiFetch<CronJob | { status: string; job: CronJob }>('/api/cron', {
@@ -410,6 +412,7 @@ export function updateCronJob(
     schedule?: string;
     run_at?: string;
     every_ms?: number;
+    timezone?: string;
     enabled?: boolean;
   },
 ): Promise<CronJob> {
@@ -420,6 +423,12 @@ export function updateCronJob(
       body: JSON.stringify(body),
     },
   ).then((data) => (typeof (data as { job?: CronJob }).job === 'object' ? (data as { job: CronJob }).job : (data as CronJob)));
+}
+
+export function getCronRuns(id: string, limit = 10): Promise<CronRun[]> {
+  return apiFetch<CronRun[] | { runs: CronRun[] }>(
+    `/api/cron/${encodeURIComponent(id)}/runs?limit=${encodeURIComponent(limit)}`,
+  ).then((data) => unwrapField(data, 'runs'));
 }
 
 export function runCronJob(id: string): Promise<{ status: string; output: string; job?: CronJob | null }> {
