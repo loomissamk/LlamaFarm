@@ -55,6 +55,7 @@ pub fn validate_schedule(schedule: &Schedule, now: DateTime<Utc>) -> Result<()> 
             if *every_ms == 0 {
                 anyhow::bail!("Invalid schedule: every_ms must be > 0");
             }
+            let _ = next_run_for_schedule(schedule, now)?;
             Ok(())
         }
     }
@@ -110,5 +111,15 @@ mod tests {
 
         let next = next_run_for_schedule(&schedule, from).unwrap();
         assert_eq!(next, Utc.with_ymd_and_hms(2026, 2, 16, 17, 0, 0).unwrap());
+    }
+
+    #[test]
+    fn validate_schedule_rejects_interval_overflow() {
+        let error = validate_schedule(
+            &Schedule::Every { every_ms: u64::MAX },
+            Utc::now(),
+        )
+        .expect_err("oversized interval should fail validation");
+        assert!(error.to_string().contains("too large"));
     }
 }

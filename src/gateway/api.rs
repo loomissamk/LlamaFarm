@@ -177,7 +177,7 @@ fn parse_cron_schedule(
     every_ms: Option<u64>,
     timezone: Option<&str>,
 ) -> Result<crate::cron::Schedule, String> {
-    match schedule_kind
+    let parsed = match schedule_kind
         .unwrap_or("cron")
         .trim()
         .to_ascii_lowercase()
@@ -217,7 +217,10 @@ fn parse_cron_schedule(
         other => Err(format!(
             "unsupported schedule_kind '{other}' (expected cron, at, or every)"
         )),
-    }
+    }?;
+
+    crate::cron::validate_schedule(&parsed, Utc::now()).map_err(|error| error.to_string())?;
+    Ok(parsed)
 }
 
 fn cron_job_json(job: &crate::cron::CronJob) -> serde_json::Value {
@@ -5171,6 +5174,19 @@ mod tests {
         let error = parse_cron_schedule(Some("every"), None, None, Some(0), None)
             .expect_err("zero interval should fail");
         assert_eq!(error, "every_ms must be greater than 0");
+    }
+
+    #[test]
+    fn cron_schedule_parser_rejects_invalid_timezone() {
+        let error = parse_cron_schedule(
+            Some("cron"),
+            Some("0 9 * * *"),
+            None,
+            None,
+            Some("Mars/Olympus_Mons"),
+        )
+        .expect_err("unknown timezone should fail");
+        assert!(error.contains("Invalid IANA timezone"));
     }
 
     #[test]
