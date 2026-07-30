@@ -1,4 +1,12 @@
 export interface StatusResponse {
+  version?: string;
+  app_version?: string;
+  build_commit?: string | null;
+  build_time?: string | null;
+  build?: {
+    commit: string | null;
+    time: string | null;
+  };
   provider: string | null;
   model: string;
   temperature: number;
@@ -10,6 +18,35 @@ export interface StatusResponse {
   channels: Record<string, boolean>;
   health: HealthSnapshot;
   ollama: OllamaStatus;
+  runtime?: RuntimeFacts;
+  capacity?: FederationNodeCapacity;
+  queue?: {
+    active_runs: number;
+    queued_runs: number | null;
+    queue_depth_available: boolean;
+  };
+}
+
+export interface RuntimeFacts {
+  provider: string;
+  model: string;
+  temperature: number;
+  memory_backend: string;
+  max_tool_iterations: number;
+  tool_count: number;
+  config_revision: string;
+  gateway: {
+    host: string;
+    port: number;
+    configured_host: string;
+    configured_port: number;
+    restart_required: boolean;
+  };
+  federation: {
+    configured_enabled: boolean;
+    effective_enabled: boolean;
+    delegation_enabled: boolean;
+  };
 }
 
 export interface RuntimeShell {
@@ -24,9 +61,19 @@ export interface OllamaStatus {
   configured_model: string;
   installed_models: string[];
   loaded_models: string[];
+  installed_model_details?: OllamaModelDetail[];
+  loaded_model_details?: OllamaModelDetail[];
   active_model_loaded: boolean;
   revision: string;
   model_environment_override: string | null;
+}
+
+export interface OllamaModelDetail {
+  name: string;
+  size_bytes?: number;
+  size_vram_bytes?: number;
+  context_length?: number | null;
+  expires_at?: string | null;
 }
 
 export interface HealthSnapshot {
@@ -242,6 +289,62 @@ export interface FederationToolCapability {
   local_only: boolean;
 }
 
+export interface FederationLoadedModel {
+  name: string;
+  size_bytes: number;
+  size_vram_bytes: number;
+  context_length?: number | null;
+  expires_at?: string | null;
+}
+
+export interface FederationNodeCapacity {
+  logical_cpus: number;
+  total_memory_bytes?: number | null;
+  memory_limit_bytes?: number | null;
+  memory_current_bytes?: number | null;
+  memory_available_bytes?: number | null;
+  gpu_total_memory_bytes?: number | null;
+  gpu_used_memory_bytes?: number | null;
+  gpu_free_memory_bytes?: number | null;
+  loaded_model_vram_bytes: number;
+  active_runs: number;
+  queued_runs?: number | null;
+}
+
+export interface FederationRuntimeFacts {
+  gateway_host: string;
+  gateway_port: number;
+  configured_gateway_host: string;
+  configured_gateway_port: number;
+  gateway_restart_required: boolean;
+  federation_configured: boolean;
+  federation_effective: boolean;
+  delegation_enabled: boolean;
+  max_tool_iterations: number;
+  config_revision: string;
+}
+
+export interface FederationCapabilities {
+  node_id: string;
+  display_name: string;
+  app_version: string;
+  build_commit?: string | null;
+  build_time?: string | null;
+  provider?: string | null;
+  model: string;
+  installed_models: string[];
+  loaded_models: FederationLoadedModel[];
+  active_model_loaded: boolean;
+  capacity: FederationNodeCapacity;
+  runtime: FederationRuntimeFacts;
+  tools: FederationToolCapability[];
+  role_support: FederationRole;
+  allow_remote_subagents: boolean;
+  health: string;
+  api_port: number;
+  last_seen: string;
+}
+
 export interface FederationLocalNodeSummary {
   node_id: string;
   display_name: string;
@@ -271,6 +374,12 @@ export interface FederationPeerSummary {
   model_summary: string;
   tool_summary: string;
   installed_models: string[];
+  loaded_models?: FederationLoadedModel[];
+  active_model_loaded?: boolean;
+  capacity?: FederationNodeCapacity;
+  runtime?: FederationRuntimeFacts;
+  build_commit?: string | null;
+  build_time?: string | null;
   tools: FederationToolCapability[];
   last_seen?: string | null;
   specialization: string;
@@ -279,7 +388,9 @@ export interface FederationPeerSummary {
 
 export interface FederationPeersResponse {
   enabled: boolean;
+  configured_enabled?: boolean;
   local_node: FederationLocalNodeSummary;
+  local_capabilities?: FederationCapabilities | null;
   peers: FederationPeerSummary[];
 }
 

@@ -79,6 +79,14 @@ function isLocalhostBind(host: string): boolean {
   return h === '127.0.0.1' || h === 'localhost' || h === '::1' || h === '[::1]' || h === '';
 }
 
+function formatBytes(bytes: number | null | undefined): string {
+  if (bytes === null || bytes === undefined) return 'n/a';
+  if (bytes === 0) return '0 B';
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / 1024 ** exponent).toFixed(exponent >= 3 ? 1 : 0)} ${units[exponent]}`;
+}
+
 export default function FederationPage() {
   const [federation, setFederation] = useState<FederationPeersResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -89,6 +97,7 @@ export default function FederationPage() {
   const manualPeerRef = useRef<HTMLInputElement>(null);
   const [delegationEnabled, setDelegationEnabledState] = useState(false);
   const [delegationToggling, setDelegationToggling] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [selectedPeerIdsBySession, setSelectedPeerIdsBySession] = useState<
     Record<string, string[]>
   >(() => loadFederationPeerSelections());
@@ -130,6 +139,8 @@ export default function FederationPage() {
 
   useEffect(() => {
     let cancelled = false;
+    let refreshTimer: number | undefined;
+    let retryDelay = 5_000;
 
     const refreshFederation = async () => {
       try {
@@ -138,11 +149,21 @@ export default function FederationPage() {
           setFederation(response);
           setLoading(false);
           setError(null);
+          setLastUpdated(new Date());
+          retryDelay = 5_000;
         }
       } catch {
         if (!cancelled) {
           setLoading(false);
           setError('Failed to load federation peers.');
+          retryDelay = Math.min(retryDelay * 2, 30_000);
+        }
+      } finally {
+        if (!cancelled) {
+          refreshTimer = window.setTimeout(
+            () => void refreshFederation(),
+            document.hidden ? 30_000 : retryDelay,
+          );
         }
       }
     };
@@ -169,15 +190,20 @@ export default function FederationPage() {
     void refreshFederation();
     refreshLocalState();
 
-    const interval = window.setInterval(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden) return;
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
       void refreshFederation();
-    }, 5000);
+      refreshLocalState();
+    };
     window.addEventListener('focus', refreshLocalState);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       cancelled = true;
-      window.clearInterval(interval);
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
       window.removeEventListener('focus', refreshLocalState);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, []);
 
@@ -225,6 +251,7 @@ export default function FederationPage() {
   );
   const offlinePeers = availablePeers.filter((peer) => !peer.online);
   const onlinePeers = availablePeers.filter((peer) => peer.online).length;
+  const localCapabilities = federation?.local_capabilities ?? null;
 
   const handlePeerToggle = (peerId: string, enabledForSession: boolean) => {
     if (!selectedSessionId) {
@@ -333,6 +360,10 @@ export default function FederationPage() {
                     <p className="mt-1 font-mono text-[11px] text-cyan-300">
                       {peer.host}:{peer.api_port} · {peer.delegate_agent}
                     </p>
+                    <p className="mt-1 font-mono text-[11px] text-gray-600">
+                      v{peer.app_version || 'unknown'}
+                      {peer.build_commit ? ` · ${peer.build_commit.slice(0, 12)}` : ''}
+                    </p>
                     <p className="mt-2 text-xs text-gray-500">{federationPeerBlockReason(peer)}</p>
                   </div>
 
@@ -365,6 +396,23 @@ export default function FederationPage() {
                         {peer.tool_summary || 'Tool summary unavailable'}
                       </span>
                     </div>
+                    {peer.capacity && (
+                      <div className="grid grid-cols-2 gap-2 rounded-lg border border-gray-800 bg-gray-900/60 p-2 sm:grid-cols-4">
+                        <span>{peer.capacity.logical_cpus} CPUs</span>
+                        <span>{formatBytes(peer.capacity.memory_available_bytes)} RAM free</span>
+                        <span>{formatBytes(peer.capacity.gpu_free_memory_bytes)} GPU free</span>
+                        <span>{peer.capacity.active_runs} active run{peer.capacity.active_runs === 1 ? '' : 's'}</span>
+                      </div>
+                    )}
+                    {peer.loaded_models && peer.loaded_models.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {peer.loaded_models.map((model) => (
+                          <span key={model.name} className="rounded-full border border-emerald-800/60 bg-emerald-950/30 px-2 py-0.5 text-[11px] text-emerald-300">
+                            {model.name} · {formatBytes(model.size_vram_bytes)} VRAM
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   <div className="space-y-3">
@@ -455,6 +503,9 @@ export default function FederationPage() {
                   Federation stays visible even when no peers are discovered. Local chat still works
                   on this node by itself.
                 </p>
+                {lastUpdated && (
+                  <p className="mt-1 text-[11px] text-gray-600">Updated {lastUpdated.toLocaleTimeString()}</p>
+                )}
               </div>
 
               <div className="flex items-center gap-2">
@@ -478,6 +529,7 @@ export default function FederationPage() {
                       .then((response) => {
                         setFederation(response);
                         setError(null);
+                        setLastUpdated(new Date());
                       })
                       .catch(() => {
                         setError('Failed to load federation peers.');
@@ -537,6 +589,40 @@ export default function FederationPage() {
                 </p>
               </div>
             </div>
+
+            {federation &&
+              federation.configured_enabled !== undefined &&
+              federation.configured_enabled !== federation.enabled && (
+                <div role="status" className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+                  Federation is {federation.configured_enabled ? 'enabled' : 'disabled'} in saved
+                  configuration but {federation.enabled ? 'enabled' : 'disabled'} in this running
+                  process. Restart to reconcile the runtime.
+                </div>
+              )}
+
+            {localCapabilities && (
+              <div className="mt-4 rounded-xl border border-gray-800 bg-gray-950/70 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Local runtime facts</p>
+                    <p className="mt-2 text-sm font-medium text-white">{localCapabilities.model}</p>
+                    <p className="mt-1 font-mono text-[11px] text-gray-500">
+                      v{localCapabilities.app_version}
+                      {localCapabilities.build_commit ? ` · ${localCapabilities.build_commit.slice(0, 12)}` : ' · build commit unavailable'}
+                    </p>
+                  </div>
+                  <span className={`rounded-full px-2.5 py-1 text-xs ${localCapabilities.active_model_loaded ? 'bg-emerald-900/40 text-emerald-300' : 'bg-gray-800 text-gray-400'}`}>
+                    {localCapabilities.active_model_loaded ? 'Model warm' : 'Model cold'}
+                  </span>
+                </div>
+                <dl className="mt-4 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+                  <div><dt className="text-gray-500">CPU</dt><dd className="mt-1 text-gray-200">{localCapabilities.capacity.logical_cpus} logical</dd></div>
+                  <div><dt className="text-gray-500">RAM available</dt><dd className="mt-1 text-gray-200">{formatBytes(localCapabilities.capacity.memory_available_bytes)}</dd></div>
+                  <div><dt className="text-gray-500">GPU available</dt><dd className="mt-1 text-gray-200">{formatBytes(localCapabilities.capacity.gpu_free_memory_bytes)}</dd></div>
+                  <div><dt className="text-gray-500">Work</dt><dd className="mt-1 text-gray-200">{localCapabilities.capacity.active_runs} active · {localCapabilities.capacity.queued_runs === null || localCapabilities.capacity.queued_runs === undefined ? 'queue n/a' : `${localCapabilities.capacity.queued_runs} queued`}</dd></div>
+                </dl>
+              </div>
+            )}
 
             {!enabled && !loading && (
               <div className="mt-4 rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">

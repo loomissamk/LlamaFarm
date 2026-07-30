@@ -1,6 +1,5 @@
-import { DiagnosticsPanel } from './Doctor';
-import { LogsPanel } from './Logs';
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Activity,
   CheckCircle2,
@@ -9,6 +8,10 @@ import {
   Radio,
   RefreshCw,
   Server,
+  MemoryStick,
+  Gauge,
+  GitCommit,
+  Network,
 } from 'lucide-react';
 import type { StatusResponse } from '@/types/api';
 import { getStatus, putIntegrationCredentials } from '@/lib/api';
@@ -20,6 +23,14 @@ function formatUptime(seconds: number): string {
   if (d > 0) return `${d}d ${h}h ${m}m`;
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m`;
+}
+
+function formatBytes(bytes: number | null | undefined): string {
+  if (bytes === null || bytes === undefined) return 'Unavailable';
+  if (bytes === 0) return '0 B';
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / 1024 ** exponent).toFixed(exponent >= 3 ? 1 : 0)} ${units[exponent]}`;
 }
 
 function healthColor(status: string): string {
@@ -65,6 +76,7 @@ export default function Dashboard() {
   const [switchingModel, setSwitchingModel] = useState(false);
   const [switchError, setSwitchError] = useState<string | null>(null);
   const [switchSuccess, setSwitchSuccess] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   const fetchStatus = () => {
     setRefreshing(true);
@@ -72,11 +84,17 @@ export default function Dashboard() {
       .then((s) => {
         setStatus(s);
         const configuredModel = canonicalOllamaModelName(s.ollama.configured_model);
-        setSelectedModel(
-          s.ollama.installed_models.find(
-            (model) => canonicalOllamaModelName(model) === configuredModel,
-          ) ?? s.ollama.installed_models[0] ?? '',
-        );
+        setSelectedModel((current) => {
+          if (s.ollama.installed_models.includes(current)) return current;
+          return (
+            s.ollama.installed_models.find(
+              (model) => canonicalOllamaModelName(model) === configuredModel,
+            ) ??
+            s.ollama.installed_models[0] ??
+            ''
+          );
+        });
+        setLastUpdated(new Date());
         setError(null);
       })
       .catch((err) => setError(err.message))
@@ -88,7 +106,7 @@ export default function Dashboard() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (error) {
+  if (error && !status) {
     return (
       <div className="p-6">
         <div className="rounded-lg bg-red-900/30 border border-red-700 p-4 text-red-300">
@@ -109,6 +127,9 @@ export default function Dashboard() {
   const installedModels = status.ollama.installed_models;
   const loadedModels = status.ollama.loaded_models;
   const configuredModel = status.ollama.configured_model || status.model;
+  const capacity = status.capacity;
+  const runtime = status.runtime;
+  const buildCommit = status.build?.commit ?? status.build_commit;
   const modelSelectionChanged =
     selectedModel.length > 0 &&
     canonicalOllamaModelName(selectedModel) !== canonicalOllamaModelName(configuredModel);
@@ -139,14 +160,25 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="space-y-6 p-4 sm:p-6">
       <div className="mb-4 flex flex-wrap gap-2 text-xs">
-        {[['/runs','Runs']].map(([to,label]) => (
-          <a key={to} href={to} className="rounded-full border border-gray-800 px-3 py-1 text-gray-400 hover:text-white hover:border-gray-600">{label}</a>
+        {[
+          { to: '/runs', label: 'Runs' },
+          { to: '/federation', label: 'Fleet' },
+          { to: '/tools', label: 'Tools' },
+          { to: '/logs', label: 'Logs' },
+          { to: '/doctor', label: 'Diagnostics' },
+        ].map(({ to, label }) => (
+          <Link key={to} to={to} className="rounded-full border border-gray-800 px-3 py-1 text-gray-400 hover:border-gray-600 hover:text-white">{label}</Link>
         ))}
       </div>
-      <div className="flex items-center justify-between">
-        <h2 className="text-base font-semibold text-white">Dashboard</h2>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-base font-semibold text-white">Dashboard</h2>
+          <p className="mt-1 text-xs text-gray-500">
+            {lastUpdated ? `Runtime facts updated ${lastUpdated.toLocaleTimeString()}` : 'Runtime facts'}
+          </p>
+        </div>
         <button
           onClick={fetchStatus}
           disabled={refreshing}
@@ -156,6 +188,12 @@ export default function Dashboard() {
           Refresh
         </button>
       </div>
+
+      {error && (
+        <div role="alert" className="rounded-lg border border-amber-700/50 bg-amber-950/20 p-3 text-sm text-amber-200">
+          Latest refresh failed; showing the last successful snapshot. {error}
+        </div>
+      )}
 
       <section className="rounded-xl border border-blue-800/60 bg-gray-900 p-5">
         <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
@@ -263,6 +301,50 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
+      </section>
+
+      <section aria-labelledby="runtime-capacity-title" className="space-y-3">
+        <div>
+          <h2 id="runtime-capacity-title" className="text-base font-semibold text-white">Runtime and capacity</h2>
+          <p className="mt-1 text-sm text-gray-400">Facts reported by this running node, not template assumptions.</p>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded-xl border border-gray-800 bg-gray-900 p-4">
+            <div className="flex items-center gap-2 text-gray-400"><GitCommit className="h-4 w-4" aria-hidden="true" /><span className="text-sm">Build</span></div>
+            <p className="mt-3 font-mono text-sm text-white">{status.app_version ?? status.version ?? 'Unknown version'}</p>
+            <p className="mt-1 truncate font-mono text-xs text-gray-500" title={buildCommit ?? undefined}>{buildCommit ? buildCommit.slice(0, 12) : 'Commit not injected'}</p>
+          </div>
+          <div className="rounded-xl border border-gray-800 bg-gray-900 p-4">
+            <div className="flex items-center gap-2 text-gray-400"><Cpu className="h-4 w-4" aria-hidden="true" /><span className="text-sm">Compute</span></div>
+            <p className="mt-3 text-sm font-semibold text-white">{capacity ? `${capacity.logical_cpus} logical CPUs` : 'Unavailable'}</p>
+            <p className="mt-1 text-xs text-gray-500">GPU free {formatBytes(capacity?.gpu_free_memory_bytes)}</p>
+          </div>
+          <div className="rounded-xl border border-gray-800 bg-gray-900 p-4">
+            <div className="flex items-center gap-2 text-gray-400"><MemoryStick className="h-4 w-4" aria-hidden="true" /><span className="text-sm">Memory</span></div>
+            <p className="mt-3 text-sm font-semibold text-white">{formatBytes(capacity?.memory_available_bytes)} available</p>
+            <p className="mt-1 text-xs text-gray-500">Effective total {formatBytes(capacity?.memory_limit_bytes ?? capacity?.total_memory_bytes)}</p>
+          </div>
+          <div className="rounded-xl border border-gray-800 bg-gray-900 p-4">
+            <div className="flex items-center gap-2 text-gray-400"><Gauge className="h-4 w-4" aria-hidden="true" /><span className="text-sm">Work</span></div>
+            <p className="mt-3 text-sm font-semibold text-white">{capacity?.active_runs ?? status.queue?.active_runs ?? 0} active runs</p>
+            <p className="mt-1 text-xs text-gray-500">{status.queue?.queue_depth_available ? `${status.queue.queued_runs ?? 0} queued` : 'Queue depth unavailable'}</p>
+          </div>
+        </div>
+        {runtime && (
+          <div className={`flex flex-col gap-3 rounded-xl border p-4 text-sm sm:flex-row sm:items-center sm:justify-between ${runtime.gateway.restart_required ? 'border-amber-700/50 bg-amber-950/20' : 'border-gray-800 bg-gray-900'}`}>
+            <div className="flex items-start gap-2">
+              <Network className={`mt-0.5 h-4 w-4 ${runtime.gateway.restart_required ? 'text-amber-300' : 'text-blue-300'}`} aria-hidden="true" />
+              <div>
+                <p className="font-medium text-white">Gateway {runtime.gateway.host}:{runtime.gateway.port}</p>
+                <p className="mt-1 text-xs text-gray-400">
+                  Configured {runtime.gateway.configured_host}:{runtime.gateway.configured_port}
+                  {runtime.gateway.restart_required ? ' · restart required to apply listener changes' : ' · effective configuration matches'}
+                </p>
+              </div>
+            </div>
+            <span className="font-mono text-xs text-gray-500">{runtime.tool_count} tools · {runtime.max_tool_iterations.toLocaleString()} max iterations</span>
+          </div>
+        )}
       </section>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -388,12 +470,6 @@ export default function Dashboard() {
             )}
           </div>
         </div>
-      </div>
-      <div className="mt-6">
-        <DiagnosticsPanel />
-      </div>
-      <div className="mt-6 overflow-hidden rounded-lg border border-gray-800 [&>div]:!h-[28rem]">
-        <LogsPanel />
       </div>
     </div>
   );
