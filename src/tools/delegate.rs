@@ -1,14 +1,14 @@
 use super::traits::{Tool, ToolResult};
 use crate::agent::loop_::{
-    DEFAULT_MAX_HISTORY_MESSAGES, run_tool_call_loop, with_tool_loop_history_limit,
+    run_tool_call_loop, with_tool_loop_history_limit, DEFAULT_MAX_HISTORY_MESSAGES,
 };
 use crate::config::DelegateAgentConfig;
 use crate::coordination::{CoordinationEnvelope, CoordinationPayload, InMemoryMessageBus};
 use crate::federation::remote_subagent::FederationRemoteSubagentAdapter;
 use crate::observability::traits::{Observer, ObserverEvent, ObserverMetric};
 use crate::providers::{self, ChatMessage, Provider};
-use crate::security::SecurityPolicy;
 use crate::security::policy::ToolOperation;
+use crate::security::SecurityPolicy;
 use async_trait::async_trait;
 use serde_json::json;
 use std::collections::HashMap;
@@ -190,18 +190,58 @@ impl Tool for DelegateTool {
     }
 
     fn description(&self) -> &str {
-        "Delegate a subtask to a specialized agent. Use when: a task benefits from a different model \
-         (e.g. fast summarization, deep reasoning, code generation). The sub-agent runs a single \
-         prompt by default; with agentic=true it can iterate with a filtered tool-call loop."
+        "Delegate a subtask to another agent. Two kinds of target: (1) a local specialist \
+         (coder, planner, verifier, ...) that runs in this same process for a different \
+         reasoning style; (2) a REMOTE FLEET PEER — a different physical machine in your \
+         federation, when one is online and worker-eligible — which gives real parallel \
+         execution on its own GPU/CPU, not just a different local model. Use a remote peer \
+         whenever the user asks to use the fleet, other boxes, or parallelize/distribute work. \
+         The sub-agent runs a single prompt by default; with agentic=true it can iterate with a \
+         filtered tool-call loop."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
-        let mut agent_names = self.agents.keys().cloned().collect::<Vec<_>>();
-        if let Some(federation) = &self.federation {
-            agent_names.extend(federation.available_remote_agents());
+        let mut local_names = self.agents.keys().cloned().collect::<Vec<_>>();
+        local_names.sort();
+        local_names.dedup();
+
+        let remote_infos = self
+            .federation
+            .as_ref()
+            .map(|federation| federation.available_remote_agents_info())
+            .unwrap_or_default();
+
+        let mut sections = Vec::new();
+        if local_names.is_empty() {
+            sections.push("(no local specialists configured)".to_string());
+        } else {
+            sections.push(format!(
+                "Local specialists (this machine): {}",
+                local_names.join(", ")
+            ));
         }
-        agent_names.sort();
-        agent_names.dedup();
+        if remote_infos.is_empty() {
+            sections.push("Remote fleet peers: none online/worker-eligible right now.".to_string());
+        } else {
+            let described = remote_infos
+                .iter()
+                .map(|info| {
+                    if info.specialization.trim().is_empty() {
+                        info.agent_name.clone()
+                    } else {
+                        format!(
+                            "{} (specialization: {})",
+                            info.agent_name, info.specialization
+                        )
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            sections.push(format!(
+                "Remote fleet peers (different physical machine — real parallel execution): {described}"
+            ));
+        }
+
         json!({
             "type": "object",
             "additionalProperties": false,
@@ -210,12 +250,8 @@ impl Tool for DelegateTool {
                     "type": "string",
                     "minLength": 1,
                     "description": format!(
-                        "Name of the agent to delegate to. Available: {}",
-                        if agent_names.is_empty() {
-                            "(none configured)".to_string()
-                        } else {
-                            agent_names.join(", ")
-                        }
+                        "Name of the agent to delegate to. {}",
+                        sections.join(" | ")
                     )
                 },
                 "prompt": {
@@ -1033,8 +1069,8 @@ mod tests {
         let tool = DelegateTool::new(sample_agents(), None, test_security())
             .with_max_history_messages(512);
         assert_eq!(tool.max_history_messages, 512);
-        let unlimited = DelegateTool::new(sample_agents(), None, test_security())
-            .with_max_history_messages(0);
+        let unlimited =
+            DelegateTool::new(sample_agents(), None, test_security()).with_max_history_messages(0);
         assert_eq!(unlimited.max_history_messages, 0);
     }
 
@@ -1109,7 +1145,8 @@ mod tests {
         let desc = schema["properties"]["agent"]["description"]
             .as_str()
             .unwrap();
-        assert!(desc.contains("none configured"));
+        assert!(desc.contains("no local specialists configured"));
+        assert!(desc.contains("none online/worker-eligible"));
     }
 
     #[tokio::test]
@@ -1192,13 +1229,11 @@ mod tests {
             .await
             .unwrap();
         assert!(!result.success);
-        assert!(
-            result
-                .error
-                .as_deref()
-                .unwrap_or("")
-                .contains("read-only mode")
-        );
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("read-only mode"));
     }
 
     #[tokio::test]
@@ -1213,13 +1248,11 @@ mod tests {
             .await
             .unwrap();
         assert!(!result.success);
-        assert!(
-            result
-                .error
-                .as_deref()
-                .unwrap_or("")
-                .contains("Rate limit exceeded")
-        );
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("Rate limit exceeded"));
     }
 
     #[tokio::test]
@@ -1250,13 +1283,11 @@ mod tests {
             .unwrap();
 
         assert!(!result.success);
-        assert!(
-            result
-                .error
-                .as_deref()
-                .unwrap_or("")
-                .contains("Failed to create provider")
-        );
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("Failed to create provider"));
     }
 
     #[tokio::test]
@@ -1287,13 +1318,11 @@ mod tests {
             .unwrap();
 
         assert!(!result.success);
-        assert!(
-            result
-                .error
-                .as_deref()
-                .unwrap_or("")
-                .contains("Failed to create provider")
-        );
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("Failed to create provider"));
     }
 
     #[test]
@@ -1325,13 +1354,11 @@ mod tests {
             .unwrap();
 
         assert!(!result.success);
-        assert!(
-            result
-                .error
-                .as_deref()
-                .unwrap_or("")
-                .contains("allowed_tools is empty")
-        );
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("allowed_tools is empty"));
     }
 
     #[tokio::test]
@@ -1350,13 +1377,11 @@ mod tests {
             .unwrap();
 
         assert!(!result.success);
-        assert!(
-            result
-                .error
-                .as_deref()
-                .unwrap_or("")
-                .contains("no executable tools")
-        );
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("no executable tools"));
     }
 
     #[tokio::test]
@@ -1398,13 +1423,11 @@ mod tests {
             .unwrap();
 
         assert!(!result.success);
-        assert!(
-            result
-                .error
-                .as_deref()
-                .unwrap_or("")
-                .contains("no executable tools")
-        );
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("no executable tools"));
     }
 
     #[tokio::test]
@@ -1420,13 +1443,11 @@ mod tests {
             .unwrap();
 
         assert!(!result.success);
-        assert!(
-            result
-                .error
-                .as_deref()
-                .unwrap_or("")
-                .contains("maximum tool iterations (2)")
-        );
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("maximum tool iterations (2)"));
     }
 
     #[tokio::test]
@@ -1442,13 +1463,11 @@ mod tests {
             .unwrap();
 
         assert!(!result.success);
-        assert!(
-            result
-                .error
-                .as_deref()
-                .unwrap_or("")
-                .contains("provider boom")
-        );
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("provider boom"));
     }
 
     #[tokio::test]
@@ -1479,13 +1498,11 @@ mod tests {
             .await
             .unwrap();
         assert!(!result.success);
-        assert!(
-            result
-                .error
-                .as_deref()
-                .unwrap_or("")
-                .contains("Failed to create provider")
-        );
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("Failed to create provider"));
 
         let bus = tool
             .coordination_bus_snapshot()

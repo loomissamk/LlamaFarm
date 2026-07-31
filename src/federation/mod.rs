@@ -10,8 +10,8 @@ use crate::config::{FederationConfig, FederationDiscoveryMode, FederationRole};
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -60,6 +60,7 @@ impl FederationService {
             registry.clone(),
             local_node_id.clone(),
             local_node_name.clone(),
+            config.task_timeout_seconds,
         )?);
 
         let service = Arc::new(Self {

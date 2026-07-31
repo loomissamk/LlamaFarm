@@ -1334,6 +1334,13 @@ pub struct FederationConfig {
     /// Allow the agent to use delegation and subagent tools. Off by default.
     #[serde(default)]
     pub enable_delegation: bool,
+    /// Max seconds to wait for a delegated remote task's result before giving
+    /// up and cancelling it. 0 means unlimited (no ceiling). Unlike
+    /// `peer_timeout_seconds` (peer liveness/discovery staleness), this bounds
+    /// a single in-flight delegated task so an overloaded or stuck peer can't
+    /// hang the calling agent's turn forever.
+    #[serde(default = "default_federation_task_timeout_seconds")]
+    pub task_timeout_seconds: u64,
 }
 
 fn default_federation_node_name() -> String {
@@ -1353,6 +1360,10 @@ fn default_federation_peer_timeout_seconds() -> u64 {
     30
 }
 
+fn default_federation_task_timeout_seconds() -> u64 {
+    600
+}
+
 impl Default for FederationConfig {
     fn default() -> Self {
         Self {
@@ -1366,6 +1377,7 @@ impl Default for FederationConfig {
             default_role: FederationRole::default(),
             allow_remote_subagents: true,
             enable_delegation: false,
+            task_timeout_seconds: default_federation_task_timeout_seconds(),
         }
     }
 }
@@ -7158,6 +7170,15 @@ impl Config {
             }
         }
 
+        if let Ok(timeout_secs) = std::env::var("LLAMAFARM_FEDERATION_TASK_TIMEOUT_SECS") {
+            match timeout_secs.trim().parse::<u64>() {
+                Ok(timeout) => self.federation.task_timeout_seconds = timeout,
+                Err(_) => tracing::warn!(
+                    "Ignoring invalid LLAMAFARM_FEDERATION_TASK_TIMEOUT_SECS (expected a non-negative integer; 0 means unlimited)"
+                ),
+            }
+        }
+
         if let Ok(peers) = std::env::var("LLAMAFARM_MANUAL_PEERS") {
             let parsed = peers
                 .split(',')
@@ -7268,9 +7289,7 @@ impl Config {
             }
         }
 
-        if let Ok(max_concurrent) =
-            std::env::var("LLAMAFARM_SCHEDULER_MAX_CONCURRENT")
-        {
+        if let Ok(max_concurrent) = std::env::var("LLAMAFARM_SCHEDULER_MAX_CONCURRENT") {
             match max_concurrent.trim().parse::<usize>() {
                 Ok(value) => self.scheduler.max_concurrent = value,
                 _ => tracing::warn!(

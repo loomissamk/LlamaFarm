@@ -12,8 +12,11 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 const TASK_EVENT_HISTORY_LIMIT: usize = 256;
-/// Bounds only connection/control-plane handshakes. Model execution and its
-/// event stream have no wall-clock deadline and end on completion or cancel.
+/// Bounds only connection/control-plane handshakes (task start/cancel/capability
+/// calls). The task result stream itself is bounded separately by
+/// `FederationRemoteSubagentAdapter::task_timeout` (config:
+/// `federation.task_timeout_seconds`) — an overloaded or stuck peer used to be
+/// able to hang the calling agent's turn indefinitely; it can't anymore.
 const FEDERATION_CONTROL_TIMEOUT_SECS: u64 = 10;
 pub const FEDERATION_AUTH_HEADER: &str = "x-llamafarm-federation-token";
 pub const FEDERATION_TASK_ID_HEADER: &str = "x-llamafarm-task-id";
@@ -199,6 +202,9 @@ pub struct FederationRemoteSubagentAdapter {
     client: reqwest::Client,
     local_node_id: Arc<RwLock<String>>,
     local_node_name: Arc<RwLock<String>>,
+    /// Max time to wait for a delegated task's result. `None` means unlimited
+    /// (operator opted out via `task_timeout_seconds = 0`).
+    task_timeout: Option<Duration>,
 }
 
 impl FederationRemoteSubagentAdapter {
@@ -206,14 +212,18 @@ impl FederationRemoteSubagentAdapter {
         registry: Arc<FederationPeerRegistry>,
         local_node_id: Arc<RwLock<String>>,
         local_node_name: Arc<RwLock<String>>,
+        task_timeout_seconds: u64,
     ) -> anyhow::Result<Self> {
         let client =
             build_federation_http_client(Duration::from_secs(FEDERATION_CONTROL_TIMEOUT_SECS))?;
+        let task_timeout =
+            (task_timeout_seconds > 0).then(|| Duration::from_secs(task_timeout_seconds));
 
         Ok(Self {
             registry,
             client,
             local_node_id,
+            task_timeout,
             local_node_name,
         })
     }
@@ -406,7 +416,7 @@ impl FederationRemoteSubagentAdapter {
         let mut final_response = None;
         let mut failure_message = None;
 
-        self.stream_remote_task_events(&stream_url, |event| {
+        let stream_future = self.stream_remote_task_events(&stream_url, |event| {
             self.emit_chat_event(peer, task_id, event.clone());
 
             match event.event_type.as_str() {
@@ -418,8 +428,30 @@ impl FederationRemoteSubagentAdapter {
                 }
                 _ => {}
             }
-        })
-        .await?;
+        });
+
+        match self.task_timeout {
+            Some(limit) => match tokio::time::timeout(limit, stream_future).await {
+                Ok(result) => result?,
+                Err(_) => {
+                    // The peer didn't finish in time. Ask it to stop rather than
+                    // leaving an unbounded task running unmonitored — the caller
+                    // gave up waiting, so nothing is watching for its completion.
+                    self.cancel_remote_task(peer, task_id).await;
+                    return Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(format!(
+                            "Remote worker '{}' did not respond within {}s — it may be \
+                             overloaded or stuck. The task was cancelled on that peer.",
+                            peer.display_name,
+                            limit.as_secs()
+                        )),
+                    });
+                }
+            },
+            None => stream_future.await?,
+        }
 
         if let Some(message) = failure_message {
             return Ok(ToolResult {
@@ -669,6 +701,13 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn test_adapter(connect_timeout: Duration) -> FederationRemoteSubagentAdapter {
+        test_adapter_with_task_timeout(connect_timeout, None)
+    }
+
+    fn test_adapter_with_task_timeout(
+        connect_timeout: Duration,
+        task_timeout: Option<Duration>,
+    ) -> FederationRemoteSubagentAdapter {
         FederationRemoteSubagentAdapter {
             registry: Arc::new(FederationPeerRegistry::new(
                 Duration::from_secs(30),
@@ -677,6 +716,7 @@ mod tests {
             client: build_federation_http_client(connect_timeout).expect("build client"),
             local_node_id: Arc::new(RwLock::new("node-a".to_string())),
             local_node_name: Arc::new(RwLock::new("Node A".to_string())),
+            task_timeout,
         }
     }
 
@@ -783,5 +823,88 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_type, "done");
         assert_eq!(events[0].full_response.as_deref(), Some("stream completed"));
+    }
+
+    #[tokio::test]
+    async fn consume_remote_task_times_out_and_cancels_stuck_peer() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock federation worker");
+        let address = listener.local_addr().expect("mock worker address");
+        let cancel_called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel_called_server = cancel_called.clone();
+
+        let server = tokio::spawn(async move {
+            // First connection: the stream. Send headers, then never send a
+            // terminal event — this simulates an overloaded/stuck peer.
+            let (mut stream_socket, _) = listener.accept().await.expect("accept stream request");
+            let mut request = vec![0_u8; 4096];
+            let _ = stream_socket
+                .read(&mut request)
+                .await
+                .expect("read stream request");
+            stream_socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\n\
+                      content-type: text/event-stream\r\n\
+                      connection: close\r\n\r\n",
+                )
+                .await
+                .expect("write stream response headers");
+
+            // Second connection: the cancel call the timeout path must make.
+            let (mut cancel_socket, _) = listener.accept().await.expect("accept cancel request");
+            let mut cancel_request = vec![0_u8; 4096];
+            let _ = cancel_socket
+                .read(&mut cancel_request)
+                .await
+                .expect("read cancel request");
+            cancel_called_server.store(true, std::sync::atomic::Ordering::SeqCst);
+            cancel_socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}",
+                )
+                .await
+                .expect("write cancel response");
+
+            // Keep the stream connection alive past the test's timeout so the
+            // hang is real, not just a fast connection close.
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            drop(stream_socket);
+        });
+
+        let adapter = test_adapter_with_task_timeout(
+            Duration::from_secs(1),
+            Some(Duration::from_millis(150)),
+        );
+        let peer = FederationPeerTarget {
+            peer_id: "peer-1".to_string(),
+            node_id: "node-b".to_string(),
+            display_name: "Node B".to_string(),
+            delegate_agent: "peer_node_b".to_string(),
+            base_url: format!("http://{address}"),
+            online: true,
+            role_support: FederationRole::Worker,
+            assigned_role: FederationRole::Worker,
+            allow_remote_subagents: true,
+        };
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            adapter.consume_remote_task(&peer, "task-1"),
+        )
+        .await
+        .expect("consume_remote_task must not hang past its own configured timeout")
+        .expect("timeout path returns a ToolResult, not an Err");
+
+        assert!(!result.success);
+        let error = result.error.expect("timeout must report an error");
+        assert!(error.contains("did not respond within"), "{error}");
+        assert!(
+            cancel_called.load(std::sync::atomic::Ordering::SeqCst),
+            "timing out must cancel the stuck task on the peer"
+        );
+
+        server.await.expect("mock worker task");
     }
 }
