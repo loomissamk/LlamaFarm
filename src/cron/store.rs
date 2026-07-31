@@ -163,8 +163,12 @@ pub fn remove_job(config: &Config, id: &str) -> Result<()> {
 }
 
 pub fn due_jobs(config: &Config, now: DateTime<Utc>) -> Result<Vec<CronJob>> {
-    let lim = i64::try_from(config.scheduler.max_tasks.max(1))
-        .context("Scheduler max_tasks overflows i64")?;
+    let lim = if config.scheduler.max_tasks == 0 {
+        -1
+    } else {
+        i64::try_from(config.scheduler.max_tasks)
+            .context("Scheduler max_tasks overflows i64")?
+    };
     with_connection(config, |conn| {
         let mut stmt = conn.prepare(
             "SELECT id, expression, command, schedule, job_type, prompt, name, session_target, model,
@@ -683,6 +687,25 @@ mod tests {
         let far_future = Utc::now() + ChronoDuration::days(365);
         let due = due_jobs(&config, far_future).unwrap();
         assert_eq!(due.len(), 2);
+    }
+
+    #[test]
+    fn zero_scheduler_max_tasks_returns_every_due_job() {
+        let tmp = TempDir::new().unwrap();
+        let mut config = test_config(&tmp);
+        config.scheduler.max_tasks = 0;
+
+        for index in 0..70 {
+            let _ = add_job(
+                &config,
+                "* * * * *",
+                &format!("echo unlimited-due-{index}"),
+            )
+            .unwrap();
+        }
+
+        let far_future = Utc::now() + ChronoDuration::days(365);
+        assert_eq!(due_jobs(&config, far_future).unwrap().len(), 70);
     }
 
     #[test]

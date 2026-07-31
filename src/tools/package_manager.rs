@@ -16,19 +16,18 @@
 
 use async_trait::async_trait;
 use serde_json::json;
-use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::AsyncReadExt;
 
+use super::command_runner::{run_capped_command, CappedStream, CommandExecution};
 use super::shell::apply_workspace_venv_env;
 use super::traits::{Tool, ToolResult};
 use crate::security::{NoopSandbox, Sandbox, SecurityPolicy};
 
 /// Maximum output bytes per stream.
 const MAX_OUTPUT: usize = 524_288; // 512 KB
-/// Default command timeout.
-const DEFAULT_TIMEOUT_SECS: u64 = 180;
+/// Default command timeout. Zero means unlimited.
+const DEFAULT_TIMEOUT_SECS: u64 = 0;
 
 /// Operations that mutate the system — blocked outside chaos modes.
 const MUTATING_OPS: &[&str] = &["install", "remove", "upgrade", "hold"];
@@ -48,6 +47,13 @@ impl PackageManagerTool {
     }
 }
 
+fn available_package_managers() -> Vec<&'static str> {
+    ["apt", "apt-get", "dnf", "yum", "pip", "uv", "cargo"]
+        .into_iter()
+        .filter(|manager| which::which(manager).is_ok())
+        .collect()
+}
+
 #[async_trait]
 impl Tool for PackageManagerTool {
     fn name(&self) -> &str {
@@ -61,13 +67,14 @@ impl Tool for PackageManagerTool {
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
+        let managers = available_package_managers();
         json!({
             "type": "object",
             "properties": {
                 "manager": {
                     "type": "string",
-                    "enum": ["apt", "apt-get", "dnf", "yum", "pip", "uv", "cargo"],
-                    "description": "Package manager to use"
+                    "enum": managers,
+                    "description": "Package manager available in this runtime"
                 },
                 "operation": {
                     "type": "string",
@@ -86,8 +93,9 @@ impl Tool for PackageManagerTool {
                 },
                 "timeout_secs": {
                     "type": "integer",
-                    "description": "Command timeout in seconds (default: 180)",
-                    "default": 180
+                    "minimum": 0,
+                    "description": "Optional command deadline in seconds; 0 means unlimited",
+                    "default": DEFAULT_TIMEOUT_SECS
                 }
             },
             "required": ["manager", "operation"]
@@ -102,6 +110,16 @@ impl Tool for PackageManagerTool {
             .get("timeout_secs")
             .and_then(|v| v.as_u64())
             .unwrap_or(DEFAULT_TIMEOUT_SECS);
+
+        if !available_package_managers().contains(&manager) {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!(
+                    "Package manager '{manager}' is not installed in this runtime"
+                )),
+            });
+        }
 
         let packages: Vec<String> = args
             .get("packages")
@@ -347,10 +365,7 @@ async fn run_command(
     workspace_dir: &std::path::Path,
 ) -> anyhow::Result<ToolResult> {
     let mut cmd = tokio::process::Command::new(program);
-    cmd.args(argv)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env("DEBIAN_FRONTEND", "noninteractive");
+    cmd.args(argv).env("DEBIAN_FRONTEND", "noninteractive");
     apply_workspace_venv_env(&mut cmd, workspace_dir);
     if let Err(e) = sandbox.wrap_command(cmd.as_std_mut()) {
         return Ok(ToolResult {
@@ -360,38 +375,21 @@ async fn run_command(
         });
     }
 
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => {
+    let timeout = (timeout_secs > 0).then(|| Duration::from_secs(timeout_secs));
+    let execution = match run_capped_command(cmd, MAX_OUTPUT, timeout).await {
+        Ok(execution) => execution,
+        Err(error) => {
             return Ok(ToolResult {
                 success: false,
                 output: String::new(),
-                error: Some(format!("Failed to spawn '{program}': {e}")),
+                error: Some(format!("Failed to execute '{program}': {error}")),
             });
         }
     };
 
-    let stdout_handle = child.stdout.take();
-    let stderr_handle = child.stderr.take();
-
-    let (stdout_bytes, stderr_bytes) = tokio::join!(
-        read_capped(stdout_handle, MAX_OUTPUT),
-        read_capped(stderr_handle, MAX_OUTPUT),
-    );
-
-    let result = tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait()).await;
-
-    let exit_status = match result {
-        Ok(Ok(s)) => s,
-        Ok(Err(e)) => {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!("Wait error: {e}")),
-            });
-        }
-        Err(_) => {
-            let _ = child.kill().await;
+    let output = match execution {
+        CommandExecution::Completed(output) => output,
+        CommandExecution::TimedOut => {
             return Ok(ToolResult {
                 success: false,
                 output: String::new(),
@@ -400,9 +398,9 @@ async fn run_command(
         }
     };
 
-    let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
-    let stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
-    let success = exit_status.success();
+    let stdout = render_stream(output.stdout, "stdout");
+    let stderr = render_stream(output.stderr, "stderr");
+    let success = output.status.success();
 
     let output = if stdout.is_empty() && !stderr.is_empty() {
         stderr.clone()
@@ -421,29 +419,12 @@ async fn run_command(
     })
 }
 
-async fn read_capped(
-    handle: Option<impl tokio::io::AsyncRead + Unpin>,
-    max_bytes: usize,
-) -> Vec<u8> {
-    let Some(mut reader) = handle else {
-        return Vec::new();
-    };
-    let mut buf = Vec::with_capacity(4096);
-    let mut tmp = [0u8; 4096];
-    loop {
-        match reader.read(&mut tmp).await {
-            Ok(0) | Err(_) => break,
-            Ok(n) => {
-                let remaining = max_bytes.saturating_sub(buf.len());
-                let take = n.min(remaining);
-                buf.extend_from_slice(&tmp[..take]);
-                if buf.len() >= max_bytes {
-                    break;
-                }
-            }
-        }
+fn render_stream(stream: CappedStream, label: &str) -> String {
+    let mut text = String::from_utf8_lossy(&stream.bytes).into_owned();
+    if stream.truncated {
+        text.push_str(&format!("\n... [{label} truncated at 512KB]"));
     }
-    buf
+    text
 }
 
 // ── Tests ──────────────────────────────────────────────────────────
@@ -471,6 +452,18 @@ mod tests {
             PackageManagerTool::new(permissive()).name(),
             "package_manager"
         );
+    }
+
+    #[test]
+    fn timeout_defaults_to_unlimited() {
+        let schema = PackageManagerTool::new(permissive()).parameters_schema();
+        assert_eq!(schema["properties"]["timeout_secs"]["default"], 0);
+        for manager in schema["properties"]["manager"]["enum"]
+            .as_array()
+            .unwrap()
+        {
+            assert!(which::which(manager.as_str().unwrap()).is_ok());
+        }
     }
 
     #[test]

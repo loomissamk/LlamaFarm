@@ -21,6 +21,8 @@
 
 - `agent.max_tool_iterations` 的默认值为 `0`（无限制）；任务会运行到完成、真实停滞/错误或操作者明确取消。正整数仍可设置每轮显式上限。
 - `research.max_iterations` 的默认值为 `0`（无限制）；有效研究会持续到完成、provider/tool 错误或相同调用/结果停滞检测器触发。正整数设置显式研究轮次上限。
+- `host_runner.max_exec_timeout_secs` 的默认值为 `0`（无最大值）；缺省或为零的 `timeout_secs` 不设置墙钟截止时间，正整数仍可设置显式截止时间。
+- `scheduler.max_concurrent` 默认为 `4`，表示所有轮询之间同时运行的计划任务总数；`0` 表示不限制并发。可用 `LLAMAFARM_SCHEDULER_MAX_CONCURRENT` 覆盖。
 - `gateway.require_pairing` 是默认值为 `false` 的旧版兼容字段；pairing 已停用，运行时忽略该值。
 - 新增 `model_routes[].api_url`，可仅为某个路由覆盖顶层 `api_url`。
 - 适用于将不同 hint 指向同一种 provider 的多个本地推理端点。
@@ -29,3 +31,7 @@
 - 设置 `LLAMAFARM_ADAPTIVE_CONTEXT=true` 后，环境默认值会成为快速基线；
   LlamaFarm 根据请求需要按 2 倍档位增长，最高不超过模型原生上下文和
   `LLAMAFARM_ADAPTIVE_CONTEXT_MAX`（默认 262,144）中的较小值。
+- 命名的 `[[db_connections]]` 供 Database Explorer 和
+  `db_schema`/`db_query` 工具使用。支持 `sqlite`、`postgres`、`mysql`
+  （包括 MariaDB）和 `mongodb` 驱动。MySQL/MariaDB 需要 Cargo feature
+  `db-mysql`；bundled Docker image 默认已启用。

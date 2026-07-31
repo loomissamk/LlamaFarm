@@ -1,6 +1,6 @@
 use super::traits::{Tool, ToolResult};
 use crate::host_runner::{
-    send_request, HostRunnerOperation, HostRunnerRequest, HostRunnerResult,
+    send_request_with_timeouts, HostRunnerOperation, HostRunnerRequest, HostRunnerResult,
     DEFAULT_EXEC_TIMEOUT_SECS,
 };
 use crate::security::SecurityPolicy;
@@ -104,13 +104,24 @@ impl Tool for HostExecTool {
 
     fn description(&self) -> &str {
         "Run policy-checked commands on the Docker host through the explicitly enabled \
-         LlamaFarm host-runner user service. Use exec for bounded foreground work, spawn \
+         LlamaFarm host-runner user service. Use exec for foreground work with no deadline \
+         by default, spawn \
          plus status for durable jobs, and redeploy to rebuild/recreate LlamaFarm without \
          losing the job when the current container is replaced. This tool targets the host; \
          use shell for work inside the current runtime."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
+        let mut timeout_schema = json!({
+            "type": "integer",
+            "minimum": 0,
+            "default": DEFAULT_EXEC_TIMEOUT_SECS,
+            "description": "Optional foreground exec deadline in seconds; 0 means unlimited"
+        });
+        if self.max_exec_timeout_secs > 0 {
+            timeout_schema["maximum"] = json!(self.max_exec_timeout_secs);
+        }
+
         json!({
             "type": "object",
             "properties": {
@@ -127,13 +138,7 @@ impl Tool for HostExecTool {
                     "type": "string",
                     "description": "Required absolute host working directory for exec or spawn"
                 },
-                "timeout_secs": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": self.max_exec_timeout_secs,
-                    "default": DEFAULT_EXEC_TIMEOUT_SECS,
-                    "description": "Foreground exec timeout"
-                },
+                "timeout_secs": timeout_schema,
                 "job_id": {
                     "type": "string",
                     "description": "Job id returned by spawn or redeploy, used with status"
@@ -169,9 +174,12 @@ impl Tool for HostExecTool {
                         .get("timeout_secs")
                         .and_then(serde_json::Value::as_u64)
                         .unwrap_or(DEFAULT_EXEC_TIMEOUT_SECS);
-                    if timeout_secs == 0 || timeout_secs > self.max_exec_timeout_secs {
+                    if timeout_secs > 0
+                        && self.max_exec_timeout_secs > 0
+                        && timeout_secs > self.max_exec_timeout_secs
+                    {
                         return Ok(Self::denied(format!(
-                            "timeout_secs must be between 1 and {}",
+                            "timeout_secs must be 0 (unlimited) or at most {}",
                             self.max_exec_timeout_secs
                         )));
                     }
@@ -213,15 +221,21 @@ impl Tool for HostExecTool {
         };
 
         let request = HostRunnerRequest::new(operation);
-        let transport_timeout = match &request.operation {
-            HostRunnerOperation::Exec { timeout_secs, .. } => Duration::from_secs(
-                timeout_secs
-                    .unwrap_or(DEFAULT_EXEC_TIMEOUT_SECS)
-                    .saturating_add(5),
-            ),
-            _ => Duration::from_secs(10),
+        let response_timeout = match &request.operation {
+            HostRunnerOperation::Exec { timeout_secs, .. } => {
+                let timeout_secs = timeout_secs.unwrap_or(DEFAULT_EXEC_TIMEOUT_SECS);
+                (timeout_secs > 0).then(|| Duration::from_secs(timeout_secs.saturating_add(5)))
+            }
+            _ => Some(Duration::from_secs(10)),
         };
-        let response = match send_request(&self.socket_path, &request, transport_timeout).await {
+        let response = match send_request_with_timeouts(
+            &self.socket_path,
+            &request,
+            Duration::from_secs(10),
+            response_timeout,
+        )
+        .await
+        {
             Ok(response) => response,
             Err(error) => {
                 return Ok(Self::denied(format!(
@@ -329,5 +343,20 @@ mod tests {
         assert!(tool
             .authorize_command("touch test-file", Path::new("/tmp"), false)
             .is_ok());
+    }
+
+    #[test]
+    fn foreground_timeout_defaults_to_unlimited() {
+        let tool = HostExecTool::new(
+            policy(AutonomyLevel::Full),
+            PathBuf::from("/tmp/missing.sock"),
+            0,
+        );
+        let schema = tool.parameters_schema();
+
+        assert_eq!(schema["properties"]["timeout_secs"]["default"], 0);
+        assert!(schema["properties"]["timeout_secs"]
+            .get("maximum")
+            .is_none());
     }
 }

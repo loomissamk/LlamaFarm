@@ -260,6 +260,16 @@ for arg in "$@"; do
   [ "$arg" = "--build" ] && WILL_BUILD=1 && break
 done
 if [ "$WILL_BUILD" = "1" ]; then
+  if [ -z "${LLAMAFARM_BUILD_COMMIT:-}" ]; then
+    LLAMAFARM_BUILD_COMMIT="$(git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || true)"
+  fi
+  if [ -z "${LLAMAFARM_BUILD_TIME:-}" ]; then
+    LLAMAFARM_BUILD_TIME="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  fi
+  export LLAMAFARM_BUILD_COMMIT
+  export LLAMAFARM_BUILD_TIME
+  echo "LlamaFarm build provenance: ${LLAMAFARM_BUILD_COMMIT:-unknown} @ $LLAMAFARM_BUILD_TIME"
+
   OLLAMA_PULL_IMAGE="$OLLAMA_IMAGE_DEFAULT"
   [ "$BACKEND" = "rocm" ] && OLLAMA_PULL_IMAGE="$OLLAMA_IMAGE_ROCM"
   echo "Pulling Ollama base image: $OLLAMA_PULL_IMAGE"

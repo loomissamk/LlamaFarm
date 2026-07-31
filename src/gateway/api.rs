@@ -4028,13 +4028,14 @@ pub async fn handle_api_context_get(
         // GPU" knob the operator asked for.
         "gpu_layers": gpu_layers,
         // Ollama server-level knobs (read-only here; set in the node profile
-        // env and applied on redeploy). max_loaded_models must be >= 2 to keep
-        // both the chat and embed models resident and avoid reload thrash.
+        // env and applied on redeploy). Concurrency and model residency remain
+        // auto-managed when their overrides are unset.
         "server": {
             "max_loaded_models": std::env::var("OLLAMA_MAX_LOADED_MODELS").ok(),
+            "num_parallel": std::env::var("OLLAMA_NUM_PARALLEL").ok(),
             "keep_alive": std::env::var("OLLAMA_KEEP_ALIVE").ok(),
             "kv_cache_type": std::env::var("OLLAMA_KV_CACHE_TYPE").ok(),
-            "note": "Server settings apply on redeploy. max_loaded_models >= 2 keeps chat + embed models resident (fixes the reload-induced TTFT)."
+            "note": "Server settings apply on redeploy. Unset concurrency/model limits let Ollama auto-manage live capacity; keep_alive=-1 removes idle expiry."
         },
         // Live GPU memory (MiB) so the UI can show the VRAM headroom and the
         // context/GPU-layer tradeoff dynamically. 0 = unavailable.
@@ -4217,9 +4218,6 @@ struct DbDiscoveryResult {
 
 fn unsupported_discovery_error(driver: &str) -> String {
     match driver {
-        "mysql" => {
-            "MySQL is reachable, but this image does not include a DB Explorer adapter for it yet."
-        }
         "redis" => "Redis is reachable, but DB Explorer does not support Redis connections yet.",
         "qdrant" => "Qdrant is reachable, but it is managed outside DB Explorer.",
         "ollama" => {

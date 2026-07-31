@@ -1016,17 +1016,45 @@ impl Tool for BrowserTool {
     }
 
     fn parameters_schema(&self) -> Value {
+        let mut actions = vec![
+            "open",
+            "snapshot",
+            "click",
+            "fill",
+            "type",
+            "get_text",
+            "get_title",
+            "get_url",
+            "screenshot",
+            "wait",
+            "press",
+            "hover",
+            "scroll",
+            "is_visible",
+            "close",
+            "find",
+        ];
+        if matches!(
+            self.configured_backend(),
+            Ok(BrowserBackendKind::ComputerUse)
+        ) {
+            actions.extend([
+                "mouse_move",
+                "mouse_click",
+                "mouse_drag",
+                "key_type",
+                "key_press",
+                "screen_capture",
+            ]);
+        }
+
         json!({
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["open", "snapshot", "click", "fill", "type", "get_text",
-                             "get_title", "get_url", "screenshot", "wait", "press",
-                             "hover", "scroll", "is_visible", "close", "find",
-                             "mouse_move", "mouse_click", "mouse_drag", "key_type",
-                             "key_press", "screen_capture"],
-                    "description": "Browser action to perform (OS-level actions require backend=computer_use)"
+                    "enum": actions,
+                    "description": "Browser action supported by the configured backend"
                 },
                 "url": {
                     "type": "string",
@@ -2653,6 +2681,64 @@ mod tests {
             tool.configured_backend().unwrap(),
             BrowserBackendKind::ComputerUse
         );
+    }
+
+    #[test]
+    fn rust_native_schema_only_advertises_dom_actions() {
+        let tool = BrowserTool::new_with_backend(
+            Arc::new(SecurityPolicy::default()),
+            vec!["example.com".into()],
+            None,
+            "rust_native".into(),
+            true,
+            "http://127.0.0.1:9515".into(),
+            None,
+            ComputerUseConfig::default(),
+        );
+        let schema = tool.parameters_schema();
+        let actions = schema["properties"]["action"]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+
+        assert!(actions.contains(&"open"));
+        assert!(actions.contains(&"find"));
+        assert!(!actions.contains(&"mouse_move"));
+        assert!(!actions.contains(&"screen_capture"));
+    }
+
+    #[test]
+    fn computer_use_schema_advertises_os_actions() {
+        let tool = BrowserTool::new_with_backend(
+            Arc::new(SecurityPolicy::default()),
+            vec!["example.com".into()],
+            None,
+            "computer_use".into(),
+            true,
+            "http://127.0.0.1:9515".into(),
+            None,
+            ComputerUseConfig::default(),
+        );
+        let schema = tool.parameters_schema();
+        let actions = schema["properties"]["action"]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+
+        for action in [
+            "mouse_move",
+            "mouse_click",
+            "mouse_drag",
+            "key_type",
+            "key_press",
+            "screen_capture",
+        ] {
+            assert!(actions.contains(&action));
+        }
     }
 
     #[test]

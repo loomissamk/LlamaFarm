@@ -51,7 +51,7 @@ request elevated privileges.
 | Action | Purpose | Required fields |
 |---|---|---|
 | `health` | Check service and capability state | none |
-| `exec` | Bounded foreground host command | `command`, absolute `cwd` |
+| `exec` | Foreground host command; unlimited by default | `command`, absolute `cwd` |
 | `spawn` | Durable background host command | `command`, absolute `cwd` |
 | `status` | Read a durable job's state and output tails | `job_id` |
 | `redeploy` | Run the configured checkout's health-gated bundle rebuild | none |
@@ -60,6 +60,7 @@ Examples:
 
 ```json
 {"action":"exec","command":"docker ps","cwd":"/home/operator"}
+{"action":"exec","command":"make test","cwd":"/home/operator/project","timeout_secs":900}
 {"action":"spawn","command":"systemctl --user restart example.service","cwd":"/home/operator"}
 {"action":"status","job_id":"<id returned by spawn>"}
 {"action":"redeploy"}
@@ -84,7 +85,12 @@ the job.
   approval, and action-rate policy as `shell`. Full autonomy does not create an
   interactive approval dependency, but hard denials still apply.
 - Requests are size-bounded, identifiers reject traversal, foreground
-  execution is time-bounded, and job output returned to the model is capped.
+  execution can use an operator-selected positive deadline, and job output
+  returned to the model is capped. A missing or zero `timeout_secs` never
+  imposes a wall-clock deadline.
+- When this runner is enabled, the `service_control` tool sends its
+  `systemctl`, `service`, and `journalctl` commands through the runner so they
+  target the host. Without the runner it retains its direct-runtime behavior.
 - `~/.local/state/llamafarm/host-runner/audit.jsonl` records timestamps,
   operations, outcomes, job ids, and SHA-256 command digests. It does not store
   command text or command output.

@@ -21,6 +21,8 @@ use std::process::Stdio;
 #[cfg(unix)]
 use std::sync::Arc;
 #[cfg(unix)]
+use crate::tools::process_group::{self, ProcessGroupGuard};
+#[cfg(unix)]
 use tokio::fs::{self, OpenOptions};
 #[cfg(unix)]
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader};
@@ -34,8 +36,10 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 
 pub const HOST_RUNNER_PROTOCOL_VERSION: u8 = 1;
-pub const DEFAULT_EXEC_TIMEOUT_SECS: u64 = 60;
-pub const DEFAULT_MAX_EXEC_TIMEOUT_SECS: u64 = 300;
+/// Zero means foreground host execution has no wall-clock deadline.
+pub const DEFAULT_EXEC_TIMEOUT_SECS: u64 = 0;
+/// Zero means the client/server do not impose a maximum opt-in deadline.
+pub const DEFAULT_MAX_EXEC_TIMEOUT_SECS: u64 = 0;
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_COMMAND_BYTES: usize = 32 * 1024;
@@ -67,7 +71,7 @@ impl HostRunnerRequest {
 pub enum HostRunnerOperation {
     /// Check whether the user service is reachable.
     Health,
-    /// Run a command and wait for its bounded output.
+    /// Run a command and wait for its capped output.
     Exec {
         command: String,
         #[serde(default)]
@@ -219,10 +223,6 @@ impl HostRunnerServerConfig {
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(DEFAULT_MAX_EXEC_TIMEOUT_SECS);
 
-        if max_exec_timeout_secs == 0 {
-            bail!("LLAMAFARM_HOST_RUNNER_MAX_TIMEOUT_SECS must be greater than zero");
-        }
-
         Ok(Self {
             home_dir: home,
             socket_path,
@@ -270,8 +270,8 @@ fn validate_request(request: &HostRunnerRequest, max_timeout_secs: u64) -> Resul
             validate_command(command)?;
             validate_cwd(cwd.as_deref())?;
             if let Some(seconds) = timeout_secs {
-                if *seconds == 0 || *seconds > max_timeout_secs {
-                    bail!("timeout_secs must be between 1 and {max_timeout_secs}");
+                if *seconds > 0 && max_timeout_secs > 0 && *seconds > max_timeout_secs {
+                    bail!("timeout_secs must be 0 (unlimited) or at most {max_timeout_secs}");
                 }
             }
         }
@@ -556,7 +556,30 @@ async fn handle_connection(stream: UnixStream, context: ServerContext) -> Result
 
     let parsed = serde_json::from_slice::<HostRunnerRequest>(&wire);
     let response = match parsed {
-        Ok(request) => dispatch_request(request, &context).await,
+        Ok(request) => {
+            let request_id = request.request_id.clone();
+            let mut operation = std::pin::pin!(dispatch_request(request, &context));
+            let mut unexpected = [0_u8; 1];
+            tokio::select! {
+                response = &mut operation => response,
+                peer = reader.read(&mut unexpected) => {
+                    match peer {
+                        // The foreground operation belongs to this request.
+                        // Dropping its future on peer disconnect arms the same
+                        // cancellation semantics as dropping a local tool
+                        // future, including process-group cleanup in run_exec.
+                        Ok(0) => return Ok(()),
+                        Ok(_) => HostRunnerResponse::failure(
+                            request_id,
+                            "unexpected data after host-runner request",
+                        ),
+                        Err(error) => return Err(error).context(
+                            "monitor host-runner client connection",
+                        ),
+                    }
+                }
+            }
+        }
         Err(error) => {
             HostRunnerResponse::failure("invalid", format!("invalid request JSON: {error}"))
         }
@@ -771,22 +794,35 @@ async fn run_exec(command: &str, cwd: &Path, timeout_secs: u64) -> Result<HostRu
         .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
+        .stderr(Stdio::piped());
+    process_group::configure(&mut process);
     let mut child = process.spawn().context("spawn host command")?;
+    let pid = child
+        .id()
+        .context("spawned host command did not expose a process ID")?;
+    let mut process_group = ProcessGroupGuard::new(pid);
     let stdout = child.stdout.take().context("capture host command stdout")?;
     let stderr = child.stderr.take().context("capture host command stderr")?;
     let stdout_task = tokio::spawn(capture_output(stdout, MAX_CAPTURE_BYTES));
     let stderr_task = tokio::spawn(capture_output(stderr, MAX_CAPTURE_BYTES));
 
-    let (status, timed_out) = match timeout(Duration::from_secs(timeout_secs), child.wait()).await {
-        Ok(waited) => (Some(waited.context("wait for host command")?), false),
-        Err(_) => {
-            child.kill().await.context("kill timed-out host command")?;
-            let waited = child.wait().await.context("reap timed-out host command")?;
-            (Some(waited), true)
+    let (status, timed_out) = if timeout_secs == 0 {
+        (
+            Some(child.wait().await.context("wait for host command")?),
+            false,
+        )
+    } else {
+        match timeout(Duration::from_secs(timeout_secs), child.wait()).await {
+            Ok(waited) => (Some(waited.context("wait for host command")?), false),
+            Err(_) => {
+                let _ = process_group.terminate();
+                let _ = child.start_kill();
+                let waited = child.wait().await.context("reap timed-out host command")?;
+                (Some(waited), true)
+            }
         }
     };
+    process_group.disarm();
     let stdout = join_capture(stdout_task).await;
     let stderr = join_capture(stderr_task).await;
 
@@ -1028,10 +1064,25 @@ pub async fn send_request(
     request: &HostRunnerRequest,
     request_timeout: Duration,
 ) -> Result<HostRunnerResponse> {
+    send_request_with_timeouts(socket_path, request, request_timeout, Some(request_timeout)).await
+}
+
+/// Send one protocol request with separate connection and response deadlines.
+///
+/// Long-running foreground execution uses `None` for `response_timeout`; the
+/// connection phase remains bounded so an unavailable runner still fails
+/// promptly.
+#[cfg(unix)]
+pub async fn send_request_with_timeouts(
+    socket_path: &Path,
+    request: &HostRunnerRequest,
+    connect_timeout: Duration,
+    response_timeout: Option<Duration>,
+) -> Result<HostRunnerResponse> {
     if !socket_path.is_absolute() {
         bail!("host-runner socket path must be absolute");
     }
-    let mut stream = timeout(request_timeout, UnixStream::connect(socket_path))
+    let mut stream = timeout(connect_timeout, UnixStream::connect(socket_path))
         .await
         .context("timed out connecting to host runner")?
         .with_context(|| format!("connect to host runner at {}", socket_path.display()))?;
@@ -1044,16 +1095,15 @@ pub async fn send_request(
         .write_all(&encoded)
         .await
         .context("write host-runner request")?;
-    stream
-        .shutdown()
-        .await
-        .context("finish host-runner request")?;
 
     let mut reader = BufReader::new(stream.take((MAX_RESPONSE_BYTES + 1) as u64));
     let mut wire = Vec::new();
-    let read_result = timeout(request_timeout, reader.read_until(b'\n', &mut wire))
-        .await
-        .context("timed out waiting for host-runner response")??;
+    let read_result = match response_timeout {
+        Some(response_timeout) => timeout(response_timeout, reader.read_until(b'\n', &mut wire))
+            .await
+            .context("timed out waiting for host-runner response")??,
+        None => reader.read_until(b'\n', &mut wire).await?,
+    };
     if read_result == 0 {
         bail!("host runner closed the socket without a response");
     }
@@ -1079,6 +1129,16 @@ pub async fn send_request(
     _socket_path: &Path,
     _request: &HostRunnerRequest,
     _request_timeout: Duration,
+) -> Result<HostRunnerResponse> {
+    bail!("the host runner requires Unix-domain socket support")
+}
+
+#[cfg(not(unix))]
+pub async fn send_request_with_timeouts(
+    _socket_path: &Path,
+    _request: &HostRunnerRequest,
+    _connect_timeout: Duration,
+    _response_timeout: Option<Duration>,
 ) -> Result<HostRunnerResponse> {
     bail!("the host runner requires Unix-domain socket support")
 }
@@ -1136,7 +1196,22 @@ mod tests {
         };
 
         let error = validate_request(&request, 300).unwrap_err().to_string();
-        assert!(error.contains("between 1 and 300"));
+        assert!(error.contains("0 (unlimited) or at most 300"));
+    }
+
+    #[test]
+    fn validation_accepts_zero_as_unlimited_timeout() {
+        let request = HostRunnerRequest {
+            protocol_version: HOST_RUNNER_PROTOCOL_VERSION,
+            request_id: "request-123".to_string(),
+            operation: HostRunnerOperation::Exec {
+                command: "true".to_string(),
+                cwd: None,
+                timeout_secs: Some(0),
+            },
+        };
+
+        assert!(validate_request(&request, 0).is_ok());
     }
 
     #[test]
@@ -1163,6 +1238,81 @@ mod tests {
         let digest = operation.command_digest().unwrap();
         assert_eq!(digest.len(), 64);
         assert!(!digest.contains("sensitive-value"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn foreground_exec_zero_timeout_waits_for_completion() {
+        let temp = tempfile::tempdir().unwrap();
+        let result = timeout(
+            Duration::from_secs(2),
+            run_exec("sleep 0.05; printf complete", temp.path(), 0),
+        )
+        .await
+        .expect("unlimited foreground exec should complete")
+        .expect("foreground exec should succeed");
+
+        assert!(matches!(
+            result,
+            HostRunnerResult::Exec {
+                exit_code: Some(0),
+                ref stdout,
+                timed_out: false,
+                ..
+            } if stdout == "complete"
+        ));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn disconnect_cancels_unlimited_exec_and_its_descendants() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket_path = temp.path().join("run/host-runner.sock");
+        let state_dir = temp.path().join("state");
+        let server = tokio::spawn(serve(HostRunnerServerConfig {
+            home_dir: temp.path().to_path_buf(),
+            socket_path: socket_path.clone(),
+            state_dir,
+            repo_dir: None,
+            allow_exec: true,
+            max_exec_timeout_secs: 0,
+        }));
+        wait_for_service(&socket_path).await;
+
+        let request = HostRunnerRequest::new(HostRunnerOperation::Exec {
+            command: "touch started; (sleep 1; touch descendant-survived) & wait".to_string(),
+            cwd: Some(temp.path().to_path_buf()),
+            timeout_secs: Some(0),
+        });
+        let request_socket = socket_path.clone();
+        let client = tokio::spawn(async move {
+            send_request_with_timeouts(
+                &request_socket,
+                &request,
+                Duration::from_secs(2),
+                None,
+            )
+            .await
+        });
+        timeout(Duration::from_secs(2), async {
+            while !temp.path().join("started").exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("unlimited host command should start");
+
+        client.abort();
+        let join_error = client
+            .await
+            .expect_err("aborting the client should drop its host-runner socket");
+        assert!(join_error.is_cancelled());
+        tokio::time::sleep(Duration::from_millis(1_100)).await;
+        assert!(
+            !temp.path().join("descendant-survived").exists(),
+            "disconnect must terminate the entire unlimited host process group"
+        );
+        server.abort();
     }
 
     #[cfg(unix)]
@@ -1228,6 +1378,25 @@ mod tests {
             })
         ));
 
+        let exec_request = HostRunnerRequest::new(HostRunnerOperation::Exec {
+            command: "sleep 0.05; printf foreground-output".to_string(),
+            cwd: Some(temp.path().to_path_buf()),
+            timeout_secs: Some(0),
+        });
+        let exec =
+            send_request_with_timeouts(&socket_path, &exec_request, Duration::from_secs(2), None)
+                .await
+                .unwrap();
+        assert!(matches!(
+            exec.result,
+            Some(HostRunnerResult::Exec {
+                exit_code: Some(0),
+                ref stdout,
+                timed_out: false,
+                ..
+            }) if stdout == "foreground-output"
+        ));
+
         let spawn_request = HostRunnerRequest::new(HostRunnerOperation::Spawn {
             command: "printf 'durable-output\\n'".to_string(),
             cwd: Some(temp.path().to_path_buf()),
@@ -1266,6 +1435,7 @@ mod tests {
             .await
             .unwrap();
         assert!(audit.contains("\"operation\":\"health\""));
+        assert!(audit.contains("\"operation\":\"exec\""));
         assert!(audit.contains("\"operation\":\"spawn\""));
         assert!(!audit.contains("durable-output"));
 

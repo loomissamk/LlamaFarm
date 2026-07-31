@@ -13,6 +13,7 @@ DEFAULT_PULL_MODELS=""
 
 OLLAMA_PID=""
 CHROMEDRIVER_PID=""
+XVFB_PID=""
 APP_PID=""
 PULL_PID=""
 STOCK_APP_PID=""
@@ -67,6 +68,14 @@ ensure_runtime_layout() {
   fi
 
   ensure_bundle_config_defaults
+}
+
+ensure_x11_socket_dir() {
+  mkdir -p /tmp/.X11-unix
+  if ! chmod 1777 /tmp/.X11-unix 2>/dev/null && [ ! -w /tmp/.X11-unix ]; then
+    echo "cannot prepare writable X11 socket directory" >&2
+    return 1
+  fi
 }
 
 ensure_bundle_config_defaults() {
@@ -268,8 +277,61 @@ start_chromedriver() {
   CHROMEDRIVER_PID=$!
 }
 
+start_virtual_display() {
+  local display="${DISPLAY:-:99}"
+  local screen="${LLAMAFARM_XVFB_SCREEN:-1920x1080x24}"
+  local probe="/tmp/.llamafarm-xvfb-ready.png"
+  local display_number=""
+
+  rm -f "$probe"
+  if DISPLAY="$display" scrot "$probe" >/dev/null 2>&1 && [ -s "$probe" ]; then
+    rm -f "$probe"
+    echo "reusing ready display on $display"
+    return 0
+  fi
+  rm -f "$probe"
+
+  case "$display" in
+    :[0-9]*)
+      display_number="${display#:}"
+      display_number="${display_number%%.*}"
+      ;;
+    *)
+      echo "bundle Xvfb requires a local DISPLAY such as :99, got: $display" >&2
+      return 1
+      ;;
+  esac
+  case "$display_number" in
+    ''|*[!0-9]*)
+      echo "invalid Xvfb display number: $display" >&2
+      return 1
+      ;;
+  esac
+  rm -f "/tmp/.X${display_number}-lock" "/tmp/.X11-unix/X${display_number}"
+
+  /usr/bin/Xvfb "$display" -screen 0 "$screen" -nolisten tcp \
+    >/tmp/xvfb.log 2>&1 &
+  XVFB_PID=$!
+
+  for _ in $(seq 1 50); do
+    if DISPLAY="$display" scrot "$probe" >/dev/null 2>&1 && [ -s "$probe" ]; then
+      rm -f "$probe"
+      echo "virtual display ready on $display ($screen)"
+      return 0
+    fi
+    if ! kill -0 "$XVFB_PID" >/dev/null 2>&1; then
+      echo "Xvfb exited before screenshot readiness; see /tmp/xvfb.log" >&2
+      return 1
+    fi
+    sleep 0.1
+  done
+
+  echo "virtual display did not pass screenshot readiness on $display" >&2
+  return 1
+}
+
 cleanup() {
-  for pid in "$APP_PID" "$STOCK_APP_PID" "$CHROMEDRIVER_PID" "$OLLAMA_PID" "$PULL_PID"; do
+  for pid in "$APP_PID" "$STOCK_APP_PID" "$CHROMEDRIVER_PID" "$XVFB_PID" "$OLLAMA_PID" "$PULL_PID"; do
     if [ -n "$pid" ] && kill -0 "$pid" >/dev/null 2>&1; then
       kill "$pid" >/dev/null 2>&1 || true
       wait "$pid" >/dev/null 2>&1 || true
@@ -289,6 +351,11 @@ monitor_children() {
 
     if ! kill -0 "$CHROMEDRIVER_PID" >/dev/null 2>&1; then
       echo "chromedriver exited unexpectedly" >&2
+      return 1
+    fi
+
+    if [ -n "$XVFB_PID" ] && ! kill -0 "$XVFB_PID" >/dev/null 2>&1; then
+      echo "Xvfb exited unexpectedly" >&2
       return 1
     fi
 
@@ -342,6 +409,7 @@ if [ "$(id -u)" = "0" ]; then
   if [ "$target_uid" != "0" ] || [ "$target_gid" != "0" ]; then
     ensure_runtime_identity "$target_uid" "$target_gid"
     ensure_runtime_layout
+    ensure_x11_socket_dir
     chown -R "$target_uid:$target_gid" "$DATA_DIR"
     drop_args=(--reuid="$target_uid" --regid="$target_gid")
     if [ -n "${LLAMAFARM_SUPP_GROUPS:-}" ]; then
@@ -354,6 +422,8 @@ if [ "$(id -u)" = "0" ]; then
 fi
 
 ensure_runtime_layout
+ensure_x11_socket_dir
+start_virtual_display
 start_ollama
 wait_for_http "ollama" "$OLLAMA_HTTP_URL/api/tags"
 repair_config_for_available_models

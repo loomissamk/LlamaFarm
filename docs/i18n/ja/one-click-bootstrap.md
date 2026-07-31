@@ -32,6 +32,13 @@
 - コマンド名、設定キー、API パス、コード識別子は英語のまま保持します。
 - 仕様解釈に差分が出る場合は英語版原文を優先します。
 
+## バンドル版ランタイムの更新
+
+`./scripts/docker/up-bundle.sh` は `rag-pdf` 対応の PDF リーダーをビルドし、
+Xvfb 仮想ディスプレイを起動して実際の PNG キャプチャで準備状態を確認します。
+status/federation API には起動スクリプトが渡したソース commit と UTC ビルド時刻も
+表示されます。モデルは `OLLAMA_PULL_MODELS` に明示した場合だけ取得されます。
+
 ## 関連エントリ
 
 - [README.md](README.md)

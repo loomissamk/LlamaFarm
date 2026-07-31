@@ -32,6 +32,14 @@ Source anglaise:
 - Les noms de commandes, clés de configuration, chemins API et identifiants de code restent en anglais.
 - En cas d'ambiguïté d'interprétation, la source anglaise fait foi.
 
+## Mise à jour du runtime groupé
+
+`./scripts/docker/up-bundle.sh` compile le lecteur PDF avec `rag-pdf`, démarre
+un affichage virtuel Xvfb et vérifie son état par une vraie capture PNG. Les API
+status et federation indiquent aussi le commit source et l'heure UTC de build
+transmis par le launcher. Les modèles ne sont téléchargés que s'ils sont
+énumérés explicitement dans `OLLAMA_PULL_MODELS`.
+
 ## Entrées liées
 
 - [README.md](README.md)

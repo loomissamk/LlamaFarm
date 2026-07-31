@@ -44,6 +44,7 @@ fn passwordless_uri(driver: &str, host: &str, port: u16) -> Option<String> {
     };
     match driver {
         "postgres" => Some(format!("postgresql://postgres@{authority}/postgres")),
+        "mysql" => Some(format!("mysql://root@{authority}/mysql")),
         "mongodb" => Some(format!("mongodb://{authority}")),
         _ => None,
     }
@@ -52,6 +53,7 @@ fn passwordless_uri(driver: &str, host: &str, port: u16) -> Option<String> {
 fn config_driver(driver: &str) -> Option<DbDriver> {
     match driver {
         "postgres" => Some(DbDriver::Postgres),
+        "mysql" => Some(DbDriver::Mysql),
         "mongodb" => Some(DbDriver::Mongodb),
         _ => None,
     }
@@ -474,6 +476,28 @@ mod tests {
         assert_eq!(
             connections[0].name,
             "discovered-mongodb-192-168-1-154-27017"
+        );
+        assert!(connections[0].read_only);
+    }
+
+    #[test]
+    fn reconciliation_adds_mysql_candidate_for_connection_setup() {
+        let mut connections = Vec::new();
+        let reconciled = reconcile_connections(
+            vec![DiscoveredDb {
+                host: "10.23.45.67".to_string(),
+                port: 3306,
+                driver: "mysql".to_string(),
+            }],
+            &mut connections,
+        );
+
+        assert!(reconciled[0].newly_added);
+        assert_eq!(connections.len(), 1);
+        assert_eq!(connections[0].driver, DbDriver::Mysql);
+        assert_eq!(
+            connections[0].uri,
+            "mysql://root@10.23.45.67:3306/mysql"
         );
         assert!(connections[0].read_only);
     }

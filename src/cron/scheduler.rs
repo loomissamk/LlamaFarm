@@ -4,30 +4,27 @@ use crate::channels::{
 };
 use crate::config::Config;
 use crate::cron::{
-    CronJob, CronJobPatch, DeliveryConfig, JobType, Schedule, SessionTarget, due_jobs,
-    next_run_for_schedule, record_last_run, record_run, remove_job, reschedule_after_run,
-    update_job,
+    due_jobs, next_run_for_schedule, record_last_run, record_run, remove_job, reschedule_after_run,
+    update_job, CronJob, CronJobPatch, DeliveryConfig, JobType, Schedule, SessionTarget,
 };
 use crate::security::SecurityPolicy;
+use crate::tools::command_runner::{run_capped_command, CommandExecution};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use futures_util::{StreamExt, stream};
+#[cfg(test)]
+use futures_util::{stream, StreamExt};
+use std::collections::HashSet;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::process::Command;
+use tokio::sync::Mutex;
 use tokio::time::{self, Duration};
 
 const MIN_POLL_SECONDS: u64 = 5;
-/// Production ceiling for a shell-type cron job's real run time. Was 120s
-/// with a hard SIGKILL and no per-job override -- too tight for real
-/// automation (e.g. a model-retrain subprocess a job might legitimately
-/// kick off). Raised to a week: effectively unbounded for any real job,
-/// while still guaranteeing a genuinely wedged process eventually gets
-/// reaped rather than holding a concurrency slot forever. The timeout
-/// mechanism itself stays (see `run_job_command_with_timeout`, exercised
-/// directly with a short duration in tests) -- only the production default
-/// changed.
-const SHELL_JOB_TIMEOUT_SECS: u64 = 604_800;
+/// Default shell cron-job deadline. Zero means unlimited; the timeout helper
+/// remains available for explicit bounded execution and focused tests.
+const SHELL_JOB_TIMEOUT_SECS: u64 = 0;
+const SHELL_JOB_MAX_OUTPUT_BYTES: usize = 1_048_576;
 const SCHEDULER_COMPONENT: &str = "scheduler";
 
 pub async fn run(config: Config) -> Result<()> {
@@ -38,6 +35,7 @@ pub async fn run(config: Config) -> Result<()> {
         &config.autonomy,
         &config.workspace_dir,
     ));
+    let in_flight = Arc::new(Mutex::new(HashSet::new()));
 
     crate::health::mark_component_ok(SCHEDULER_COMPONENT);
 
@@ -55,7 +53,14 @@ pub async fn run(config: Config) -> Result<()> {
             }
         };
 
-        process_due_jobs(&config, &security, jobs, SCHEDULER_COMPONENT).await;
+        launch_due_jobs(
+            &config,
+            &security,
+            &in_flight,
+            jobs,
+            SCHEDULER_COMPONENT,
+        )
+        .await;
     }
 }
 
@@ -99,6 +104,72 @@ async fn execute_job_with_retry(
     (false, last_output)
 }
 
+fn reserve_due_jobs(
+    jobs: Vec<CronJob>,
+    in_flight: &mut HashSet<String>,
+    max_per_poll: usize,
+) -> Vec<CronJob> {
+    let mut reserved = Vec::new();
+    for job in jobs {
+        if reserved.len() >= max_per_poll {
+            break;
+        }
+        if in_flight.insert(job.id.clone()) {
+            reserved.push(job);
+        }
+    }
+    reserved
+}
+
+fn available_scheduler_slots(max_concurrent: usize, active_count: usize) -> usize {
+    if max_concurrent == 0 {
+        usize::MAX
+    } else {
+        max_concurrent.saturating_sub(active_count)
+    }
+}
+
+async fn launch_due_jobs(
+    config: &Config,
+    security: &Arc<SecurityPolicy>,
+    in_flight: &Arc<Mutex<HashSet<String>>>,
+    jobs: Vec<CronJob>,
+    component: &str,
+) {
+    crate::health::mark_component_ok(component);
+    let jobs = {
+        let mut active = in_flight.lock().await;
+        let available =
+            available_scheduler_slots(config.scheduler.max_concurrent, active.len());
+        reserve_due_jobs(jobs, &mut active, available)
+    };
+
+    for job in jobs {
+        let config = config.clone();
+        let security = Arc::clone(security);
+        let component = component.to_owned();
+        let active = Arc::clone(in_flight);
+        tokio::spawn(async move {
+            let job_id = job.id.clone();
+            let execution = tokio::spawn(async move {
+                execute_and_persist_job(&config, security.as_ref(), &job, &component).await
+            })
+            .await;
+            active.lock().await.remove(&job_id);
+            match execution {
+                Ok((_, true, _)) => {}
+                Ok((_, false, output)) => {
+                    tracing::warn!("Scheduler job '{job_id}' failed: {output}");
+                }
+                Err(error) => {
+                    tracing::warn!("Scheduler job '{job_id}' panicked or was cancelled: {error}");
+                }
+            }
+        });
+    }
+}
+
+#[cfg(test)]
 async fn process_due_jobs(
     config: &Config,
     security: &Arc<SecurityPolicy>,
@@ -108,7 +179,7 @@ async fn process_due_jobs(
     // Refresh scheduler health on every successful poll cycle, including idle cycles.
     crate::health::mark_component_ok(component);
 
-    let max_concurrent = config.scheduler.max_concurrent.max(1);
+    let max_concurrent = available_scheduler_slots(config.scheduler.max_concurrent, 0);
     let mut in_flight =
         stream::iter(
             jobs.into_iter().map(|job| {
@@ -488,24 +559,24 @@ async fn run_job_command_with_timeout(
         );
     }
 
-    let child = match Command::new("sh")
+    let mut command = Command::new("sh");
+    command
         .arg("-lc")
         .arg(&effective_command)
         .current_dir(&config.workspace_dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(e) => return (false, format!("spawn error: {e}")),
-    };
+        .stdin(Stdio::null());
+    let deadline = (!timeout.is_zero()).then_some(timeout);
 
-    match time::timeout(timeout, child.wait_with_output()).await {
-        Ok(Ok(output)) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
+    match run_capped_command(command, SHELL_JOB_MAX_OUTPUT_BYTES, deadline).await {
+        Ok(CommandExecution::Completed(output)) => {
+            let mut stdout = String::from_utf8_lossy(&output.stdout.bytes).into_owned();
+            let mut stderr = String::from_utf8_lossy(&output.stderr.bytes).into_owned();
+            if output.stdout.truncated {
+                stdout.push_str("\n[stdout truncated at 1 MiB]");
+            }
+            if output.stderr.truncated {
+                stderr.push_str("\n[stderr truncated at 1 MiB]");
+            }
             let combined = format!(
                 "status={}\nstdout:\n{}\nstderr:\n{}",
                 output.status,
@@ -514,11 +585,11 @@ async fn run_job_command_with_timeout(
             );
             (output.status.success(), combined)
         }
-        Ok(Err(e)) => (false, format!("spawn error: {e}")),
-        Err(_) => (
+        Ok(CommandExecution::TimedOut) => (
             false,
             format!("job timed out after {}s", timeout.as_secs_f64()),
         ),
+        Err(error) => (false, format!("spawn error: {error}")),
     }
 }
 
@@ -600,6 +671,65 @@ mod tests {
 
     fn unique_component(prefix: &str) -> String {
         format!("{prefix}-{}", uuid::Uuid::new_v4())
+    }
+
+    #[test]
+    fn shell_job_timeout_defaults_to_unlimited() {
+        assert_eq!(SHELL_JOB_TIMEOUT_SECS, 0);
+    }
+
+    #[test]
+    fn zero_concurrency_limit_leaves_all_slots_available() {
+        assert_eq!(available_scheduler_slots(0, 0), usize::MAX);
+        assert_eq!(available_scheduler_slots(0, 128), usize::MAX);
+    }
+
+    #[test]
+    fn positive_concurrency_limit_counts_all_active_jobs() {
+        assert_eq!(available_scheduler_slots(4, 0), 4);
+        assert_eq!(available_scheduler_slots(4, 3), 1);
+        assert_eq!(available_scheduler_slots(4, 4), 0);
+        assert_eq!(available_scheduler_slots(4, 9), 0);
+    }
+
+    #[test]
+    fn unlimited_scheduler_reserves_every_non_active_due_job() {
+        let mut active = HashSet::from(["long-running".to_string()]);
+        let mut long = test_job("sleep 3600");
+        long.id = "long-running".to_string();
+        let mut later_a = test_job("true");
+        later_a.id = "later-a".to_string();
+        let mut later_b = test_job("true");
+        later_b.id = "later-b".to_string();
+
+        let available = available_scheduler_slots(0, active.len());
+        let reserved =
+            reserve_due_jobs(vec![long, later_a, later_b], &mut active, available);
+
+        assert_eq!(
+            reserved
+                .iter()
+                .map(|job| job.id.as_str())
+                .collect::<Vec<_>>(),
+            ["later-a", "later-b"]
+        );
+    }
+
+    #[tokio::test]
+    async fn zero_timeout_waits_for_shell_job_completion() {
+        let tmp = TempDir::new().unwrap();
+        let mut config = test_config(&tmp).await;
+        config.autonomy.allowed_commands = vec!["sleep".into()];
+        let job = test_job("sleep 0.05");
+        let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
+
+        let (success, output) = tokio::time::timeout(
+            Duration::from_secs(2),
+            run_job_command_with_timeout(&config, &security, &job, Duration::ZERO),
+        )
+        .await
+        .expect("unlimited shell job should finish");
+        assert!(success, "{output}");
     }
 
     #[tokio::test]

@@ -4,16 +4,19 @@ These profiles turn the three NVIDIA hosts into an asymmetric local agent cluste
 
 | Node | Role | Inference profile |
 | --- | --- | --- |
-| Windows WSL2 RTX 3050 Ti Laptop, 4 GB + 64 GB RAM | additional worker | adaptive 32K → 128K → 256K, one stream |
-| RTX 4070 Laptop, 8 GB + 32 GB RAM | fast IDE / fallback worker | adaptive 32K → 128K → 256K, one stream |
-| RTX 5070 Ti, 16 GB + 123 GB RAM | coordinator / RAG / quality worker | adaptive 64K → 128K → 256K, one stream |
+| Windows WSL2 RTX 3050 Ti Laptop, 4 GB + 64 GB RAM | additional worker | adaptive 32K → 128K → 256K, Ollama-managed concurrency |
+| RTX 4070 Laptop, 8 GB + 32 GB RAM | fast IDE / fallback worker | adaptive 32K → 128K → 256K, Ollama-managed concurrency |
+| RTX 5070 Ti, 16 GB + 128 GB installed RAM (~123 GiB usable) | coordinator / RAG / quality worker | adaptive 64K → 128K → 256K, Ollama-managed concurrency |
 
 The profiles do not allocate 262K for every turn. They keep a 32K or 64K fast
 lane, then grow an individual request to 128K or 256K when the actual prompt
 needs the larger tier. No profile caps generated tokens, tool iterations,
-research iterations, delegate iterations, CPU, RAM, swap, PIDs, or GPU access.
-All three keep one inference stream so a single request can use the complete
-node resource envelope.
+research iterations, delegate iterations, scheduled-job concurrency, CPU, RAM,
+swap, PIDs, or GPU access.
+The profiles do not override Ollama's parallel-request, loaded-model, or GPU
+overhead heuristics; Ollama admits work from the resources it actually sees.
+Loaded models have no idle expiry and remain hot until Ollama needs their
+memory for another model or the operator unloads them.
 
 ## Bring-up
 
@@ -95,15 +98,14 @@ context length is always an additional ceiling. A persisted
 `provider.ollama_num_ctx` remains an exact manual override and disables adaptive
 selection until reset to auto.
 
-Every node profile also retains up to 512 raw history messages and avoids the
-compact bootstrap mode. This lets the provider see the real long request
-before choosing a tier. If a response reports pressure at 32K, 64K, or 128K,
-LlamaFarm retries once at the next tier; at the native/operator ceiling it
-returns an explicit error instead of accepting a possibly truncated automatic
-response.
-
-Keep `OLLAMA_NUM_PARALLEL=1`: Ollama reserves context/KV capacity per parallel
-request, so concurrency multiplies the allocation.
+Every node profile sets the message-count history budget to `0` (unlimited) and
+avoids the compact bootstrap mode. Raw evidence is therefore retained until an
+actual provider context-pressure response requires context-aware compaction,
+instead of disappearing at an arbitrary message count. This lets the provider
+see the real long request before choosing a tier. If a response reports
+pressure at 32K, 64K, or 128K, LlamaFarm retries once at the next tier; at the
+native/operator ceiling it returns an explicit error instead of accepting a
+possibly truncated automatic response.
 
 Verification path:
 
@@ -127,8 +129,9 @@ the LAN gateway. This keeps the model-serving path free and on the node's GPU.
 
 ## Durable working state
 
-When conversation history passes the configured budget, LlamaFarm now creates
-an atomic, mode-`0600` rolling checkpoint at:
+When a positive history budget is configured, or actual provider context
+pressure requires compaction, LlamaFarm creates an atomic, mode-`0600` rolling
+checkpoint at:
 
 ```text
 $LLAMAFARM_WORKSPACE/memory/WORKING_STATE.md
@@ -152,8 +155,8 @@ Use the GPUs for active decoding; system RAM is a valuable, slower second tier:
 Neither service has a Compose CPU, memory, swap, or PID ceiling. The 5070 Ti
 bundle can use the full 123 GB RAM pool and every host CPU for long context,
 RAG, and deliberate model offload; the laptop bundle likewise uses all
-available local capacity. Model concurrency remains one because simultaneous
-inference contexts would reduce throughput, not because of a container budget.
+available local capacity. Ollama manages inference concurrency from live
+capacity rather than a profile-imposed stream or loaded-model ceiling.
 
 ## NVIDIA Container Toolkit preflight
 

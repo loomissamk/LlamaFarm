@@ -4,9 +4,10 @@
 //! programs across the toolchains shipped in the bundle image (python3,
 //! node, gcc/g++, go, rustc, bash) instead of hand-rolling shell pipelines.
 //! Each run executes in a disposable directory under
-//! `<workspace>/.code_run/` with a wall-clock timeout and captured
+//! `<workspace>/.code_run/` with an optional wall-clock timeout and captured
 //! stdout/stderr/exit status.
 
+use super::process_group::{self, ProcessGroupGuard};
 use super::traits::{Tool, ToolResult};
 use crate::security::{SecurityPolicy, policy::ToolOperation};
 use async_trait::async_trait;
@@ -15,8 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-const DEFAULT_TIMEOUT_SECS: u64 = 30;
-const MAX_TIMEOUT_SECS: u64 = 300;
+const DEFAULT_TIMEOUT_SECS: u64 = 0;
 const MAX_CAPTURED_BYTES: usize = 64 * 1024;
 
 struct LanguageSpec {
@@ -110,18 +110,14 @@ fn substitute(template: &[&str], src: &Path, bin: &Path) -> Vec<String> {
 
 fn truncate_bytes(bytes: &[u8]) -> String {
     let text = String::from_utf8_lossy(bytes);
-    if text.len() <= MAX_CAPTURED_BYTES {
-        text.into_owned()
-    } else {
-        format!("{}…[truncated]", &text[..MAX_CAPTURED_BYTES])
-    }
+    crate::util::truncate_with_ellipsis(&text, MAX_CAPTURED_BYTES)
 }
 
 async fn run_command(
     argv: &[String],
     cwd: &Path,
     stdin_data: Option<&str>,
-    timeout: Duration,
+    timeout: Option<Duration>,
 ) -> anyhow::Result<(bool, String, String, Option<i32>)> {
     use tokio::io::AsyncWriteExt;
     let mut cmd = tokio::process::Command::new(&argv[0]);
@@ -131,7 +127,12 @@ async fn run_command(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
+    process_group::configure(&mut cmd);
     let mut child = cmd.spawn()?;
+    let pid = child
+        .id()
+        .ok_or_else(|| anyhow::anyhow!("spawned code process did not expose a process ID"))?;
+    let mut process_group = ProcessGroupGuard::new(pid);
     if let Some(data) = stdin_data {
         if let Some(mut stdin) = child.stdin.take() {
             let _ = stdin.write_all(data.as_bytes()).await;
@@ -139,9 +140,18 @@ async fn run_command(
     } else {
         drop(child.stdin.take());
     }
-    match tokio::time::timeout(timeout, child.wait_with_output()).await {
-        Ok(output) => {
+    let mut output = Box::pin(child.wait_with_output());
+    let result = match timeout {
+        Some(timeout) => match tokio::time::timeout(timeout, output.as_mut()).await {
+            Ok(result) => Some(result),
+            Err(_) => None,
+        },
+        None => Some(output.as_mut().await),
+    };
+    match result {
+        Some(output) => {
             let output = output?;
+            process_group.disarm();
             Ok((
                 output.status.success(),
                 truncate_bytes(&output.stdout),
@@ -149,12 +159,18 @@ async fn run_command(
                 output.status.code(),
             ))
         }
-        Err(_) => Ok((
-            false,
-            String::new(),
-            format!("timed out after {}s", timeout.as_secs()),
-            None,
-        )),
+        None => {
+            let _ = process_group.terminate();
+            Ok((
+                false,
+                String::new(),
+                format!(
+                    "timed out after {}s",
+                    timeout.map_or(0, |duration| duration.as_secs())
+                ),
+                None,
+            ))
+        }
     }
 }
 
@@ -166,7 +182,7 @@ impl Tool for CodeRunTool {
 
     fn description(&self) -> &str {
         "Write, compile, and execute a short program in a disposable \
-         directory with a timeout. Languages: python, javascript, \
+         directory with no wall-clock deadline by default. Languages: python, javascript, \
          typescript, c, cpp, go, rust, bash. Returns stdout, stderr, and \
          exit status. Prefer this over hand-written shell pipelines for \
          running code snippets; use file_write + shell for full projects."
@@ -191,7 +207,9 @@ impl Tool for CodeRunTool {
                 },
                 "timeout_secs": {
                     "type": "integer",
-                    "description": "Wall-clock limit (default 30, max 300)"
+                    "minimum": 0,
+                    "default": DEFAULT_TIMEOUT_SECS,
+                    "description": "Optional compile/run deadline in seconds; 0 means unlimited"
                 }
             },
             "required": ["language", "code"]
@@ -253,18 +271,18 @@ impl Tool for CodeRunTool {
             });
         }
 
-        let timeout = Duration::from_secs(
-            args.get("timeout_secs")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(DEFAULT_TIMEOUT_SECS)
-                .clamp(1, MAX_TIMEOUT_SECS),
-        );
+        let timeout_secs = args
+            .get("timeout_secs")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(DEFAULT_TIMEOUT_SECS);
+        let timeout = (timeout_secs > 0).then(|| Duration::from_secs(timeout_secs));
         let stdin_data = args.get("stdin").and_then(|v| v.as_str());
 
         let run_dir = self
             .scratch_root
             .join(uuid::Uuid::new_v4().to_string());
         std::fs::create_dir_all(&run_dir)?;
+        let scratch_guard = ScratchDirGuard(run_dir.clone());
         let src = run_dir.join(spec.source);
         std::fs::write(&src, code)?;
         let bin = run_dir.join("program");
@@ -273,9 +291,8 @@ impl Tool for CodeRunTool {
         if !spec.compile.is_empty() {
             let argv = substitute(spec.compile, &src, &bin);
             let (ok, out, err, code_num) =
-                run_command(&argv, &run_dir, None, Duration::from_secs(120)).await?;
+                run_command(&argv, &run_dir, None, timeout).await?;
             if !ok {
-                let _ = std::fs::remove_dir_all(&run_dir);
                 return Ok(ToolResult {
                     success: false,
                     output: out,
@@ -290,7 +307,7 @@ impl Tool for CodeRunTool {
         let argv = substitute(spec.run, &src, &bin);
         let (ok, stdout, stderr, exit_code) =
             run_command(&argv, &run_dir, stdin_data, timeout).await?;
-        let _ = std::fs::remove_dir_all(&run_dir);
+        drop(scratch_guard);
 
         let mut output = format!(
             "exit: {}\n",
@@ -307,6 +324,14 @@ impl Tool for CodeRunTool {
             output,
             error: if ok { None } else { Some("program exited non-zero".into()) },
         })
+    }
+}
+
+struct ScratchDirGuard(PathBuf);
+
+impl Drop for ScratchDirGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 
@@ -338,6 +363,33 @@ mod tests {
             .map(|d| d.count())
             .unwrap_or(0);
         assert_eq!(leftovers, 0, "scratch dir must be cleaned up");
+    }
+
+    #[tokio::test]
+    async fn zero_timeout_is_unlimited() {
+        if which::which("bash").is_err() {
+            return;
+        }
+        let (tool, _tmp) = tool();
+        let schema = tool.parameters_schema();
+        assert_eq!(schema["properties"]["timeout_secs"]["default"], 0);
+        assert!(schema["properties"]["timeout_secs"]
+            .get("maximum")
+            .is_none());
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            tool.execute(json!({
+                "language": "bash",
+                "code": "sleep 0.05; printf unlimited-code-run",
+                "timeout_secs": 0
+            })),
+        )
+        .await
+        .expect("unlimited code run should finish")
+        .unwrap();
+        assert!(result.success, "{:?}", result.error);
+        assert!(result.output.contains("unlimited-code-run"));
     }
 
     #[tokio::test]

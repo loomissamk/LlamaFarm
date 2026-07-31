@@ -88,6 +88,10 @@ fn persist_working_state_checkpoint(model: &str, summary: &str, focus: Option<&s
 /// Trim conversation history to prevent unbounded growth.
 /// Preserves the system prompt (first message if role=system) and the most recent messages.
 pub(super) fn trim_history(history: &mut Vec<ChatMessage>, max_history: usize) {
+    if max_history == 0 {
+        return;
+    }
+
     // Nothing to trim if within limit
     let has_system = history.first().map_or(false, |m| m.role == "system");
     let non_system_count = if has_system {
@@ -116,6 +120,10 @@ pub(super) fn compaction_range(
     history: &[ChatMessage],
     max_history: usize,
 ) -> Option<(usize, usize)> {
+    if max_history == 0 {
+        return None;
+    }
+
     let has_system = history.first().map_or(false, |m| m.role == "system");
     let non_system_count = if has_system {
         history.len().saturating_sub(1)

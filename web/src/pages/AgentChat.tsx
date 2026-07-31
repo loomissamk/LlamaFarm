@@ -30,7 +30,11 @@ import {
   persistFederationTasksBySession,
   type FederationTaskState,
 } from '@/lib/federationState';
-import { WebSocketClient, type SeedChatMessage } from '@/lib/ws';
+import {
+  WebSocketClient,
+  type SeedChatMessage,
+  type SendChatMessageOptions,
+} from '@/lib/ws';
 import type {
   FederationPeerSummary,
   FederationPeersResponse,
@@ -258,15 +262,18 @@ function createChatSession(temporary: boolean): ChatSession {
 }
 
 function normalizeSession(session: ChatSession): ChatSession {
-  const limitedMessages = session.messages.slice(-MAX_PERSISTED_MESSAGES);
+  // Keep the complete live transcript in memory. The browser's localStorage
+  // copy remains a bounded startup cache; the gateway is the durable source
+  // of truth and the unlimited node profile retains the full saved history.
+  const liveMessages = session.messages;
   const latestTimestamp =
-    limitedMessages[limitedMessages.length - 1]?.timestamp ?? session.updatedAt;
+    liveMessages[liveMessages.length - 1]?.timestamp ?? session.updatedAt;
 
   return {
     ...session,
-    messages: limitedMessages,
+    messages: liveMessages,
     updatedAt: latestTimestamp,
-    title: deriveSessionTitle(limitedMessages, session.temporary),
+    title: deriveSessionTitle(liveMessages, session.temporary),
   };
 }
 
@@ -793,6 +800,9 @@ export default function AgentChat() {
   );
 
   const wsRef = useRef<WebSocketClient | null>(null);
+  const runWsRefs = useRef<Record<string, WebSocketClient>>({});
+  const runWsQueuesRef = useRef<Record<string, SendChatMessageOptions[]>>({});
+  const wsMessageHandlerRef = useRef<((message: WsMessage) => void) | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const confirmDeleteCancelRef = useRef<HTMLButtonElement>(null);
@@ -801,9 +811,9 @@ export default function AgentChat() {
   const completedResponseSessionIdsRef = useRef<Set<string>>(new Set());
   const deletedSessionIdsRef = useRef<Set<string>>(new Set());
   const queuedFollowupSessionIdsRef = useRef<Set<string>>(new Set());
-  const responseStartRef = useRef<number | null>(null);
-  const streamStartRef = useRef<number | null>(null);
-  const charCountRef = useRef(0);
+  const responseStartRef = useRef<Record<string, number>>({});
+  const streamStartRef = useRef<Record<string, number>>({});
+  const charCountRef = useRef<Record<string, number>>({});
   const activeSessionIdRef = useRef(activeSessionId);
   const hasConnectedRef = useRef(false);
   const connected = connectionState === 'connected';
@@ -887,6 +897,13 @@ export default function AgentChat() {
 
         setSessions((prev) => {
           const knownIds = new Set(prev.map((s) => s.id));
+          const localById = new Map(prev.map((session) => [session.id, session]));
+          const staleIds = remote
+            .filter((summary) => {
+              const local = localById.get(summary.session_id);
+              return local !== undefined && summary.message_count > local.messages.length;
+            })
+            .map((summary) => summary.session_id);
           const additions: ChatSession[] = remote
             .filter((r) => !knownIds.has(r.session_id))
             .map((r) => ({
@@ -897,10 +914,11 @@ export default function AgentChat() {
               updatedAt: new Date(r.updated_at_unix * 1000),
               messages: [],
             }));
-          if (additions.length === 0) return prev;
+          if (additions.length === 0 && staleIds.length === 0) return prev;
           setRemoteOnlySessionIds((prevIds) => {
             const next = new Set(prevIds);
             for (const a of additions) next.add(a.id);
+            for (const sessionId of staleIds) next.add(sessionId);
             return next;
           });
           return sortSessions([...prev, ...additions]);
@@ -985,15 +1003,9 @@ export default function AgentChat() {
           ? 'Connection lost. Reconnecting automatically…'
           : 'Unable to connect yet. Retrying automatically…',
       );
-      responseStartRef.current = null;
-      streamStartRef.current = null;
-      charCountRef.current = 0;
-      pendingContentRef.current = {};
-      setTypingSessionIds([]);
-      setStoppingSessionIds([]);
-      setStreamingContentBySession({});
-      setStreamingPreviewCollapsedBySession({});
-      setStreaming(false);
+      // This is the lightweight control connection. Active chat turns own
+      // independent sockets, so a control reconnect must not erase their live
+      // state or imply that server-side work stopped.
     };
 
     ws.onError = () => {
@@ -1001,7 +1013,7 @@ export default function AgentChat() {
       setStreaming(false);
     };
 
-    ws.onMessage = (msg: WsMessage) => {
+    const handleWsMessage = (msg: WsMessage) => {
       const sessionId = msg.session_id ?? activeSessionIdRef.current;
       if (!sessionId) {
         return;
@@ -1108,14 +1120,22 @@ export default function AgentChat() {
           }));
           setStreaming(true);
           // TPS tracking
-          if (streamStartRef.current === null) {
-            streamStartRef.current = performance.now();
-            charCountRef.current = 0;
+          if (streamStartRef.current[sessionId] === undefined) {
+            streamStartRef.current[sessionId] = performance.now();
+            charCountRef.current[sessionId] = 0;
           }
-          charCountRef.current += (msg.content ?? '').length;
-          const elapsed = (performance.now() - streamStartRef.current) / 1000;
-          if (elapsed > 0.2) {
-            setTps(Math.max(1, Math.round(charCountRef.current / 4 / elapsed)));
+          charCountRef.current[sessionId] =
+            (charCountRef.current[sessionId] ?? 0) + (msg.content ?? '').length;
+          const streamStartedAt =
+            streamStartRef.current[sessionId] ?? performance.now();
+          const elapsed = (performance.now() - streamStartedAt) / 1000;
+          if (elapsed > 0.2 && sessionId === activeSessionIdRef.current) {
+            setTps(
+              Math.max(
+                1,
+                Math.round((charCountRef.current[sessionId] ?? 0) / 4 / elapsed),
+              ),
+            );
           }
           break;
         }
@@ -1124,7 +1144,10 @@ export default function AgentChat() {
           // Real per-segment inference timing from the provider (Ollama):
           // decode TPS and time-to-first-token, replacing wall-clock guesses.
           const m = msg.metrics ?? {};
-          if (typeof m.generation_tps === 'number') {
+          if (
+            typeof m.generation_tps === 'number' &&
+            sessionId === activeSessionIdRef.current
+          ) {
             setRealMetrics({
               generationTps: m.generation_tps,
               ttftMs: typeof m.ttft_ms === 'number' ? m.ttft_ms : null,
@@ -1143,12 +1166,18 @@ export default function AgentChat() {
             ''
           ).trim();
           const outputTokens = estimateOutputTokens(content);
-          const startedAt = responseStartRef.current ?? streamStartRef.current;
+          const startedAt =
+            responseStartRef.current[sessionId] ?? streamStartRef.current[sessionId];
           const completionSeconds =
-            startedAt !== null ? Math.max((performance.now() - startedAt) / 1000, 0.05) : 0;
+            typeof startedAt === 'number'
+              ? Math.max((performance.now() - startedAt) / 1000, 0.05)
+              : 0;
           const estimatedTokensPerSecond =
             completionSeconds > 0 && outputTokens > 0 ? outputTokens / completionSeconds : 0;
-          if (estimatedTokensPerSecond > 0) {
+          if (
+            estimatedTokensPerSecond > 0 &&
+            sessionId === activeSessionIdRef.current
+          ) {
             setTps(Math.max(1, Math.round(estimatedTokensPerSecond)));
           }
           // Some backends emit both a legacy `message` event and the terminal
@@ -1175,9 +1204,9 @@ export default function AgentChat() {
             completedResponseSessionIdsRef.current.add(sessionId);
           }
           clearTypingForSession();
-          responseStartRef.current = null;
-          streamStartRef.current = null;
-          charCountRef.current = 0;
+          delete responseStartRef.current[sessionId];
+          delete streamStartRef.current[sessionId];
+          delete charCountRef.current[sessionId];
           setStreaming(false);
           break;
         }
@@ -1424,9 +1453,9 @@ export default function AgentChat() {
             };
           });
           clearTypingForSession();
-          responseStartRef.current = null;
-          streamStartRef.current = null;
-          charCountRef.current = 0;
+          delete responseStartRef.current[sessionId];
+          delete streamStartRef.current[sessionId];
+          delete charCountRef.current[sessionId];
           setStreaming(false);
           break;
         }
@@ -1445,19 +1474,27 @@ export default function AgentChat() {
             },
           );
           clearTypingForSession();
-          responseStartRef.current = null;
-          streamStartRef.current = null;
-          charCountRef.current = 0;
+          delete responseStartRef.current[sessionId];
+          delete streamStartRef.current[sessionId];
+          delete charCountRef.current[sessionId];
           setStreaming(false);
           break;
       }
     };
+    wsMessageHandlerRef.current = handleWsMessage;
+    ws.onMessage = handleWsMessage;
 
     ws.connect();
     wsRef.current = ws;
 
     return () => {
+      wsMessageHandlerRef.current = null;
       ws.disconnect();
+      for (const runWs of Object.values(runWsRefs.current)) {
+        runWs.disconnect();
+      }
+      runWsRefs.current = {};
+      runWsQueuesRef.current = {};
     };
   }, []);
 
@@ -1596,12 +1633,9 @@ export default function AgentChat() {
     const nextExisting = sessions.find((session) => session.id !== sessionId);
     const replacementSession = !nextExisting ? createChatSession(false) : null;
 
-    // If a run is live, ask the gateway to stop it before removing its
-    // transcript. The backend treats session_delete during a run as a clean
-    // cancellation and avoids re-persisting the partial turn.
-    if (typingSessionIds.includes(sessionId)) {
-      wsRef.current?.cancelSession(sessionId);
-    }
+    // session_delete is itself an atomic stop+delete operation for an active
+    // run. Send it through the independent control socket so it cannot queue
+    // behind that session's streaming connection.
     wsRef.current?.deleteSession(sessionId);
     deletedSessionIdsRef.current.add(sessionId);
     delete pendingContentRef.current[sessionId];
@@ -1650,6 +1684,82 @@ export default function AgentChat() {
     }
   };
 
+  const sendSessionMessage = (
+    sessionId: string,
+    message: SendChatMessageOptions,
+  ): boolean => {
+    const flushQueue = (client: WebSocketClient) => {
+      const queue = runWsQueuesRef.current[sessionId] ?? [];
+      while (queue.length > 0 && client.connected) {
+        const next = queue[0];
+        if (!next) break;
+        client.sendMessage(next);
+        queue.shift();
+      }
+      if (queue.length === 0) {
+        delete runWsQueuesRef.current[sessionId];
+      } else {
+        runWsQueuesRef.current[sessionId] = queue;
+      }
+    };
+
+    const existing = runWsRefs.current[sessionId];
+    runWsQueuesRef.current[sessionId] = [
+      ...(runWsQueuesRef.current[sessionId] ?? []),
+      message,
+    ];
+    if (existing) {
+      try {
+        flushQueue(existing);
+        return true;
+      } catch {
+        existing.disconnect();
+        delete runWsRefs.current[sessionId];
+      }
+    }
+
+    const client = new WebSocketClient({ autoReconnect: false });
+    runWsRefs.current[sessionId] = client;
+    client.onOpen = () => {
+      try {
+        flushQueue(client);
+      } catch {
+        setError(`Chat ${sessionId.slice(0, 8)} could not send. Reconnect and try again.`);
+      }
+    };
+    client.onMessage = (incoming) => {
+      wsMessageHandlerRef.current?.(incoming);
+      const incomingSessionId = incoming.session_id ?? sessionId;
+      if (
+        incomingSessionId === sessionId &&
+        (incoming.type === 'done' ||
+          incoming.type === 'message' ||
+          incoming.type === 'cancelled' ||
+          incoming.type === 'error')
+      ) {
+        if (runWsRefs.current[sessionId] === client) {
+          delete runWsRefs.current[sessionId];
+          delete runWsQueuesRef.current[sessionId];
+        }
+        client.disconnect();
+      }
+    };
+    client.onClose = () => {
+      if (runWsRefs.current[sessionId] === client) {
+        delete runWsRefs.current[sessionId];
+        delete runWsQueuesRef.current[sessionId];
+        setError(
+          `Chat ${sessionId.slice(0, 8)} detached; its server-side run continues in the background.`,
+        );
+      }
+    };
+    client.onError = () => {
+      setError(`Chat ${sessionId.slice(0, 8)} connection failed; the control channel remains available.`);
+    };
+    client.connect();
+    return true;
+  };
+
   // Shared by the manual send box and programmatic triggers (e.g. "Test All
   // Tools") that need to fire a message into a session that may have just
   // been created in the same event handler — so it takes `session` and
@@ -1684,22 +1794,27 @@ export default function AgentChat() {
     try {
       deletedSessionIdsRef.current.delete(session.id);
       completedResponseSessionIdsRef.current.delete(session.id);
-      wsRef.current.sendMessage({
+      const sent = sendSessionMessage(session.id, {
         content: trimmed,
         sessionId: session.id,
         temporary: session.temporary,
         historySeed: buildHistorySeed(updatedSession.messages),
         federationPeerIds: federationEnabled ? selectedFederationPeerIds : [],
       });
+      if (!sent) {
+        return false;
+      }
       setSessions((prev) =>
         sortSessions(prev.map((s) => (s.id === session.id ? updatedSession : s))),
       );
       setError(null);
-      responseStartRef.current = performance.now();
-      streamStartRef.current = null;
-      charCountRef.current = 0;
-      setTps(0);
-      setRealMetrics(null);
+      responseStartRef.current[session.id] = performance.now();
+      delete streamStartRef.current[session.id];
+      charCountRef.current[session.id] = 0;
+      if (session.id === activeSessionIdRef.current) {
+        setTps(0);
+        setRealMetrics(null);
+      }
       setStreaming(true);
       setTypingSessionIds((prev) => (prev.includes(session.id) ? prev : [...prev, session.id]));
       setStoppingSessionIds((prev) => prev.filter((id) => id !== session.id));
@@ -1747,7 +1862,15 @@ export default function AgentChat() {
       return;
     }
 
-    wsRef.current?.cancelSession(activeSession.id);
+    const runWs = runWsRefs.current[activeSession.id];
+    if (runWs?.connected) {
+      runWs.cancelSession(activeSession.id);
+    } else {
+      // A run whose viewer socket detached is still server-owned. The control
+      // connection can attach solely to deliver Stop and receive its terminal
+      // acknowledgement.
+      wsRef.current?.cancelSession(activeSession.id);
+    }
     setStoppingSessionIds((prev) =>
       prev.includes(activeSession.id) ? prev : [...prev, activeSession.id],
     );

@@ -33,14 +33,14 @@
     dead_code
 )]
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use dialoguer::{Input, Password};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::PathBuf;
 use tracing::{info, warn};
-use tracing_subscriber::{EnvFilter, fmt};
+use tracing_subscriber::{fmt, EnvFilter};
 
 fn parse_temperature(s: &str) -> std::result::Result<f64, String> {
     let t: f64 = s.parse().map_err(|e| format!("{e}"))?;
@@ -612,7 +612,7 @@ enum HostRunnerCommands {
         /// Repository used by the fixed health-gated redeploy operation
         #[arg(long)]
         repo_dir: Option<PathBuf>,
-        /// Maximum foreground exec duration
+        /// Maximum opt-in foreground exec duration (0 means no maximum)
         #[arg(long)]
         max_exec_timeout_secs: Option<u64>,
     },
@@ -957,9 +957,6 @@ async fn main() -> Result<()> {
                     runner_config.repo_dir = Some(path.clone());
                 }
                 if let Some(seconds) = max_exec_timeout_secs {
-                    if *seconds == 0 {
-                        bail!("--max-exec-timeout-secs must be greater than zero");
-                    }
                     runner_config.max_exec_timeout_secs = *seconds;
                 }
                 return host_runner::serve(runner_config).await;

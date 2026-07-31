@@ -10,6 +10,9 @@ pub mod postgres;
 #[cfg(feature = "db-mongo")]
 pub mod mongodb;
 
+#[cfg(feature = "db-mysql")]
+pub mod mysql;
+
 // ── Shared output types ────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,7 +69,7 @@ pub fn sanitize_connection_error(error: &dyn std::fmt::Display, connection_uri: 
     static URI_USERINFO: OnceLock<regex::Regex> = OnceLock::new();
     let regex = URI_USERINFO.get_or_init(|| {
         regex::Regex::new(
-            r"(?i)\b(?P<scheme>mongodb(?:\+srv)?|postgres(?:ql)?|mysql)://(?P<user>[^/\s:@]+):[^@\s/]+@",
+            r"(?i)\b(?P<scheme>mongodb(?:\+srv)?|postgres(?:ql)?|mysql|mariadb)://(?P<user>[^/\s:@]+):[^@\s/]+@",
         )
         .expect("database URI credential regex must compile")
     });
@@ -88,9 +91,7 @@ pub fn build_adapter(
         )?)),
         DbDriver::Postgres => build_postgres(conn),
         DbDriver::Mongodb => build_mongo(conn),
-        DbDriver::Mysql => {
-            anyhow::bail!("MySQL/MariaDB support is not yet implemented in the DB explorer")
-        }
+        DbDriver::Mysql => build_mysql(conn),
     }
 }
 
@@ -127,9 +128,38 @@ fn build_mongo(_conn: &crate::config::DbConnectionConfig) -> anyhow::Result<Box<
     )
 }
 
+#[cfg(feature = "db-mysql")]
+fn build_mysql(conn: &crate::config::DbConnectionConfig) -> anyhow::Result<Box<dyn DbAdapter>> {
+    Ok(Box::new(mysql::MysqlAdapter::new(
+        conn.uri.clone(),
+        conn.read_only,
+    )))
+}
+
+#[cfg(not(feature = "db-mysql"))]
+fn build_mysql(_conn: &crate::config::DbConnectionConfig) -> anyhow::Result<Box<dyn DbAdapter>> {
+    anyhow::bail!(
+        "MySQL/MariaDB support requires the 'db-mysql' Cargo feature \
+         (add db-mysql to LLAMAFARM_CARGO_FEATURES)"
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::sanitize_connection_error;
+    use super::{build_adapter, sanitize_connection_error};
+    use crate::config::{DbConnectionConfig, DbDriver};
+
+    fn mysql_connection() -> DbConnectionConfig {
+        DbConnectionConfig {
+            name: "mysql_test".to_string(),
+            driver: DbDriver::Mysql,
+            uri: "mysql://reader@db.example.com/research".to_string(),
+            database: None,
+            read_only: true,
+            max_rows: 25,
+            label: None,
+        }
+    }
 
     #[test]
     fn connection_error_removes_the_exact_configured_uri() {
@@ -144,14 +174,35 @@ mod tests {
 
     #[test]
     fn connection_error_masks_driver_rendered_userinfo() {
-        let error = "server rejected postgresql://reader:private-value@db.internal:5432/research";
+        for scheme in ["postgresql", "mysql", "mariadb"] {
+            let error =
+                format!("server rejected {scheme}://reader:private-value@db.internal/research");
+            let sanitized = sanitize_connection_error(&error, "different stored value");
 
-        let sanitized = sanitize_connection_error(&error, "different stored value");
+            assert_eq!(
+                sanitized,
+                format!(
+                    "server rejected {scheme}://reader:***MASKED***@db.internal/research"
+                )
+            );
+            assert!(!sanitized.contains("private-value"));
+        }
+    }
 
-        assert_eq!(
-            sanitized,
-            "server rejected postgresql://reader:***MASKED***@db.internal:5432/research"
-        );
-        assert!(!sanitized.contains("private-value"));
+    #[cfg(feature = "db-mysql")]
+    #[test]
+    fn mysql_factory_builds_adapter_when_feature_is_enabled() {
+        let adapter = build_adapter(&mysql_connection()).expect("MySQL adapter should build");
+        assert_eq!(adapter.driver_name(), "mysql");
+    }
+
+    #[cfg(not(feature = "db-mysql"))]
+    #[test]
+    fn mysql_factory_reports_required_feature() {
+        let error = match build_adapter(&mysql_connection()) {
+            Ok(_) => panic!("MySQL adapter must require the db-mysql feature"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("'db-mysql' Cargo feature"));
     }
 }

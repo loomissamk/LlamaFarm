@@ -22,6 +22,7 @@ pub mod browser;
 pub mod browser_open;
 pub mod cli_discovery;
 pub mod code_run;
+pub(crate) mod command_runner;
 pub mod composio;
 pub mod content_search;
 pub mod cron_add;
@@ -59,7 +60,7 @@ pub mod package_manager;
 pub mod packet_capture;
 pub mod pdf_read;
 pub mod process;
-mod process_group;
+pub(crate) mod process_group;
 pub mod proxy_config;
 pub mod pushover;
 pub mod schedule;
@@ -244,7 +245,9 @@ pub fn default_tools_with_runtime(
         tools.push(Box::new(FileReadTool::new(security.clone())));
         tools.push(Box::new(FileWriteTool::new(security.clone())));
         tools.push(Box::new(FileEditTool::new(security.clone())));
-        tools.push(Box::new(ApplyPatchTool::new()));
+        tools.push(Box::new(ApplyPatchTool::new(
+            security.workspace_dir.clone(),
+        )));
         tools.push(Box::new(GlobSearchTool::new(security.clone())));
         tools.push(Box::new(ContentSearchTool::new(security.clone())));
     }
@@ -383,21 +386,30 @@ pub fn all_tools_with_runtime_and_federation(
         )),
     ];
 
-    if root_config.host_runner.enabled {
-        if let Some(socket_path) = root_config.host_runner.effective_socket_path() {
-            tool_arcs.push(Arc::new(HostExecTool::new(
-                security.clone(),
-                socket_path,
-                root_config.host_runner.max_exec_timeout_secs,
-            )));
-        } else {
-            tracing::warn!(
-                "host_runner.enabled is true but no socket path or home directory is available"
-            );
+    let host_runner_socket_path = if root_config.host_runner.enabled {
+        match root_config.host_runner.effective_socket_path() {
+            Some(socket_path) => {
+                tool_arcs.push(Arc::new(HostExecTool::new(
+                    security.clone(),
+                    socket_path.clone(),
+                    root_config.host_runner.max_exec_timeout_secs,
+                )));
+                Some(socket_path)
+            }
+            None => {
+                tracing::warn!(
+                    "host_runner.enabled is true but no socket path or home directory is available"
+                );
+                None
+            }
         }
-    }
+    } else {
+        None
+    };
 
-    let sop_engine = Arc::new(Mutex::new(SopEngine::new(config.sop.clone())));
+    let mut sop_engine = SopEngine::new(config.sop.clone());
+    sop_engine.reload(workspace_dir);
+    let sop_engine = Arc::new(Mutex::new(sop_engine));
     let sop_audit = Arc::new(SopAuditLogger::new(memory.clone()));
     let sop_metrics = Arc::new(SopMetricsCollector::new());
 
@@ -452,17 +464,20 @@ pub fn all_tools_with_runtime_and_federation(
             security.clone(),
             command_sandbox.clone(),
         )));
-        tool_arcs.push(Arc::new(ServiceControlTool::new_with_sandbox(
-            security.clone(),
-            command_sandbox.clone(),
-        )));
+        let mut service_control =
+            ServiceControlTool::new_with_sandbox(security.clone(), command_sandbox.clone());
+        if let Some(socket_path) = host_runner_socket_path.clone() {
+            service_control = service_control
+                .with_host_runner(socket_path, root_config.host_runner.max_exec_timeout_secs);
+        }
+        tool_arcs.push(Arc::new(service_control));
     }
 
     if has_filesystem_access {
         tool_arcs.push(Arc::new(FileReadTool::new(security.clone())));
         tool_arcs.push(Arc::new(FileWriteTool::new(security.clone())));
         tool_arcs.push(Arc::new(FileEditTool::new(security.clone())));
-        tool_arcs.push(Arc::new(ApplyPatchTool::new()));
+        tool_arcs.push(Arc::new(ApplyPatchTool::new(workspace_dir)));
         tool_arcs.push(Arc::new(GlobSearchTool::new(security.clone())));
         tool_arcs.push(Arc::new(ContentSearchTool::new(security.clone())));
         let mut workspace_rag = WorkspaceRagTool::new(workspace_dir);
@@ -872,6 +887,68 @@ mod tests {
         assert!(names.contains(&"model_routing_config"));
         assert!(names.contains(&"pushover"));
         assert!(names.contains(&"proxy_config"));
+    }
+
+    #[tokio::test]
+    async fn all_tools_loads_sops_from_configured_workspace() {
+        let tmp = TempDir::new().unwrap();
+        let sop_dir = tmp.path().join("sops").join("fixture-sop");
+        std::fs::create_dir_all(&sop_dir).unwrap();
+        std::fs::write(
+            sop_dir.join("SOP.toml"),
+            r#"
+[sop]
+name = "fixture-sop"
+description = "Factory loading fixture"
+
+[[triggers]]
+type = "manual"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            sop_dir.join("SOP.md"),
+            r#"
+# Fixture SOP
+
+## Steps
+
+1. **Verify loading** — Confirm the configured workspace was scanned.
+"#,
+        )
+        .unwrap();
+
+        let security = Arc::new(SecurityPolicy::default());
+        let mem_cfg = MemoryConfig {
+            backend: "markdown".into(),
+            ..MemoryConfig::default()
+        };
+        let mem: Arc<dyn Memory> =
+            Arc::from(crate::memory::create_memory(&mem_cfg, tmp.path(), None).unwrap());
+        let cfg = test_config(&tmp);
+        let tools = all_tools(
+            Arc::new(Config::default()),
+            &security,
+            mem,
+            None,
+            None,
+            &BrowserConfig::default(),
+            &crate::config::HttpRequestConfig::default(),
+            &crate::config::WebFetchConfig::default(),
+            tmp.path(),
+            &HashMap::new(),
+            None,
+            &cfg,
+        );
+        let sop_list = tools
+            .iter()
+            .find(|tool| tool.name() == "sop_list")
+            .expect("sop_list should be registered");
+        let result = sop_list.execute(serde_json::json!({})).await.unwrap();
+
+        assert!(result.success);
+        assert!(result.output.contains("fixture-sop"), "{}", result.output);
+        assert!(result.output.contains("1 total"), "{}", result.output);
     }
 
     #[test]

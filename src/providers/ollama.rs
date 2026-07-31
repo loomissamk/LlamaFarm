@@ -402,6 +402,17 @@ impl OllamaProvider {
         crate::config::build_runtime_proxy_client_with_timeouts("provider.ollama", 300, 10)
     }
 
+    /// Model pulls can be much longer than ordinary management calls. Keep a
+    /// bounded connect phase, but never terminate an active download because
+    /// an arbitrary response deadline elapsed.
+    fn pull_client(&self) -> Client {
+        crate::config::build_runtime_proxy_client_with_optional_timeouts(
+            "provider.ollama.pull",
+            None,
+            Some(10),
+        )
+    }
+
     /// Generation deliberately has no fixed wall-clock or generated-token
     /// deadline. A local model may be slow while it is CPU-spilling or
     /// pre-filling a large context. The agent's cancellation token can still
@@ -1139,7 +1150,7 @@ impl OllamaProvider {
         }
 
         let url = format!("{}/api/pull", self.base_url);
-        let client = self.http_client();
+        let client = self.pull_client();
         let body = PullRequest {
             name: model,
             stream: true,
@@ -2332,15 +2343,8 @@ mod tests {
 
     #[test]
     fn request_explicitly_serializes_unbounded_generation_by_default() {
-        let mut provider = OllamaProvider::new_full(
-            None,
-            None,
-            Some(true),
-            None,
-            None,
-            Some(32_768),
-            None,
-        );
+        let mut provider =
+            OllamaProvider::new_full(None, None, Some(true), None, None, Some(32_768), None);
         // Keep this test independent of process-wide env mutation in the
         // config override suite.
         provider.max_output_tokens = None;

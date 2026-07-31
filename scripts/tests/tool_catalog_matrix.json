@@ -1,0 +1,3110 @@
+{
+  "version": 1,
+  "tools": [
+    {
+      "name": "shell",
+      "cases": [
+        {
+          "id": "shell.fixture_setup",
+          "phase": "setup",
+          "args": {
+            "command": "set -eu; mkdir -p '${FIXTURE_ROOT}'; printf '%s' 'JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCAyMDAgMjAwXSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4gPj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCA0NyA+PgpzdHJlYW0KQlQgL0YxIDEyIFRmIDIwIDEwMCBUZCAoY2F0YWxvZyBhdWRpdCBwZGYpIFRqIEVUCmVuZHN0cmVhbQplbmRvYmoKNSAwIG9iago8PCAvVHlwZSAvRm9udCAvU3VidHlwZSAvVHlwZTEgL0Jhc2VGb250IC9IZWx2ZXRpY2EgPj4KZW5kb2JqCnhyZWYKMCA2CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAwOSAwMDAwMCBuIAowMDAwMDAwMDU4IDAwMDAwIG4gCjAwMDAwMDAxMTUgMDAwMDAgbiAKMDAwMDAwMDI0MSAwMDAwMCBuIAowMDAwMDAwMzM5IDAwMDAwIG4gCnRyYWlsZXIKPDwgL1NpemUgNiAvUm9vdCAxIDAgUiA+PgpzdGFydHhyZWYKNDA5CiUlRU9GCg==' | base64 -d > '${FIXTURE_ROOT}/audit.pdf'; printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nfsAAAAASUVORK5CYII=' | base64 -d > '${FIXTURE_ROOT}/audit.png'; printf 'CATALOG_SHELL_OK\\n'",
+            "approved": true
+          },
+          "output_patterns": ["CATALOG_SHELL_OK"]
+        },
+        {
+          "id": "shell.rag_fixture_setup",
+          "phase": "setup",
+          "depends_on": ["shell.fixture_setup"],
+          "args": {
+            "command": "set -eu; mkdir -p 'rag/inbox'; printf 'CATALOG_RAG_MARKER_%s\\nThis deterministic document belongs only to the tool catalogue audit.\\n' '${RUN_ID}' > 'rag/inbox/catalog-e2e-${RUN_ID}.txt'; printf 'CATALOG_RAG_SETUP_OK\\n'",
+            "approved": true
+          },
+          "output_patterns": ["CATALOG_RAG_SETUP_OK"]
+        },
+        {
+          "id": "shell.ollama_presence",
+          "phase": "setup",
+          "depends_on": ["shell.fixture_setup"],
+          "args": {
+            "command": "set -eu; if ollama list | awk 'NR > 1 { print $1 }' | grep -Fxq '${OLLAMA_AUDIT_MODEL}'; then present=true; else present=false; fi; printf 'CATALOG_OLLAMA_AUDIT_MODEL_PRESENT=%s\\n' \"$present\"",
+            "approved": true
+          },
+          "captures": [
+            {
+              "name": "OLLAMA_AUDIT_MODEL_WAS_PRESENT",
+              "regex": "CATALOG_OLLAMA_AUDIT_MODEL_PRESENT=(true|false)"
+            }
+          ]
+        },
+        {
+          "id": "shell.ollama_alias_setup",
+          "depends_on": ["ollama.pull_audit_model"],
+          "args": {
+            "command": "set -eu; ollama cp '${OLLAMA_AUDIT_MODEL}' '${OLLAMA_DELETE_MODEL}'; ollama show '${OLLAMA_DELETE_MODEL}' >/dev/null; printf 'CATALOG_OLLAMA_ALIAS_OK\\n'",
+            "approved": true
+          },
+          "output_patterns": ["CATALOG_OLLAMA_ALIAS_OK"]
+        },
+        {
+          "id": "shell.ollama_cleanup",
+          "phase": "cleanup",
+          "depends_on": ["ollama.delete_alias"],
+          "args": {
+            "command": "set -eu; ollama rm '${OLLAMA_DELETE_MODEL}' >/dev/null 2>&1 || true; if [ '${OLLAMA_AUDIT_MODEL_WAS_PRESENT}' = false ]; then ollama rm '${OLLAMA_AUDIT_MODEL}' >/dev/null; fi; printf 'CATALOG_OLLAMA_CLEANUP_OK\\n'",
+            "approved": true
+          },
+          "output_patterns": ["CATALOG_OLLAMA_CLEANUP_OK"]
+        },
+        {
+          "id": "shell.package_hold_state",
+          "phase": "setup",
+          "depends_on": ["shell.fixture_setup"],
+          "args": {
+            "command": "set -eu; if apt-mark showhold | grep -Fxq bash; then held=true; else held=false; fi; printf 'CATALOG_BASH_WAS_HELD=%s\\n' \"$held\"",
+            "approved": true
+          },
+          "captures": [
+            {
+              "name": "PACKAGE_BASH_WAS_HELD",
+              "regex": "CATALOG_BASH_WAS_HELD=(true|false)"
+            }
+          ]
+        },
+        {
+          "id": "shell.db_image_presence",
+          "phase": "setup",
+          "depends_on": ["shell.fixture_setup"],
+          "args": {
+            "command": "set -eu; if docker image inspect '${DB_POSTGRES_IMAGE}' >/dev/null 2>&1; then pg=true; else pg=false; fi; if docker image inspect '${DB_MYSQL_IMAGE}' >/dev/null 2>&1; then mysql=true; else mysql=false; fi; if docker image inspect '${DB_MONGODB_IMAGE}' >/dev/null 2>&1; then mongo=true; else mongo=false; fi; printf 'CATALOG_DB_POSTGRES_IMAGE_PRESENT=%s\\nCATALOG_DB_MYSQL_IMAGE_PRESENT=%s\\nCATALOG_DB_MONGODB_IMAGE_PRESENT=%s\\n' \"$pg\" \"$mysql\" \"$mongo\"",
+            "approved": true
+          },
+          "captures": [
+            {
+              "name": "DB_POSTGRES_IMAGE_WAS_PRESENT",
+              "regex": "CATALOG_DB_POSTGRES_IMAGE_PRESENT=(true|false)"
+            },
+            {
+              "name": "DB_MYSQL_IMAGE_WAS_PRESENT",
+              "regex": "CATALOG_DB_MYSQL_IMAGE_PRESENT=(true|false)"
+            },
+            {
+              "name": "DB_MONGODB_IMAGE_WAS_PRESENT",
+              "regex": "CATALOG_DB_MONGODB_IMAGE_PRESENT=(true|false)"
+            }
+          ]
+        },
+        {
+          "id": "shell.package_unhold",
+          "phase": "cleanup",
+          "depends_on": ["package.hold"],
+          "args": {
+            "command": "set -eu; if [ '${PACKAGE_BASH_WAS_HELD}' = false ]; then apt-mark unhold bash >/dev/null; fi; printf 'CATALOG_PACKAGE_UNHOLD_OK\\n'",
+            "approved": true
+          },
+          "output_patterns": ["CATALOG_PACKAGE_UNHOLD_OK"]
+        },
+        {
+          "id": "shell.pushover_env_setup",
+          "phase": "setup",
+          "depends_on": ["shell.fixture_setup"],
+          "args": {
+            "command": "set -eu; if [ -f .env ]; then cp .env '${FIXTURE_ROOT}/workspace.env.backup'; mode=restore; else mode=remove; fi; printf '\\n# catalog-e2e-${RUN_ID}\\nPUSHOVER_TOKEN=catalog-e2e-token\\nPUSHOVER_USER_KEY=catalog-e2e-user\\nPUSHOVER_API_URL=http://127.0.0.1:${HTTP_FIXTURE_PORT}/1/messages.json\\n' >> .env; printf 'CATALOG_PUSHOVER_ENV_OK CATALOG_ENV_MODE=%s\\n' \"$mode\"",
+            "approved": true
+          },
+          "output_patterns": ["CATALOG_PUSHOVER_ENV_OK"],
+          "captures": [
+            {
+              "name": "PUSHOVER_ENV_CLEANUP_MODE",
+              "regex": "CATALOG_ENV_MODE=(restore|remove)"
+            }
+          ]
+        },
+        {
+          "id": "shell.git_branch_setup",
+          "phase": "setup",
+          "depends_on": ["shell.fixture_setup"],
+          "args": {
+            "command": "set -eu; test -z \"$(git status --porcelain --untracked-files=no)\"; original=$(git branch --show-current); test -n \"$original\"; test \"$original\" != '${GIT_AUDIT_BRANCH}'; git show-ref --verify --quiet 'refs/heads/${GIT_AUDIT_BRANCH}' && git branch -D '${GIT_AUDIT_BRANCH}' || true; git checkout -b '${GIT_AUDIT_BRANCH}'; printf 'CATALOG_GIT_ORIGINAL=%s\\n' \"$original\"",
+            "approved": true
+          },
+          "captures": [
+            {
+              "name": "GIT_ORIGINAL_BRANCH",
+              "regex": "CATALOG_GIT_ORIGINAL=([^\\s]+)"
+            }
+          ]
+        },
+        {
+          "id": "shell.git_remote_setup",
+          "depends_on": ["git.commit"],
+          "args": {
+            "command": "set -eu; remote_root=\"$(pwd)/${FIXTURE_ROOT}/remote.git\"; git init --bare \"$remote_root\" >/dev/null; original=$(git remote get-url origin); git remote set-url origin \"$remote_root\"; printf 'CATALOG_GIT_ORIGINAL_REMOTE=%s\\n' \"$original\"",
+            "approved": true
+          },
+          "captures": [
+            {
+              "name": "GIT_ORIGINAL_REMOTE",
+              "regex": "CATALOG_GIT_ORIGINAL_REMOTE=([^\\s]+)"
+            }
+          ]
+        },
+        {
+          "id": "shell.git_remote_track",
+          "depends_on": ["git.push"],
+          "args": {
+            "command": "set -eu; git branch --set-upstream-to='origin/${GIT_AUDIT_BRANCH}' '${GIT_AUDIT_BRANCH}'; printf 'CATALOG_GIT_TRACK_OK\\n'",
+            "approved": true
+          },
+          "output_patterns": ["CATALOG_GIT_TRACK_OK"]
+        },
+        {
+          "id": "shell.git_remote_cleanup",
+          "phase": "cleanup",
+          "depends_on": [
+            "git.clone",
+            "git.fetch",
+            "git.pull",
+            "process.kill_git_daemon"
+          ],
+          "args": {
+            "command": "set -eu; git remote set-url origin '${GIT_ORIGINAL_REMOTE}'; git branch --unset-upstream 2>/dev/null || true; printf 'CATALOG_GIT_REMOTE_CLEANUP_OK\\n'",
+            "approved": true
+          },
+          "output_patterns": ["CATALOG_GIT_REMOTE_CLEANUP_OK"]
+        },
+        {
+          "id": "shell.pushover_env_cleanup",
+          "phase": "cleanup",
+          "depends_on": ["pushover.send", "process.kill"],
+          "args": {
+            "command": "set -eu; case '${PUSHOVER_ENV_CLEANUP_MODE}' in restore) cp '${FIXTURE_ROOT}/workspace.env.backup' .env ;; remove) rm -f .env ;; *) exit 2 ;; esac; printf 'CATALOG_PUSHOVER_ENV_CLEANUP_OK\\n'",
+            "approved": true
+          },
+          "output_patterns": ["CATALOG_PUSHOVER_ENV_CLEANUP_OK"]
+        },
+        {
+          "id": "shell.git_branch_cleanup",
+          "phase": "cleanup",
+          "depends_on": [
+            "shell.pushover_env_cleanup",
+            "shell.git_remote_cleanup",
+            "git.stash_drop",
+            "git_worktree.discard"
+          ],
+          "args": {
+            "command": "set -eu; test -z \"$(git status --porcelain --untracked-files=no)\"; git checkout '${GIT_ORIGINAL_BRANCH}'; git branch -D '${GIT_AUDIT_BRANCH}'; printf 'CATALOG_GIT_CLEANUP_OK\\n'",
+            "approved": true
+          },
+          "output_patterns": ["CATALOG_GIT_CLEANUP_OK"]
+        },
+        {
+          "id": "shell.db_fixture_init",
+          "depends_on": [
+            "shell.fixture_setup",
+            "docker.run_postgres_fixture",
+            "docker.run_mysql_fixture",
+            "docker.run_mongodb_fixture"
+          ],
+          "args": {
+            "command": "set -eu; python3 -c \"import sqlite3; p='${FIXTURE_ROOT}/catalog.sqlite'; c=sqlite3.connect(p); c.execute('CREATE TABLE IF NOT EXISTS catalog_e2e (marker TEXT NOT NULL)'); c.execute('DELETE FROM catalog_e2e'); c.execute('INSERT INTO catalog_e2e(marker) VALUES (?)', ('CATALOG_DB_SQLITE_OK',)); c.commit(); c.close()\"; until docker exec '${DB_POSTGRES_CONTAINER}' pg_isready -U catalog -d catalog >/dev/null 2>&1; do sleep 1; done; docker exec '${DB_POSTGRES_CONTAINER}' psql -U catalog -d catalog -v ON_ERROR_STOP=1 -c \"CREATE TABLE IF NOT EXISTS catalog_e2e (marker TEXT NOT NULL); TRUNCATE catalog_e2e; INSERT INTO catalog_e2e(marker) VALUES ('CATALOG_DB_POSTGRES_OK');\" >/dev/null; until docker exec '${DB_MYSQL_CONTAINER}' mysqladmin ping -h 127.0.0.1 -uroot -pcatalogroot --silent >/dev/null 2>&1; do sleep 1; done; docker exec '${DB_MYSQL_CONTAINER}' mysql -uroot -pcatalogroot catalog -e \"CREATE TABLE IF NOT EXISTS catalog_e2e (marker VARCHAR(128) NOT NULL); TRUNCATE TABLE catalog_e2e; INSERT INTO catalog_e2e(marker) VALUES ('CATALOG_DB_MYSQL_OK');\" >/dev/null; until docker exec '${DB_MONGODB_CONTAINER}' mongosh --quiet --eval \"quit(db.adminCommand('ping').ok ? 0 : 1)\" >/dev/null 2>&1; do sleep 1; done; docker exec '${DB_MONGODB_CONTAINER}' mongosh --quiet --eval \"const c=db.getSiblingDB('catalog').catalog_e2e; c.deleteMany({}); c.insertOne({marker:'CATALOG_DB_MONGODB_OK'});\" >/dev/null; printf 'CATALOG_DB_FIXTURES_OK\\n'",
+            "approved": true
+          },
+          "output_patterns": ["CATALOG_DB_FIXTURES_OK"]
+        },
+        {
+          "id": "shell.db_image_cleanup",
+          "phase": "cleanup",
+          "depends_on": [
+            "docker.stop_postgres_fixture",
+            "docker.stop_mysql_fixture",
+            "docker.stop_mongodb_fixture"
+          ],
+          "args": {
+            "command": "set -eu; if [ '${DB_POSTGRES_IMAGE_WAS_PRESENT}' = false ]; then docker image rm '${DB_POSTGRES_IMAGE}' >/dev/null; fi; if [ '${DB_MYSQL_IMAGE_WAS_PRESENT}' = false ]; then docker image rm '${DB_MYSQL_IMAGE}' >/dev/null; fi; if [ '${DB_MONGODB_IMAGE_WAS_PRESENT}' = false ]; then docker image rm '${DB_MONGODB_IMAGE}' >/dev/null; fi; printf 'CATALOG_DB_IMAGE_CLEANUP_OK\\n'",
+            "approved": true
+          },
+          "output_patterns": ["CATALOG_DB_IMAGE_CLEANUP_OK"]
+        },
+        {
+          "id": "shell.fixture_cleanup",
+          "phase": "cleanup",
+          "depends_on": [
+            "shell.git_branch_cleanup",
+            "shell.ollama_cleanup",
+            "shell.package_unhold",
+            "cron_remove.remove",
+            "cron_remove.agent_isolated",
+            "cron_remove.agent_main",
+            "schedule.cancel",
+            "schedule.remove_add",
+            "schedule.remove",
+            "memory_forget.forget",
+            "process.kill",
+            "package.remove",
+            "docker.stop",
+            "docker.kill",
+            "docker.rm",
+            "docker.compose_down",
+            "docker.rmi",
+            "browser.close",
+            "subagent.kill",
+            "sop.advance",
+            "state.tombstone",
+            "routing.remove_scenario",
+            "routing.remove_agent",
+            "proxy.restore_env"
+            ,
+            "shell.db_image_cleanup",
+            "host.status_completed"
+          ],
+          "args": {
+            "command": "set -eu; rm -f 'rag/inbox/catalog-e2e-${RUN_ID}.txt'; rmdir 'rag/inbox' 'rag' 2>/dev/null || true; rm -rf '${FIXTURE_ROOT}'; rm -f '${SCREENSHOT_FILE}'; printf 'CATALOG_CLEANUP_OK\\n'",
+            "approved": true
+          },
+          "output_patterns": ["CATALOG_CLEANUP_OK"]
+        }
+      ]
+    },
+    {
+      "name": "file_write",
+      "cases": [
+        {
+          "id": "file.write",
+          "depends_on": ["shell.fixture_setup"],
+          "args": {
+            "path": "${FIXTURE_ROOT}/audit.txt",
+            "content": "catalog marker original\\n"
+          }
+        },
+        {
+          "id": "file.http_fixture",
+          "depends_on": ["shell.fixture_setup"],
+          "args": {
+            "path": "${FIXTURE_ROOT}/audit_http.py",
+            "content": "from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\\nimport json\\nimport sys\\n\\nclass Handler(BaseHTTPRequestHandler):\\n    def do_GET(self):\\n        body = b\"<html><title>Catalog Audit</title><h1>Catalog Audit</h1><form><label for='custname'>Customer name</label><input id='custname' name='custname' placeholder='Customer name' role='textbox'><input type='radio' value='small' data-testid='size-small' role='radio'></form></html>\"\\n        self.send_response(200)\\n        self.send_header('Content-Type', 'text/html')\\n        self.send_header('Content-Length', str(len(body)))\\n        self.end_headers()\\n        self.wfile.write(body)\\n    def do_POST(self):\\n        length = int(self.headers.get('Content-Length', '0'))\\n        self.rfile.read(length)\\n        body = json.dumps({'status': 1, 'request': 'catalog-e2e'}).encode()\\n        self.send_response(200)\\n        self.send_header('Content-Type', 'application/json')\\n        self.send_header('Content-Length', str(len(body)))\\n        self.end_headers()\\n        self.wfile.write(body)\\n    def log_message(self, *_):\\n        pass\\n\\nprint('CATALOG_PROCESS_OK', flush=True)\\nThreadingHTTPServer(('127.0.0.1', int(sys.argv[1])), Handler).serve_forever()\\n"
+          }
+        },
+        {
+          "id": "file.dockerfile_fixture",
+          "depends_on": ["shell.fixture_setup"],
+          "args": {
+            "path": "${FIXTURE_ROOT}/Dockerfile.audit",
+            "content": "FROM alpine:3.20\\nCMD [\\\"sh\\\", \\\"-c\\\", \\\"echo CATALOG_DOCKER_IMAGE_OK\\\"]\\n"
+          }
+        },
+        {
+          "id": "file.compose_fixture",
+          "depends_on": ["shell.fixture_setup"],
+          "args": {
+            "path": "${FIXTURE_ROOT}/compose.yaml",
+            "content": "services:\\n  audit:\\n    image: alpine:3.20\\n    command: [\\\"sh\\\", \\\"-c\\\", \\\"echo CATALOG_COMPOSE_OK; sleep 600\\\"]\\n"
+          }
+        },
+        {
+          "id": "file.python_package_setup",
+          "depends_on": ["shell.fixture_setup"],
+          "args": {
+            "path": "${FIXTURE_ROOT}/python-package/setup.py",
+            "content": "from setuptools import setup\\nsetup(name='llamafarm-catalog-e2e-${RUN_ID}', version='0.0.1', packages=['catalog_e2e_pkg'])\\n"
+          }
+        },
+        {
+          "id": "file.python_package_module",
+          "depends_on": ["shell.fixture_setup"],
+          "args": {
+            "path": "${FIXTURE_ROOT}/python-package/catalog_e2e_pkg/__init__.py",
+            "content": "MARKER = 'CATALOG_PACKAGE_OK'\\n"
+          }
+        },
+        {
+          "id": "file.post_commit_change",
+          "depends_on": ["git.checkout_audit"],
+          "args": {
+            "path": "${FIXTURE_ROOT}/audit.txt",
+            "content": "catalog marker stash\\n"
+          }
+        }
+      ]
+    },
+    {
+      "name": "file_read",
+      "cases": [
+        {
+          "id": "file.read",
+          "depends_on": ["file.write"],
+          "args": {
+            "path": "${FIXTURE_ROOT}/audit.txt",
+            "offset": 1,
+            "limit": 10
+          },
+          "output_patterns": ["catalog marker original"]
+        }
+      ]
+    },
+    {
+      "name": "file_edit",
+      "cases": [
+        {
+          "id": "file.edit",
+          "depends_on": ["file.read"],
+          "args": {
+            "path": "${FIXTURE_ROOT}/audit.txt",
+            "old_string": "catalog marker original",
+            "new_string": "catalog marker edited"
+          }
+        }
+      ]
+    },
+    {
+      "name": "apply_patch",
+      "cases": [
+        {
+          "id": "file.patch",
+          "depends_on": ["file.edit"],
+          "args": {
+            "patch": "diff --git a/${FIXTURE_ROOT}/audit.txt b/${FIXTURE_ROOT}/audit.txt\\n--- a/${FIXTURE_ROOT}/audit.txt\\n+++ b/${FIXTURE_ROOT}/audit.txt\\n@@ -1 +1 @@\\n-catalog marker edited\\n+catalog marker patched\\n",
+            "dry_run": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "glob_search",
+      "cases": [
+        {
+          "id": "file.glob",
+          "depends_on": ["file.patch"],
+          "args": {
+            "pattern": "${FIXTURE_ROOT}/*.txt"
+          },
+          "output_patterns": ["audit\\.txt"]
+        }
+      ]
+    },
+    {
+      "name": "content_search",
+      "cases": [
+        {
+          "id": "file.search",
+          "depends_on": ["file.patch"],
+          "args": {
+            "pattern": "catalog marker patched",
+            "path": "${FIXTURE_ROOT}",
+            "output_mode": "content",
+            "case_sensitive": true,
+            "max_results": 10
+          },
+          "output_patterns": ["catalog marker patched"]
+        },
+        {
+          "id": "file.search_files",
+          "depends_on": ["file.patch"],
+          "args": {
+            "pattern": "catalog marker patched",
+            "path": "${FIXTURE_ROOT}",
+            "output_mode": "files_with_matches",
+            "case_sensitive": true,
+            "max_results": 10
+          },
+          "output_patterns": ["audit\\.txt"]
+        },
+        {
+          "id": "file.search_count",
+          "depends_on": ["file.patch"],
+          "args": {
+            "pattern": "catalog marker patched",
+            "path": "${FIXTURE_ROOT}",
+            "output_mode": "count",
+            "case_sensitive": true,
+            "max_results": 10
+          },
+          "output_patterns": ["audit\\.txt", "1"]
+        }
+      ]
+    },
+    {
+      "name": "pdf_read",
+      "cases": [
+        {
+          "id": "file.pdf_read",
+          "depends_on": ["shell.fixture_setup"],
+          "args": {
+            "path": "${FIXTURE_ROOT}/audit.pdf",
+            "max_chars": 2000
+          },
+          "output_patterns": ["catalog audit pdf"]
+        }
+      ]
+    },
+    {
+      "name": "image_info",
+      "cases": [
+        {
+          "id": "file.image_info",
+          "depends_on": ["shell.fixture_setup"],
+          "args": {
+            "path": "${FIXTURE_ROOT}/audit.png",
+            "include_base64": false
+          }
+        },
+        {
+          "id": "screenshot.image_info",
+          "depends_on": ["screenshot.capture"],
+          "args": {
+            "path": "${SCREENSHOT_FILE}",
+            "include_base64": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "memory_store",
+      "cases": [
+        {
+          "id": "memory.store",
+          "args": {
+            "key": "${MEMORY_KEY}",
+            "content": "catalog memory marker ${RUN_ID}",
+            "category": "conversation"
+          }
+        }
+      ]
+    },
+    {
+      "name": "memory_recall",
+      "cases": [
+        {
+          "id": "memory.recall",
+          "depends_on": ["memory.store"],
+          "args": {
+            "query": "catalog memory marker ${RUN_ID}",
+            "limit": 5
+          },
+          "output_patterns": ["catalog memory marker"]
+        }
+      ]
+    },
+    {
+      "name": "memory_forget",
+      "cases": [
+        {
+          "id": "memory_forget.forget",
+          "phase": "cleanup",
+          "depends_on": ["memory.recall"],
+          "args": {
+            "key": "${MEMORY_KEY}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "cron_add",
+      "cases": [
+        {
+          "id": "cron.add",
+          "depends_on": ["shell.fixture_setup"],
+          "args": {
+            "name": "catalog-e2e-${RUN_ID}",
+            "schedule": {
+              "kind": "every",
+              "every_ms": 86400000
+            },
+            "job_type": "shell",
+            "command": "printf 'CATALOG_CRON_OK\\n' > '${FIXTURE_ROOT}/cron.txt'",
+            "delete_after_run": false,
+            "approved": true
+          },
+          "captures": [
+            {
+              "name": "CRON_JOB_ID",
+              "json_path": "id"
+            }
+          ]
+        },
+        {
+          "id": "cron.add_agent_isolated",
+          "depends_on": ["shell.fixture_setup"],
+          "args": {
+            "name": "catalog-e2e-agent-isolated-${RUN_ID}",
+            "schedule": {
+              "kind": "every",
+              "every_ms": 86400000
+            },
+            "job_type": "agent",
+            "prompt": "Return only CATALOG_CRON_AGENT_ISOLATED_OK.",
+            "session_target": "isolated",
+            "delete_after_run": false
+          },
+          "captures": [
+            {
+              "name": "CRON_AGENT_ISOLATED_JOB_ID",
+              "json_path": "id"
+            }
+          ]
+        },
+        {
+          "id": "cron.add_agent_main",
+          "depends_on": ["cron.add_agent_isolated"],
+          "args": {
+            "name": "catalog-e2e-agent-main-${RUN_ID}",
+            "schedule": {
+              "kind": "every",
+              "every_ms": 86400000
+            },
+            "job_type": "agent",
+            "prompt": "Return only CATALOG_CRON_AGENT_MAIN_OK.",
+            "session_target": "main",
+            "delete_after_run": false
+          },
+          "captures": [
+            {
+              "name": "CRON_AGENT_MAIN_JOB_ID",
+              "json_path": "id"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cron_list",
+      "cases": [
+        {
+          "id": "cron.list",
+          "depends_on": ["cron.add"],
+          "args": {},
+          "output_patterns": ["${CRON_JOB_ID}"]
+        }
+      ]
+    },
+    {
+      "name": "cron_update",
+      "cases": [
+        {
+          "id": "cron.update",
+          "depends_on": ["cron.list"],
+          "args": {
+            "job_id": "${CRON_JOB_ID}",
+            "patch": {
+              "name": "catalog-e2e-updated-${RUN_ID}",
+              "enabled": true
+            },
+            "approved": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "cron_run",
+      "cases": [
+        {
+          "id": "cron.run",
+          "depends_on": ["cron.update"],
+          "args": {
+            "job_id": "${CRON_JOB_ID}",
+            "approved": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "cron_runs",
+      "cases": [
+        {
+          "id": "cron.runs",
+          "depends_on": ["cron.run"],
+          "args": {
+            "job_id": "${CRON_JOB_ID}",
+            "limit": 10
+          }
+        }
+      ]
+    },
+    {
+      "name": "cron_remove",
+      "cases": [
+        {
+          "id": "cron_remove.remove",
+          "phase": "cleanup",
+          "depends_on": ["cron.runs"],
+          "args": {
+            "job_id": "${CRON_JOB_ID}"
+          }
+        },
+        {
+          "id": "cron_remove.agent_isolated",
+          "phase": "cleanup",
+          "depends_on": ["cron.add_agent_isolated"],
+          "args": {
+            "job_id": "${CRON_AGENT_ISOLATED_JOB_ID}"
+          }
+        },
+        {
+          "id": "cron_remove.agent_main",
+          "phase": "cleanup",
+          "depends_on": ["cron.add_agent_main"],
+          "args": {
+            "job_id": "${CRON_AGENT_MAIN_JOB_ID}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "schedule",
+      "cases": [
+        {
+          "id": "schedule.create",
+          "depends_on": ["shell.fixture_setup"],
+          "action": "create",
+          "args": {
+            "action": "create",
+            "expression": "0 0 1 1 *",
+            "command": "printf 'CATALOG_SCHEDULE_OK\\n' > '${FIXTURE_ROOT}/schedule.txt'",
+            "approved": true
+          },
+          "captures": [
+            {
+              "name": "SCHEDULE_ID",
+              "regex": "Created recurring job ([^\\s]+)"
+            }
+          ]
+        },
+        {
+          "id": "schedule.add",
+          "depends_on": ["shell.fixture_setup"],
+          "action": "add",
+          "args": {
+            "action": "add",
+            "expression": "0 0 1 1 *",
+            "command": "printf 'CATALOG_SCHEDULE_ADD_OK\\n' > '${FIXTURE_ROOT}/schedule-add.txt'",
+            "approved": true
+          },
+          "captures": [
+            {
+              "name": "SCHEDULE_ADD_ID",
+              "regex": "Created recurring job ([^\\s]+)"
+            }
+          ]
+        },
+        {
+          "id": "schedule.once",
+          "depends_on": ["shell.fixture_setup"],
+          "action": "once",
+          "args": {
+            "action": "once",
+            "run_at": "2037-01-01T00:00:00Z",
+            "command": "printf 'CATALOG_SCHEDULE_ONCE_OK\\n' > '${FIXTURE_ROOT}/schedule-once.txt'",
+            "approved": true
+          },
+          "captures": [
+            {
+              "name": "SCHEDULE_ONCE_ID",
+              "regex": "Created one-shot job ([^\\s]+)"
+            }
+          ]
+        },
+        {
+          "id": "schedule.list",
+          "depends_on": ["schedule.create"],
+          "action": "list",
+          "args": {
+            "action": "list"
+          },
+          "output_patterns": ["${SCHEDULE_ID}"]
+        },
+        {
+          "id": "schedule.get",
+          "depends_on": ["schedule.create"],
+          "action": "get",
+          "args": {
+            "action": "get",
+            "id": "${SCHEDULE_ID}"
+          }
+        },
+        {
+          "id": "schedule.pause",
+          "depends_on": ["schedule.get", "schedule.list"],
+          "action": "pause",
+          "args": {
+            "action": "pause",
+            "id": "${SCHEDULE_ID}"
+          }
+        },
+        {
+          "id": "schedule.resume",
+          "depends_on": ["schedule.pause"],
+          "action": "resume",
+          "args": {
+            "action": "resume",
+            "id": "${SCHEDULE_ID}"
+          }
+        },
+        {
+          "id": "schedule.cancel",
+          "phase": "cleanup",
+          "depends_on": ["schedule.once"],
+          "action": "cancel",
+          "args": {
+            "action": "cancel",
+            "id": "${SCHEDULE_ONCE_ID}"
+          }
+        },
+        {
+          "id": "schedule.remove_add",
+          "phase": "cleanup",
+          "depends_on": ["schedule.add"],
+          "action": "remove",
+          "args": {
+            "action": "remove",
+            "id": "${SCHEDULE_ADD_ID}"
+          }
+        },
+        {
+          "id": "schedule.remove",
+          "phase": "cleanup",
+          "depends_on": ["schedule.resume"],
+          "action": "remove",
+          "args": {
+            "action": "remove",
+            "id": "${SCHEDULE_ID}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "task_plan",
+      "cases": [
+        {
+          "id": "task_plan.create",
+          "action": "create",
+          "args": {
+            "action": "create",
+            "tasks": [
+              {
+                "title": "catalog audit first",
+                "status": "pending",
+                "context": "${RUN_ID}"
+              }
+            ]
+          }
+        },
+        {
+          "id": "task_plan.add",
+          "depends_on": ["task_plan.create"],
+          "action": "add",
+          "args": {
+            "action": "add",
+            "title": "catalog audit second",
+            "context": "${RUN_ID}"
+          }
+        },
+        {
+          "id": "task_plan.update_pending",
+          "depends_on": ["task_plan.add"],
+          "action": "update",
+          "args": {
+            "action": "update",
+            "id": 1,
+            "status": "pending"
+          }
+        },
+        {
+          "id": "task_plan.update_in_progress",
+          "depends_on": ["task_plan.update_pending"],
+          "action": "update",
+          "args": {
+            "action": "update",
+            "id": 1,
+            "status": "in_progress"
+          }
+        },
+        {
+          "id": "task_plan.update_failed",
+          "depends_on": ["task_plan.update_in_progress"],
+          "action": "update",
+          "args": {
+            "action": "update",
+            "id": 1,
+            "status": "failed"
+          }
+        },
+        {
+          "id": "task_plan.update_blocked",
+          "depends_on": ["task_plan.update_failed"],
+          "action": "update",
+          "args": {
+            "action": "update",
+            "id": 1,
+            "status": "blocked"
+          }
+        },
+        {
+          "id": "task_plan.update_skipped",
+          "depends_on": ["task_plan.update_blocked"],
+          "action": "update",
+          "args": {
+            "action": "update",
+            "id": 1,
+            "status": "skipped"
+          }
+        },
+        {
+          "id": "task_plan.update",
+          "depends_on": ["task_plan.update_skipped"],
+          "action": "update",
+          "args": {
+            "action": "update",
+            "id": 1,
+            "status": "completed"
+          }
+        },
+        {
+          "id": "task_plan.list",
+          "depends_on": ["task_plan.update"],
+          "action": "list",
+          "args": {
+            "action": "list"
+          },
+          "output_patterns": ["catalog audit first", "catalog audit second"]
+        },
+        {
+          "id": "task_plan.delete",
+          "phase": "cleanup",
+          "depends_on": ["task_plan.list"],
+          "action": "delete",
+          "args": {
+            "action": "delete"
+          }
+        }
+      ]
+    },
+    {
+      "name": "process",
+      "cases": [
+        {
+          "id": "process.spawn",
+          "depends_on": [
+            "file.http_fixture",
+            "shell.pushover_env_setup"
+          ],
+          "action": "spawn",
+          "args": {
+            "action": "spawn",
+            "command": "python3 '${FIXTURE_ROOT}/audit_http.py' '${HTTP_FIXTURE_PORT}'",
+            "approved": true
+          },
+          "captures": [
+            {
+              "name": "PROCESS_ID",
+              "json_path": "id"
+            }
+          ]
+        },
+        {
+          "id": "process.list",
+          "depends_on": ["process.spawn"],
+          "action": "list",
+          "args": {
+            "action": "list"
+          }
+        },
+        {
+          "id": "process.git_daemon_spawn",
+          "depends_on": ["git.push"],
+          "action": "spawn",
+          "args": {
+            "action": "spawn",
+            "command": "git daemon --reuseaddr --export-all --base-path=\"$(pwd)/${FIXTURE_ROOT}\" --port='${GIT_DAEMON_PORT}' \"$(pwd)/${FIXTURE_ROOT}/remote.git\"",
+            "approved": true
+          },
+          "captures": [
+            {
+              "name": "GIT_DAEMON_PROCESS_ID",
+              "json_path": "id"
+            }
+          ]
+        },
+        {
+          "id": "process.output",
+          "depends_on": ["process.spawn", "process.list"],
+          "action": "output",
+          "args": {
+            "action": "output",
+            "id": {
+              "$var": "PROCESS_ID",
+              "type": "int"
+            }
+          },
+          "output_patterns": ["CATALOG_PROCESS_OK"]
+        },
+        {
+          "id": "process.kill_git_daemon",
+          "phase": "cleanup",
+          "depends_on": ["git.clone"],
+          "action": "kill",
+          "args": {
+            "action": "kill",
+            "id": {
+              "$var": "GIT_DAEMON_PROCESS_ID",
+              "type": "int"
+            }
+          }
+        },
+        {
+          "id": "process.kill",
+          "phase": "cleanup",
+          "depends_on": ["process.output"],
+          "action": "kill",
+          "args": {
+            "action": "kill",
+            "id": {
+              "$var": "PROCESS_ID",
+              "type": "int"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "git_operations",
+      "cases": [
+        {
+          "id": "git.status",
+          "depends_on": ["shell.git_branch_setup", "file.patch"],
+          "action": "status",
+          "args": {
+            "operation": "status"
+          }
+        },
+        {
+          "id": "git.diff",
+          "depends_on": ["git.status"],
+          "action": "diff",
+          "args": {
+            "operation": "diff",
+            "files": "${FIXTURE_ROOT}/audit.txt"
+          }
+        },
+        {
+          "id": "git.log",
+          "depends_on": ["shell.git_branch_setup"],
+          "action": "log",
+          "args": {
+            "operation": "log",
+            "limit": 3
+          }
+        },
+        {
+          "id": "git.branch",
+          "depends_on": ["shell.git_branch_setup"],
+          "action": "branch",
+          "args": {
+            "operation": "branch"
+          },
+          "output_patterns": ["${GIT_AUDIT_BRANCH}"]
+        },
+        {
+          "id": "git.add",
+          "depends_on": ["git.diff", "git.branch"],
+          "action": "add",
+          "args": {
+            "operation": "add",
+            "paths": "${FIXTURE_ROOT}/audit.txt"
+          }
+        },
+        {
+          "id": "git.commit",
+          "depends_on": ["git.add", "git.log"],
+          "action": "commit",
+          "args": {
+            "operation": "commit",
+            "message": "test(e2e): audit-owned catalogue fixture"
+          }
+        },
+        {
+          "id": "git.checkout_original",
+          "depends_on": ["git.commit"],
+          "action": "checkout",
+          "args": {
+            "operation": "checkout",
+            "branch": "${GIT_ORIGINAL_BRANCH}"
+          }
+        },
+        {
+          "id": "git.checkout_audit",
+          "depends_on": ["git.checkout_original"],
+          "action": "checkout",
+          "args": {
+            "operation": "checkout",
+            "branch": "${GIT_AUDIT_BRANCH}"
+          }
+        },
+        {
+          "id": "git.push",
+          "depends_on": ["shell.git_remote_setup", "git.checkout_audit"],
+          "action": "push",
+          "args": {
+            "operation": "push",
+            "branch": "${GIT_AUDIT_BRANCH}"
+          }
+        },
+        {
+          "id": "git.fetch",
+          "depends_on": ["git.push"],
+          "action": "fetch",
+          "args": {
+            "operation": "fetch"
+          }
+        },
+        {
+          "id": "git.pull",
+          "depends_on": ["git.fetch", "shell.git_remote_track"],
+          "action": "pull",
+          "args": {
+            "operation": "pull"
+          }
+        },
+        {
+          "id": "git.clone",
+          "depends_on": ["process.git_daemon_spawn"],
+          "action": "clone",
+          "args": {
+            "operation": "clone",
+            "url": "git://127.0.0.1:${GIT_DAEMON_PORT}/remote.git",
+            "directory": "${FIXTURE_ROOT}/clone"
+          }
+        },
+        {
+          "id": "git.stash_push",
+          "depends_on": ["file.post_commit_change"],
+          "action": "stash",
+          "args": {
+            "operation": "stash",
+            "action": "push"
+          }
+        },
+        {
+          "id": "git.stash_list",
+          "depends_on": ["git.stash_push"],
+          "action": "stash",
+          "args": {
+            "operation": "stash",
+            "action": "list"
+          },
+          "output_patterns": ["auto-stash"]
+        },
+        {
+          "id": "git.stash_pop",
+          "depends_on": ["git.stash_list"],
+          "action": "stash",
+          "args": {
+            "operation": "stash",
+            "action": "pop"
+          }
+        },
+        {
+          "id": "git.stash_push_again",
+          "depends_on": ["git.stash_pop"],
+          "action": "stash",
+          "args": {
+            "operation": "stash",
+            "action": "push"
+          }
+        },
+        {
+          "id": "git.stash_drop",
+          "phase": "cleanup",
+          "depends_on": ["git.stash_push_again"],
+          "action": "stash",
+          "args": {
+            "operation": "stash",
+            "action": "drop",
+            "index": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "git_worktree",
+      "cases": [
+        {
+          "id": "git_worktree.create_adopt",
+          "depends_on": ["git.commit"],
+          "action": "create",
+          "args": {
+            "action": "create",
+            "name": "${WORKTREE_ADOPT_NAME}",
+            "base": "HEAD"
+          }
+        },
+        {
+          "id": "git_worktree.list",
+          "depends_on": ["git_worktree.create_adopt"],
+          "action": "list",
+          "args": {
+            "action": "list"
+          },
+          "output_patterns": ["${WORKTREE_ADOPT_NAME}"]
+        },
+        {
+          "id": "git_worktree.adopt",
+          "depends_on": ["git_worktree.list"],
+          "action": "adopt",
+          "args": {
+            "action": "adopt",
+            "name": "${WORKTREE_ADOPT_NAME}"
+          }
+        },
+        {
+          "id": "git_worktree.create_discard",
+          "depends_on": ["git_worktree.adopt"],
+          "action": "create",
+          "args": {
+            "action": "create",
+            "name": "${WORKTREE_DISCARD_NAME}",
+            "base": "HEAD"
+          }
+        },
+        {
+          "id": "git_worktree.discard",
+          "phase": "cleanup",
+          "depends_on": ["git_worktree.create_discard"],
+          "action": "discard",
+          "args": {
+            "action": "discard",
+            "name": "${WORKTREE_DISCARD_NAME}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "docker",
+      "cases": [
+        {
+          "id": "docker.ps",
+          "action": "ps",
+          "args": {
+            "action": "ps"
+          }
+        },
+        {
+          "id": "docker.images",
+          "action": "images",
+          "args": {
+            "action": "images"
+          }
+        },
+        {
+          "id": "docker.pull_image",
+          "depends_on": ["docker.images"],
+          "action": "pull_image",
+          "args": {
+            "action": "pull_image",
+            "image": "${DOCKER_TEST_IMAGE}",
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "docker.pull_postgres_image",
+          "depends_on": ["docker.images", "shell.db_image_presence"],
+          "action": "pull_image",
+          "args": {
+            "action": "pull_image",
+            "image": "${DB_POSTGRES_IMAGE}",
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "docker.pull_mysql_image",
+          "depends_on": ["docker.images", "shell.db_image_presence"],
+          "action": "pull_image",
+          "args": {
+            "action": "pull_image",
+            "image": "${DB_MYSQL_IMAGE}",
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "docker.pull_mongodb_image",
+          "depends_on": ["docker.images", "shell.db_image_presence"],
+          "action": "pull_image",
+          "args": {
+            "action": "pull_image",
+            "image": "${DB_MONGODB_IMAGE}",
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "docker.run_postgres_fixture",
+          "depends_on": ["docker.pull_postgres_image"],
+          "action": "run",
+          "args": {
+            "action": "run",
+            "image": "${DB_POSTGRES_IMAGE}",
+            "args": [
+              "-d",
+              "--name",
+              "${DB_POSTGRES_CONTAINER}",
+              "--network",
+              "container:${RUNTIME_CONTAINER}",
+              "-e",
+              "POSTGRES_USER=catalog",
+              "-e",
+              "POSTGRES_PASSWORD=catalog",
+              "-e",
+              "POSTGRES_DB=catalog"
+            ],
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "docker.run_mysql_fixture",
+          "depends_on": ["docker.pull_mysql_image"],
+          "action": "run",
+          "args": {
+            "action": "run",
+            "image": "${DB_MYSQL_IMAGE}",
+            "args": [
+              "-d",
+              "--name",
+              "${DB_MYSQL_CONTAINER}",
+              "--network",
+              "container:${RUNTIME_CONTAINER}",
+              "-e",
+              "MYSQL_USER=catalog",
+              "-e",
+              "MYSQL_PASSWORD=catalog",
+              "-e",
+              "MYSQL_DATABASE=catalog",
+              "-e",
+              "MYSQL_ROOT_PASSWORD=catalogroot"
+            ],
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "docker.run_mongodb_fixture",
+          "depends_on": ["docker.pull_mongodb_image"],
+          "action": "run",
+          "args": {
+            "action": "run",
+            "image": "${DB_MONGODB_IMAGE}",
+            "args": [
+              "-d",
+              "--name",
+              "${DB_MONGODB_CONTAINER}",
+              "--network",
+              "container:${RUNTIME_CONTAINER}"
+            ],
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "docker.build",
+          "depends_on": ["file.dockerfile_fixture", "docker.pull_image"],
+          "action": "build",
+          "args": {
+            "action": "build",
+            "context": "${FIXTURE_ROOT}",
+            "dockerfile": "${FIXTURE_ROOT}/Dockerfile.audit",
+            "tag": "${DOCKER_AUDIT_IMAGE}",
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "docker.stats",
+          "depends_on": ["docker.ps"],
+          "action": "stats",
+          "args": {
+            "action": "stats",
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "docker.run_stop_fixture",
+          "depends_on": ["docker.ps", "docker.images"],
+          "action": "run",
+          "args": {
+            "action": "run",
+            "image": "${DOCKER_TEST_IMAGE}",
+            "args": ["-d", "--name", "${DOCKER_STOP_CONTAINER}"],
+            "command": "sleep 600",
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "docker.inspect",
+          "depends_on": ["docker.run_stop_fixture"],
+          "action": "inspect",
+          "args": {
+            "action": "inspect",
+            "container": "${DOCKER_STOP_CONTAINER}"
+          }
+        },
+        {
+          "id": "docker.exec",
+          "depends_on": ["docker.inspect"],
+          "action": "exec",
+          "args": {
+            "action": "exec",
+            "container": "${DOCKER_STOP_CONTAINER}",
+            "command": "echo CATALOG_DOCKER_OK",
+            "timeout_secs": 0
+          },
+          "output_patterns": ["CATALOG_DOCKER_OK"]
+        },
+        {
+          "id": "docker.logs",
+          "depends_on": ["docker.exec"],
+          "action": "logs",
+          "args": {
+            "action": "logs",
+            "container": "${DOCKER_STOP_CONTAINER}",
+            "tail": 20
+          }
+        },
+        {
+          "id": "docker.stop",
+          "phase": "cleanup",
+          "depends_on": ["docker.logs"],
+          "action": "stop",
+          "args": {
+            "action": "stop",
+            "container": "${DOCKER_STOP_CONTAINER}"
+          }
+        },
+        {
+          "id": "docker.run_kill_fixture",
+          "depends_on": ["docker.pull_image"],
+          "action": "run",
+          "args": {
+            "action": "run",
+            "image": "${DOCKER_TEST_IMAGE}",
+            "args": ["-d", "--name", "${DOCKER_KILL_CONTAINER}"],
+            "command": "sleep 600",
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "docker.kill",
+          "phase": "cleanup",
+          "depends_on": ["docker.run_kill_fixture"],
+          "action": "kill",
+          "args": {
+            "action": "kill",
+            "container": "${DOCKER_KILL_CONTAINER}"
+          }
+        },
+        {
+          "id": "docker.run_rm_fixture",
+          "depends_on": ["docker.ps", "docker.images"],
+          "action": "run",
+          "args": {
+            "action": "run",
+            "image": "${DOCKER_TEST_IMAGE}",
+            "args": ["-d", "--name", "${DOCKER_RM_CONTAINER}"],
+            "command": "sleep 600",
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "docker.rm",
+          "phase": "cleanup",
+          "depends_on": ["docker.run_rm_fixture"],
+          "action": "rm",
+          "args": {
+            "action": "rm",
+            "container": "${DOCKER_RM_CONTAINER}"
+          }
+        },
+        {
+          "id": "docker.compose_up",
+          "depends_on": ["file.compose_fixture", "docker.pull_image"],
+          "action": "compose_up",
+          "args": {
+            "action": "compose_up",
+            "compose_file": "${FIXTURE_ROOT}/compose.yaml",
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "docker.compose_logs",
+          "depends_on": ["docker.compose_up"],
+          "action": "compose_logs",
+          "args": {
+            "action": "compose_logs",
+            "compose_file": "${FIXTURE_ROOT}/compose.yaml",
+            "service": "audit",
+            "tail": 20,
+            "timeout_secs": 0
+          },
+          "output_patterns": ["CATALOG_COMPOSE_OK"]
+        },
+        {
+          "id": "docker.compose_restart",
+          "depends_on": ["docker.compose_logs"],
+          "action": "compose_restart",
+          "args": {
+            "action": "compose_restart",
+            "compose_file": "${FIXTURE_ROOT}/compose.yaml",
+            "service": "audit",
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "docker.compose_down",
+          "phase": "cleanup",
+          "depends_on": ["docker.compose_restart"],
+          "action": "compose_down",
+          "args": {
+            "action": "compose_down",
+            "compose_file": "${FIXTURE_ROOT}/compose.yaml",
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "docker.rmi",
+          "phase": "cleanup",
+          "depends_on": ["docker.build", "docker.compose_down"],
+          "action": "rmi",
+          "args": {
+            "action": "rmi",
+            "image": "${DOCKER_AUDIT_IMAGE}"
+          }
+        },
+        {
+          "id": "docker.stop_postgres_fixture",
+          "phase": "cleanup",
+          "depends_on": [
+            "db.schema_postgres",
+            "db.query_postgres",
+            "db.schema_all"
+          ],
+          "action": "stop",
+          "args": {
+            "action": "stop",
+            "container": "${DB_POSTGRES_CONTAINER}"
+          }
+        },
+        {
+          "id": "docker.stop_mysql_fixture",
+          "phase": "cleanup",
+          "depends_on": [
+            "db.schema_mysql",
+            "db.query_mysql",
+            "db.schema_all"
+          ],
+          "action": "stop",
+          "args": {
+            "action": "stop",
+            "container": "${DB_MYSQL_CONTAINER}"
+          }
+        },
+        {
+          "id": "docker.stop_mongodb_fixture",
+          "phase": "cleanup",
+          "depends_on": [
+            "db.schema_mongodb",
+            "db.query_mongodb",
+            "db.schema_all"
+          ],
+          "action": "stop",
+          "args": {
+            "action": "stop",
+            "container": "${DB_MONGODB_CONTAINER}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "package_manager",
+      "cases": [
+        {
+          "id": "package.list",
+          "args": {
+            "manager": "pip",
+            "operation": "list",
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "package.apt_get_list",
+          "args": {
+            "manager": "apt-get",
+            "operation": "list",
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "package.cargo_list",
+          "args": {
+            "manager": "cargo",
+            "operation": "list",
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "package.search",
+          "args": {
+            "manager": "apt",
+            "operation": "search",
+            "packages": ["bash"],
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "package.install",
+          "depends_on": [
+            "file.python_package_setup",
+            "file.python_package_module"
+          ],
+          "args": {
+            "manager": "pip",
+            "operation": "install",
+            "packages": [
+              "--no-build-isolation",
+              "${FIXTURE_ROOT}/python-package"
+            ],
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "package.upgrade",
+          "depends_on": ["package.install"],
+          "args": {
+            "manager": "pip",
+            "operation": "upgrade",
+            "packages": [
+              "--no-build-isolation",
+              "${FIXTURE_ROOT}/python-package"
+            ],
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "package.hold",
+          "depends_on": ["shell.package_hold_state", "package.search"],
+          "args": {
+            "manager": "apt",
+            "operation": "hold",
+            "packages": ["bash"],
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "package.remove",
+          "phase": "cleanup",
+          "depends_on": ["package.upgrade"],
+          "args": {
+            "manager": "pip",
+            "operation": "remove",
+            "packages": ["llamafarm-catalog-e2e-${RUN_ID}"],
+            "yes": true,
+            "timeout_secs": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "service_control",
+      "cases": [
+        {
+          "id": "service.list",
+          "depends_on": ["host.service_fixture_setup"],
+          "args": {
+            "operation": "list-units",
+            "user_scope": true,
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "service.daemon_reload",
+          "depends_on": ["host.service_fixture_setup"],
+          "args": {
+            "operation": "daemon-reload",
+            "user_scope": true,
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "service.enable",
+          "depends_on": ["service.daemon_reload"],
+          "args": {
+            "operation": "enable",
+            "unit": "${SERVICE_UNIT}",
+            "user_scope": true,
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "service.is_enabled",
+          "depends_on": ["service.enable"],
+          "args": {
+            "operation": "is-enabled",
+            "unit": "${SERVICE_UNIT}",
+            "user_scope": true,
+            "timeout_secs": 0
+          },
+          "output_patterns": ["enabled"]
+        },
+        {
+          "id": "service.start",
+          "depends_on": ["service.is_enabled", "service.list"],
+          "args": {
+            "operation": "start",
+            "unit": "${SERVICE_UNIT}",
+            "user_scope": true,
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "service.status",
+          "depends_on": ["service.start"],
+          "args": {
+            "operation": "status",
+            "unit": "${SERVICE_UNIT}",
+            "user_scope": true,
+            "timeout_secs": 0
+          },
+          "output_patterns": ["active \\(running\\)"]
+        },
+        {
+          "id": "service.is_active",
+          "depends_on": ["service.start"],
+          "args": {
+            "operation": "is-active",
+            "unit": "${SERVICE_UNIT}",
+            "user_scope": true,
+            "timeout_secs": 0
+          },
+          "output_patterns": ["active"]
+        },
+        {
+          "id": "service.logs",
+          "depends_on": ["service.is_active"],
+          "args": {
+            "operation": "logs",
+            "unit": "${SERVICE_UNIT}",
+            "lines": 20,
+            "user_scope": true,
+            "timeout_secs": 0
+          },
+          "output_patterns": ["CATALOG_SERVICE_OK"]
+        },
+        {
+          "id": "service.reload",
+          "depends_on": ["service.logs"],
+          "args": {
+            "operation": "reload",
+            "unit": "${SERVICE_UNIT}",
+            "user_scope": true,
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "service.restart",
+          "depends_on": ["service.reload"],
+          "args": {
+            "operation": "restart",
+            "unit": "${SERVICE_UNIT}",
+            "user_scope": true,
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "service.stop",
+          "phase": "cleanup",
+          "depends_on": ["service.restart"],
+          "args": {
+            "operation": "stop",
+            "unit": "${SERVICE_UNIT}",
+            "user_scope": true,
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "service.disable",
+          "phase": "cleanup",
+          "depends_on": ["service.stop"],
+          "args": {
+            "operation": "disable",
+            "unit": "${SERVICE_UNIT}",
+            "user_scope": true,
+            "timeout_secs": 0
+          }
+        },
+        {
+          "id": "service.is_failed",
+          "phase": "cleanup",
+          "depends_on": ["host.service_fail_activate"],
+          "args": {
+            "operation": "is-failed",
+            "unit": "${SERVICE_FAIL_UNIT}",
+            "user_scope": true,
+            "timeout_secs": 0
+          },
+          "output_patterns": ["failed"]
+        }
+      ]
+    },
+    {
+      "name": "host_exec",
+      "cases": [
+        {
+          "id": "host.health",
+          "action": "health",
+          "args": {
+            "action": "health"
+          }
+        },
+        {
+          "id": "host.exec",
+          "depends_on": ["host.health"],
+          "action": "exec",
+          "args": {
+            "action": "exec",
+            "command": "printf 'CATALOG_HOST_OK\\n'",
+            "cwd": "${HOST_CWD}",
+            "timeout_secs": 0,
+            "approved": true
+          },
+          "output_patterns": ["CATALOG_HOST_OK"]
+        },
+        {
+          "id": "host.spawn",
+          "depends_on": ["host.health"],
+          "action": "spawn",
+          "args": {
+            "action": "spawn",
+            "command": "sleep 1; printf 'CATALOG_HOST_SPAWN_OK\\n'",
+            "cwd": "${HOST_CWD}",
+            "approved": true
+          },
+          "captures": [
+            {
+              "name": "HOST_JOB_ID",
+              "json_path": "job.job_id"
+            }
+          ]
+        },
+        {
+          "id": "host.status",
+          "depends_on": ["host.spawn"],
+          "action": "status",
+          "args": {
+            "action": "status",
+            "job_id": "${HOST_JOB_ID}"
+          },
+          "output_patterns": ["${HOST_JOB_ID}"]
+        },
+        {
+          "id": "host.status_completed",
+          "depends_on": ["host.status"],
+          "action": "status",
+          "args": {
+            "action": "status",
+            "job_id": "${HOST_JOB_ID}"
+          },
+          "output_patterns": ["${HOST_JOB_ID}"]
+        },
+        {
+          "id": "host.service_fixture_setup",
+          "depends_on": ["host.exec"],
+          "action": "exec",
+          "args": {
+            "action": "exec",
+            "command": "set -eu; unit_dir=\"$HOME/.config/systemd/user\"; mkdir -p \"$unit_dir\"; printf '%s\\n' '[Unit]' 'Description=LlamaFarm catalogue audit service' '[Service]' 'Type=simple' \"ExecStart=/bin/sh -c 'while :; do echo CATALOG_SERVICE_OK; sleep 2; done'\" \"ExecReload=/bin/sh -c 'echo CATALOG_SERVICE_RELOAD_OK'\" '[Install]' 'WantedBy=default.target' > \"$unit_dir/${SERVICE_UNIT}\"; printf '%s\\n' '[Unit]' 'Description=LlamaFarm catalogue audit failed service' '[Service]' 'Type=oneshot' 'ExecStart=/bin/false' > \"$unit_dir/${SERVICE_FAIL_UNIT}\"; systemctl --user daemon-reload; printf 'CATALOG_SERVICE_FIXTURE_OK\\n'",
+            "cwd": "${HOST_CWD}",
+            "timeout_secs": 0,
+            "approved": true
+          },
+          "output_patterns": ["CATALOG_SERVICE_FIXTURE_OK"]
+        },
+        {
+          "id": "host.service_fail_activate",
+          "depends_on": ["service.stop"],
+          "action": "exec",
+          "args": {
+            "action": "exec",
+            "command": "systemctl --user start '${SERVICE_FAIL_UNIT}' >/dev/null 2>&1 || test \"$(systemctl --user is-failed '${SERVICE_FAIL_UNIT}')\" = failed; printf 'CATALOG_SERVICE_FAILED_STATE_OK\\n'",
+            "cwd": "${HOST_CWD}",
+            "timeout_secs": 0,
+            "approved": true
+          },
+          "output_patterns": ["CATALOG_SERVICE_FAILED_STATE_OK"]
+        },
+        {
+          "id": "host.service_fixture_cleanup",
+          "phase": "cleanup",
+          "depends_on": ["service.disable", "service.is_failed"],
+          "action": "exec",
+          "args": {
+            "action": "exec",
+            "command": "set -eu; systemctl --user disable --now '${SERVICE_UNIT}' >/dev/null 2>&1 || true; systemctl --user reset-failed '${SERVICE_FAIL_UNIT}' >/dev/null 2>&1 || true; rm -f \"$HOME/.config/systemd/user/${SERVICE_UNIT}\" \"$HOME/.config/systemd/user/${SERVICE_FAIL_UNIT}\"; systemctl --user daemon-reload; printf 'CATALOG_SERVICE_CLEANUP_OK\\n'",
+            "cwd": "${HOST_CWD}",
+            "timeout_secs": 0,
+            "approved": true
+          },
+          "output_patterns": ["CATALOG_SERVICE_CLEANUP_OK"]
+        },
+        {
+          "id": "host.redeploy",
+          "depends_on": ["shell.fixture_cleanup", "host.service_fixture_cleanup"],
+          "action": "redeploy",
+          "args": {
+            "action": "redeploy",
+            "approved": true
+          },
+          "remove_database_fixtures": true,
+          "require_gateway_recovery": true,
+          "captures": [
+            {
+              "name": "HOST_REDEPLOY_JOB_ID",
+              "json_path": "job.job_id"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "model_routing_config",
+      "cases": [
+        {
+          "id": "routing.get_before",
+          "action": "get",
+          "args": {
+            "action": "get"
+          },
+          "captures": [
+            {
+              "name": "ROUTING_DEFAULT_PROVIDER",
+              "json_path": "default.provider"
+            },
+            {
+              "name": "ROUTING_DEFAULT_MODEL",
+              "json_path": "default.model"
+            },
+            {
+              "name": "ROUTING_DEFAULT_TEMPERATURE",
+              "json_path": "default.temperature"
+            }
+          ]
+        },
+        {
+          "id": "routing.list_hints",
+          "action": "list_hints",
+          "args": {
+            "action": "list_hints"
+          }
+        },
+        {
+          "id": "routing.set_default_noop",
+          "depends_on": ["routing.get_before"],
+          "action": "set_default",
+          "args": {
+            "action": "set_default",
+            "provider": {
+              "$var": "ROUTING_DEFAULT_PROVIDER",
+              "type": "json"
+            },
+            "model": {
+              "$var": "ROUTING_DEFAULT_MODEL",
+              "type": "json"
+            },
+            "temperature": {
+              "$var": "ROUTING_DEFAULT_TEMPERATURE",
+              "type": "json"
+            }
+          },
+          "output_patterns": ["Default provider/model settings updated"]
+        },
+        {
+          "id": "routing.upsert_scenario",
+          "depends_on": [
+            "routing.get_before",
+            "routing.list_hints",
+            "routing.set_default_noop"
+          ],
+          "action": "upsert_scenario",
+          "args": {
+            "action": "upsert_scenario",
+            "hint": "catalog_e2e_${RUN_ID}",
+            "provider": "ollama",
+            "model": "${OLLAMA_TEST_MODEL}",
+            "keywords": "catalogue",
+            "patterns": ["catalog_e2e"],
+            "classification_enabled": false
+          }
+        },
+        {
+          "id": "routing.upsert_scenario_union_variants",
+          "depends_on": ["routing.upsert_scenario"],
+          "action": "upsert_scenario",
+          "args": {
+            "action": "upsert_scenario",
+            "hint": "catalog_e2e_${RUN_ID}",
+            "provider": "ollama",
+            "model": "${OLLAMA_TEST_MODEL}",
+            "keywords": ["catalogue", "audit"],
+            "patterns": "catalog_e2e",
+            "classification_enabled": false
+          }
+        },
+        {
+          "id": "routing.get_scenario",
+          "depends_on": ["routing.upsert_scenario_union_variants"],
+          "action": "get",
+          "args": {
+            "action": "get"
+          },
+          "output_patterns": ["catalog_e2e_${RUN_ID}"]
+        },
+        {
+          "id": "routing.remove_scenario",
+          "phase": "cleanup",
+          "depends_on": ["routing.get_scenario"],
+          "action": "remove_scenario",
+          "args": {
+            "action": "remove_scenario",
+            "hint": "catalog_e2e_${RUN_ID}",
+            "remove_classification": true
+          }
+        },
+        {
+          "id": "routing.upsert_agent",
+          "depends_on": ["routing.get_before"],
+          "action": "upsert_agent",
+          "args": {
+            "action": "upsert_agent",
+            "name": "catalog_e2e_${RUN_ID}",
+            "provider": "ollama",
+            "model": "${OLLAMA_TEST_MODEL}",
+            "system_prompt": "Return deterministic catalogue audit markers.",
+            "allowed_tools": "memory_recall",
+            "agentic": false,
+            "max_iterations": 0
+          }
+        },
+        {
+          "id": "routing.upsert_agent_union_variant",
+          "depends_on": ["routing.upsert_agent"],
+          "action": "upsert_agent",
+          "args": {
+            "action": "upsert_agent",
+            "name": "catalog_e2e_${RUN_ID}",
+            "provider": "ollama",
+            "model": "${OLLAMA_TEST_MODEL}",
+            "system_prompt": "Return deterministic catalogue audit markers.",
+            "allowed_tools": ["memory_recall", "state_get"],
+            "agentic": false,
+            "max_iterations": 0
+          }
+        },
+        {
+          "id": "routing.get_agent",
+          "depends_on": ["routing.upsert_agent_union_variant"],
+          "action": "get",
+          "args": {
+            "action": "get"
+          },
+          "output_patterns": ["catalog_e2e_${RUN_ID}"]
+        },
+        {
+          "id": "routing.remove_agent",
+          "phase": "cleanup",
+          "depends_on": ["routing.get_agent"],
+          "action": "remove_agent",
+          "args": {
+            "action": "remove_agent",
+            "name": "catalog_e2e_${RUN_ID}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "proxy_config",
+      "cases": [
+        {
+          "id": "proxy.get_before",
+          "action": "get",
+          "args": {
+            "action": "get"
+          },
+          "captures": [
+            {
+              "name": "PROXY_WAS_ENABLED",
+              "json_path": "proxy.enabled"
+            },
+            {
+              "name": "PROXY_SCOPE",
+              "json_path": "proxy.scope"
+            },
+            {
+              "name": "PROXY_NO_PROXY",
+              "json_path": "proxy.no_proxy"
+            },
+            {
+              "name": "PROXY_SERVICES",
+              "json_path": "proxy.services"
+            }
+          ]
+        },
+        {
+          "id": "proxy.set_roundtrip",
+          "depends_on": ["proxy.get_before"],
+          "action": "set",
+          "args": {
+            "action": "set",
+            "enabled": {
+              "$var": "PROXY_WAS_ENABLED",
+              "type": "bool"
+            },
+            "scope": "${PROXY_SCOPE}",
+            "no_proxy": "localhost,127.0.0.1",
+            "services": ["provider.ollama", "tool.http_request"]
+          }
+        },
+        {
+          "id": "proxy.set_union_variants",
+          "depends_on": ["proxy.set_roundtrip"],
+          "action": "set",
+          "args": {
+            "action": "set",
+            "enabled": {
+              "$var": "PROXY_WAS_ENABLED",
+              "type": "bool"
+            },
+            "scope": "${PROXY_SCOPE}",
+            "no_proxy": ["localhost", "127.0.0.1"],
+            "services": "provider.ollama,tool.http_request"
+          }
+        },
+        {
+          "id": "proxy.list_services",
+          "action": "list_services",
+          "args": {
+            "action": "list_services"
+          }
+        },
+        {
+          "id": "proxy.apply_env",
+          "depends_on": ["proxy.set_union_variants"],
+          "action": "apply_env",
+          "args": {
+            "action": "apply_env"
+          }
+        },
+        {
+          "id": "proxy.clear_env",
+          "depends_on": ["proxy.apply_env"],
+          "action": "clear_env",
+          "args": {
+            "action": "clear_env"
+          }
+        },
+        {
+          "id": "proxy.disable",
+          "depends_on": ["proxy.clear_env"],
+          "action": "disable",
+          "args": {
+            "action": "disable",
+            "clear_env": false
+          }
+        },
+        {
+          "id": "proxy.restore",
+          "phase": "cleanup",
+          "depends_on": ["proxy.disable"],
+          "action": "set",
+          "args": {
+            "action": "set",
+            "enabled": {
+              "$var": "PROXY_WAS_ENABLED",
+              "type": "bool"
+            },
+            "scope": "${PROXY_SCOPE}",
+            "no_proxy": {
+              "$var": "PROXY_NO_PROXY",
+              "type": "json"
+            },
+            "services": {
+              "$var": "PROXY_SERVICES",
+              "type": "json"
+            }
+          }
+        },
+        {
+          "id": "proxy.restore_env",
+          "phase": "cleanup",
+          "depends_on": ["proxy.restore"],
+          "action": "apply_env",
+          "args": {
+            "action": "apply_env"
+          }
+        }
+      ]
+    },
+    {
+      "name": "ollama_model",
+      "cases": [
+        {
+          "id": "ollama.list",
+          "action": "list",
+          "args": {
+            "action": "list"
+          },
+          "output_patterns": ["${OLLAMA_TEST_MODEL}"]
+        },
+        {
+          "id": "ollama.show",
+          "depends_on": ["ollama.list"],
+          "action": "show",
+          "args": {
+            "action": "show",
+            "name": "${OLLAMA_TEST_MODEL}"
+          }
+        },
+        {
+          "id": "ollama.running",
+          "action": "running",
+          "args": {
+            "action": "running"
+          }
+        },
+        {
+          "id": "ollama.pull_audit_model",
+          "depends_on": ["ollama.show", "shell.ollama_presence"],
+          "action": "pull",
+          "args": {
+            "action": "pull",
+            "name": "${OLLAMA_AUDIT_MODEL}"
+          }
+        },
+        {
+          "id": "ollama.delete_alias",
+          "phase": "cleanup",
+          "depends_on": ["shell.ollama_alias_setup"],
+          "action": "delete",
+          "args": {
+            "action": "delete",
+            "name": "${OLLAMA_DELETE_MODEL}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "pushover",
+      "cases": [
+        {
+          "id": "pushover.send",
+          "depends_on": ["process.spawn"],
+          "args": {
+            "message": "LlamaFarm catalogue audit ${RUN_ID}",
+            "title": "LlamaFarm E2E",
+            "priority": -2
+          },
+          "config_block_patterns": [
+            "PUSHOVER.*(TOKEN|USER|KEY)",
+            "not configured",
+            "missing.*credential"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "sop_list",
+      "cases": [
+        {
+          "id": "sop.list",
+          "args": {
+            "filter": "${SOP_NAME}"
+          },
+          "captures": [
+            {
+              "name": "SOP_NAME",
+              "regex": "- \\*\\*([^*]+)\\*\\*"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "sop_execute",
+      "cases": [
+        {
+          "id": "sop.execute",
+          "depends_on": ["sop.list"],
+          "args": {
+            "name": "${SOP_NAME}",
+            "payload": "{\"source\":\"catalog-e2e\",\"run_id\":\"${RUN_ID}\"}"
+          },
+          "captures": [
+            {
+              "name": "SOP_RUN_ID",
+              "regex": "SOP run started: ([^\\s(]+)"
+            }
+          ]
+        },
+        {
+          "id": "sop.execute_failed_path",
+          "depends_on": ["sop.advance"],
+          "args": {
+            "name": "${SOP_NAME}",
+            "payload": "{\"source\":\"catalog-e2e-failed\",\"run_id\":\"${RUN_ID}\"}"
+          },
+          "captures": [
+            {
+              "name": "SOP_FAILED_RUN_ID",
+              "regex": "SOP run started: ([^\\s(]+)"
+            }
+          ]
+        },
+        {
+          "id": "sop.execute_skipped_path",
+          "depends_on": ["sop.advance_failed"],
+          "args": {
+            "name": "${SOP_NAME}",
+            "payload": "{\"source\":\"catalog-e2e-skipped\",\"run_id\":\"${RUN_ID}\"}"
+          },
+          "captures": [
+            {
+              "name": "SOP_SKIPPED_RUN_ID",
+              "regex": "SOP run started: ([^\\s(]+)"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "sop_status",
+      "cases": [
+        {
+          "id": "sop.status",
+          "depends_on": ["sop.execute"],
+          "args": {
+            "run_id": "${SOP_RUN_ID}",
+            "include_metrics": true,
+            "include_gate_status": true
+          }
+        },
+        {
+          "id": "sop.status_failed_path",
+          "depends_on": ["sop.execute_failed_path"],
+          "args": {
+            "run_id": "${SOP_FAILED_RUN_ID}",
+            "include_metrics": true,
+            "include_gate_status": true
+          }
+        },
+        {
+          "id": "sop.status_skipped_path",
+          "depends_on": ["sop.execute_skipped_path"],
+          "args": {
+            "run_id": "${SOP_SKIPPED_RUN_ID}",
+            "include_metrics": true,
+            "include_gate_status": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "sop_approve",
+      "cases": [
+        {
+          "id": "sop.approve",
+          "depends_on": ["sop.status"],
+          "args": {
+            "run_id": "${SOP_RUN_ID}"
+          }
+        },
+        {
+          "id": "sop.approve_failed_path",
+          "depends_on": ["sop.status_failed_path"],
+          "args": {
+            "run_id": "${SOP_FAILED_RUN_ID}"
+          }
+        },
+        {
+          "id": "sop.approve_skipped_path",
+          "depends_on": ["sop.status_skipped_path"],
+          "args": {
+            "run_id": "${SOP_SKIPPED_RUN_ID}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "sop_advance",
+      "cases": [
+        {
+          "id": "sop.advance",
+          "depends_on": ["sop.approve"],
+          "args": {
+            "run_id": "${SOP_RUN_ID}",
+            "status": "completed",
+            "output": "catalog audit step completed"
+          }
+        },
+        {
+          "id": "sop.advance_failed",
+          "depends_on": ["sop.approve_failed_path"],
+          "args": {
+            "run_id": "${SOP_FAILED_RUN_ID}",
+            "status": "failed",
+            "output": "catalog audit intentional failed-path check"
+          }
+        },
+        {
+          "id": "sop.advance_skipped",
+          "phase": "cleanup",
+          "depends_on": ["sop.approve_skipped_path"],
+          "args": {
+            "run_id": "${SOP_SKIPPED_RUN_ID}",
+            "status": "skipped",
+            "output": "catalog audit intentional skipped-path check"
+          }
+        }
+      ]
+    },
+    {
+      "name": "workspace_rag",
+      "cases": [
+        {
+          "id": "rag.status",
+          "depends_on": ["shell.rag_fixture_setup"],
+          "action": "status",
+          "args": {
+            "action": "status"
+          }
+        },
+        {
+          "id": "rag.search",
+          "depends_on": ["rag.status"],
+          "action": "search",
+          "args": {
+            "action": "search",
+            "query": "CATALOG_RAG_MARKER_${RUN_ID}",
+            "limit": 3
+          },
+          "output_patterns": ["CATALOG_RAG_MARKER_${RUN_ID}"]
+        }
+      ]
+    },
+    {
+      "name": "code_run",
+      "cases": [
+        {
+          "id": "code.run",
+          "args": {
+            "language": "python",
+            "code": "print('CATALOG_CODE_OK')",
+            "timeout_secs": 0
+          },
+          "output_patterns": ["CATALOG_CODE_OK"]
+        },
+        {
+          "id": "code.javascript",
+          "args": {
+            "language": "javascript",
+            "code": "console.log('CATALOG_JAVASCRIPT_OK')",
+            "timeout_secs": 0
+          },
+          "output_patterns": ["CATALOG_JAVASCRIPT_OK"]
+        },
+        {
+          "id": "code.typescript",
+          "args": {
+            "language": "typescript",
+            "code": "const marker: string = 'CATALOG_TYPESCRIPT_OK'; console.log(marker)",
+            "timeout_secs": 0
+          },
+          "output_patterns": ["CATALOG_TYPESCRIPT_OK"]
+        },
+        {
+          "id": "code.c",
+          "args": {
+            "language": "c",
+            "code": "#include <stdio.h>\nint main(void) { puts(\"CATALOG_C_OK\"); return 0; }",
+            "timeout_secs": 0
+          },
+          "output_patterns": ["CATALOG_C_OK"]
+        },
+        {
+          "id": "code.cpp",
+          "args": {
+            "language": "cpp",
+            "code": "#include <iostream>\nint main() { std::cout << \"CATALOG_CPP_OK\\n\"; }",
+            "timeout_secs": 0
+          },
+          "output_patterns": ["CATALOG_CPP_OK"]
+        },
+        {
+          "id": "code.go",
+          "args": {
+            "language": "go",
+            "code": "package main\nimport \"fmt\"\nfunc main() { fmt.Println(\"CATALOG_GO_OK\") }",
+            "timeout_secs": 0
+          },
+          "output_patterns": ["CATALOG_GO_OK"]
+        },
+        {
+          "id": "code.rust",
+          "args": {
+            "language": "rust",
+            "code": "fn main() { println!(\"CATALOG_RUST_OK\"); }",
+            "timeout_secs": 0
+          },
+          "output_patterns": ["CATALOG_RUST_OK"]
+        },
+        {
+          "id": "code.bash",
+          "args": {
+            "language": "bash",
+            "code": "printf '%s\\n' CATALOG_BASH_OK",
+            "timeout_secs": 0
+          },
+          "output_patterns": ["CATALOG_BASH_OK"]
+        }
+      ]
+    },
+    {
+      "name": "packet_capture",
+      "cases": [
+        {
+          "id": "packet.capture",
+          "args": {
+            "interface": "any",
+            "packets": 1,
+            "duration_secs": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "browser",
+      "cases": [
+        {
+          "id": "browser.open",
+          "depends_on": ["process.spawn"],
+          "action": "open",
+          "args": {
+            "action": "open",
+            "url": "${BROWSER_TEST_URL}"
+          }
+        },
+        {
+          "id": "browser.get_title",
+          "depends_on": ["browser.open"],
+          "action": "get_title",
+          "args": {
+            "action": "get_title"
+          },
+          "output_patterns": ["Catalog Audit"]
+        },
+        {
+          "id": "browser.get_url",
+          "depends_on": ["browser.open"],
+          "action": "get_url",
+          "args": {
+            "action": "get_url"
+          },
+          "output_patterns": ["127\\.0\\.0\\.1"]
+        },
+        {
+          "id": "browser.get_text",
+          "depends_on": ["browser.open"],
+          "action": "get_text",
+          "args": {
+            "action": "get_text",
+            "selector": "body"
+          },
+          "output_patterns": ["Catalog Audit"]
+        },
+        {
+          "id": "browser.is_visible",
+          "depends_on": ["browser.open"],
+          "action": "is_visible",
+          "args": {
+            "action": "is_visible",
+            "selector": "input[name='custname']"
+          },
+          "output_patterns": ["true"]
+        },
+        {
+          "id": "browser.snapshot",
+          "depends_on": ["browser.open"],
+          "action": "snapshot",
+          "args": {
+            "action": "snapshot",
+            "interactive_only": true,
+            "compact": true,
+            "depth": 6
+          }
+        },
+        {
+          "id": "browser.fill",
+          "depends_on": ["browser.snapshot"],
+          "action": "fill",
+          "args": {
+            "action": "fill",
+            "selector": "input[name='custname']",
+            "value": "LlamaFarmAudit"
+          }
+        },
+        {
+          "id": "browser.type",
+          "depends_on": ["browser.fill"],
+          "action": "type",
+          "args": {
+            "action": "type",
+            "selector": "input[name='custname']",
+            "text": "-typed"
+          }
+        },
+        {
+          "id": "browser.press",
+          "depends_on": ["browser.type"],
+          "action": "press",
+          "args": {
+            "action": "press",
+            "key": "Tab"
+          }
+        },
+        {
+          "id": "browser.hover",
+          "depends_on": ["browser.press"],
+          "action": "hover",
+          "args": {
+            "action": "hover",
+            "selector": "input[value='small']"
+          }
+        },
+        {
+          "id": "browser.scroll",
+          "depends_on": ["browser.hover"],
+          "action": "scroll",
+          "args": {
+            "action": "scroll",
+            "direction": "down",
+            "pixels": 20
+          }
+        },
+        {
+          "id": "browser.scroll_up",
+          "depends_on": ["browser.scroll"],
+          "action": "scroll",
+          "args": {
+            "action": "scroll",
+            "direction": "up",
+            "pixels": 20
+          }
+        },
+        {
+          "id": "browser.scroll_left",
+          "depends_on": ["browser.scroll_up"],
+          "action": "scroll",
+          "args": {
+            "action": "scroll",
+            "direction": "left",
+            "pixels": 20
+          }
+        },
+        {
+          "id": "browser.scroll_right",
+          "depends_on": ["browser.scroll_left"],
+          "action": "scroll",
+          "args": {
+            "action": "scroll",
+            "direction": "right",
+            "pixels": 20
+          }
+        },
+        {
+          "id": "browser.wait",
+          "depends_on": ["browser.open"],
+          "action": "wait",
+          "args": {
+            "action": "wait",
+            "selector": "form"
+          }
+        },
+        {
+          "id": "browser.find",
+          "depends_on": ["browser.wait"],
+          "action": "find",
+          "args": {
+            "action": "find",
+            "by": "text",
+            "value": "Catalog Audit",
+            "find_action": "text"
+          },
+          "output_patterns": ["Catalog Audit"]
+        },
+        {
+          "id": "browser.find_by_role_fill",
+          "depends_on": ["browser.find"],
+          "action": "find",
+          "args": {
+            "action": "find",
+            "by": "role",
+            "value": "textbox",
+            "find_action": "fill",
+            "fill_value": "role-filled"
+          },
+          "output_patterns": ["filled"]
+        },
+        {
+          "id": "browser.find_by_label_click",
+          "depends_on": ["browser.find_by_role_fill"],
+          "action": "find",
+          "args": {
+            "action": "find",
+            "by": "label",
+            "value": "Customer name",
+            "find_action": "click"
+          },
+          "output_patterns": ["clicked"]
+        },
+        {
+          "id": "browser.find_by_placeholder_hover",
+          "depends_on": ["browser.find_by_label_click"],
+          "action": "find",
+          "args": {
+            "action": "find",
+            "by": "placeholder",
+            "value": "Customer name",
+            "find_action": "hover"
+          },
+          "output_patterns": ["hovered"]
+        },
+        {
+          "id": "browser.find_by_testid_check",
+          "depends_on": ["browser.find_by_placeholder_hover"],
+          "action": "find",
+          "args": {
+            "action": "find",
+            "by": "testid",
+            "value": "size-small",
+            "find_action": "check"
+          },
+          "output_patterns": ["checked"]
+        },
+        {
+          "id": "browser.screenshot",
+          "depends_on": ["browser.scroll"],
+          "action": "screenshot",
+          "args": {
+            "action": "screenshot",
+            "path": "${BROWSER_SCREENSHOT_FILE}",
+            "full_page": true
+          }
+        },
+        {
+          "id": "browser.click",
+          "depends_on": [
+            "browser.fill",
+            "browser.type",
+            "browser.find_by_testid_check",
+            "browser.screenshot",
+            "browser.get_title",
+            "browser.get_url",
+            "browser.get_text",
+            "browser.is_visible"
+          ],
+          "action": "click",
+          "args": {
+            "action": "click",
+            "selector": "input[value='small']"
+          }
+        },
+        {
+          "id": "browser.close",
+          "phase": "cleanup",
+          "depends_on": ["browser.click", "browser.press"],
+          "action": "close",
+          "args": {
+            "action": "close"
+          }
+        }
+      ]
+    },
+    {
+      "name": "http_request",
+      "cases": [
+        {
+          "id": "http.request",
+          "depends_on": ["process.spawn"],
+          "args": {
+            "url": "${BROWSER_TEST_URL}",
+            "method": "GET",
+            "headers": {
+              "Accept": "text/html"
+            }
+          },
+          "output_patterns": ["Catalog Audit"]
+        }
+      ]
+    },
+    {
+      "name": "web_fetch",
+      "cases": [
+        {
+          "id": "web.fetch",
+          "depends_on": ["process.spawn"],
+          "args": {
+            "url": "${BROWSER_TEST_URL}"
+          },
+          "output_patterns": ["Catalog Audit"]
+        }
+      ]
+    },
+    {
+      "name": "web_search_tool",
+      "cases": [
+        {
+          "id": "web.search",
+          "args": {
+            "query": "LlamaFarm catalogue audit deterministic fixture"
+          },
+          "config_block_patterns": [
+            "API.?key",
+            "credential",
+            "not configured",
+            "BRAVE|TAVILY|SERP"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "arxiv_search",
+      "cases": [
+        {
+          "id": "arxiv.search",
+          "args": {
+            "query": "transformer attention",
+            "limit": 3,
+            "min_score": 0.0,
+            "category": "cs.AI"
+          }
+        }
+      ]
+    },
+    {
+      "name": "db_schema",
+      "cases": [
+        {
+          "id": "db.schema_all",
+          "depends_on": ["shell.db_fixture_init"],
+          "args": {},
+          "output_patterns": [
+            "${DB_SQLITE_CONNECTION}",
+            "${DB_POSTGRES_CONNECTION}",
+            "${DB_MYSQL_CONNECTION}",
+            "${DB_MONGODB_CONNECTION}",
+            "catalog_e2e"
+          ]
+        },
+        {
+          "id": "db.schema_sqlite",
+          "depends_on": ["shell.db_fixture_init"],
+          "args": {
+            "connection": "${DB_SQLITE_CONNECTION}"
+          },
+          "output_patterns": ["sqlite", "catalog_e2e", "marker"]
+        },
+        {
+          "id": "db.schema_postgres",
+          "depends_on": ["shell.db_fixture_init"],
+          "args": {
+            "connection": "${DB_POSTGRES_CONNECTION}"
+          },
+          "output_patterns": ["postgres", "catalog_e2e", "marker"]
+        },
+        {
+          "id": "db.schema_mysql",
+          "depends_on": ["shell.db_fixture_init"],
+          "args": {
+            "connection": "${DB_MYSQL_CONNECTION}"
+          },
+          "output_patterns": ["mysql", "catalog_e2e", "marker"]
+        },
+        {
+          "id": "db.schema_mongodb",
+          "depends_on": ["shell.db_fixture_init"],
+          "args": {
+            "connection": "${DB_MONGODB_CONNECTION}"
+          },
+          "output_patterns": ["mongodb", "catalog_e2e", "marker"]
+        }
+      ]
+    },
+    {
+      "name": "db_query",
+      "cases": [
+        {
+          "id": "db.query_sqlite",
+          "depends_on": ["db.schema_sqlite"],
+          "args": {
+            "connection": "${DB_SQLITE_CONNECTION}",
+            "query": "${DB_SQLITE_QUERY}",
+            "max_rows": 1
+          },
+          "output_patterns": ["CATALOG_DB_SQLITE_OK"]
+        },
+        {
+          "id": "db.query_postgres",
+          "depends_on": ["db.schema_postgres"],
+          "args": {
+            "connection": "${DB_POSTGRES_CONNECTION}",
+            "query": "${DB_POSTGRES_QUERY}",
+            "max_rows": 1
+          },
+          "output_patterns": ["CATALOG_DB_POSTGRES_OK"]
+        },
+        {
+          "id": "db.query_mysql",
+          "depends_on": ["db.schema_mysql"],
+          "args": {
+            "connection": "${DB_MYSQL_CONNECTION}",
+            "query": "${DB_MYSQL_QUERY}",
+            "max_rows": 1
+          },
+          "output_patterns": ["CATALOG_DB_MYSQL_OK"]
+        },
+        {
+          "id": "db.query_mongodb",
+          "depends_on": ["db.schema_mongodb"],
+          "args": {
+            "connection": "${DB_MONGODB_CONNECTION}",
+            "query": {
+              "$var": "DB_MONGODB_QUERY",
+              "type": "json"
+            },
+            "max_rows": 1
+          },
+          "output_patterns": ["CATALOG_DB_MONGODB_OK"]
+        }
+      ]
+    },
+    {
+      "name": "screenshot",
+      "cases": [
+        {
+          "id": "screenshot.capture",
+          "args": {
+            "filename": "${SCREENSHOT_FILE}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "delegate",
+      "cases": [
+        {
+          "id": "delegate.call",
+          "args": {
+            "agent": "planner",
+            "prompt": "Return exactly CATALOG_DELEGATE_OK and perform no tool calls.",
+            "context": "Deterministic end-to-end catalogue audit ${RUN_ID}"
+          },
+          "output_patterns": ["CATALOG_DELEGATE_OK"]
+        },
+        {
+          "id": "delegate.remote_primary",
+          "depends_on": ["delegate.call"],
+          "federation_peer_ids": ["${REMOTE_PEER_ID_PRIMARY}"],
+          "args": {
+            "agent": "${REMOTE_AGENT_PRIMARY}",
+            "prompt": "Return exactly CATALOG_REMOTE_PRIMARY_OK and perform no tool calls.",
+            "context": "Federated end-to-end catalogue audit ${RUN_ID}"
+          },
+          "output_patterns": ["CATALOG_REMOTE_PRIMARY_OK"]
+        },
+        {
+          "id": "delegate.remote_secondary",
+          "depends_on": ["delegate.call"],
+          "federation_peer_ids": ["${REMOTE_PEER_ID_SECONDARY}"],
+          "args": {
+            "agent": "${REMOTE_AGENT_SECONDARY}",
+            "prompt": "Return exactly CATALOG_REMOTE_SECONDARY_OK and perform no tool calls.",
+            "context": "Federated end-to-end catalogue audit ${RUN_ID}"
+          },
+          "output_patterns": ["CATALOG_REMOTE_SECONDARY_OK"]
+        }
+      ]
+    },
+    {
+      "name": "delegate_coordination_status",
+      "cases": [
+        {
+          "id": "delegate.coordination",
+          "depends_on": [
+            "delegate.call",
+            "delegate.remote_primary",
+            "delegate.remote_secondary"
+          ],
+          "args": {
+            "agent": "planner",
+            "include_messages": true,
+            "message_limit": 5,
+            "include_dead_letters": true,
+            "dead_letter_limit": 5,
+            "context_limit": 5
+          }
+        }
+      ]
+    },
+    {
+      "name": "subagent_spawn",
+      "cases": [
+        {
+          "id": "subagent.spawn",
+          "args": {
+            "agent": "operator",
+            "task": "Keep this audit session running until it is explicitly cancelled. Do not mutate files or external systems.",
+            "context": "Catalogue audit ${RUN_ID}"
+          },
+          "captures": [
+            {
+              "name": "SUBAGENT_SESSION_ID",
+              "json_path": "session_id"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "subagent_list",
+      "cases": [
+        {
+          "id": "subagent.list",
+          "depends_on": ["subagent.spawn"],
+          "args": {
+            "status": "all"
+          },
+          "output_patterns": ["${SUBAGENT_SESSION_ID}"]
+        },
+        {
+          "id": "subagent.list_running",
+          "depends_on": ["subagent.spawn"],
+          "args": {
+            "status": "running"
+          }
+        },
+        {
+          "id": "subagent.list_completed",
+          "depends_on": ["subagent.spawn"],
+          "args": {
+            "status": "completed"
+          }
+        },
+        {
+          "id": "subagent.list_failed",
+          "depends_on": ["subagent.spawn"],
+          "args": {
+            "status": "failed"
+          }
+        },
+        {
+          "id": "subagent.list_killed",
+          "depends_on": ["subagent.kill"],
+          "args": {
+            "status": "killed"
+          },
+          "output_patterns": ["${SUBAGENT_SESSION_ID}"]
+        }
+      ]
+    },
+    {
+      "name": "subagent_manage",
+      "cases": [
+        {
+          "id": "subagent.status",
+          "depends_on": ["subagent.spawn"],
+          "action": "status",
+          "args": {
+            "session_id": "${SUBAGENT_SESSION_ID}",
+            "action": "status"
+          }
+        },
+        {
+          "id": "subagent.kill",
+          "phase": "cleanup",
+          "depends_on": ["subagent.status", "subagent.list"],
+          "action": "kill",
+          "args": {
+            "session_id": "${SUBAGENT_SESSION_ID}",
+            "action": "kill"
+          }
+        }
+      ]
+    },
+    {
+      "name": "agents_list",
+      "cases": [
+        {
+          "id": "agents.list",
+          "args": {}
+        }
+      ]
+    },
+    {
+      "name": "agents_send",
+      "cases": [
+        {
+          "id": "agents.send",
+          "depends_on": ["agents.list"],
+          "args": {
+            "to_agent": "*",
+            "payload": "{\"kind\":\"catalog_e2e\",\"run_id\":\"${RUN_ID}\"}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "agents_inbox",
+      "cases": [
+        {
+          "id": "agents.inbox",
+          "depends_on": ["agents.send"],
+          "args": {}
+        }
+      ]
+    },
+    {
+      "name": "state_set",
+      "cases": [
+        {
+          "id": "state.set",
+          "args": {
+            "key": "${STATE_KEY}",
+            "value": "catalog state marker ${RUN_ID}"
+          }
+        },
+        {
+          "id": "state.tombstone",
+          "phase": "cleanup",
+          "depends_on": ["state.get"],
+          "args": {
+            "key": "${STATE_KEY}",
+            "value": ""
+          }
+        }
+      ]
+    },
+    {
+      "name": "state_get",
+      "cases": [
+        {
+          "id": "state.get",
+          "depends_on": ["state.set"],
+          "args": {
+            "key": "${STATE_KEY}"
+          },
+          "output_patterns": ["catalog state marker"]
+        }
+      ]
+    }
+  ]
+}

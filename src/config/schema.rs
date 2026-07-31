@@ -375,6 +375,7 @@ pub struct DbConnectionConfig {
     /// Connection URI. Examples:
     ///   sqlite: /path/to/db.sqlite3
     ///   postgres: postgres://user:pass@host:5432/dbname
+    ///   mysql: mysql://user:pass@host:3306/dbname
     ///   mongodb: mongodb://host:27017
     pub uri: String,
     /// For MongoDB: which database to use (required). Ignored for SQL drivers.
@@ -849,7 +850,9 @@ pub struct AgentConfig {
     /// positive value only when an explicit per-turn iteration cap is wanted.
     #[serde(default = "default_agent_max_tool_iterations")]
     pub max_tool_iterations: usize,
-    /// Maximum conversation history messages retained per session. Default: `50`.
+    /// Maximum conversation history messages retained per session. Default:
+    /// `50`. Set `0` to retain history until actual provider context pressure
+    /// requires context-aware compaction.
     #[serde(default = "default_agent_max_history_messages")]
     pub max_history_messages: usize,
     /// Maximum tokens a provider may generate for one inference segment.
@@ -3178,7 +3181,8 @@ pub struct HostRunnerConfig {
     /// container process's own `HOME`.
     #[serde(default)]
     pub host_home: Option<PathBuf>,
-    /// Maximum foreground host command timeout accepted by the client.
+    /// Maximum positive foreground host command timeout accepted by the
+    /// client. Zero means no maximum.
     #[serde(default = "default_host_runner_max_exec_timeout_secs")]
     pub max_exec_timeout_secs: u64,
 }
@@ -3417,10 +3421,10 @@ pub struct SchedulerConfig {
     /// Enable the built-in scheduler loop.
     #[serde(default = "default_scheduler_enabled")]
     pub enabled: bool,
-    /// Maximum number of persisted scheduled tasks.
+    /// Maximum due jobs considered per scheduler poll. Set `0` for unlimited.
     #[serde(default = "default_scheduler_max_tasks")]
     pub max_tasks: usize,
-    /// Maximum tasks executed per scheduler polling cycle.
+    /// Maximum simultaneously running scheduled tasks. Set `0` for unlimited.
     #[serde(default = "default_scheduler_max_concurrent")]
     pub max_concurrent: usize,
 }
@@ -6624,9 +6628,6 @@ impl Config {
 
         // Host runner. This bridge is opt-in and must always resolve to an
         // absolute owner-controlled Unix socket.
-        if self.host_runner.max_exec_timeout_secs == 0 {
-            anyhow::bail!("host_runner.max_exec_timeout_secs must be greater than 0");
-        }
         if self.host_runner.enabled {
             let socket_path = self
                 .host_runner
@@ -6734,9 +6735,9 @@ impl Config {
             &self.security.otp.gated_domains,
             &self.security.otp.gated_domain_categories,
         )
-        .with_context(
-            || "Invalid security.otp.gated_domains or security.otp.gated_domain_categories",
-        )?;
+        .with_context(|| {
+            "Invalid security.otp.gated_domains or security.otp.gated_domain_categories"
+        })?;
         if self.security.estop.state_file.trim().is_empty() {
             anyhow::bail!("security.estop.state_file must not be empty");
         }
@@ -6794,12 +6795,6 @@ impl Config {
         }
 
         // Scheduler
-        if self.scheduler.max_concurrent == 0 {
-            anyhow::bail!("scheduler.max_concurrent must be greater than 0");
-        }
-        if self.scheduler.max_tasks == 0 {
-            anyhow::bail!("scheduler.max_tasks must be greater than 0");
-        }
 
         // Model routes
         for (i, route) in self.model_routes.iter().enumerate() {
@@ -7055,11 +7050,9 @@ impl Config {
         }
         if let Ok(raw) = std::env::var("LLAMAFARM_HOST_RUNNER_MAX_TIMEOUT_SECS") {
             match raw.trim().parse::<u64>() {
-                Ok(seconds) if seconds > 0 => {
-                    self.host_runner.max_exec_timeout_secs = seconds;
-                }
+                Ok(seconds) => self.host_runner.max_exec_timeout_secs = seconds,
                 _ => tracing::warn!(
-                    "Ignoring invalid LLAMAFARM_HOST_RUNNER_MAX_TIMEOUT_SECS (expected a positive integer)"
+                    "Ignoring invalid LLAMAFARM_HOST_RUNNER_MAX_TIMEOUT_SECS (expected a non-negative integer)"
                 ),
             }
         }
@@ -7232,9 +7225,9 @@ impl Config {
 
         if let Ok(max_history) = std::env::var("LLAMAFARM_AGENT_MAX_HISTORY_MESSAGES") {
             match max_history.trim().parse::<usize>() {
-                Ok(value) if value > 0 => self.agent.max_history_messages = value,
+                Ok(value) => self.agent.max_history_messages = value,
                 _ => tracing::warn!(
-                    "Ignoring invalid LLAMAFARM_AGENT_MAX_HISTORY_MESSAGES (must be a positive integer)"
+                    "Ignoring invalid LLAMAFARM_AGENT_MAX_HISTORY_MESSAGES (must be a non-negative integer; 0 means unlimited until context pressure)"
                 ),
             }
         }
@@ -7271,6 +7264,26 @@ impl Config {
                 "0" | "false" | "no" | "off" => self.agent.parallel_tools = false,
                 _ => tracing::warn!(
                     "Ignoring invalid LLAMAFARM_AGENT_PARALLEL_TOOLS (valid: 1|0|true|false|yes|no|on|off)"
+                ),
+            }
+        }
+
+        if let Ok(max_concurrent) =
+            std::env::var("LLAMAFARM_SCHEDULER_MAX_CONCURRENT")
+        {
+            match max_concurrent.trim().parse::<usize>() {
+                Ok(value) => self.scheduler.max_concurrent = value,
+                _ => tracing::warn!(
+                    "Ignoring invalid LLAMAFARM_SCHEDULER_MAX_CONCURRENT (must be a non-negative integer; 0 means unlimited)"
+                ),
+            }
+        }
+
+        if let Ok(max_tasks) = std::env::var("LLAMAFARM_SCHEDULER_MAX_TASKS") {
+            match max_tasks.trim().parse::<usize>() {
+                Ok(value) => self.scheduler.max_tasks = value,
+                _ => tracing::warn!(
+                    "Ignoring invalid LLAMAFARM_SCHEDULER_MAX_TASKS (must be a non-negative integer; 0 means unlimited)"
                 ),
             }
         }
@@ -7576,8 +7589,7 @@ impl Config {
         // decrypted or otherwise resolved after load; discovery must never
         // write an effective credential back in plaintext.
         if let (Some(stored_connections), Some(runtime_connections)) = (
-            root.get("db_connections")
-                .and_then(toml::Value::as_array),
+            root.get("db_connections").and_then(toml::Value::as_array),
             db_connections.as_array_mut(),
         ) {
             for runtime_connection in runtime_connections {
@@ -7600,8 +7612,7 @@ impl Config {
         }
         root.insert("db_connections".to_string(), db_connections);
 
-        let toml_str =
-            toml::to_string_pretty(&raw_toml).context("Failed to serialize config")?;
+        let toml_str = toml::to_string_pretty(&raw_toml).context("Failed to serialize config")?;
         self.write_serialized_config(&toml_str).await
     }
 
@@ -7732,8 +7743,8 @@ mod tests {
     use tempfile::TempDir;
     use tokio::sync::{Mutex, MutexGuard};
     use tokio::test;
-    use tokio_stream::StreamExt;
     use tokio_stream::wrappers::ReadDirStream;
+    use tokio_stream::StreamExt;
 
     // ── Defaults ─────────────────────────────────────────────
 
@@ -7929,11 +7940,9 @@ allowed_roots = []
         let parsed: AutonomyConfig = toml::from_str(raw).unwrap();
         assert_eq!(parsed.shell_redirect_policy, ShellRedirectPolicy::Block);
         assert!(parsed.non_cli_excluded_tools.contains(&"shell".to_string()));
-        assert!(
-            parsed
-                .non_cli_excluded_tools
-                .contains(&"browser".to_string())
-        );
+        assert!(parsed
+            .non_cli_excluded_tools
+            .contains(&"browser".to_string()));
     }
 
     #[test]
@@ -7941,10 +7950,9 @@ allowed_roots = []
         let mut cfg = Config::default();
         cfg.autonomy.non_cli_excluded_tools = vec!["shell".into(), "shell".into()];
         let err = cfg.validate().unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("autonomy.non_cli_excluded_tools contains duplicate entry")
-        );
+        assert!(err
+            .to_string()
+            .contains("autonomy.non_cli_excluded_tools contains duplicate entry"));
     }
 
     #[test]
@@ -8402,12 +8410,10 @@ calc = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         assert_eq!(parsed.default_provider.as_deref(), Some("ollama"));
         assert_eq!(parsed.autonomy.level, AutonomyLevel::Full);
         assert!(!parsed.autonomy.workspace_only);
-        assert!(
-            parsed
-                .autonomy
-                .allowed_commands
-                .contains(&"docker".to_string())
-        );
+        assert!(parsed
+            .autonomy
+            .allowed_commands
+            .contains(&"docker".to_string()));
         assert!(parsed.autonomy.allowed_roots.contains(&"~".to_string()));
         assert!(parsed.browser.enabled);
         assert!(parsed.http_request.enabled);
@@ -8417,12 +8423,10 @@ calc = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         assert!(parsed.federation.enable_delegation);
         assert!(parsed.agents_ipc.enabled);
         assert!(parsed.security.estop.enabled);
-        assert!(
-            parsed
-                .autonomy
-                .auto_approve
-                .contains(&"delegate".to_string())
-        );
+        assert!(parsed
+            .autonomy
+            .auto_approve
+            .contains(&"delegate".to_string()));
         assert_devsecops_agent_is_visible_and_scoped(&parsed);
     }
 
@@ -8586,6 +8590,18 @@ tool_dispatcher = "xml"
         assert_eq!(parsed.agent.tool_dispatcher, "xml");
     }
 
+    #[test]
+    async fn agent_config_accepts_zero_as_unlimited_history_policy() {
+        let parsed: Config = toml::from_str(
+            r#"
+[agent]
+max_history_messages = 0
+"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.agent.max_history_messages, 0);
+    }
+
     #[tokio::test]
     async fn sync_directory_handles_existing_directory() {
         let dir = std::env::temp_dir().join(format!(
@@ -8668,12 +8684,10 @@ tool_dispatcher = "xml"
 
         let contents = tokio::fs::read_to_string(&config_path).await.unwrap();
         let loaded: Config = toml::from_str(&contents).unwrap();
-        assert!(
-            loaded
-                .api_key
-                .as_deref()
-                .is_some_and(crate::security::SecretStore::is_encrypted)
-        );
+        assert!(loaded
+            .api_key
+            .as_deref()
+            .is_some_and(crate::security::SecretStore::is_encrypted));
         let store = crate::security::SecretStore::new(&dir, true);
         let decrypted = store.decrypt(loaded.api_key.as_deref().unwrap()).unwrap();
         assert_eq!(decrypted, "sk-roundtrip");
@@ -10307,10 +10321,9 @@ provider_api = "not-a-real-mode"
         let err = config
             .validate()
             .expect_err("model route max_tokens=0 should be rejected");
-        assert!(
-            err.to_string()
-                .contains("model_routes[0].max_tokens must be greater than 0")
-        );
+        assert!(err
+            .to_string()
+            .contains("model_routes[0].max_tokens must be greater than 0"));
     }
 
     #[test]
@@ -10328,10 +10341,9 @@ provider_api = "not-a-real-mode"
         let err = config
             .validate()
             .expect_err("model route api_url with non-http scheme should be rejected");
-        assert!(
-            err.to_string()
-                .contains("model_routes[0].api_url must use http/https")
-        );
+        assert!(err
+            .to_string()
+            .contains("model_routes[0].api_url must use http/https"));
     }
 
     #[test]
@@ -10516,11 +10528,9 @@ provider_api = "not-a-real-mode"
         };
 
         let error = config.validate().expect_err("expected validation failure");
-        assert!(
-            error
-                .to_string()
-                .contains("wire_api must be one of: responses, chat_completions")
-        );
+        assert!(error
+            .to_string()
+            .contains("wire_api must be one of: responses, chat_completions"));
     }
 
     #[test]
@@ -10971,6 +10981,12 @@ default_model = "legacy-model"
     }
 
     #[test]
+    async fn host_runner_timeout_cap_defaults_to_unlimited() {
+        let config = HostRunnerConfig::default();
+        assert_eq!(config.max_exec_timeout_secs, 0);
+    }
+
+    #[test]
     async fn env_override_port_fallback() {
         let _env_guard = env_override_lock().await;
         let mut config = Config::default();
@@ -11328,11 +11344,9 @@ default_model = "legacy-model"
             std::env::var("HTTPS_PROXY").ok().as_deref(),
             Some("http://127.0.0.1:7891")
         );
-        assert!(
-            std::env::var("NO_PROXY")
-                .ok()
-                .is_some_and(|value| value.contains("localhost"))
-        );
+        assert!(std::env::var("NO_PROXY")
+            .ok()
+            .is_some_and(|value| value.contains("localhost")));
 
         clear_proxy_env_test_vars();
     }
@@ -11895,10 +11909,9 @@ baseline_syscalls = ["read", "write", "openat", "close"]
         let err = config
             .validate()
             .expect_err("expected fallback_api_keys empty value validation failure");
-        assert!(
-            err.to_string()
-                .contains("reliability.fallback_api_keys.openrouter must not be empty")
-        );
+        assert!(err
+            .to_string()
+            .contains("reliability.fallback_api_keys.openrouter must not be empty"));
     }
 
     #[test]
@@ -11913,10 +11926,9 @@ baseline_syscalls = ["read", "write", "openat", "close"]
         let err = config
             .validate()
             .expect_err("expected fallback_api_keys mapping validation failure");
-        assert!(
-            err.to_string()
-                .contains("reliability.fallback_api_keys.anthropic has no matching entry")
-        );
+        assert!(err
+            .to_string()
+            .contains("reliability.fallback_api_keys.anthropic has no matching entry"));
     }
 
     #[test]
@@ -11995,10 +12007,9 @@ baseline_syscalls = ["read", "write", "openat", "close"]
         let err = config
             .validate()
             .expect_err("expected syscall threshold ordering validation failure");
-        assert!(
-            err.to_string()
-                .contains("max_denied_events_per_minute must be less than or equal")
-        );
+        assert!(err
+            .to_string()
+            .contains("max_denied_events_per_minute must be less than or equal"));
     }
 
     #[test]
@@ -12009,10 +12020,9 @@ baseline_syscalls = ["read", "write", "openat", "close"]
         let err = config
             .validate()
             .expect_err("expected semantic_guard_collection validation failure");
-        assert!(
-            err.to_string()
-                .contains("security.semantic_guard_collection")
-        );
+        assert!(err
+            .to_string()
+            .contains("security.semantic_guard_collection"));
     }
 
     #[test]
@@ -12023,10 +12033,9 @@ baseline_syscalls = ["read", "write", "openat", "close"]
         let err = config
             .validate()
             .expect_err("expected semantic_guard_threshold validation failure");
-        assert!(
-            err.to_string()
-                .contains("security.semantic_guard_threshold")
-        );
+        assert!(err
+            .to_string()
+            .contains("security.semantic_guard_threshold"));
     }
 
     #[test]
@@ -12067,10 +12076,9 @@ baseline_syscalls = ["read", "write", "openat", "close"]
         let err = config
             .validate()
             .expect_err("expected coordination inbox limit validation failure");
-        assert!(
-            err.to_string()
-                .contains("coordination.max_inbox_messages_per_agent")
-        );
+        assert!(err
+            .to_string()
+            .contains("coordination.max_inbox_messages_per_agent"));
 
         let mut config = Config::default();
         config.coordination.max_dead_letters = 0;
@@ -12091,10 +12099,9 @@ baseline_syscalls = ["read", "write", "openat", "close"]
         let err = config
             .validate()
             .expect_err("expected coordination dedupe-window validation failure");
-        assert!(
-            err.to_string()
-                .contains("coordination.max_seen_message_ids")
-        );
+        assert!(err
+            .to_string()
+            .contains("coordination.max_seen_message_ids"));
 
         let mut config = Config::default();
         config.coordination.lead_agent = "   ".into();

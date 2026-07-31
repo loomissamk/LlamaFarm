@@ -42,7 +42,7 @@ Notes:
 | `enabled` | `false` | Register the policy-checked `host_exec` tool |
 | `socket_path` | unset | Exact owner-only Unix socket path |
 | `host_home` | unset | Host home mirrored into Docker; used to derive the socket |
-| `max_exec_timeout_secs` | `300` | Maximum foreground host command timeout |
+| `max_exec_timeout_secs` | `0` | Maximum positive foreground host command timeout; `0` means no maximum |
 
 Environment overrides are `LLAMAFARM_HOST_RUNNER_ENABLED`,
 `LLAMAFARM_HOST_RUNNER_SOCKET`, `LLAMAFARM_HOST_HOME`, and
@@ -107,7 +107,7 @@ Operational note for container users:
 | `tool_routing_enabled` | `true` | Route the WebSocket Agent Chat registry per turn using the current request plus recent user-task context |
 | `tool_routing_top_k` | `12` | Maximum relevant non-essential tools to select before adding core tools and required workflow dependencies; `0` disables routing |
 | `max_tool_iterations` | `0` | Tool-call loop turns per user message; `0` is unlimited, while dedicated stall detectors stop repeated non-progress |
-| `max_history_messages` | `50` | Maximum conversation history messages retained per session |
+| `max_history_messages` | `50` | Maximum conversation history messages retained per session; `0` preserves raw history until actual provider context pressure requires compaction |
 | `parallel_tools` | `false` | Enable parallel tool execution within a single iteration |
 | `tool_dispatcher` | `auto` | Tool dispatch strategy |
 
@@ -135,6 +135,20 @@ Notes:
 - If a channel message exceeds this value, the runtime returns: `Agent exceeded maximum tool iterations (<value>)`.
 - In CLI, gateway, and channel tool loops, multiple independent tool calls are executed concurrently by default when the pending calls do not require approval gating; result order remains stable.
 - `parallel_tools` applies to the `Agent::turn()` API surface. It does not gate the runtime loop used by CLI, gateway, or channel handlers.
+
+## `[scheduler]`
+
+| Key | Default | Purpose |
+|---|---|---|
+| `enabled` | `true` | Enable the persisted background-job scheduler |
+| `max_tasks` | `64` | Maximum due jobs considered per poll; `0` means unlimited |
+| `max_concurrent` | `4` | Maximum jobs running at once across scheduler polls; `0` means unlimited |
+
+`LLAMAFARM_SCHEDULER_MAX_CONCURRENT` overrides `max_concurrent`, and
+`LLAMAFARM_SCHEDULER_MAX_TASKS` overrides `max_tasks`. A long-running
+job remains in the active count until it finishes; with a positive limit, later
+polls start only the remaining number of jobs. With `0`, every distinct due job
+may start without a scheduler-imposed concurrency ceiling.
 
 ## `[security.otp]`
 
@@ -831,6 +845,36 @@ Notes:
 - Webhook endpoint is `POST /nextcloud-talk`.
 - `LLAMAFARM_NEXTCLOUD_TALK_WEBHOOK_SECRET` overrides `webhook_secret` when set.
 - See [nextcloud-talk-setup.md](nextcloud-talk-setup.md) for setup and troubleshooting.
+
+## `[[db_connections]]`
+
+Named connections power the Database Explorer and the `db_schema` and
+`db_query` tools. Supported drivers are `sqlite`, `postgres`, `mysql`
+(including MariaDB), and `mongodb`.
+
+| Key | Default | Purpose |
+|---|---|---|
+| `name` | _required_ | Stable connection name used by the UI and tools |
+| `driver` | _required_ | `sqlite`, `postgres`, `mysql`, or `mongodb` |
+| `uri` | _required_ | File path for SQLite or driver connection URI |
+| `database` | unset | MongoDB database name; SQL drivers select it from the URI |
+| `read_only` | `true` | Restrict SQL connections to read queries and MongoDB to non-writing operations |
+| `max_rows` | `500` | Maximum rows returned by one query |
+| `label` | `name` | Optional display label |
+
+```toml
+[[db_connections]]
+name = "research_mysql"
+driver = "mysql"
+uri = "mysql://llamafarm_user:replace_me@db.example.com:3306/research"
+read_only = true
+max_rows = 500
+```
+
+MySQL/MariaDB requires the `db-mysql` Cargo feature. The bundled Docker image
+enables it by default; source builds can add
+`--features db-mysql` (or include `db-mysql` in
+`LLAMAFARM_CARGO_FEATURES`).
 
 ## `[hardware]`
 

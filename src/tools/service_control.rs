@@ -14,16 +14,20 @@
 
 use async_trait::async_trait;
 use serde_json::json;
-use std::process::Stdio;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::AsyncReadExt;
 
+use super::command_runner::{run_capped_command, CappedStream, CommandExecution};
 use super::traits::{Tool, ToolResult};
+use crate::host_runner::{
+    send_request_with_timeouts, HostRunnerOperation, HostRunnerRequest, HostRunnerResult,
+};
 use crate::security::{NoopSandbox, Sandbox, SecurityPolicy};
 
 const MAX_OUTPUT: usize = 524_288; // 512 KB
-const DEFAULT_TIMEOUT_SECS: u64 = 30;
+/// Default command timeout. Zero means unlimited.
+const DEFAULT_TIMEOUT_SECS: u64 = 0;
 
 /// Read-only operations that are always permitted.
 const READONLY_OPS: &[&str] = &[
@@ -38,6 +42,12 @@ const READONLY_OPS: &[&str] = &[
 pub struct ServiceControlTool {
     security: Arc<SecurityPolicy>,
     sandbox: Arc<dyn Sandbox>,
+    host_runner: Option<HostRunnerTarget>,
+}
+
+struct HostRunnerTarget {
+    socket_path: PathBuf,
+    max_exec_timeout_secs: u64,
 }
 
 impl ServiceControlTool {
@@ -46,7 +56,28 @@ impl ServiceControlTool {
     }
 
     pub fn new_with_sandbox(security: Arc<SecurityPolicy>, sandbox: Arc<dyn Sandbox>) -> Self {
-        Self { security, sandbox }
+        Self {
+            security,
+            sandbox,
+            host_runner: None,
+        }
+    }
+
+    /// Route service commands to the host user service instead of executing
+    /// them in the current runtime (normally the bundled container).
+    pub fn with_host_runner(mut self, socket_path: PathBuf, max_exec_timeout_secs: u64) -> Self {
+        self.host_runner = Some(HostRunnerTarget {
+            socket_path,
+            max_exec_timeout_secs,
+        });
+        self
+    }
+
+    async fn run(&self, argv: &[String], timeout_secs: u64) -> anyhow::Result<ToolResult> {
+        if let Some(host_runner) = &self.host_runner {
+            return run_host_argv(argv, timeout_secs, host_runner).await;
+        }
+        run_argv(argv, timeout_secs, self.sandbox.as_ref()).await
     }
 }
 
@@ -59,10 +90,27 @@ impl Tool for ServiceControlTool {
     fn description(&self) -> &str {
         "Control systemd/SysV services: start, stop, restart, enable, disable, status, reload, \
         daemon-reload, logs (journalctl). Read-only ops (status/logs/is-active) are always \
-        permitted. Mutating ops require chaos_lab mode."
+        permitted. Mutating ops require chaos_lab mode. When the host runner is configured, \
+        commands target the host; otherwise they target the current runtime. Set user_scope=true \
+        to manage the current user's systemd units without requiring system-level privileges."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
+        let mut timeout_schema = json!({
+            "type": "integer",
+            "minimum": 0,
+            "description": "Optional command deadline in seconds; 0 means unlimited",
+            "default": DEFAULT_TIMEOUT_SECS
+        });
+        if let Some(maximum) = self
+            .host_runner
+            .as_ref()
+            .map(|target| target.max_exec_timeout_secs)
+            .filter(|maximum| *maximum > 0)
+        {
+            timeout_schema["maximum"] = json!(maximum);
+        }
+
         json!({
             "type": "object",
             "properties": {
@@ -90,11 +138,12 @@ impl Tool for ServiceControlTool {
                     "description": "Use 'service' command instead of 'systemctl' (SysV fallback)",
                     "default": false
                 },
-                "timeout_secs": {
-                    "type": "integer",
-                    "description": "Command timeout in seconds (default: 30)",
-                    "default": 30
-                }
+                "user_scope": {
+                    "type": "boolean",
+                    "description": "Use the current user's systemd manager (systemctl --user / journalctl --user)",
+                    "default": false
+                },
+                "timeout_secs": timeout_schema
             },
             "required": ["operation"]
         })
@@ -108,10 +157,37 @@ impl Tool for ServiceControlTool {
             .get("use_sysv")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let user_scope = args
+            .get("user_scope")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if user_scope && use_sysv {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some("user_scope is only supported with systemd, not SysV".to_string()),
+            });
+        }
         let timeout_secs = args
             .get("timeout_secs")
             .and_then(|v| v.as_u64())
             .unwrap_or(DEFAULT_TIMEOUT_SECS);
+        if let Some(maximum) = self
+            .host_runner
+            .as_ref()
+            .map(|target| target.max_exec_timeout_secs)
+            .filter(|maximum| *maximum > 0)
+        {
+            if timeout_secs > maximum {
+                return Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!(
+                        "timeout_secs must be 0 (unlimited) or at most {maximum}"
+                    )),
+                });
+            }
+        }
 
         // Gate mutating operations.
         if !READONLY_OPS.contains(&operation) && self.security.block_high_risk_commands {
@@ -137,32 +213,42 @@ impl Tool for ServiceControlTool {
                     });
                 }
             };
-            let argv = vec![
-                "journalctl".to_string(),
+            let mut argv = vec!["journalctl".to_string()];
+            if user_scope {
+                argv.push("--user".to_string());
+            }
+            argv.extend([
                 "-u".to_string(),
                 unit_name.to_string(),
                 "-n".to_string(),
                 lines.to_string(),
                 "--no-pager".to_string(),
-            ];
-            return run_argv(&argv, timeout_secs, self.sandbox.as_ref()).await;
+            ]);
+            return self.run(&argv, timeout_secs).await;
         }
 
         // Special case: list-units
         if operation == "list-units" {
-            let argv = vec![
-                "systemctl".to_string(),
+            let mut argv = vec!["systemctl".to_string()];
+            if user_scope {
+                argv.push("--user".to_string());
+            }
+            argv.extend([
                 "list-units".to_string(),
                 "--no-pager".to_string(),
                 "--no-legend".to_string(),
-            ];
-            return run_argv(&argv, timeout_secs, self.sandbox.as_ref()).await;
+            ]);
+            return self.run(&argv, timeout_secs).await;
         }
 
         // daemon-reload doesn't need a unit name
         if operation == "daemon-reload" {
-            let argv = vec!["systemctl".to_string(), "daemon-reload".to_string()];
-            return run_argv(&argv, timeout_secs, self.sandbox.as_ref()).await;
+            let mut argv = vec!["systemctl".to_string()];
+            if user_scope {
+                argv.push("--user".to_string());
+            }
+            argv.push("daemon-reload".to_string());
+            return self.run(&argv, timeout_secs).await;
         }
 
         // All other operations require a unit name.
@@ -186,18 +272,18 @@ impl Tool for ServiceControlTool {
             ]
         } else {
             // systemctl: systemctl <operation> <unit> [--no-pager]
-            let mut v = vec![
-                "systemctl".to_string(),
-                operation.to_string(),
-                unit_name.to_string(),
-            ];
+            let mut v = vec!["systemctl".to_string()];
+            if user_scope {
+                v.push("--user".to_string());
+            }
+            v.extend([operation.to_string(), unit_name.to_string()]);
             if operation == "status" {
                 v.push("--no-pager".to_string());
             }
             v
         };
 
-        run_argv(&argv, timeout_secs, self.sandbox.as_ref()).await
+        self.run(&argv, timeout_secs).await
     }
 }
 
@@ -212,7 +298,7 @@ async fn run_argv(
     let rest = &argv[1..];
 
     let mut cmd = tokio::process::Command::new(program);
-    cmd.args(rest).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.args(rest);
     if let Err(e) = sandbox.wrap_command(cmd.as_std_mut()) {
         return Ok(ToolResult {
             success: false,
@@ -221,38 +307,21 @@ async fn run_argv(
         });
     }
 
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => {
+    let timeout = (timeout_secs > 0).then(|| Duration::from_secs(timeout_secs));
+    let execution = match run_capped_command(cmd, MAX_OUTPUT, timeout).await {
+        Ok(execution) => execution,
+        Err(error) => {
             return Ok(ToolResult {
                 success: false,
                 output: String::new(),
-                error: Some(format!("Failed to spawn '{program}': {e}")),
+                error: Some(format!("Failed to execute '{program}': {error}")),
             });
         }
     };
 
-    let stdout_handle = child.stdout.take();
-    let stderr_handle = child.stderr.take();
-
-    let (stdout_bytes, stderr_bytes) = tokio::join!(
-        read_capped(stdout_handle, MAX_OUTPUT),
-        read_capped(stderr_handle, MAX_OUTPUT),
-    );
-
-    let result = tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait()).await;
-
-    let exit_status = match result {
-        Ok(Ok(s)) => s,
-        Ok(Err(e)) => {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!("Wait error: {e}")),
-            });
-        }
-        Err(_) => {
-            let _ = child.kill().await;
+    let command_output = match execution {
+        CommandExecution::Completed(output) => output,
+        CommandExecution::TimedOut => {
             return Ok(ToolResult {
                 success: false,
                 output: String::new(),
@@ -261,16 +330,16 @@ async fn run_argv(
         }
     };
 
-    let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
-    let stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
-    let success = exit_status.success();
+    let stdout = render_stream(command_output.stdout, "stdout");
+    let stderr = render_stream(command_output.stderr, "stderr");
+    let success = command_output.status.success();
 
     // For `status`, a non-zero exit code (unit inactive/failed) is informative,
     // not a tool failure — return the output regardless.
     let output = if stdout.is_empty() && !stderr.is_empty() {
         stderr.clone()
     } else if stdout.is_empty() && stderr.is_empty() {
-        format!("exit code: {}", exit_status.code().unwrap_or(-1))
+        format!("exit code: {}", command_output.status.code().unwrap_or(-1))
     } else {
         stdout
     };
@@ -286,29 +355,115 @@ async fn run_argv(
     })
 }
 
-async fn read_capped(
-    handle: Option<impl tokio::io::AsyncRead + Unpin>,
-    max_bytes: usize,
-) -> Vec<u8> {
-    let Some(mut reader) = handle else {
-        return Vec::new();
-    };
-    let mut buf = Vec::with_capacity(4096);
-    let mut tmp = [0u8; 4096];
-    loop {
-        match reader.read(&mut tmp).await {
-            Ok(0) | Err(_) => break,
-            Ok(n) => {
-                let remaining = max_bytes.saturating_sub(buf.len());
-                let take = n.min(remaining);
-                buf.extend_from_slice(&tmp[..take]);
-                if buf.len() >= max_bytes {
-                    break;
-                }
-            }
+async fn run_host_argv(
+    argv: &[String],
+    timeout_secs: u64,
+    target: &HostRunnerTarget,
+) -> anyhow::Result<ToolResult> {
+    let request = HostRunnerRequest::new(HostRunnerOperation::Exec {
+        command: argv_to_shell_command(argv),
+        cwd: None,
+        timeout_secs: Some(timeout_secs),
+    });
+    let response_timeout =
+        (timeout_secs > 0).then(|| Duration::from_secs(timeout_secs.saturating_add(5)));
+    let response = match send_request_with_timeouts(
+        &target.socket_path,
+        &request,
+        Duration::from_secs(10),
+        response_timeout,
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!(
+                    "Host runner unavailable at {}: {error}",
+                    target.socket_path.display()
+                )),
+            });
         }
+    };
+    if !response.success {
+        return Ok(ToolResult {
+            success: false,
+            output: String::new(),
+            error: Some(
+                response
+                    .error
+                    .unwrap_or_else(|| "host runner rejected service command".to_string()),
+            ),
+        });
     }
-    buf
+
+    match response.result {
+        Some(HostRunnerResult::Exec {
+            exit_code,
+            stdout,
+            stderr,
+            timed_out,
+        }) => {
+            let success = exit_code == Some(0) && !timed_out;
+            let output = if stdout.is_empty() && !stderr.is_empty() {
+                stderr.clone()
+            } else if stdout.is_empty() && stderr.is_empty() {
+                format!("exit code: {}", exit_code.unwrap_or(-1))
+            } else {
+                stdout
+            };
+            let error = if timed_out {
+                Some(format!("Timed out after {timeout_secs}s"))
+            } else if success || stderr.is_empty() {
+                None
+            } else {
+                Some(stderr)
+            };
+            Ok(ToolResult {
+                success,
+                output,
+                error,
+            })
+        }
+        Some(_) => Ok(ToolResult {
+            success: false,
+            output: String::new(),
+            error: Some("host runner returned an unexpected result".to_string()),
+        }),
+        None => Ok(ToolResult {
+            success: false,
+            output: String::new(),
+            error: Some("host runner returned no result".to_string()),
+        }),
+    }
+}
+
+fn argv_to_shell_command(argv: &[String]) -> String {
+    argv.iter()
+        .map(|argument| shell_quote(argument))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn shell_quote(argument: &str) -> String {
+    if !argument.is_empty()
+        && argument.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/' | b':' | b'@')
+        })
+    {
+        return argument.to_string();
+    }
+    format!("'{}'", argument.replace('\'', "'\"'\"'"))
+}
+
+fn render_stream(stream: CappedStream, label: &str) -> String {
+    let mut text = String::from_utf8_lossy(&stream.bytes).into_owned();
+    if stream.truncated {
+        text.push_str(&format!("\n... [{label} truncated at 512KB]"));
+    }
+    text
 }
 
 // ── Tests ──────────────────────────────────────────────────────────
@@ -316,7 +471,13 @@ async fn read_capped(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use crate::host_runner::{HostRunnerResponse, HOST_RUNNER_PROTOCOL_VERSION};
     use crate::security::SecurityPolicy;
+    #[cfg(unix)]
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    #[cfg(unix)]
+    use tokio::net::UnixListener;
 
     fn permissive() -> Arc<SecurityPolicy> {
         let mut p = SecurityPolicy::default();
@@ -376,5 +537,77 @@ mod tests {
         let schema = ServiceControlTool::new(permissive()).parameters_schema();
         let required = schema["required"].as_array().unwrap();
         assert!(required.iter().any(|v| v.as_str() == Some("operation")));
+        assert_eq!(schema["properties"]["timeout_secs"]["default"], 0);
+        assert_eq!(schema["properties"]["user_scope"]["default"], false);
+    }
+
+    #[test]
+    fn host_runner_timeout_limit_is_advertised() {
+        let tool =
+            ServiceControlTool::new(permissive()).with_host_runner("/tmp/test.sock".into(), 120);
+        let schema = tool.parameters_schema();
+        assert_eq!(schema["properties"]["timeout_secs"]["maximum"], 120);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn configured_host_runner_receives_service_command() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket_path = temp.path().join("host-runner.sock");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read_half, mut write_half) = stream.into_split();
+            let mut line = String::new();
+            BufReader::new(read_half)
+                .read_line(&mut line)
+                .await
+                .unwrap();
+            let request: HostRunnerRequest = serde_json::from_str(&line).unwrap();
+            match &request.operation {
+                HostRunnerOperation::Exec {
+                    command,
+                    cwd,
+                    timeout_secs,
+                } => {
+                    assert_eq!(
+                        command,
+                        "systemctl --user status 'fixture service.service' --no-pager"
+                    );
+                    assert_eq!(cwd, &None);
+                    assert_eq!(timeout_secs, &Some(0));
+                }
+                operation => panic!("unexpected operation: {operation:?}"),
+            }
+            let response = HostRunnerResponse {
+                protocol_version: HOST_RUNNER_PROTOCOL_VERSION,
+                request_id: request.request_id,
+                success: true,
+                result: Some(HostRunnerResult::Exec {
+                    exit_code: Some(0),
+                    stdout: "host service active\n".to_string(),
+                    stderr: String::new(),
+                    timed_out: false,
+                }),
+                error: None,
+            };
+            let mut wire = serde_json::to_vec(&response).unwrap();
+            wire.push(b'\n');
+            write_half.write_all(&wire).await.unwrap();
+        });
+
+        let tool = ServiceControlTool::new(permissive()).with_host_runner(socket_path, 0);
+        let result = tool
+            .execute(json!({
+                "operation": "status",
+                "unit": "fixture service.service",
+                "user_scope": true
+            }))
+            .await
+            .unwrap();
+
+        server.await.unwrap();
+        assert!(result.success, "{:?}", result.error);
+        assert_eq!(result.output, "host service active\n");
     }
 }

@@ -32,6 +32,13 @@
 - 命令名、配置键、API 路径和代码标识保持英文。
 - 发生语义歧义或行为冲突时，以英文原文为准。
 
+## 捆绑运行时更新
+
+`./scripts/docker/up-bundle.sh` 构建带 `rag-pdf` 的 PDF 读取器，启动
+Xvfb 虚拟显示并用真实 PNG 截图检查其就绪状态。状态与 federation API
+还会报告启动脚本注入的源码 commit 和 UTC 构建时间。模型仅在
+`OLLAMA_PULL_MODELS` 中明确列出时拉取。
+
 ## 相关入口
 
 - [README.md](README.md)

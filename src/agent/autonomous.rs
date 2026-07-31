@@ -6,14 +6,14 @@
 //! ## Cycle structure
 //!
 //! ```text
-//! for attempt in 0..retry_budget {
+//! loop {
 //!     check wall-clock cap
 //!     inject execution-mode system context (chaos, autonomous, …)
 //!     run_tool_call_loop  → final_answer
 //!     if objective_complete(final_answer) → return Completed
+//!     if a positive retry budget is exhausted → return RetryBudgetExhausted
 //!     inject recovery prompt
 //! }
-//! return RetryBudgetExhausted
 //! ```
 //!
 //! In `chaos_lab` mode a hypothesis/recovery prompt is injected before each
@@ -30,11 +30,11 @@ use uuid::Uuid;
 use crate::agent::tool_cache::ToolResultCache;
 use crate::config::{AgentExecutionMode, MultimodalConfig};
 use crate::observability::runtime_trace::RunTracer;
-use crate::observability::{Observer, runtime_trace};
+use crate::observability::{runtime_trace, Observer};
 use crate::providers::{ChatMessage, Provider};
 use crate::tools::Tool;
 
-use super::loop_::{TOOL_CACHE, compact_history_with_focus, run_tool_call_loop};
+use super::loop_::{compact_history_with_focus, run_tool_call_loop, TOOL_CACHE};
 use super::run_ledger::{self, RunStatus};
 
 // ── Outcome ───────────────────────────────────────────────────────
@@ -127,7 +127,7 @@ impl<'a> AutonomousLoop<'a> {
         };
         Self {
             mode,
-            retry_budget: retry_budget.max(1),
+            retry_budget,
             wall_clock_cap,
             provider,
             tools_registry,
@@ -177,8 +177,9 @@ impl<'a> AutonomousLoop<'a> {
 
     // ── Execution ─────────────────────────────────────────────────
 
-    /// Drive the autonomous cycle until the objective is met, budget is
-    /// exhausted, or the wall-clock cap is reached.
+    /// Drive the autonomous cycle until the objective is met, a positive retry
+    /// budget is exhausted, or the wall-clock cap is reached. A retry budget
+    /// of zero is unlimited.
     ///
     /// `history` is the live conversation buffer.  The caller is responsible
     /// for injecting the initial user objective message before calling `run`.
@@ -230,9 +231,10 @@ impl<'a> AutonomousLoop<'a> {
         self.inject_system_context(history);
 
         let mut last_answer = String::new();
-        let mut last_evidence_blockers: Option<String> = None;
+        let mut last_evidence_blockers: Option<String>;
 
-        for attempt in 0..self.retry_budget {
+        let mut attempt = 0_u32;
+        loop {
             // ── wall-clock cap ──────────────────────────────────
             if let Some(cap) = self.wall_clock_cap {
                 let elapsed = start.elapsed();
@@ -360,41 +362,48 @@ impl<'a> AutonomousLoop<'a> {
                 if let Some(ref t) = tracer {
                     t.close(
                         true,
-                        attempt + 1,
+                        attempt.saturating_add(1),
                         start.elapsed().as_secs(),
                         "completed",
                         &answer,
                     );
                 }
                 if let Some(ref l) = ledger {
-                    l.set_attempt(attempt + 1, None);
+                    l.set_attempt(attempt.saturating_add(1), None);
                     l.finalize(RunStatus::Completed);
                 }
                 return Ok(LoopOutcome::Completed {
-                    attempts: attempt + 1,
+                    attempts: attempt.saturating_add(1),
                     final_answer: answer,
                 });
             }
 
             // ── this attempt failed — compact then inject recovery prompt ──
-            if attempt + 1 < self.retry_budget {
-                // Compact history with objective focus so long runs don't
-                // overflow the context window.  Extract the first user
-                // message as the focus hint (owned so the borrow ends before
-                // the mutable compact call).
-                let objective: Option<String> = history
-                    .iter()
-                    .find(|m| m.role == "user")
-                    .map(|m| m.content.clone());
-                let _ = compact_history_with_focus(
-                    history,
-                    self.provider,
-                    self.model,
-                    // Keep at most 2× max_tool_iterations messages between compactions.
-                    self.max_tool_iterations.saturating_mul(2).max(20),
-                    objective.as_deref(),
-                )
-                .await;
+            let attempts_completed = attempt.saturating_add(1);
+            if retry_budget_allows_another_attempt(self.retry_budget, attempts_completed) {
+                // A positive tool-iteration ceiling also supplies the retry
+                // compaction threshold. Zero means the run is deliberately
+                // unlimited, so preserve its complete evidence chain and let
+                // the provider's normal context-pressure handling decide if
+                // compaction is actually required.
+                if let Some(max_history) =
+                    retry_history_compaction_limit(self.max_tool_iterations)
+                {
+                    // Extract the first user message as the focus hint (owned
+                    // so the borrow ends before the mutable compact call).
+                    let objective: Option<String> = history
+                        .iter()
+                        .find(|m| m.role == "user")
+                        .map(|m| m.content.clone());
+                    let _ = compact_history_with_focus(
+                        history,
+                        self.provider,
+                        self.model,
+                        max_history,
+                        objective.as_deref(),
+                    )
+                    .await;
+                }
 
                 let (recovery_prompt, retry_reason) = match &last_evidence_blockers {
                     Some(blockers) => (
@@ -407,8 +416,13 @@ impl<'a> AutonomousLoop<'a> {
                     ),
                 };
                 if let Some(ref l) = ledger {
-                    l.set_attempt(attempt + 1, Some(retry_reason.to_string()));
+                    l.set_attempt(attempts_completed, Some(retry_reason.to_string()));
                 }
+                let remaining = if self.retry_budget == 0 {
+                    serde_json::Value::String("unlimited".to_string())
+                } else {
+                    serde_json::json!(self.retry_budget.saturating_sub(attempts_completed))
+                };
                 runtime_trace::record_event(
                     "autonomous_loop_retry",
                     Some(self.channel_name),
@@ -419,12 +433,16 @@ impl<'a> AutonomousLoop<'a> {
                     Some("injecting recovery prompt"),
                     serde_json::json!({
                         "attempt": attempt,
-                        "remaining": self.retry_budget - attempt - 1,
+                        "remaining": remaining,
                         "reason": retry_reason,
                     }),
                 );
                 history.push(ChatMessage::user(recovery_prompt));
+                attempt = attempts_completed;
+                continue;
             }
+
+            break;
         }
 
         runtime_trace::record_event(
@@ -506,7 +524,7 @@ impl<'a> AutonomousLoop<'a> {
                      5. If still failing, escalate the intervention.\n\n\
                      Do not repeat the same action that already failed. \
                      Continue without waiting for approval.",
-                    attempt = attempt + 1,
+                    attempt = attempt.saturating_add(1),
                     snippet = truncate(last_answer, 300),
                 )
             }
@@ -518,7 +536,7 @@ impl<'a> AutonomousLoop<'a> {
                      Diagnose what went wrong, adjust your approach, and try again. \
                      Use tool results from earlier in this conversation to inform your \
                      revised plan. Do not ask for approval — continue autonomously.",
-                    attempt = attempt + 1,
+                    attempt = attempt.saturating_add(1),
                     snippet = truncate(last_answer, 300),
                 )
             }
@@ -553,7 +571,7 @@ You are running in fully autonomous operator mode on a disposable target machine
 - Execute tool calls immediately when you know the next action.
 - If a step fails, diagnose and retry with a corrected approach.
 - Continue until the objective is fully complete, then summarise what you did.
-- You have a retry budget — use it to recover from failures, not to stall.
+- Keep recovering until completion, explicit cancellation, or an explicitly configured limit.
 ";
 
 const CHAOS_LAB_SYSTEM_ADDENDUM: &str = "
@@ -569,7 +587,7 @@ You are running in chaos_lab mode on a fully disposable target environment.
 - Do NOT ask for approval at any step.
 - Do NOT stop on the first error — treat errors as data points.
 - Log every action, observation, hypothesis, and outcome in your response.
-- Continue until the objective is confirmed complete or the retry budget is spent.
+- Continue until completion, explicit cancellation, or an explicitly configured limit.
 ";
 
 /// Retry prompt for the case where the model claims completion but the run
@@ -590,6 +608,19 @@ fn build_evidence_recovery_prompt(blockers: &str) -> String {
 }
 
 // ── Failure detection ─────────────────────────────────────────────
+
+const fn retry_budget_allows_another_attempt(retry_budget: u32, attempts_completed: u32) -> bool {
+    retry_budget == 0 || attempts_completed < retry_budget
+}
+
+const fn retry_history_compaction_limit(max_tool_iterations: usize) -> Option<usize> {
+    if max_tool_iterations == 0 {
+        None
+    } else {
+        let doubled = max_tool_iterations.saturating_mul(2);
+        Some(if doubled < 20 { 20 } else { doubled })
+    }
+}
 
 /// Heuristic: decide whether a final LLM answer signals task failure.
 ///
@@ -689,6 +720,21 @@ mod tests {
             last_answer: "fail".into(),
         };
         assert!(!o2.is_success());
+    }
+
+    #[test]
+    fn zero_retry_budget_is_unlimited() {
+        assert!(retry_budget_allows_another_attempt(0, 1));
+        assert!(retry_budget_allows_another_attempt(0, u32::MAX));
+        assert!(retry_budget_allows_another_attempt(3, 2));
+        assert!(!retry_budget_allows_another_attempt(3, 3));
+    }
+
+    #[test]
+    fn unlimited_tool_iterations_preserve_retry_history() {
+        assert_eq!(retry_history_compaction_limit(0), None);
+        assert_eq!(retry_history_compaction_limit(1), Some(20));
+        assert_eq!(retry_history_compaction_limit(12), Some(24));
     }
 
     #[test]

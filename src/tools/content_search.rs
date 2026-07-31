@@ -1,13 +1,14 @@
+use super::command_runner::{run_capped_command, CommandExecution};
 use super::traits::{Tool, ToolResult};
 use crate::security::SecurityPolicy;
 use async_trait::async_trait;
 use serde_json::json;
-use std::process::Stdio;
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 const MAX_RESULTS: usize = 1000;
 const MAX_OUTPUT_BYTES: usize = 1_048_576; // 1 MB
-const TIMEOUT_SECS: u64 = 30;
+const DEFAULT_TIMEOUT_SECS: u64 = 0;
 
 /// Search file contents by regex pattern within the workspace.
 ///
@@ -91,6 +92,12 @@ impl Tool for ContentSearchTool {
                     "type": "integer",
                     "description": "Maximum number of results to return. Defaults to 1000",
                     "default": 1000
+                },
+                "timeout_secs": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Optional search deadline in seconds; 0 means unlimited",
+                    "default": DEFAULT_TIMEOUT_SECS
                 }
             },
             "required": ["pattern"]
@@ -164,6 +171,10 @@ impl Tool for ContentSearchTool {
             .map(|v| v as usize)
             .unwrap_or(MAX_RESULTS)
             .min(MAX_RESULTS);
+        let timeout_secs = args
+            .get("timeout_secs")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(DEFAULT_TIMEOUT_SECS);
 
         // --- Rate limit check ---
         if self.security.is_rate_limited() {
@@ -278,28 +289,27 @@ impl Tool for ContentSearchTool {
             }
         }
 
-        cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::piped());
-
-        let output = match tokio::time::timeout(
-            std::time::Duration::from_secs(TIMEOUT_SECS),
-            tokio::process::Command::from(cmd).output(),
+        let timeout = (timeout_secs > 0).then(|| Duration::from_secs(timeout_secs));
+        let output = match run_capped_command(
+            tokio::process::Command::from(cmd),
+            MAX_OUTPUT_BYTES,
+            timeout,
         )
         .await
         {
-            Ok(Ok(out)) => out,
-            Ok(Err(e)) => {
+            Ok(CommandExecution::Completed(output)) => output,
+            Err(e) => {
                 return Ok(ToolResult {
                     success: false,
                     output: String::new(),
                     error: Some(format!("Failed to execute search command: {e}")),
                 });
             }
-            Err(_) => {
+            Ok(CommandExecution::TimedOut) => {
                 return Ok(ToolResult {
                     success: false,
                     output: String::new(),
-                    error: Some(format!("Search timed out after {TIMEOUT_SECS} seconds.")),
+                    error: Some(format!("Search timed out after {timeout_secs} seconds.")),
                 });
             }
         };
@@ -307,7 +317,7 @@ impl Tool for ContentSearchTool {
         // Exit code: 0 = matches found, 1 = no matches (grep/rg), 2 = error
         let exit_code = output.status.code().unwrap_or(-1);
         if exit_code >= 2 {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stderr = String::from_utf8_lossy(&output.stderr.bytes);
             return Ok(ToolResult {
                 success: false,
                 output: String::new(),
@@ -315,7 +325,7 @@ impl Tool for ContentSearchTool {
             });
         }
 
-        let raw_stdout = String::from_utf8_lossy(&output.stdout);
+        let raw_stdout = String::from_utf8_lossy(&output.stdout.bytes);
 
         // --- Parse and format output ---
         let workspace_canon =
@@ -328,13 +338,16 @@ impl Tool for ContentSearchTool {
         };
 
         // Truncate output if too large
-        let final_output = if formatted.len() > MAX_OUTPUT_BYTES {
+        let mut final_output = if formatted.len() > MAX_OUTPUT_BYTES {
             let mut truncated = truncate_utf8(&formatted, MAX_OUTPUT_BYTES).to_string();
             truncated.push_str("\n\n[Output truncated: exceeded 1 MB limit]");
             truncated
         } else {
             formatted
         };
+        if output.stdout.truncated {
+            final_output.push_str("\n\n[Raw search output truncated after 1 MB]");
+        }
 
         Ok(ToolResult {
             success: true,
@@ -706,6 +719,7 @@ mod tests {
         assert!(schema["properties"]["pattern"].is_object());
         assert!(schema["properties"]["path"].is_object());
         assert!(schema["properties"]["output_mode"].is_object());
+        assert_eq!(schema["properties"]["timeout_secs"]["default"], 0);
         assert!(
             schema["required"]
                 .as_array()

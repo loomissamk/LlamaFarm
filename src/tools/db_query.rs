@@ -4,6 +4,14 @@ use crate::db::{build_adapter, sanitize_connection_error};
 use async_trait::async_trait;
 use serde_json::json;
 
+fn render_cell(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => "NULL".to_string(),
+        serde_json::Value::String(text) => crate::util::truncate_with_ellipsis(text, 200),
+        other => other.to_string(),
+    }
+}
+
 /// Execute a query against a configured database connection.
 pub struct DbQueryTool {
     connections: Vec<DbConnectionConfig>,
@@ -290,20 +298,7 @@ impl Tool for DbQueryTool {
                 out.push('\n');
 
                 for row in &result.rows {
-                    let cells: Vec<String> = row
-                        .iter()
-                        .map(|v| match v {
-                            serde_json::Value::Null => "NULL".to_string(),
-                            serde_json::Value::String(s) => {
-                                if s.len() > 200 {
-                                    format!("{}…", &s[..200])
-                                } else {
-                                    s.clone()
-                                }
-                            }
-                            other => other.to_string(),
-                        })
-                        .collect();
+                    let cells: Vec<String> = row.iter().map(render_cell).collect();
                     out.push_str(&cells.join(" | "));
                     out.push('\n');
                 }
@@ -347,6 +342,15 @@ mod tests {
     #[test]
     fn tool_name() {
         assert_eq!(make_tool().name(), "db_query");
+    }
+
+    #[test]
+    fn cell_rendering_truncates_multibyte_text_at_character_boundaries() {
+        let value = serde_json::Value::String(format!("{}étail", "a".repeat(199)));
+        let rendered = render_cell(&value);
+
+        assert!(rendered.ends_with("é..."));
+        assert_eq!(rendered.chars().count(), 203);
     }
 
     #[tokio::test]

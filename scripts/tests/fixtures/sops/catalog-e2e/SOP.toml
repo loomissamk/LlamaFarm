@@ -1,0 +1,11 @@
+[sop]
+name = "catalog-e2e"
+description = "Deterministic, reversible SOP fixture for the tool catalogue audit"
+version = "1.0.0"
+priority = "normal"
+execution_mode = "supervised"
+cooldown_secs = 0
+max_concurrent = 1
+
+[[triggers]]
+type = "manual"

@@ -84,6 +84,13 @@ Endpoint cũ này ưu tiên chuyển tiếp đến `scripts/bootstrap.sh`, nếu
 
 Nếu chạy Cách B ngoài thư mục repo, bootstrap script sẽ tự clone workspace tạm, build, cài đặt rồi dọn dẹp.
 
+## Runtime cục bộ đóng gói
+
+`./scripts/docker/up-bundle.sh` build trình đọc PDF với `rag-pdf`, khởi động màn
+hình ảo Xvfb và kiểm tra bằng một ảnh PNG thật. API status và federation cũng
+báo commit nguồn cùng thời gian build UTC do launcher truyền vào. Model chỉ
+được tải khi được liệt kê rõ trong `OLLAMA_PULL_MODELS`.
+
 ## Chế độ thiết lập tùy chọn
 
 ### Thiết lập trong container (Docker)

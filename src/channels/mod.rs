@@ -1618,8 +1618,10 @@ fn append_sender_turn(ctx: &ChannelRuntimeContext, sender_key: &str, turn: ChatM
         .unwrap_or_else(|e| e.into_inner());
     let turns = histories.entry(sender_key.to_string()).or_default();
     turns.push(turn);
-    while turns.len() > ctx.max_history_messages {
-        turns.remove(0);
+    if ctx.max_history_messages > 0 {
+        while turns.len() > ctx.max_history_messages {
+            turns.remove(0);
+        }
     }
 }
 
@@ -5143,7 +5145,7 @@ pub async fn start_channels(config: Config) -> Result<()> {
         temperature,
         auto_save_memory: config.memory.auto_save,
         max_tool_iterations: config.agent.max_tool_iterations,
-        max_history_messages: config.agent.max_history_messages.max(1),
+        max_history_messages: config.agent.max_history_messages,
         min_relevance_score: config.memory.min_relevance_score,
         conversation_histories: Arc::new(Mutex::new(HashMap::new())),
         provider_cache: Arc::new(Mutex::new(provider_cache_seed)),

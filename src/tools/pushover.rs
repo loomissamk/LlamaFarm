@@ -13,6 +13,12 @@ pub struct PushoverTool {
     workspace_dir: PathBuf,
 }
 
+struct PushoverConfiguration {
+    token: String,
+    user_key: String,
+    api_url: String,
+}
+
 impl PushoverTool {
     pub fn new(security: Arc<SecurityPolicy>, workspace_dir: PathBuf) -> Self {
         Self {
@@ -41,7 +47,7 @@ impl PushoverTool {
         )
     }
 
-    async fn get_credentials(&self) -> anyhow::Result<(String, String)> {
+    async fn get_configuration(&self) -> anyhow::Result<PushoverConfiguration> {
         let env_path = self.workspace_dir.join(".env");
         let content = tokio::fs::read_to_string(&env_path)
             .await
@@ -49,6 +55,7 @@ impl PushoverTool {
 
         let mut token = None;
         let mut user_key = None;
+        let mut api_url = None;
 
         for line in content.lines() {
             let line = line.trim();
@@ -64,6 +71,8 @@ impl PushoverTool {
                     token = Some(value);
                 } else if key.eq_ignore_ascii_case("PUSHOVER_USER_KEY") {
                     user_key = Some(value);
+                } else if key.eq_ignore_ascii_case("PUSHOVER_API_URL") && !value.is_empty() {
+                    api_url = Some(value);
                 }
             }
         }
@@ -72,7 +81,17 @@ impl PushoverTool {
         let user_key =
             user_key.ok_or_else(|| anyhow::anyhow!("PUSHOVER_USER_KEY not found in .env"))?;
 
-        Ok((token, user_key))
+        Ok(PushoverConfiguration {
+            token,
+            user_key,
+            api_url: api_url.unwrap_or_else(|| PUSHOVER_API_URL.to_string()),
+        })
+    }
+
+    #[cfg(test)]
+    async fn get_credentials(&self) -> anyhow::Result<(String, String)> {
+        let config = self.get_configuration().await?;
+        Ok((config.token, config.user_key))
     }
 }
 
@@ -154,11 +173,11 @@ impl Tool for PushoverTool {
 
         let sound = args.get("sound").and_then(|v| v.as_str()).map(String::from);
 
-        let (token, user_key) = self.get_credentials().await?;
+        let config = self.get_configuration().await?;
 
         let mut form = reqwest::multipart::Form::new()
-            .text("token", token)
-            .text("user", user_key)
+            .text("token", config.token)
+            .text("user", config.user_key)
             .text("message", message);
 
         if let Some(title) = title {
@@ -178,7 +197,7 @@ impl Tool for PushoverTool {
             PUSHOVER_REQUEST_TIMEOUT_SECS,
             10,
         );
-        let response = client.post(PUSHOVER_API_URL).multipart(form).send().await?;
+        let response = client.post(config.api_url).multipart(form).send().await?;
 
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
@@ -220,6 +239,53 @@ mod tests {
     use crate::security::AutonomyLevel;
     use std::fs;
     use tempfile::TempDir;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    async fn spawn_pushover_mock(
+        status: &'static str,
+        response_body: &'static str,
+    ) -> (String, tokio::task::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            let mut expected_length = None;
+
+            loop {
+                let count = stream.read(&mut buffer).await.unwrap();
+                if count == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..count]);
+                if let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                    let body_start = header_end + 4;
+                    if expected_length.is_none() {
+                        let headers = String::from_utf8_lossy(&request[..header_end]);
+                        expected_length = headers.lines().find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().ok())
+                                .flatten()
+                        });
+                    }
+                    if expected_length.is_some_and(|length| request.len() >= body_start + length) {
+                        break;
+                    }
+                }
+            }
+
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
+                response_body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+            String::from_utf8_lossy(&request).into_owned()
+        });
+        (format!("http://{address}/1/messages.json"), server)
+    }
 
     fn test_security(level: AutonomyLevel, max_actions_per_hour: u32) -> Arc<SecurityPolicy> {
         Arc::new(SecurityPolicy {
@@ -429,5 +495,62 @@ mod tests {
 
         assert!(!result.success);
         assert!(result.error.unwrap().contains("-2..=2"));
+    }
+
+    #[tokio::test]
+    async fn execute_supports_local_api_override_and_dummy_credentials() {
+        let (api_url, server) =
+            spawn_pushover_mock("200 OK", r#"{"status":1,"request":"fixture"}"#).await;
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join(".env"),
+            format!(
+                "PUSHOVER_TOKEN=fixture-token\nPUSHOVER_USER_KEY=fixture-user\nPUSHOVER_API_URL={api_url}\n"
+            ),
+        )
+        .unwrap();
+        let tool = PushoverTool::new(
+            test_security(AutonomyLevel::Full, 100),
+            tmp.path().to_path_buf(),
+        );
+
+        let result = tool
+            .execute(json!({"message": "fixture-message", "title": "Fixture"}))
+            .await
+            .unwrap();
+        let request = server.await.unwrap();
+
+        assert!(result.success, "{:?}", result.error);
+        assert!(request.contains("fixture-token"));
+        assert!(request.contains("fixture-user"));
+        assert!(request.contains("fixture-message"));
+    }
+
+    #[tokio::test]
+    async fn execute_surfaces_mock_transport_http_error() {
+        let (api_url, server) =
+            spawn_pushover_mock("400 Bad Request", r#"{"status":0,"errors":["fixture"]}"#).await;
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join(".env"),
+            format!(
+                "PUSHOVER_TOKEN=fixture-token\nPUSHOVER_USER_KEY=fixture-user\nPUSHOVER_API_URL={api_url}\n"
+            ),
+        )
+        .unwrap();
+        let tool = PushoverTool::new(
+            test_security(AutonomyLevel::Full, 100),
+            tmp.path().to_path_buf(),
+        );
+
+        let result = tool
+            .execute(json!({"message": "fixture-message"}))
+            .await
+            .unwrap();
+        server.await.unwrap();
+
+        assert!(!result.success);
+        assert!(result.output.contains("\"status\":0"));
+        assert!(result.error.unwrap().contains("400"));
     }
 }

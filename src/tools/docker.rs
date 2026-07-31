@@ -7,8 +7,9 @@
 //! - Managing images (`images`, `pull`, `rmi`)
 //! - Compose operations (`up`, `down`, `restart`, `logs`)
 //!
-//! All operations go through `docker` (or `podman` if configured) with a
-//! 300-second timeout. Output is capped at 512KB per stream.
+//! All operations go through `docker` (or `podman` if configured). Commands
+//! have no wall-clock deadline by default; callers can opt into one. Output is
+//! continuously drained and retained up to 512KB per stream.
 //!
 //! ## Security
 //!
@@ -22,8 +23,8 @@ use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::AsyncReadExt;
 
+use super::command_runner::{run_capped_command, CappedStream, CommandExecution};
 use super::traits::{Tool, ToolResult};
 use crate::security::SecurityPolicy;
 use crate::security::{NoopSandbox, Sandbox};
@@ -31,8 +32,8 @@ use crate::security::{NoopSandbox, Sandbox};
 /// Maximum output bytes per stream.
 const MAX_OUTPUT: usize = 524_288; // 512 KB
 
-/// Default command timeout in seconds.
-const DEFAULT_TIMEOUT_SECS: u64 = 300;
+/// Default command timeout in seconds. Zero means unlimited.
+const DEFAULT_TIMEOUT_SECS: u64 = 0;
 
 pub struct DockerTool {
     security: Arc<SecurityPolicy>,
@@ -138,8 +139,9 @@ impl Tool for DockerTool {
                 },
                 "timeout_secs": {
                     "type": "integer",
-                    "description": "Command timeout in seconds (default: 300)",
-                    "default": 300
+                    "minimum": 0,
+                    "description": "Optional command deadline in seconds; 0 means unlimited",
+                    "default": DEFAULT_TIMEOUT_SECS
                 }
             },
             "required": ["action"]
@@ -355,9 +357,6 @@ impl DockerTool {
         timeout_secs: u64,
         sandbox: &dyn Sandbox,
     ) -> anyhow::Result<ToolResult> {
-        use std::process::Stdio;
-
-        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
         if let Err(e) = sandbox.wrap_command(cmd.as_std_mut()) {
             return Ok(ToolResult {
                 success: false,
@@ -366,38 +365,21 @@ impl DockerTool {
             });
         }
 
-        let mut child = match cmd.spawn() {
-            Ok(c) => c,
-            Err(e) => {
+        let timeout = (timeout_secs > 0).then(|| Duration::from_secs(timeout_secs));
+        let execution = match run_capped_command(cmd, MAX_OUTPUT, timeout).await {
+            Ok(execution) => execution,
+            Err(error) => {
                 return Ok(ToolResult {
                     success: false,
                     output: String::new(),
-                    error: Some(format!("Failed to spawn docker: {e}")),
+                    error: Some(format!("Docker command execution failed: {error}")),
                 });
             }
         };
 
-        let stdout_handle = child.stdout.take();
-        let stderr_handle = child.stderr.take();
-
-        let (stdout_bytes, stderr_bytes) = tokio::join!(
-            read_capped(stdout_handle, MAX_OUTPUT),
-            read_capped(stderr_handle, MAX_OUTPUT),
-        );
-
-        let result = tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait()).await;
-
-        let exit_status = match result {
-            Ok(Ok(s)) => s,
-            Ok(Err(e)) => {
-                return Ok(ToolResult {
-                    success: false,
-                    output: String::new(),
-                    error: Some(format!("Docker wait error: {e}")),
-                });
-            }
-            Err(_) => {
-                let _ = child.kill().await;
+        let output = match execution {
+            CommandExecution::Completed(output) => output,
+            CommandExecution::TimedOut => {
                 return Ok(ToolResult {
                     success: false,
                     output: String::new(),
@@ -406,9 +388,9 @@ impl DockerTool {
             }
         };
 
-        let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
-        let stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
-        let success = exit_status.success();
+        let stdout = render_stream(output.stdout, "stdout");
+        let stderr = render_stream(output.stderr, "stderr");
+        let success = output.status.success();
 
         let output = if stdout.is_empty() && !stderr.is_empty() {
             stderr.clone()
@@ -436,29 +418,12 @@ fn require_str<'a>(args: &'a serde_json::Value, field: &str) -> anyhow::Result<&
         .ok_or_else(|| anyhow::anyhow!("Required field '{field}' missing or not a string"))
 }
 
-async fn read_capped(
-    handle: Option<impl tokio::io::AsyncRead + Unpin>,
-    max_bytes: usize,
-) -> Vec<u8> {
-    let Some(mut reader) = handle else {
-        return Vec::new();
-    };
-    let mut buf = Vec::with_capacity(4096);
-    let mut tmp = [0u8; 4096];
-    loop {
-        match reader.read(&mut tmp).await {
-            Ok(0) | Err(_) => break,
-            Ok(n) => {
-                let remaining = max_bytes.saturating_sub(buf.len());
-                let take = n.min(remaining);
-                buf.extend_from_slice(&tmp[..take]);
-                if buf.len() >= max_bytes {
-                    break;
-                }
-            }
-        }
+fn render_stream(stream: CappedStream, label: &str) -> String {
+    let mut text = String::from_utf8_lossy(&stream.bytes).into_owned();
+    if stream.truncated {
+        text.push_str(&format!("\n... [{label} truncated at 512KB]"));
     }
-    buf
+    text
 }
 
 // ── Tests ──────────────────────────────────────────────────────────
@@ -483,6 +448,7 @@ mod tests {
         let schema = tool().parameters_schema();
         let required = schema["required"].as_array().unwrap();
         assert!(required.iter().any(|v| v.as_str() == Some("action")));
+        assert_eq!(schema["properties"]["timeout_secs"]["default"], 0);
     }
 
     #[tokio::test]
@@ -507,9 +473,8 @@ mod tests {
         let t = tool();
         assert!(t.build_exec_args(&json!({})).is_err());
         assert!(t.build_exec_args(&json!({"container": "myapp"})).is_err());
-        assert!(
-            t.build_exec_args(&json!({"container": "myapp", "command": "ls -la"}))
-                .is_ok()
-        );
+        assert!(t
+            .build_exec_args(&json!({"container": "myapp", "command": "ls -la"}))
+            .is_ok());
     }
 }

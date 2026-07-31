@@ -170,11 +170,11 @@ impl DbAdapter for MongoAdapter {
             .map(|v| v.min(max_rows as u64))
             .unwrap_or(max_rows as u64) as i64;
 
-        // Build find options: projection, sort, timeout.
+        // Build find options. The caller's explicit result limit bounds what
+        // we retain, but an active database query has no arbitrary wall-clock
+        // deadline; it completes naturally or is cancelled with its run.
         let mut find_opts = mongodb::options::FindOptions::default();
         find_opts.limit = Some(limit);
-        // 15-second server-side timeout prevents full-collection scans from hanging.
-        find_opts.max_time = Some(std::time::Duration::from_secs(15));
 
         if let Some(proj) = q
             .get("projection")

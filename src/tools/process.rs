@@ -4,8 +4,8 @@ use super::shell::{
 use super::traits::{Tool, ToolResult};
 use super::{process_group, process_group::ProcessGroupGuard};
 use crate::runtime::RuntimeAdapter;
-use crate::security::SyscallAnomalyDetector;
 use crate::security::policy::ToolOperation;
+use crate::security::SyscallAnomalyDetector;
 use crate::security::{NoopSandbox, Sandbox, SecurityPolicy};
 use async_trait::async_trait;
 use serde_json::json;
@@ -42,7 +42,7 @@ struct ProcessEntry {
 ///
 /// Allows the agent to spawn long-running commands, check their output,
 /// and terminate their complete process groups. Complements the synchronous
-/// `ShellTool` for commands that need to run beyond the 60-second shell timeout.
+/// `ShellTool` for commands that must keep running after a tool call returns.
 pub struct ProcessTool {
     security: Arc<SecurityPolicy>,
     runtime: Arc<dyn RuntimeAdapter>,
@@ -626,7 +626,7 @@ impl Tool for ProcessTool {
     }
 
     fn description(&self) -> &str {
-        "Start and manage long-running background processes. Use action='spawn' for web apps, Streamlit, development servers, daemons, and commands that must outlive the shell tool's 60-second limit; use output/list to inspect them and kill to terminate their complete process group."
+        "Start and manage background processes. Use action='spawn' for web apps, Streamlit, development servers, daemons, and commands that must keep running after a shell tool call returns; use output/list to inspect them and kill to terminate their complete process group."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -745,12 +745,10 @@ mod tests {
     fn process_tool_schema_has_action() {
         let schema = make_tool().parameters_schema();
         assert!(schema["properties"]["action"].is_object());
-        assert!(
-            schema["required"]
-                .as_array()
-                .unwrap()
-                .contains(&json!("action"))
-        );
+        assert!(schema["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("action")));
     }
 
     #[test]

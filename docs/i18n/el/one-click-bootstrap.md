@@ -62,6 +62,14 @@ curl -fsSL https://raw.githubusercontent.com/llamafarm-labs/llamafarm/main/scrip
 > [!IMPORTANT]
 > Για περιβάλλοντα υψηλής ασφάλειας, συνιστάται η **Επιλογή Α**, ώστε να μπορείτε να επιθεωρήσετε το σενάριο πριν από την εκτέλεση.
 
+## Ενσωματωμένο τοπικό runtime
+
+Το `./scripts/docker/up-bundle.sh` μεταγλωττίζει το PDF reader με `rag-pdf`,
+εκκινεί εικονική οθόνη Xvfb και επαληθεύει την ετοιμότητά της με πραγματικό
+PNG screenshot. Τα API status και federation αναφέρουν επίσης το source commit
+και τον UTC χρόνο build που παρέχει ο launcher. Μοντέλα λαμβάνονται μόνο όταν
+δηλωθούν ρητά στο `OLLAMA_PULL_MODELS`.
+
 ## Διαδικασία Εισαγωγής (Onboarding)
 
 ### Μέσω Docker / Podman

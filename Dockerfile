@@ -21,6 +21,8 @@ FROM rust:1.93-slim@sha256:7e6fa79cf81be23fd45d857f75f583d80cfdbb11c91fa06180fd7
 
 WORKDIR /app
 ARG LLAMAFARM_CARGO_FEATURES=""
+ARG LLAMAFARM_BUILD_COMMIT=""
+ARG LLAMAFARM_BUILD_TIME=""
 
 # Install build dependencies
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -189,10 +191,12 @@ RUN apt-get update && apt-get install -y \
     rsync \
     ruby-full \
     rustc \
+    scrot \
     sqlite3 \
     util-linux \
     usbutils \
     wget \
+    xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 # Optional authorized-lab toolkit (opt-in, off by default to keep the image
@@ -251,6 +255,7 @@ ENV LLAMAFARM_WORKSPACE=/llamafarm-data/workspace
 ENV HOME=/llamafarm-data
 ENV SHELL=/bin/bash
 ENV CHROME_BIN=/usr/bin/chromium
+ENV DISPLAY=:99
 ENV OLLAMA_HOST=127.0.0.1:11434
 ENV OLLAMA_MODELS=/llamafarm-data/.ollama/models
 ENV LLAMAFARM_GATEWAY_PORT=42617

@@ -14,8 +14,8 @@ use tokio::io::AsyncReadExt;
 
 use super::process_group::{self, ProcessGroupGuard};
 
-/// Maximum shell command execution time before kill.
-const SHELL_TIMEOUT_SECS: u64 = 60;
+/// Default shell command timeout. Zero means no wall-clock deadline.
+const DEFAULT_SHELL_TIMEOUT_SECS: u64 = 0;
 /// Maximum output size in bytes (1MB).
 const MAX_OUTPUT_BYTES: usize = 1_048_576;
 /// Environment variables safe to pass to shell commands.
@@ -413,11 +413,11 @@ enum ShellCommandExecution {
     TimedOut { termination_detail: String },
 }
 
-/// Run a finite command while retaining ownership of its child so timeout and
-/// cancellation paths can terminate the entire process group.
-async fn run_command_with_timeout(
+/// Run a command while retaining ownership of its child so explicit timeout
+/// and cancellation paths can terminate the entire process group.
+async fn run_command_with_optional_timeout(
     mut cmd: tokio::process::Command,
-    timeout: Duration,
+    timeout: Option<Duration>,
 ) -> io::Result<ShellCommandExecution> {
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -446,8 +446,16 @@ async fn run_command_with_timeout(
     };
     let mut execution = Box::pin(execution);
 
-    match tokio::time::timeout(timeout, execution.as_mut()).await {
-        Ok(result) => {
+    let result = match timeout {
+        Some(timeout) => match tokio::time::timeout(timeout, execution.as_mut()).await {
+            Ok(result) => Some(result),
+            Err(_) => None,
+        },
+        None => Some(execution.as_mut().await),
+    };
+
+    match result {
+        Some(result) => {
             drop(execution);
             match result {
                 Ok(output) => {
@@ -462,14 +470,13 @@ async fn run_command_with_timeout(
                 }
             }
         }
-        Err(_) => {
+        None => {
             drop(execution);
             let process_group_error = process_group.terminate().err();
             // This is redundant on Unix when group signaling succeeds, but is
             // the required fallback on platforms without process groups.
             let direct_child_error = child.start_kill().err();
-            let wait_result =
-                tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+            let wait_result = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
             let direct_child_exited = matches!(&wait_result, Ok(Ok(_)));
 
             let termination_detail = if process_group::is_supported() {
@@ -537,7 +544,7 @@ impl Tool for ShellTool {
     }
 
     fn description(&self) -> &str {
-        "Execute a finite-duration shell command in the workspace directory (60-second limit). Bare local script paths are accepted and normalized to an explicit interpreter when possible. Leading forms like `cd /path && ./script.sh` are supported. Use the process tool with action='spawn' for web apps, development servers, daemons, and other long-running commands."
+        "Execute a shell command in the workspace directory with no wall-clock limit by default. Set timeout_secs to a positive value for an operator-requested deadline. Bare local script paths are accepted and normalized to an explicit interpreter when possible. Leading forms like `cd /path && ./script.sh` are supported. Use the process tool with action='spawn' for services that must keep running after the tool call returns."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -546,7 +553,13 @@ impl Tool for ShellTool {
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "A finite shell command to execute (60-second limit). Bare local script paths like ./test.sh or script.py are supported, as are leading forms like `cd /path && ./script.sh`. Use process.spawn for long-running services."
+                    "description": "A shell command to execute. Bare local script paths like ./test.sh or script.py are supported, as are leading forms like `cd /path && ./script.sh`. Use process.spawn for services that must keep running after the tool call returns."
+                },
+                "timeout_secs": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": DEFAULT_SHELL_TIMEOUT_SECS,
+                    "description": "Optional command deadline in seconds; 0 means unlimited"
                 },
                 "approved": {
                     "type": "boolean",
@@ -645,7 +658,14 @@ impl Tool for ShellTool {
             });
         }
 
-        // Execute with timeout to prevent hanging commands.
+        let timeout_secs = args
+            .get("timeout_secs")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(DEFAULT_SHELL_TIMEOUT_SECS);
+        let timeout = (timeout_secs > 0).then(|| Duration::from_secs(timeout_secs));
+
+        // Execute until completion, explicit cancellation, or an optional
+        // operator-provided timeout.
         // Clear the environment to prevent leaking API keys and other secrets
         // (CWE-200), then re-add only safe, functional variables.
         let mut cmd = match self
@@ -686,7 +706,7 @@ impl Tool for ShellTool {
             });
         }
 
-        let result = run_command_with_timeout(cmd, Duration::from_secs(SHELL_TIMEOUT_SECS)).await;
+        let result = run_command_with_optional_timeout(cmd, timeout).await;
 
         match result {
             Ok(ShellCommandExecution::Completed(output)) => {
@@ -737,7 +757,7 @@ impl Tool for ShellTool {
                 success: false,
                 output: String::new(),
                 error: Some(format!(
-                    "Command timed out after {SHELL_TIMEOUT_SECS}s; {termination_detail}"
+                    "Command timed out after {timeout_secs}s; {termination_detail}"
                 )),
             }),
         }
@@ -813,12 +833,10 @@ mod tests {
         let tool = ShellTool::new(test_security(AutonomyLevel::Supervised), test_runtime());
         let schema = tool.parameters_schema();
         assert!(schema["properties"]["command"].is_object());
-        assert!(
-            schema["required"]
-                .as_array()
-                .expect("schema required field should be an array")
-                .contains(&json!("command"))
-        );
+        assert!(schema["required"]
+            .as_array()
+            .expect("schema required field should be an array")
+            .contains(&json!("command")));
         assert!(schema["properties"]["approved"].is_object());
     }
 
@@ -931,13 +949,11 @@ mod tests {
             .await
             .expect("readonly command execution should return a result");
         assert!(!result.success);
-        assert!(
-            result
-                .error
-                .as_ref()
-                .expect("error field should be present for blocked command")
-                .contains("not allowed")
-        );
+        assert!(result
+            .error
+            .as_ref()
+            .expect("error field should be present for blocked command")
+            .contains("not allowed"));
     }
 
     #[tokio::test]
@@ -973,13 +989,11 @@ mod tests {
             .await
             .expect("absolute path argument should be blocked");
         assert!(!result.success);
-        assert!(
-            result
-                .error
-                .as_deref()
-                .unwrap_or("")
-                .contains("Path blocked")
-        );
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("Path blocked"));
     }
 
     #[tokio::test]
@@ -990,13 +1004,11 @@ mod tests {
             .await
             .expect("option-assigned forbidden path should be blocked");
         assert!(!result.success);
-        assert!(
-            result
-                .error
-                .as_deref()
-                .unwrap_or("")
-                .contains("Path blocked")
-        );
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("Path blocked"));
     }
 
     #[tokio::test]
@@ -1007,13 +1019,11 @@ mod tests {
             .await
             .expect("short option attached forbidden path should be blocked");
         assert!(!result.success);
-        assert!(
-            result
-                .error
-                .as_deref()
-                .unwrap_or("")
-                .contains("Path blocked")
-        );
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("Path blocked"));
     }
 
     #[tokio::test]
@@ -1024,13 +1034,11 @@ mod tests {
             .await
             .expect("tilde-user path should be blocked");
         assert!(!result.success);
-        assert!(
-            result
-                .error
-                .as_deref()
-                .unwrap_or("")
-                .contains("Path blocked")
-        );
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("Path blocked"));
     }
 
     #[tokio::test]
@@ -1041,13 +1049,11 @@ mod tests {
             .await
             .expect("input redirection bypass should be blocked");
         assert!(!result.success);
-        assert!(
-            result
-                .error
-                .as_deref()
-                .unwrap_or("")
-                .contains("not allowed")
-        );
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("not allowed"));
     }
 
     #[tokio::test]
@@ -1072,13 +1078,11 @@ mod tests {
             .await
             .expect("2>/dev/null should be normalized under strip policy");
         assert!(!devnull.success);
-        assert!(
-            devnull
-                .error
-                .as_deref()
-                .unwrap_or("")
-                .contains("definitely_missing_shell_redirect")
-        );
+        assert!(devnull
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("definitely_missing_shell_redirect"));
     }
 
     #[tokio::test]
@@ -1095,13 +1099,11 @@ mod tests {
             .await
             .expect("unsupported redirect should still be blocked");
         assert!(!result.success);
-        assert!(
-            result
-                .error
-                .as_deref()
-                .unwrap_or("")
-                .contains("not allowed")
-        );
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("not allowed"));
     }
 
     #[tokio::test]
@@ -1246,13 +1248,11 @@ mod tests {
             .await
             .expect("plain variable expansion should be blocked");
         assert!(!result.success);
-        assert!(
-            result
-                .error
-                .as_deref()
-                .unwrap_or("")
-                .contains("not allowed")
-        );
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("not allowed"));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1268,11 +1268,9 @@ mod tests {
             .await
             .expect("env command execution should succeed");
         assert!(result.success);
-        assert!(
-            result
-                .output
-                .contains("LLAMAFARM_TEST_PASSTHROUGH=db://unit-test")
-        );
+        assert!(result
+            .output
+            .contains("LLAMAFARM_TEST_PASSTHROUGH=db://unit-test"));
     }
 
     #[test]
@@ -1308,13 +1306,11 @@ mod tests {
             .await
             .expect("unapproved command should return a result");
         assert!(!denied.success);
-        assert!(
-            denied
-                .error
-                .as_deref()
-                .unwrap_or("")
-                .contains("explicit approval")
-        );
+        assert!(denied
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("explicit approval"));
 
         let allowed = tool
             .execute(json!({
@@ -1329,11 +1325,34 @@ mod tests {
             .await;
     }
 
-    // ── §5.2 Shell timeout enforcement tests ─────────────────
+    // ── §5.2 Shell timeout and cancellation tests ─────────────
 
     #[test]
-    fn shell_timeout_constant_is_reasonable() {
-        assert_eq!(SHELL_TIMEOUT_SECS, 60, "shell timeout must be 60 seconds");
+    fn shell_timeout_defaults_to_unlimited() {
+        assert_eq!(DEFAULT_SHELL_TIMEOUT_SECS, 0);
+        let schema =
+            ShellTool::new(test_security(AutonomyLevel::Full), test_runtime()).parameters_schema();
+        assert_eq!(schema["properties"]["timeout_secs"]["default"], 0);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unlimited_shell_command_waits_for_completion() {
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.arg("-c").arg("sleep 0.05; printf complete");
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            run_command_with_optional_timeout(cmd, None),
+        )
+        .await
+        .expect("unlimited command should complete")
+        .expect("command should execute");
+        let ShellCommandExecution::Completed(output) = result else {
+            panic!("unlimited command must not time out");
+        };
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"complete");
     }
 
     #[cfg(unix)]
@@ -1350,7 +1369,7 @@ mod tests {
         let mut cmd = tokio::process::Command::new("sh");
         cmd.arg("-c").arg(command).current_dir(temp.path());
 
-        let result = run_command_with_timeout(cmd, Duration::from_millis(500))
+        let result = run_command_with_optional_timeout(cmd, Some(Duration::from_millis(500)))
             .await
             .expect("timed command should return an execution outcome");
 
@@ -1363,6 +1382,45 @@ mod tests {
         assert!(
             !leaked.exists(),
             "a descendant must not survive the shell timeout"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dropping_inflight_shell_before_timeout_kills_descendant_process_group() {
+        let temp = tempfile::tempdir().expect("temp directory should be created");
+        let started = temp.path().join("started");
+        let leaked = temp.path().join("descendant-survived-cancel");
+        let command = format!(
+            "touch {}; (sleep 1; touch {}) & wait",
+            shell_quote_single(&started.to_string_lossy()),
+            shell_quote_single(&leaked.to_string_lossy())
+        );
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.arg("-c").arg(command).current_dir(temp.path());
+
+        // The gateway cancels a direct shell tool by dropping its execution
+        // future. Exercise the default unlimited path to prove cancellation
+        // still drops the RAII guard and reaps descendants.
+        let task = tokio::spawn(run_command_with_optional_timeout(cmd, None));
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !started.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("fixture command should start");
+
+        task.abort();
+        let join_error = match task.await {
+            Err(error) => error,
+            Ok(_) => panic!("aborting the shell future should cancel its task"),
+        };
+        assert!(join_error.is_cancelled());
+        tokio::time::sleep(Duration::from_millis(1_100)).await;
+        assert!(
+            !leaked.exists(),
+            "a descendant must not survive cancellation before the shell timeout"
         );
     }
 

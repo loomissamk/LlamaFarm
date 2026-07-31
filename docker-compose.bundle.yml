@@ -28,11 +28,16 @@ services:
       context: .
       target: bundle
       args:
-        LLAMAFARM_CARGO_FEATURES: browser-native,db-mongo,db-postgres
+        LLAMAFARM_CARGO_FEATURES: browser-native,db-mongo,db-postgres,db-mysql,rag-pdf
+        LLAMAFARM_BUILD_COMMIT: ${LLAMAFARM_BUILD_COMMIT:-}
+        LLAMAFARM_BUILD_TIME: ${LLAMAFARM_BUILD_TIME:-}
     container_name: LlamaFarm
     restart: unless-stopped
     init: true
-    shm_size: ${LLAMAFARM_SHM_SIZE:-2gb}
+    # Share the host IPC namespace instead of imposing a container /dev/shm
+    # budget. This local single-tenant bundle may use the host's natural
+    # shared-memory capacity.
+    ipc: host
 
     environment:
       # The service listens on all container interfaces so Docker can publish
@@ -42,6 +47,10 @@ services:
       # The local bundle is direct-access by design. This fixed value also
       # overrides stale persisted config from an older paired deployment.
       - LLAMAFARM_GATEWAY_PORT=${LLAMAFARM_GATEWAY_PORT:-42617}
+      - LLAMAFARM_BUILD_COMMIT=${LLAMAFARM_BUILD_COMMIT:-}
+      - LLAMAFARM_BUILD_TIME=${LLAMAFARM_BUILD_TIME:-}
+      - RUST_LOG=${RUST_LOG:-info}
+      - DISPLAY=${LLAMAFARM_DISPLAY:-:99}
       # Leave empty by default so a model selected and persisted in the
       # dashboard remains authoritative after the container restarts.
       # Set LLAMAFARM_MODEL explicitly only when an immutable deployment-level
@@ -56,6 +65,9 @@ services:
       # Forward only an explicit operator value; there is deliberately no
       # bundled generated-token ceiling.
       - LLAMAFARM_AGENT_MAX_OUTPUT_TOKENS
+      - LLAMAFARM_WS_PERSISTED_MAX_SESSIONS=${LLAMAFARM_WS_PERSISTED_MAX_SESSIONS:-64}
+      - LLAMAFARM_SCHEDULER_MAX_CONCURRENT=${LLAMAFARM_SCHEDULER_MAX_CONCURRENT:-4}
+      - LLAMAFARM_SCHEDULER_MAX_TASKS=${LLAMAFARM_SCHEDULER_MAX_TASKS:-64}
       # Free local web search is useful for agents; keep it explicit and
       # overrideable rather than relying on an old persisted config value.
       - LLAMAFARM_WEB_SEARCH_ENABLED=${LLAMAFARM_WEB_SEARCH_ENABLED:-true}
@@ -91,7 +103,7 @@ services:
       - LLAMAFARM_HOST_RUNNER_ENABLED=${LLAMAFARM_HOST_RUNNER_ENABLED:-false}
       - LLAMAFARM_HOST_RUNNER_SOCKET=${LLAMAFARM_HOST_RUNNER_SOCKET:-}
       - LLAMAFARM_HOST_HOME=${HOME}
-      - LLAMAFARM_HOST_RUNNER_MAX_TIMEOUT_SECS=${LLAMAFARM_HOST_RUNNER_MAX_TIMEOUT_SECS:-300}
+      - LLAMAFARM_HOST_RUNNER_MAX_TIMEOUT_SECS=${LLAMAFARM_HOST_RUNNER_MAX_TIMEOUT_SECS:-0}
       - OLLAMA_HOST=0.0.0.0:11434
       # This platform is local-first: never route inference to an Ollama cloud
       # model. Model pulls still use the registry, while generation stays on
@@ -108,11 +120,10 @@ services:
       - OLLAMA_NUM_CTX=${OLLAMA_NUM_CTX:-32768}
       - LLAMAFARM_ADAPTIVE_CONTEXT=${LLAMAFARM_ADAPTIVE_CONTEXT:-false}
       - LLAMAFARM_ADAPTIVE_CONTEXT_MAX=${LLAMAFARM_ADAPTIVE_CONTEXT_MAX:-262144}
-      - OLLAMA_NUM_PARALLEL=${OLLAMA_NUM_PARALLEL:-1}
-      - OLLAMA_MAX_LOADED_MODELS=${OLLAMA_MAX_LOADED_MODELS:-1}
       - OLLAMA_FLASH_ATTENTION=${OLLAMA_FLASH_ATTENTION:-1}
-      - OLLAMA_GPU_OVERHEAD=${OLLAMA_GPU_OVERHEAD:-536870912}
-      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-10m}
+      # No idle unload timer: a loaded model stays hot until Ollama needs the
+      # memory for another model or the operator explicitly unloads it.
+      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:--1}
       # VRAM cap: leave unset to let Ollama auto-detect. Override in .env:
       #   OLLAMA_MAX_VRAM=<bytes>  (e.g. 7516192768 for a 7 GB laptop GPU)
       - OLLAMA_MAX_VRAM=${OLLAMA_MAX_VRAM:-}
@@ -147,7 +158,7 @@ services:
       - "${LLAMAFARM_HOST_BIND_IP:-127.0.0.1}:${LLAMAFARM_MANAGED_APP_PORTS:-8501-8599}:${LLAMAFARM_MANAGED_APP_PORTS:-8501-8599}"
 
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:${LLAMAFARM_GATEWAY_PORT:-42617}/health >/dev/null && curl -fsS http://127.0.0.1:11434/api/tags >/dev/null && curl -fsS http://127.0.0.1:9515/status >/dev/null"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:${LLAMAFARM_GATEWAY_PORT:-42617}/health >/dev/null && curl -fsS http://127.0.0.1:11434/api/tags >/dev/null && curl -fsS http://127.0.0.1:9515/status >/dev/null && DISPLAY=$${DISPLAY:-:99} scrot /tmp/.llamafarm-display-health.png >/dev/null 2>&1 && test -s /tmp/.llamafarm-display-health.png && rm -f /tmp/.llamafarm-display-health.png"]
       interval: 60s
       timeout: 10s
       retries: 3

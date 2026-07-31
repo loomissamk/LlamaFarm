@@ -360,6 +360,9 @@ impl Agent {
 
     fn trim_history(&mut self) {
         let max = self.config.max_history_messages;
+        if max == 0 {
+            return;
+        }
         if self.history.len() <= max {
             return;
         }

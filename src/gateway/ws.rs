@@ -28,7 +28,10 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use futures_util::{stream::SplitSink, SinkExt, StreamExt};
+use futures_util::{
+    stream::{SplitSink, SplitStream},
+    SinkExt, StreamExt,
+};
 use parking_lot::Mutex;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -46,8 +49,8 @@ const EMPTY_WS_RESPONSE_FALLBACK: &str = "Tool execution completed, but the mode
 const WS_AUTOSAVE_MIN_MESSAGE_CHARS: usize = 20;
 const WS_CHAT_SUBPROTOCOL: &str = "llamafarm.v1";
 const WS_CHAT_STORE_REL_PATH: &str = "state/web-chat-sessions.json";
-const WS_PERSISTED_MAX_MESSAGES: usize = 800;
-const WS_PERSISTED_MAX_SESSIONS: usize = 64;
+const WS_PERSISTED_MAX_MESSAGES_DEFAULT: usize = 800;
+const WS_PERSISTED_MAX_SESSIONS_DEFAULT: usize = 64;
 const WS_RESTORED_CONTEXT_PREFIX: &str = "[Saved chat context restored]";
 const WS_CANCELLED_MESSAGE: &str =
     "Stopped by user. Completed tool results remain in this chat; no final response was produced.";
@@ -70,6 +73,8 @@ static WS_CHAT_SESSIONS: LazyLock<Mutex<HashMap<String, WsChatSession>>> =
 struct ActiveWsChatRun {
     registration_id: Uuid,
     cancellation: CancellationToken,
+    completion: tokio::sync::watch::Receiver<bool>,
+    delete_on_terminal: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Server-owned cancellation handles for live web-chat turns.
@@ -84,6 +89,8 @@ static ACTIVE_WS_CHAT_RUNS: LazyLock<Mutex<HashMap<String, ActiveWsChatRun>>> =
 struct ActiveWsChatRunRegistration {
     session_id: String,
     registration_id: Uuid,
+    completion: tokio::sync::watch::Sender<bool>,
+    delete_on_terminal: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl ActiveWsChatRunRegistration {
@@ -94,22 +101,40 @@ impl ActiveWsChatRunRegistration {
         }
 
         let registration_id = Uuid::new_v4();
+        let (completion, completion_rx) = tokio::sync::watch::channel(false);
+        let delete_on_terminal =
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         active_runs.insert(
             session_id.to_string(),
             ActiveWsChatRun {
                 registration_id,
                 cancellation,
+                completion: completion_rx,
+                delete_on_terminal: std::sync::Arc::clone(&delete_on_terminal),
             },
         );
         Some(Self {
             session_id: session_id.to_string(),
             registration_id,
+            completion,
+            delete_on_terminal,
         })
+    }
+
+    fn request_delete(&self) {
+        self.delete_on_terminal
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn delete_requested(&self) -> bool {
+        self.delete_on_terminal
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 
 impl Drop for ActiveWsChatRunRegistration {
     fn drop(&mut self) {
+        self.completion.send_replace(true);
         let mut active_runs = ACTIVE_WS_CHAT_RUNS.lock();
         if active_runs
             .get(&self.session_id)
@@ -120,21 +145,112 @@ impl Drop for ActiveWsChatRunRegistration {
     }
 }
 
-fn request_active_ws_chat_run_cancel(session_id: &str) -> bool {
-    let cancellation = ACTIVE_WS_CHAT_RUNS
-        .lock()
-        .get(session_id)
-        .map(|run| run.cancellation.clone());
-    if let Some(cancellation) = cancellation {
-        cancellation.cancel();
-        true
-    } else {
-        false
+fn request_active_ws_chat_run_cancel(
+    session_id: &str,
+    delete_on_terminal: bool,
+) -> Option<tokio::sync::watch::Receiver<bool>> {
+    let control = ACTIVE_WS_CHAT_RUNS.lock().get(session_id).map(|run| {
+        (
+            run.cancellation.clone(),
+            run.completion.clone(),
+            std::sync::Arc::clone(&run.delete_on_terminal),
+        )
+    });
+    let (cancellation, completion, delete_requested) = control?;
+    if delete_on_terminal {
+        delete_requested.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    cancellation.cancel();
+    Some(completion)
+}
+
+async fn wait_for_active_ws_chat_run_completion(
+    mut completion: tokio::sync::watch::Receiver<bool>,
+) {
+    while !*completion.borrow_and_update() {
+        if completion.changed().await.is_err() {
+            break;
+        }
     }
 }
 
 fn mark_ws_client_disconnected(socket_disconnected: &mut bool) {
     *socket_disconnected = true;
+}
+
+async fn await_ws_setup_operation<T, F>(
+    operation: F,
+    socket_rx: &mut SplitStream<WebSocket>,
+    session_id: &str,
+    cancellation: &CancellationToken,
+    registration: &ActiveWsChatRunRegistration,
+    socket_disconnected: &mut bool,
+    followup_message: &mut Option<String>,
+) -> Option<T>
+where
+    F: std::future::Future<Output = T>,
+{
+    let mut operation = std::pin::pin!(operation);
+    loop {
+        tokio::select! {
+            biased;
+            () = cancellation.cancelled() => return None,
+            inbound = socket_rx.next(), if !*socket_disconnected => {
+                match inbound {
+                    Some(Ok(Message::Text(text))) => {
+                        match parse_inflight_ws_control(&text) {
+                            InFlightWsControl::Cancel { session_id: control_session_id }
+                                if control_session_id == session_id => {
+                                cancellation.cancel();
+                            }
+                            InFlightWsControl::SessionDelete { session_id: control_session_id }
+                                if control_session_id == session_id => {
+                                registration.request_delete();
+                                cancellation.cancel();
+                            }
+                            InFlightWsControl::Message { session_id: control_session_id }
+                                if control_session_id == session_id => {
+                                *followup_message = Some(text.to_string());
+                                cancellation.cancel();
+                            }
+                            InFlightWsControl::Cancel { .. }
+                            | InFlightWsControl::SessionDelete { .. }
+                            | InFlightWsControl::Message { .. }
+                            | InFlightWsControl::InvalidJson
+                            | InFlightWsControl::Other => {}
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => {
+                        mark_ws_client_disconnected(socket_disconnected);
+                    }
+                    _ => {}
+                }
+            }
+            output = &mut operation => return Some(output),
+        }
+    }
+}
+
+async fn finish_cancelled_ws_setup(
+    socket: &mut WsSink,
+    session_id: &str,
+    store_path: &Path,
+    registration: &ActiveWsChatRunRegistration,
+    socket_disconnected: bool,
+) {
+    if registration.delete_requested() {
+        delete_ws_chat_history(session_id, store_path).await;
+    }
+    if !socket_disconnected {
+        let cancelled = json!({
+            "type": "cancelled",
+            "session_id": session_id,
+            "message": WS_CANCELLED_MESSAGE,
+        });
+        let _ = socket
+            .send(Message::Text(cancelled.to_string().into()))
+            .await;
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -322,12 +438,46 @@ fn normalize_ws_history_for_storage(history: &[ChatMessage]) -> Vec<ChatMessage>
         normalized.append(&mut pending_tool_trace);
     }
 
-    if normalized.len() > WS_PERSISTED_MAX_MESSAGES {
-        let keep_from = normalized.len() - WS_PERSISTED_MAX_MESSAGES;
-        normalized.drain(..keep_from);
+    if let Some(max_messages) = ws_persisted_message_limit() {
+        if normalized.len() > max_messages {
+            let keep_from = normalized.len() - max_messages;
+            normalized.drain(..keep_from);
+        }
     }
 
     normalized
+}
+
+fn parse_ws_persisted_message_limit(raw: Option<&str>) -> Option<usize> {
+    match raw.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => match value.parse::<usize>() {
+            Ok(0) => None,
+            Ok(limit) => Some(limit),
+            Err(_) => Some(WS_PERSISTED_MAX_MESSAGES_DEFAULT),
+        },
+        None => Some(WS_PERSISTED_MAX_MESSAGES_DEFAULT),
+    }
+}
+
+fn ws_persisted_message_limit() -> Option<usize> {
+    let configured = std::env::var("LLAMAFARM_AGENT_MAX_HISTORY_MESSAGES").ok();
+    parse_ws_persisted_message_limit(configured.as_deref())
+}
+
+fn ws_persisted_session_limit() -> Option<usize> {
+    match std::env::var("LLAMAFARM_WS_PERSISTED_MAX_SESSIONS")
+        .ok()
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => match value.parse::<usize>() {
+            Ok(0) => None,
+            Ok(limit) => Some(limit),
+            Err(_) => Some(WS_PERSISTED_MAX_SESSIONS_DEFAULT),
+        },
+        None => Some(WS_PERSISTED_MAX_SESSIONS_DEFAULT),
+    }
 }
 
 fn select_resume_history(
@@ -387,7 +537,8 @@ async fn persist_ws_chat_session(store_path: &Path, session_id: &str, history: &
         },
     );
 
-    if persisted.sessions.len() > WS_PERSISTED_MAX_SESSIONS {
+    if let Some(max_sessions) = ws_persisted_session_limit() {
+      if persisted.sessions.len() > max_sessions {
         let mut ordered: Vec<(String, u64)> = persisted
             .sessions
             .iter()
@@ -395,10 +546,11 @@ async fn persist_ws_chat_session(store_path: &Path, session_id: &str, history: &
             .collect();
         ordered.sort_by_key(|(_, updated_at_unix)| *updated_at_unix);
 
-        let remove_count = persisted.sessions.len() - WS_PERSISTED_MAX_SESSIONS;
+        let remove_count = persisted.sessions.len() - max_sessions;
         for (session_id, _) in ordered.into_iter().take(remove_count) {
             persisted.sessions.remove(&session_id);
         }
+      }
     }
 
     if let Err(error) = write_persisted_ws_chat_sessions(store_path, &persisted).await {
@@ -1578,12 +1730,29 @@ async fn emit_ws_federation_event(socket: &mut WsSink, event: FederationChatEven
     let _ = socket.send(Message::Text(payload.to_string().into())).await;
 }
 
+/// Race direct-intent work against the same server-owned token used by the
+/// normal tool loop. The token is intentionally independent of the websocket:
+/// dropping a browser connection leaves `operation` running, while an explicit
+/// Stop from either the original or a replacement socket drops the in-flight
+/// future and returns the standard cancellation sentinel.
+async fn await_direct_operation<T>(
+    cancellation: &CancellationToken,
+    operation: impl std::future::Future<Output = T>,
+) -> anyhow::Result<T> {
+    tokio::select! {
+        biased;
+        () = cancellation.cancelled() => Err(crate::agent::loop_::ToolLoopCancelled.into()),
+        output = operation => Ok(output),
+    }
+}
+
 async fn execute_direct_shell_command(
     socket: &mut WsSink,
     session_id: &str,
     runtime: &GatewayRuntimeSnapshot,
     history: &mut Vec<ChatMessage>,
     command: &str,
+    cancellation: &CancellationToken,
 ) -> anyhow::Result<String> {
     let Some(shell_tool) = runtime
         .tools_registry_exec
@@ -1604,10 +1773,12 @@ async fn execute_direct_shell_command(
     .await;
 
     let started_at = Instant::now();
-    let tool_result = shell_tool
-        .execute(json!({ "command": command }))
-        .await
-        .map_err(|error| anyhow::anyhow!("shell execution failed: {error}"))?;
+    let tool_result = await_direct_operation(
+        cancellation,
+        shell_tool.execute(json!({ "command": command })),
+    )
+    .await?
+    .map_err(|error| anyhow::anyhow!("shell execution failed: {error}"))?;
 
     let raw_output = if tool_result.output.trim().is_empty() {
         tool_result.error.clone().unwrap_or_default()
@@ -1696,6 +1867,7 @@ async fn execute_direct_workspace_delete(
     config: &crate::config::Config,
     history: &mut Vec<ChatMessage>,
     path: &str,
+    cancellation: &CancellationToken,
 ) -> anyhow::Result<String> {
     emit_ws_delta_event(
         socket,
@@ -1708,7 +1880,11 @@ async fn execute_direct_workspace_delete(
     .await;
 
     let started_at = Instant::now();
-    let result = super::api::delete_workspace_path(config, Some(path)).await;
+    let result = await_direct_operation(
+        cancellation,
+        super::api::delete_workspace_path(config, Some(path)),
+    )
+    .await?;
     let (success, raw_output) = match result {
         Ok(payload) => (
             true,
@@ -1751,6 +1927,7 @@ async fn execute_direct_workspace_directory_create(
     config: &crate::config::Config,
     history: &mut Vec<ChatMessage>,
     path: &str,
+    cancellation: &CancellationToken,
 ) -> anyhow::Result<String> {
     emit_ws_delta_event(
         socket,
@@ -1763,7 +1940,11 @@ async fn execute_direct_workspace_directory_create(
     .await;
 
     let started_at = Instant::now();
-    let result = super::api::create_workspace_directory(config, Some(path)).await;
+    let result = await_direct_operation(
+        cancellation,
+        super::api::create_workspace_directory(config, Some(path)),
+    )
+    .await?;
     let (success, raw_output) = match result {
         Ok(payload) => (
             true,
@@ -1806,6 +1987,7 @@ async fn execute_direct_file_read(
     runtime: &GatewayRuntimeSnapshot,
     history: &mut Vec<ChatMessage>,
     path: &str,
+    cancellation: &CancellationToken,
 ) -> anyhow::Result<String> {
     let Some(file_read_tool) = runtime
         .tools_registry_exec
@@ -1826,10 +2008,12 @@ async fn execute_direct_file_read(
     .await;
 
     let started_at = Instant::now();
-    let tool_result = file_read_tool
-        .execute(json!({ "path": path }))
-        .await
-        .map_err(|error| anyhow::anyhow!("file_read execution failed: {error}"))?;
+    let tool_result = await_direct_operation(
+        cancellation,
+        file_read_tool.execute(json!({ "path": path })),
+    )
+    .await?
+    .map_err(|error| anyhow::anyhow!("file_read execution failed: {error}"))?;
 
     let raw_output = if tool_result.output.trim().is_empty() {
         tool_result.error.clone().unwrap_or_default()
@@ -1888,6 +2072,7 @@ async fn execute_direct_ollama_model(
     runtime: &GatewayRuntimeSnapshot,
     history: &mut Vec<ChatMessage>,
     request: &DirectOllamaModelRequest,
+    cancellation: &CancellationToken,
 ) -> anyhow::Result<String> {
     let Some(ollama_tool) = runtime
         .tools_registry_exec
@@ -1925,10 +2110,10 @@ async fn execute_direct_ollama_model(
     }
     let arguments_value = serde_json::Value::Object(arguments);
 
-    let tool_result = ollama_tool
-        .execute(arguments_value.clone())
-        .await
-        .map_err(|error| anyhow::anyhow!("ollama_model execution failed: {error}"))?;
+    let tool_result =
+        await_direct_operation(cancellation, ollama_tool.execute(arguments_value.clone()))
+            .await?
+            .map_err(|error| anyhow::anyhow!("ollama_model execution failed: {error}"))?;
 
     let raw_output = if tool_result.output.trim().is_empty() {
         tool_result.error.clone().unwrap_or_default()
@@ -2214,11 +2399,63 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             }
         };
 
-        let runtime = state.runtime_snapshot();
         let msg_type = parsed["type"].as_str().unwrap_or("").to_string();
         let session_id =
             normalize_ws_session_id(parsed.get("session_id").and_then(serde_json::Value::as_str))
                 .unwrap_or_else(|| "default".to_string());
+        let config = state.config.lock().clone();
+        let ws_chat_store_path = resolve_ws_chat_store_path(&config);
+
+        // Control frames must never wait for model-capability prefetch. A
+        // replacement connection can therefore stop/delete a run immediately,
+        // including while the submitting connection is still warming Ollama.
+        if msg_type == "session_delete" {
+            if let Some(completion) = request_active_ws_chat_run_cancel(&session_id, true) {
+                delete_ws_chat_history(&session_id, &ws_chat_store_path).await;
+                wait_for_active_ws_chat_run_completion(completion).await;
+            }
+            delete_ws_chat_history(&session_id, &ws_chat_store_path).await;
+            continue;
+        }
+
+        if msg_type == "cancel" {
+            let payload =
+                if let Some(completion) = request_active_ws_chat_run_cancel(&session_id, false) {
+                    let cancelling = json!({
+                        "type": "cancelling",
+                        "session_id": session_id,
+                        "message": "Stopping the active run…",
+                    });
+                    let _ = socket
+                        .send(Message::Text(cancelling.to_string().into()))
+                        .await;
+                    wait_for_active_ws_chat_run_completion(completion).await;
+                    json!({
+                        "type": "cancelled",
+                        "session_id": session_id,
+                        "message": WS_CANCELLED_MESSAGE,
+                    })
+                } else {
+                    json!({
+                        "type": "cancelled",
+                        "session_id": session_id,
+                        "message": "No active run to stop.",
+                    })
+                };
+            let _ = socket.send(Message::Text(payload.to_string().into())).await;
+            continue;
+        }
+
+        if msg_type != "message" {
+            continue;
+        }
+
+        let content = parsed["content"].as_str().unwrap_or("").to_string();
+        if content.is_empty() {
+            continue;
+        }
+
+        let runtime = state.runtime_snapshot();
         let selected_federation_peer_ids =
             parse_selected_federation_peer_ids(parsed.get("federation_peer_ids"));
         let (federation_event_tx, mut federation_event_rx) =
@@ -2231,16 +2468,91 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             cancellation: Some(turn_cancellation.clone()),
         });
         let mut followup_message: Option<String> = None;
+        let Some(active_run_registration) =
+            ActiveWsChatRunRegistration::register(&session_id, turn_cancellation.clone())
+        else {
+            let payload = json!({
+                "type": "error",
+                "session_id": session_id,
+                "message": "This chat already has an active server-side run. Wait for it to finish or use Stop before starting another turn.",
+            });
+            let _ = socket.send(Message::Text(payload.to_string().into())).await;
+            continue;
+        };
 
-        with_chat_context(federation_context, async {
-            // Warm per-model capability cache before taking the config lock so the
-            // MutexGuard isn't held across an await point (parking_lot guards are !Send).
+        // Register before the first awaited setup operation, and keep reading
+        // the submitting socket while capability discovery runs. Closing the
+        // viewer merely detaches it; an explicit Stop races and drops prefetch.
+        let mut socket_disconnected_during_prefetch = false;
+        let mut prefetch = std::pin::pin!(
             runtime
                 .provider
                 .prefetch_model_capabilities(&runtime.model)
-                .await;
+        );
+        let prefetch_completed = loop {
+            tokio::select! {
+                biased;
+                () = turn_cancellation.cancelled() => break false,
+                inbound = socket_rx.next(), if !socket_disconnected_during_prefetch => {
+                    match inbound {
+                        Some(Ok(Message::Text(text))) => {
+                            match parse_inflight_ws_control(&text) {
+                                InFlightWsControl::Cancel { session_id: control_session_id }
+                                    if control_session_id == session_id => {
+                                    turn_cancellation.cancel();
+                                }
+                                InFlightWsControl::SessionDelete { session_id: control_session_id }
+                                    if control_session_id == session_id => {
+                                    active_run_registration.request_delete();
+                                    turn_cancellation.cancel();
+                                }
+                                InFlightWsControl::Message { session_id: control_session_id }
+                                    if control_session_id == session_id => {
+                                    followup_message = Some(text.to_string());
+                                    turn_cancellation.cancel();
+                                }
+                                InFlightWsControl::Cancel { .. }
+                                | InFlightWsControl::SessionDelete { .. }
+                                | InFlightWsControl::Message { .. }
+                                | InFlightWsControl::InvalidJson
+                                | InFlightWsControl::Other => {}
+                            }
+                        }
+                        Some(Ok(Message::Close(_))) | Some(Err(_)) | None => {
+                            mark_ws_client_disconnected(
+                                &mut socket_disconnected_during_prefetch,
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+                () = &mut prefetch => break true,
+            }
+        };
+        drop(prefetch);
 
-            let config = state.config.lock().clone();
+        if !prefetch_completed {
+            if active_run_registration.delete_requested() {
+                delete_ws_chat_history(&session_id, &ws_chat_store_path).await;
+            }
+            if !socket_disconnected_during_prefetch {
+                let cancelled = json!({
+                    "type": "cancelled",
+                    "session_id": session_id,
+                    "message": WS_CANCELLED_MESSAGE,
+                });
+                let _ = socket
+                    .send(Message::Text(cancelled.to_string().into()))
+                    .await;
+            }
+            drop(active_run_registration);
+            if let Some(followup) = followup_message.take() {
+                queued_inbound = Some(followup);
+            }
+            continue;
+        }
+
+        with_chat_context(federation_context, async {
             let provider_label = config
                 .default_provider
                 .clone()
@@ -2257,65 +2569,36 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 .unwrap_or(false);
             let approval_manager = ApprovalManager::from_config(&config.autonomy);
             let max_history_messages = config.agent.max_history_messages;
-            let ws_chat_store_path = resolve_ws_chat_store_path(&config);
-
-            if msg_type == "session_delete" {
-                delete_ws_chat_history(&session_id, &ws_chat_store_path).await;
-                return;
-            }
-
-            if msg_type == "cancel" {
-                // A replacement websocket can stop a server-owned run after
-                // the submitting browser disconnected. Disconnect itself
-                // never touches this token.
-                let payload = if request_active_ws_chat_run_cancel(&session_id) {
-                    json!({
-                        "type": "cancelling",
-                        "session_id": session_id,
-                        "message": "Stopping the active run…",
-                    })
-                } else {
-                    json!({
-                        "type": "cancelled",
-                        "session_id": session_id,
-                        "message": "No active run to stop.",
-                    })
-                };
-                let _ = socket.send(Message::Text(payload.to_string().into())).await;
-                return;
-            }
-
-            if msg_type != "message" {
-                return;
-            }
-
-            let content = parsed["content"].as_str().unwrap_or("").to_string();
-            if content.is_empty() {
-                return;
-            }
-
-            let Some(_active_run_registration) =
-                ActiveWsChatRunRegistration::register(&session_id, turn_cancellation.clone())
-            else {
-                let payload = json!({
-                    "type": "error",
-                    "session_id": session_id,
-                    "message": "This chat already has an active server-side run. Wait for it to finish or use Stop before starting another turn.",
-                });
-                let _ = socket.send(Message::Text(payload.to_string().into())).await;
-                return;
-            };
 
             let direct_intent = classify_direct_intent(&content);
             let temporary = parsed["temporary"].as_bool().unwrap_or(false);
             let history_seed = parse_seed_history(parsed.get("history_seed"));
-            let mut history = load_ws_chat_history(
+            let Some(mut history) = await_ws_setup_operation(
+                load_ws_chat_history(
+                    &session_id,
+                    temporary,
+                    &history_seed,
+                    &ws_chat_store_path,
+                ),
+                &mut socket_rx,
                 &session_id,
-                temporary,
-                &history_seed,
-                &ws_chat_store_path,
+                &turn_cancellation,
+                &active_run_registration,
+                &mut socket_disconnected_during_prefetch,
+                &mut followup_message,
             )
-            .await;
+            .await
+            else {
+                finish_cancelled_ws_setup(
+                    &mut socket,
+                    &session_id,
+                    &ws_chat_store_path,
+                    &active_run_registration,
+                    socket_disconnected_during_prefetch,
+                )
+                .await;
+                return;
+            };
             let forced_file_write = matches!(
                 direct_intent.as_ref(),
                 Some(DirectIntent::ForceTool(DirectForcedToolIntent::FileWrite(_)))
@@ -2451,12 +2734,31 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             // from ALL prior sessions (semantic when the Qdrant backend is
             // configured) and inject them as cited context for this turn.
             if direct_intent.is_none() {
-                let memory_context = crate::channels::build_memory_context(
-                    runtime.mem.as_ref(),
-                    &content,
-                    config.memory.min_relevance_score,
+                let Some(memory_context) = await_ws_setup_operation(
+                    crate::channels::build_memory_context(
+                        runtime.mem.as_ref(),
+                        &content,
+                        config.memory.min_relevance_score,
+                    ),
+                    &mut socket_rx,
+                    &session_id,
+                    &turn_cancellation,
+                    &active_run_registration,
+                    &mut socket_disconnected_during_prefetch,
+                    &mut followup_message,
                 )
-                .await;
+                .await
+                else {
+                    finish_cancelled_ws_setup(
+                        &mut socket,
+                        &session_id,
+                        &ws_chat_store_path,
+                        &active_run_registration,
+                        socket_disconnected_during_prefetch,
+                    )
+                    .await;
+                    return;
+                };
                 if !memory_context.is_empty() {
                     effective_system_prompt.push_str(
                         "\n\n## Recalled memory (prior sessions)\n\
@@ -2482,15 +2784,33 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
 
             if state.auto_save && content.chars().count() >= WS_AUTOSAVE_MIN_MESSAGE_CHARS {
                 let key = websocket_memory_key();
-                let _ = runtime
-                    .mem
-                    .store(
+                if await_ws_setup_operation(
+                    runtime.mem.store(
                         &key,
                         &content,
                         MemoryCategory::Conversation,
                         Some(session_id.as_str()),
+                    ),
+                    &mut socket_rx,
+                    &session_id,
+                    &turn_cancellation,
+                    &active_run_registration,
+                    &mut socket_disconnected_during_prefetch,
+                    &mut followup_message,
+                )
+                .await
+                .is_none()
+                {
+                    finish_cancelled_ws_setup(
+                        &mut socket,
+                        &session_id,
+                        &ws_chat_store_path,
+                        &active_run_registration,
+                        socket_disconnected_during_prefetch,
                     )
                     .await;
+                    return;
+                }
             }
 
             let already_present = history
@@ -2509,70 +2829,125 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             }));
 
             if let Some(DirectIntent::ExecuteNow(intent)) = direct_intent.as_ref() {
-                let result = match intent {
-                    DirectExecutionIntent::FileRead(path) => {
-                        execute_direct_file_read(
-                            &mut socket,
-                            &session_id,
-                            &runtime,
-                            &mut history,
-                            path,
-                        )
-                        .await
-                    }
-                    DirectExecutionIntent::WorkspaceDelete(path) => {
-                        let config = state.config.lock().clone();
-                        execute_direct_workspace_delete(
-                            &mut socket,
-                            &session_id,
-                            &config,
-                            &mut history,
-                            path,
-                        )
-                        .await
-                    }
-                    DirectExecutionIntent::WorkspaceCreateDirectory(path) => {
-                        let config = state.config.lock().clone();
-                        execute_direct_workspace_directory_create(
-                            &mut socket,
-                            &session_id,
-                            &config,
-                            &mut history,
-                            path,
-                        )
-                        .await
-                    }
-                    DirectExecutionIntent::OllamaModel(request) => {
-                        execute_direct_ollama_model(
-                            &mut socket,
-                            &session_id,
-                            &runtime,
-                            &mut history,
-                            request,
-                        )
-                        .await
-                    }
-                    DirectExecutionIntent::Shell(command) => {
-                        execute_direct_shell_command(
-                            &mut socket,
-                            &session_id,
-                            &runtime,
-                            &mut history,
-                            command,
-                        )
-                        .await
+                let mut socket_disconnected = socket_disconnected_during_prefetch;
+                let mut delete_session_after_direct_cancel = false;
+                let result = {
+                    let direct_operation = async {
+                        match intent {
+                            DirectExecutionIntent::FileRead(path) => {
+                                execute_direct_file_read(
+                                    &mut socket,
+                                    &session_id,
+                                    &runtime,
+                                    &mut history,
+                                    path,
+                                    &turn_cancellation,
+                                )
+                                .await
+                            }
+                            DirectExecutionIntent::WorkspaceDelete(path) => {
+                                execute_direct_workspace_delete(
+                                    &mut socket,
+                                    &session_id,
+                                    &config,
+                                    &mut history,
+                                    path,
+                                    &turn_cancellation,
+                                )
+                                .await
+                            }
+                            DirectExecutionIntent::WorkspaceCreateDirectory(path) => {
+                                execute_direct_workspace_directory_create(
+                                    &mut socket,
+                                    &session_id,
+                                    &config,
+                                    &mut history,
+                                    path,
+                                    &turn_cancellation,
+                                )
+                                .await
+                            }
+                            DirectExecutionIntent::OllamaModel(request) => {
+                                execute_direct_ollama_model(
+                                    &mut socket,
+                                    &session_id,
+                                    &runtime,
+                                    &mut history,
+                                    request,
+                                    &turn_cancellation,
+                                )
+                                .await
+                            }
+                            DirectExecutionIntent::Shell(command) => {
+                                execute_direct_shell_command(
+                                    &mut socket,
+                                    &session_id,
+                                    &runtime,
+                                    &mut history,
+                                    command,
+                                    &turn_cancellation,
+                                )
+                                .await
+                            }
+                        }
+                    };
+                    tokio::pin!(direct_operation);
+
+                    loop {
+                        tokio::select! {
+                            biased;
+                            inbound = socket_rx.next(), if !socket_disconnected => {
+                                match inbound {
+                                    Some(Ok(Message::Text(text))) => {
+                                        match parse_inflight_ws_control(&text) {
+                                            InFlightWsControl::Cancel { session_id: control_session_id }
+                                                if control_session_id == session_id => {
+                                                turn_cancellation.cancel();
+                                            }
+                                            InFlightWsControl::SessionDelete { session_id: control_session_id }
+                                                if control_session_id == session_id => {
+                                                delete_session_after_direct_cancel = true;
+                                                active_run_registration.request_delete();
+                                                turn_cancellation.cancel();
+                                            }
+                                            InFlightWsControl::Message { session_id: control_session_id }
+                                                if control_session_id == session_id => {
+                                                followup_message = Some(text.to_string());
+                                                turn_cancellation.cancel();
+                                            }
+                                            InFlightWsControl::Cancel { .. }
+                                            | InFlightWsControl::SessionDelete { .. }
+                                            | InFlightWsControl::Message { .. }
+                                            | InFlightWsControl::InvalidJson
+                                            | InFlightWsControl::Other => {}
+                                        }
+                                    }
+                                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => {
+                                        // Detaching the viewer does not affect the
+                                        // server-owned operation or cancellation token.
+                                        mark_ws_client_disconnected(&mut socket_disconnected);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            result = &mut direct_operation => break result,
+                        }
                     }
                 };
 
                 match result {
                     Ok(response) => {
-                        store_ws_chat_history(
-                            &session_id,
-                            &history,
-                            temporary,
-                            &ws_chat_store_path,
-                        )
-                        .await;
+                        if active_run_registration.delete_requested() {
+                            delete_ws_chat_history(&session_id, &ws_chat_store_path).await;
+                        } else {
+                            store_ws_chat_history(
+                                &session_id,
+                                &history,
+                                temporary,
+                                &ws_chat_store_path,
+                            )
+                            .await;
+                        }
                         let done = serde_json::json!({
                             "type": "done",
                             "session_id": session_id,
@@ -2586,14 +2961,52 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                             "model": runtime.model,
                         }));
                     }
+                    Err(error) if crate::agent::loop_::is_tool_loop_cancelled(&error) => {
+                        // Preserve the user's direct request and any operation
+                        // history that completed before Stop. A disconnected
+                        // browser is not itself a Stop signal; only the shared
+                        // server-owned token reaches this branch.
+                        if delete_session_after_direct_cancel
+                            || active_run_registration.delete_requested()
+                        {
+                            delete_ws_chat_history(&session_id, &ws_chat_store_path).await;
+                        } else {
+                            store_ws_chat_history(
+                                &session_id,
+                                &history,
+                                temporary,
+                                &ws_chat_store_path,
+                            )
+                            .await;
+                        }
+                        let cancelled = serde_json::json!({
+                            "type": "cancelled",
+                            "session_id": session_id,
+                            "message": WS_CANCELLED_MESSAGE,
+                        });
+                        let _ = socket
+                            .send(Message::Text(cancelled.to_string().into()))
+                            .await;
+
+                        let _ = state.event_tx.send(serde_json::json!({
+                            "type": "agent_cancelled",
+                            "provider": provider_label,
+                            "model": runtime.model,
+                            "session_id": session_id,
+                        }));
+                    }
                     Err(error) => {
-                        store_ws_chat_history(
-                            &session_id,
-                            &history_before_turn,
-                            temporary,
-                            &ws_chat_store_path,
-                        )
-                        .await;
+                        if active_run_registration.delete_requested() {
+                            delete_ws_chat_history(&session_id, &ws_chat_store_path).await;
+                        } else {
+                            store_ws_chat_history(
+                                &session_id,
+                                &history_before_turn,
+                                temporary,
+                                &ws_chat_store_path,
+                            )
+                            .await;
+                        }
                         let sanitized = crate::providers::sanitize_api_error(&error.to_string());
                         let err = serde_json::json!({
                             "type": "error",
@@ -2665,7 +3078,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                         // `delta_tx` channel below fills up and stalls the
                         // "detached" run waiting for buffer space that will
                         // never free.
-                        let mut socket_disconnected = false;
+                        let mut socket_disconnected = socket_disconnected_during_prefetch;
                         // Guards the delta_rx branch below: a closed mpsc receiver
                         // resolves immediately on every poll, so once we've drained
                         // its final `None` we must stop selecting on it or the loop
@@ -2727,6 +3140,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                                         // deletion is completed after the cancelled turn reaches a
                                                         // clean terminal state, so it cannot be re-persisted below.
                                                         delete_session_after_cancel = true;
+                                                        active_run_registration.request_delete();
                                                         if !cancellation_requested {
                                                             cancellation_requested = true;
                                                             cancellation_token.cancel();
@@ -2871,6 +3285,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     // recall what was asked and answered, not just the prompt.
                     if state.auto_save
                         && !temporary
+                        && !active_run_registration.delete_requested()
                         && content.chars().count() >= WS_AUTOSAVE_MIN_MESSAGE_CHARS
                     {
                         let exchange = format!(
@@ -2888,13 +3303,17 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                             )
                             .await;
                     }
-                    store_ws_chat_history(
-                        &session_id,
-                        &history,
-                        temporary,
-                        &ws_chat_store_path,
-                    )
-                    .await;
+                    if active_run_registration.delete_requested() {
+                        delete_ws_chat_history(&session_id, &ws_chat_store_path).await;
+                    } else {
+                        store_ws_chat_history(
+                            &session_id,
+                            &history,
+                            temporary,
+                            &ws_chat_store_path,
+                        )
+                        .await;
+                    }
 
                     let done = serde_json::json!({
                         "type": "done",
@@ -2914,7 +3333,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     // follow-up can build on verified work. Do not manufacture an
                     // assistant final response for a turn that was intentionally
                     // stopped halfway through.
-                    if delete_session_after_cancel {
+                    if delete_session_after_cancel || active_run_registration.delete_requested() {
                         delete_ws_chat_history(&session_id, &ws_chat_store_path).await;
                     } else {
                         store_ws_chat_history(
@@ -2941,13 +3360,17 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     }));
                 }
                 Err(error) => {
-                    store_ws_chat_history(
-                        &session_id,
-                        &history_before_turn,
-                        temporary,
-                        &ws_chat_store_path,
-                    )
-                    .await;
+                    if active_run_registration.delete_requested() {
+                        delete_ws_chat_history(&session_id, &ws_chat_store_path).await;
+                    } else {
+                        store_ws_chat_history(
+                            &session_id,
+                            &history_before_turn,
+                            temporary,
+                            &ws_chat_store_path,
+                        )
+                        .await;
+                    }
                     let sanitized = crate::providers::sanitize_api_error(&error.to_string());
                     let err = serde_json::json!({
                         "type": "error",
@@ -3005,7 +3428,19 @@ mod tests {
     use crate::tools::{Tool, ToolResult};
     use async_trait::async_trait;
     use axum::http::HeaderValue;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
     use tempfile::tempdir;
+
+    struct DirectOperationDropFlag(Arc<AtomicBool>);
+
+    impl Drop for DirectOperationDropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
 
     #[test]
     fn extract_ws_bearer_token_prefers_authorization_header() {
@@ -3093,11 +3528,84 @@ mod tests {
         let mut socket_disconnected = false;
         mark_ws_client_disconnected(&mut socket_disconnected);
 
-        assert!(request_active_ws_chat_run_cancel(&session_id));
+        assert!(request_active_ws_chat_run_cancel(&session_id, false).is_some());
         assert!(
             cancellation.is_cancelled(),
             "an explicit Stop from a replacement client must cancel the run"
         );
+    }
+
+    #[tokio::test]
+    async fn reconnect_stop_drops_inflight_direct_operation() {
+        let session_id = format!("direct-stop-test-{}", Uuid::new_v4());
+        let cancellation = CancellationToken::new();
+        let _registration =
+            ActiveWsChatRunRegistration::register(&session_id, cancellation.clone())
+                .expect("test run should register");
+        let started = Arc::new(tokio::sync::Notify::new());
+        let dropped = Arc::new(AtomicBool::new(false));
+        let operation_started = Arc::clone(&started);
+        let operation_dropped = Arc::clone(&dropped);
+        let operation = async move {
+            let _drop_flag = DirectOperationDropFlag(operation_dropped);
+            operation_started.notify_one();
+            std::future::pending::<()>().await;
+        };
+        let operation_cancellation = cancellation.clone();
+        let task = tokio::spawn(async move {
+            await_direct_operation(&operation_cancellation, operation).await
+        });
+
+        started.notified().await;
+        let mut socket_disconnected = false;
+        mark_ws_client_disconnected(&mut socket_disconnected);
+        assert!(request_active_ws_chat_run_cancel(&session_id, false).is_some());
+
+        let error = tokio::time::timeout(std::time::Duration::from_secs(1), task)
+            .await
+            .expect("direct operation should observe Stop promptly")
+            .expect("direct operation task should not panic")
+            .expect_err("direct operation should end with cancellation");
+        assert!(crate::agent::loop_::is_tool_loop_cancelled(&error));
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "cancelling direct work must drop its in-flight tool future"
+        );
+        assert!(socket_disconnected);
+    }
+
+    #[tokio::test]
+    async fn replacement_stop_observes_terminal_completion() {
+        let session_id = format!("stop-terminal-test-{}", Uuid::new_v4());
+        let cancellation = CancellationToken::new();
+        let registration =
+            ActiveWsChatRunRegistration::register(&session_id, cancellation.clone())
+                .expect("test run should register");
+        let completion = request_active_ws_chat_run_cancel(&session_id, false)
+            .expect("replacement Stop should find the active run");
+        assert!(cancellation.is_cancelled());
+
+        let waiter = tokio::spawn(wait_for_active_ws_chat_run_completion(completion));
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished());
+        drop(registration);
+        tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+            .await
+            .expect("replacement controller should receive terminal completion")
+            .expect("completion waiter should not panic");
+    }
+
+    #[test]
+    fn replacement_delete_marks_active_run_before_cancelling() {
+        let session_id = format!("delete-active-test-{}", Uuid::new_v4());
+        let cancellation = CancellationToken::new();
+        let registration =
+            ActiveWsChatRunRegistration::register(&session_id, cancellation.clone())
+                .expect("test run should register");
+
+        assert!(request_active_ws_chat_run_cancel(&session_id, true).is_some());
+        assert!(cancellation.is_cancelled());
+        assert!(registration.delete_requested());
     }
 
     #[test]
@@ -3346,6 +3854,23 @@ Reminder set successfully."#;
         let normalized = normalize_ws_history_for_storage(&history);
         assert_eq!(normalized.len(), 3);
         assert!(normalized.iter().all(|message| message.role != "system"));
+    }
+
+    #[test]
+    fn persisted_history_limit_follows_unlimited_agent_profile() {
+        assert_eq!(parse_ws_persisted_message_limit(Some("0")), None);
+        assert_eq!(
+            parse_ws_persisted_message_limit(Some("1250")),
+            Some(1250)
+        );
+        assert_eq!(
+            parse_ws_persisted_message_limit(None),
+            Some(WS_PERSISTED_MAX_MESSAGES_DEFAULT)
+        );
+        assert_eq!(
+            parse_ws_persisted_message_limit(Some("invalid")),
+            Some(WS_PERSISTED_MAX_MESSAGES_DEFAULT)
+        );
     }
 
     #[test]

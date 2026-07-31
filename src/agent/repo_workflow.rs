@@ -8,7 +8,8 @@
 //! 3. Patch   — apply edits via file_write / file_edit tools
 //! 4. Build   — run the configured build/test command via shell
 //! 5. Verify  — inspect build output; declare done or diagnose failures
-//! 6. Retry   — revise patches and re-run, up to `retry_budget` attempts
+//! 6. Retry   — revise patches and re-run until complete or an explicit
+//!              positive `retry_budget` is exhausted
 //! ```
 //!
 //! ## Usage
@@ -36,8 +37,8 @@ use crate::tools::Tool;
 
 use super::autonomous::{AutonomousLoop, LoopOutcome};
 
-/// Default number of plan→patch→build→verify attempts before giving up.
-const DEFAULT_RETRY_BUDGET: u32 = 5;
+/// Default retry budget. Zero means unlimited.
+const DEFAULT_RETRY_BUDGET: u32 = 0;
 
 /// Default wall-clock cap for a repo workflow run.
 ///
@@ -139,9 +140,9 @@ impl<'a> RepoWorkflowAgent<'a> {
         }
     }
 
-    /// Override the retry budget (default: 5).
+    /// Override the retry budget (`0` means unlimited).
     pub fn with_retry_budget(mut self, budget: u32) -> Self {
-        self.retry_budget = budget.max(1);
+        self.retry_budget = budget;
         self
     }
 
@@ -151,7 +152,7 @@ impl<'a> RepoWorkflowAgent<'a> {
         self
     }
 
-    /// Override max tool iterations per attempt (default: 30).
+    /// Override max tool iterations per attempt (`0` means unlimited).
     pub fn with_max_tool_iterations(mut self, n: usize) -> Self {
         self.max_tool_iterations = n;
         self

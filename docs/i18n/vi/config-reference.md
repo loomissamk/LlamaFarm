@@ -34,6 +34,18 @@ Lưu ý:
 - Để trống giữ mặc định của provider.
 - Biến môi trường: `LLAMAFARM_MODEL_SUPPORT_VISION` hoặc `MODEL_SUPPORT_VISION` (giá trị: `true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off`).
 
+## `[host_runner]`
+
+| Khóa | Mặc định | Mục đích |
+|---|---|---|
+| `enabled` | `false` | Đăng ký công cụ `host_exec` đã kiểm tra policy |
+| `socket_path` | chưa đặt | Đường dẫn Unix socket chính xác của host runner |
+| `host_home` | chưa đặt | Thư mục home của host được ánh xạ vào Docker |
+| `max_exec_timeout_secs` | `0` | Thời hạn foreground dương tối đa; `0` nghĩa là không có mức tối đa |
+
+`timeout_secs` bị bỏ qua hoặc bằng `0` không áp dụng thời hạn theo đồng hồ.
+Giá trị dương vẫn đặt thời hạn rõ ràng.
+
 ## `[observability]`
 
 | Khóa | Mặc định | Mục đích |
@@ -77,7 +89,7 @@ Lưu ý cho người dùng container:
 | `tool_routing_enabled` | `true` | Chọn registry tool theo từng lượt cho WebSocket Agent Chat, dựa trên yêu cầu hiện tại và ngữ cảnh tác vụ gần đây |
 | `tool_routing_top_k` | `12` | Số tool không thiết yếu liên quan tối đa trước khi thêm tool lõi và các phụ thuộc bắt buộc; `0` tắt định tuyến |
 | `max_tool_iterations` | `0` | Số vòng lặp tool-call cho mỗi tin nhắn; `0` nghĩa là không giới hạn, còn bộ phát hiện đình trệ chuyên dụng sẽ dừng tình trạng lặp lại không có tiến triển |
-| `max_history_messages` | `50` | Số tin nhắn lịch sử tối đa giữ lại mỗi phiên |
+| `max_history_messages` | `50` | Số tin nhắn lịch sử tối đa giữ lại mỗi phiên; `0` giữ nguyên toàn bộ lịch sử cho đến khi áp lực ngữ cảnh thực tế của nhà cung cấp buộc phải cô đọng |
 | `parallel_tools` | `false` | Bật thực thi tool song song trong một lượt |
 | `tool_dispatcher` | `auto` | Chiến lược dispatch tool |
 
@@ -101,6 +113,20 @@ Lưu ý:
 - Nếu tin nhắn kênh vượt giá trị này, runtime trả về: `Agent exceeded maximum tool iterations (<value>)`.
 - Trong vòng lặp tool của CLI, gateway và channel, các lời gọi tool độc lập được thực thi đồng thời mặc định khi không cần phê duyệt; thứ tự kết quả giữ ổn định.
 - `parallel_tools` áp dụng cho API `Agent::turn()`. Không ảnh hưởng đến vòng lặp runtime của CLI, gateway hay channel.
+
+## `[scheduler]`
+
+| Khóa | Mặc định | Mục đích |
+|---|---|---|
+| `enabled` | `true` | Bật bộ lập lịch tác vụ nền được lưu bền vững |
+| `max_tasks` | `64` | Số tác vụ đến hạn tối đa xét trong mỗi lần poll; `0` nghĩa là không giới hạn |
+| `max_concurrent` | `4` | Số tác vụ chạy đồng thời tối đa qua mọi vòng poll; `0` nghĩa là không giới hạn |
+
+`LLAMAFARM_SCHEDULER_MAX_CONCURRENT` ghi đè `max_concurrent`, còn
+`LLAMAFARM_SCHEDULER_MAX_TASKS` ghi đè `max_tasks`. Tác vụ chạy lâu
+vẫn được tính là đang hoạt động cho đến khi kết thúc. Với giá trị `0`, mọi tác
+vụ đến hạn khác nhau đều có thể bắt đầu mà không bị bộ lập lịch áp trần đồng
+thời.
 
 ## `[agents.<name>]`
 
@@ -519,6 +545,25 @@ Lưu ý:
 
 - WhatsApp Web yêu cầu build flag `whatsapp-web`.
 - Nếu cả Cloud lẫn Web đều có cấu hình, Cloud được ưu tiên để tương thích ngược.
+
+## `[[db_connections]]`
+
+Các kết nối có tên được dùng bởi Database Explorer và các công cụ `db_schema`,
+`db_query`. Các driver được hỗ trợ là `sqlite`, `postgres`, `mysql` (bao gồm
+MariaDB) và `mongodb`.
+
+| Khóa | Mặc định | Mục đích |
+|---|---|---|
+| `name` | _bắt buộc_ | Tên kết nối ổn định được UI và công cụ sử dụng |
+| `driver` | _bắt buộc_ | `sqlite`, `postgres`, `mysql` hoặc `mongodb` |
+| `uri` | _bắt buộc_ | Đường dẫn tệp SQLite hoặc URI kết nối của driver |
+| `database` | chưa đặt | Tên database MongoDB; driver SQL lấy database từ URI |
+| `read_only` | `true` | Giới hạn kết nối SQL ở truy vấn đọc và MongoDB ở thao tác không ghi |
+| `max_rows` | `500` | Số hàng tối đa trả về cho mỗi truy vấn |
+| `label` | `name` | Nhãn hiển thị tùy chọn |
+
+MySQL/MariaDB yêu cầu Cargo feature `db-mysql`. Bundled Docker image bật feature
+này theo mặc định.
 
 ## `[hardware]`
 

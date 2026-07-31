@@ -1,5 +1,5 @@
 use crate::tools::traits::{Tool, ToolResult};
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use serde_json::json;
 use std::fmt::Write as _;
@@ -16,15 +16,19 @@ use tokio::process::Command;
 /// - Optionally stages + commits when `commit_message` is provided
 ///
 /// Notes:
-/// - This tool assumes it is running inside a git repo.
+/// - This tool resolves the repository from its configured workspace.
 /// - It does NOT fetch, pull, or push.
 /// - It does NOT run arbitrary scripts.
 /// - It is intentionally narrow: patch in, apply/check, status/commit out.
-pub struct ApplyPatchTool;
+pub struct ApplyPatchTool {
+    workspace_dir: PathBuf,
+}
 
 impl ApplyPatchTool {
-    pub fn new() -> Self {
-        Self
+    pub fn new(workspace_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            workspace_dir: workspace_dir.into(),
+        }
     }
 
     fn schema() -> serde_json::Value {
@@ -57,7 +61,7 @@ impl Tool for ApplyPatchTool {
     }
 
     fn description(&self) -> &str {
-        "Safely check/apply a unified diff to the current git repository, optionally staging and committing."
+        "Safely check/apply a unified diff to the configured workspace's git repository, optionally staging and committing."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -97,7 +101,7 @@ impl Tool for ApplyPatchTool {
             });
         }
 
-        let repo_root = git_repo_root().await?;
+        let repo_root = git_repo_root(&self.workspace_dir).await?;
         let mut log = String::new();
         let _ = writeln!(log, "Repo root: {}", repo_root.display());
         let _ = writeln!(log, "Mode: {}", if dry_run { "dry-run" } else { "apply" });
@@ -285,12 +289,11 @@ impl Tool for ApplyPatchTool {
     }
 }
 
-async fn git_repo_root() -> Result<PathBuf> {
-    let cwd = std::env::current_dir().context("Failed to read current_dir")?;
-    let (code, out, err) = run_cmd(&cwd, "git", &["rev-parse", "--show-toplevel"]).await?;
+async fn git_repo_root(workspace_dir: &Path) -> Result<PathBuf> {
+    let (code, out, err) = run_cmd(workspace_dir, "git", &["rev-parse", "--show-toplevel"]).await?;
     if code != 0 {
         return Err(anyhow!(
-            "Not a git repo (git rev-parse failed). stderr: {}",
+            "Configured workspace is not a git repo (git rev-parse failed). stderr: {}",
             err.trim()
         ));
     }
@@ -319,6 +322,8 @@ async fn run_cmd(dir: &Path, program: &str, args: &[&str]) -> Result<(i32, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use std::fs;
 
     #[test]
     fn schema_is_object() {
@@ -327,5 +332,41 @@ mod tests {
         assert_eq!(s["type"], "object");
         assert!(s["properties"].is_object());
         assert!(s["properties"]["patch"].is_object());
+    }
+
+    #[tokio::test]
+    async fn dry_run_uses_configured_workspace_repository() {
+        let workspace = tempfile::tempdir().unwrap();
+        let init = run_cmd(workspace.path(), "git", &["init", "--quiet"])
+            .await
+            .unwrap();
+        assert_eq!(init.0, 0, "git init failed: {}", init.2);
+        fs::write(workspace.path().join("note.txt"), "before\n").unwrap();
+
+        let tool = ApplyPatchTool::new(workspace.path());
+        let result = tool
+            .execute(json!({
+                "dry_run": true,
+                "patch": "\
+diff --git a/note.txt b/note.txt
+--- a/note.txt
++++ b/note.txt
+@@ -1 +1 @@
+-before
++after
+"
+            }))
+            .await
+            .unwrap();
+
+        assert!(result.success, "{:?}", result.error);
+        assert!(result.output.contains(&format!(
+            "Repo root: {}",
+            workspace.path().canonicalize().unwrap().display()
+        )));
+        assert_eq!(
+            fs::read_to_string(workspace.path().join("note.txt")).unwrap(),
+            "before\n"
+        );
     }
 }

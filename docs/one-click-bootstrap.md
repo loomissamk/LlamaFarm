@@ -128,7 +128,10 @@ What this bundled stack does:
 2. starts `LlamaFarm` on `http://127.0.0.1:42617`
 3. starts internal Ollama on `127.0.0.1:11434`
 4. starts internal Chromium WebDriver on `127.0.0.1:9515`
-5. auto-pulls `qwen3.5:9b`, `devstral-small-2:latest`, and `devstral-2:123b-cloud`
+5. starts a virtual X display and verifies it with a real screenshot capture
+6. builds the advertised PDF reader with `rag-pdf` support
+7. reports the source commit and UTC build time through the status/federation APIs
+8. optionally pulls every model listed in `OLLAMA_PULL_MODELS`
 
 Useful follow-ups:
 

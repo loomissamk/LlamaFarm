@@ -5,7 +5,7 @@
 //! `http://localhost:11434`).
 
 use super::traits::{Tool, ToolResult};
-use crate::security::{SecurityPolicy, policy::ToolOperation};
+use crate::security::{policy::ToolOperation, SecurityPolicy};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::Deserialize;
@@ -16,8 +16,9 @@ use std::time::Duration;
 const DEFAULT_BASE_URL: &str = "http://localhost:11434";
 /// Timeout for read-only API calls (list, show, ps).
 const READ_TIMEOUT_SECS: u64 = 30;
-/// Timeout for model pulls — models can be several gigabytes.
-const PULL_TIMEOUT_SECS: u64 = 600;
+/// Connect safeguards remain bounded, but model downloads have no total
+/// wall-clock deadline because large models can legitimately take hours.
+const CONNECT_TIMEOUT_SECS: u64 = 10;
 
 // ── Response shapes ───────────────────────────────────────────────────────────
 
@@ -106,6 +107,14 @@ impl OllamaModelTool {
         Ok(Client::builder()
             .timeout(Duration::from_secs(timeout))
             .build()?)
+    }
+
+    fn pull_client() -> Client {
+        crate::config::build_runtime_proxy_client_with_optional_timeouts(
+            "tool.ollama_model.pull",
+            None,
+            Some(CONNECT_TIMEOUT_SECS),
+        )
     }
 
     fn format_bytes(bytes: u64) -> String {
@@ -370,21 +379,13 @@ impl OllamaModelTool {
         }
 
         let url = format!("{}/api/pull", self.base_url);
-        let client = match Self::client(PULL_TIMEOUT_SECS) {
-            Ok(c) => c,
-            Err(e) => {
-                return ToolResult {
-                    success: false,
-                    output: String::new(),
-                    error: Some(format!("Failed to build HTTP client: {e}")),
-                };
-            }
-        };
+        let client = Self::pull_client();
 
-        // stream:false gives a single JSON response after completion
-        let resp = match client
+        // Stream progress so long downloads keep producing response traffic;
+        // only the final status is retained for the tool result.
+        let mut resp = match client
             .post(&url)
-            .json(&json!({ "name": name, "stream": false }))
+            .json(&json!({ "name": name, "stream": true }))
             .send()
             .await
         {
@@ -408,24 +409,37 @@ impl OllamaModelTool {
             };
         }
 
-        let body: PullResponse = match resp.json().await {
-            Ok(b) => b,
-            Err(e) => {
-                return ToolResult {
-                    success: false,
-                    output: String::new(),
-                    error: Some(format!("Failed to parse /api/pull response: {e}")),
-                };
+        let mut pending = Vec::new();
+        let mut last_status = None;
+        loop {
+            match resp.chunk().await {
+                Ok(Some(chunk)) => {
+                    pending.extend_from_slice(&chunk);
+                    while let Some(newline) = pending.iter().position(|byte| *byte == b'\n') {
+                        let line = pending.drain(..=newline).collect::<Vec<_>>();
+                        update_pull_status(&line, &mut last_status);
+                    }
+                }
+                Ok(None) => break,
+                Err(error) => {
+                    return ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(format!("Ollama pull stream failed: {error}")),
+                    };
+                }
             }
-        };
+        }
+        update_pull_status(&pending, &mut last_status);
+        let status = last_status.unwrap_or_else(|| "unknown".to_string());
 
         ToolResult {
-            success: body.status == "success",
-            output: format!("Pull {}: {}", name, body.status),
-            error: if body.status == "success" {
+            success: status == "success",
+            output: format!("Pull {name}: {status}"),
+            error: if status == "success" {
                 None
             } else {
-                Some(format!("Unexpected pull status: {}", body.status))
+                Some(format!("Unexpected pull status: {status}"))
             },
         }
     }
@@ -487,6 +501,17 @@ impl OllamaModelTool {
                 }
             }
         }
+    }
+}
+
+fn update_pull_status(line: &[u8], last_status: &mut Option<String>) {
+    let line = String::from_utf8_lossy(line);
+    let line = line.trim();
+    if line.is_empty() {
+        return;
+    }
+    if let Ok(status) = serde_json::from_str::<PullResponse>(line) {
+        *last_status = Some(status.status);
     }
 }
 
@@ -608,6 +633,14 @@ mod tests {
     fn empty_base_url_uses_default() {
         let tool = OllamaModelTool::new(Arc::new(SecurityPolicy::default()), Some(String::new()));
         assert_eq!(tool.base_url, DEFAULT_BASE_URL);
+    }
+
+    #[test]
+    fn pull_status_tracks_final_stream_event() {
+        let mut status = None;
+        update_pull_status(br#"{"status":"pulling manifest"}"#, &mut status);
+        update_pull_status(br#"{"status":"success"}"#, &mut status);
+        assert_eq!(status.as_deref(), Some("success"));
     }
 
     #[tokio::test]

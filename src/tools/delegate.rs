@@ -136,7 +136,7 @@ impl DelegateTool {
     }
 
     pub fn with_max_history_messages(mut self, max_history_messages: usize) -> Self {
-        self.max_history_messages = max_history_messages.max(1);
+        self.max_history_messages = max_history_messages;
         self
     }
 
@@ -1033,6 +1033,9 @@ mod tests {
         let tool = DelegateTool::new(sample_agents(), None, test_security())
             .with_max_history_messages(512);
         assert_eq!(tool.max_history_messages, 512);
+        let unlimited = DelegateTool::new(sample_agents(), None, test_security())
+            .with_max_history_messages(0);
+        assert_eq!(unlimited.max_history_messages, 0);
     }
 
     #[test]

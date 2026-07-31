@@ -207,6 +207,10 @@ where
 pub(crate) const DEFAULT_MAX_HISTORY_MESSAGES: usize = 50;
 
 fn plan_boundary_history_budget(history_budget: usize) -> Option<usize> {
+    if history_budget == 0 {
+        return None;
+    }
+
     // A value above the compact default is an explicit long-context policy.
     // Preserve its raw messages so the provider can select 128K/256K from the
     // actual request instead of discarding them at each completed plan item.
@@ -11869,6 +11873,21 @@ Tail"#;
         ];
         trim_history(&mut history, DEFAULT_MAX_HISTORY_MESSAGES);
         assert_eq!(history.len(), 3);
+    }
+
+    #[test]
+    fn zero_history_budget_preserves_raw_history_until_context_pressure() {
+        let mut history = vec![ChatMessage::system("sys")];
+        for index in 0..1_000 {
+            history.push(ChatMessage::user(format!("message {index}")));
+        }
+        let original = history.clone();
+
+        trim_history(&mut history, 0);
+
+        assert_eq!(history, original);
+        assert_eq!(compaction_range(&history, 0), None);
+        assert_eq!(plan_boundary_history_budget(0), None);
     }
 
     #[test]
