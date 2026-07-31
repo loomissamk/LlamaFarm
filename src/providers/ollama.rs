@@ -81,11 +81,22 @@ struct ChatRequest {
     think: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<serde_json::Value>>,
-    /// How long Ollama keeps the model loaded after the request. "-1" pins it
+    /// How long Ollama keeps the model loaded after the request. `-1` pins it
     /// in VRAM so subsequent turns skip the multi-second reload that shows up
     /// as a huge time-to-first-token. Configurable; defaults to keeping it hot.
     #[serde(skip_serializing_if = "Option::is_none")]
-    keep_alive: Option<String>,
+    keep_alive: Option<KeepAlive>,
+}
+
+/// Ollama accepts integer sentinel values (`-1` to pin, `0` to unload) or a
+/// duration string such as `"5m"`. Serializing a numeric sentinel as a JSON
+/// string makes recent Ollama releases try to parse it as a duration and reject
+/// the request with `time: missing unit in duration "-1"`.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum KeepAlive {
+    Sentinel(i64),
+    Duration(String),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -190,12 +201,17 @@ struct OllamaFunction {
 /// Keep-alive for the loaded model. Defaults to "-1" (pin in VRAM) so back-to-
 /// back chat turns skip the reload that otherwise shows as a large TTFT. Set
 /// `OLLAMA_KEEP_ALIVE` (e.g. "5m", "0", "-1") to override.
-fn resolve_keep_alive() -> String {
-    std::env::var("OLLAMA_KEEP_ALIVE")
+fn resolve_keep_alive() -> KeepAlive {
+    let value = std::env::var("OLLAMA_KEEP_ALIVE")
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| "-1".to_string())
+        .unwrap_or_else(|| "-1".to_string());
+
+    value
+        .parse::<i64>()
+        .map(KeepAlive::Sentinel)
+        .unwrap_or_else(|_| KeepAlive::Duration(value))
 }
 
 fn env_flag_enabled(name: &str) -> bool {
