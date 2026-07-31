@@ -525,6 +525,7 @@ async fn execute_federation_task(
         system_prompt,
         max_tool_iterations,
         max_history_messages,
+        workspace_dir,
     ) = {
         let config_guard = state.config.lock();
         let provider_label = config_guard
@@ -585,8 +586,27 @@ async fn execute_federation_task(
             system_prompt,
             config_guard.agent.max_tool_iterations,
             config_guard.agent.max_history_messages,
+            config_guard.workspace_dir.clone(),
         )
     };
+
+    // Durable run ledger so delegated tasks show up in the Runs page like any
+    // other run, instead of only existing as an ephemeral in-browser event
+    // list on the Federation page that vanishes on refresh.
+    let ledger = crate::agent::run_ledger::RunLedger::open_or_create(
+        &workspace_dir,
+        &task_id,
+        request.session_id.as_deref(),
+        "federation",
+        &provider_label,
+        &runtime.model,
+        "chat",
+    )
+    .map_err(|e| {
+        tracing::warn!("Could not open run ledger for federation task {task_id}: {e}");
+        e
+    })
+    .ok();
 
     let user_prompt = build_federation_user_prompt(&request);
     let mut history = vec![
@@ -594,7 +614,9 @@ async fn execute_federation_task(
         crate::providers::ChatMessage::user(&user_prompt),
     ];
 
-    let loop_result = crate::agent::loop_::with_tool_loop_settings(
+    let loop_result = crate::agent::run_ledger::RUN_LEDGER.scope(
+        ledger.clone(),
+        crate::agent::loop_::with_tool_loop_settings(
         parallel_tools,
         native_tools,
         crate::agent::loop_::with_tool_loop_history_limit(max_history_messages, async {
@@ -643,6 +665,7 @@ async fn execute_federation_task(
                 }
             }
         }),
+        ),
     )
     .await;
 
@@ -655,6 +678,9 @@ async fn execute_federation_task(
             } else {
                 rendered
             };
+            if let Some(ref l) = ledger {
+                l.finalize(crate::agent::run_ledger::RunStatus::Completed);
+            }
             task_manager.publish(
                 &task_id,
                 FederationTaskEvent::done(&task_id, final_response),
@@ -668,23 +694,30 @@ async fn execute_federation_task(
             // that returns its report even when it didn't call a tool.
             // Surface it as a completed-but-unverified result instead of an
             // opaque failure that silently drops the model's output.
-            if let Some((text, _retry_count)) = crate::agent::loop_::ungrounded_final_text(&error)
-            {
+            if let Some((text, _retry_count)) = crate::agent::loop_::ungrounded_final_text(&error) {
                 let rendered =
                     super::sanitize_gateway_response(text, runtime.tools_registry_exec.as_ref());
                 let final_response = if rendered.trim().is_empty() {
-                    "Tool execution completed, but no final response text was returned."
-                        .to_string()
+                    "Tool execution completed, but no final response text was returned.".to_string()
                 } else {
-                    format!(
-                        "[unverified: no tool call grounded this answer]\n{rendered}"
-                    )
+                    format!("[unverified: no tool call grounded this answer]\n{rendered}")
                 };
+                if let Some(ref l) = ledger {
+                    l.finalize(crate::agent::run_ledger::RunStatus::CompletedUnverified);
+                }
                 task_manager.publish(
                     &task_id,
                     FederationTaskEvent::done(&task_id, final_response),
                 );
             } else {
+                if let Some(ref l) = ledger {
+                    let status = if crate::agent::loop_::is_tool_loop_cancelled(&error) {
+                        crate::agent::run_ledger::RunStatus::Cancelled
+                    } else {
+                        crate::agent::run_ledger::RunStatus::Failed
+                    };
+                    l.finalize(status);
+                }
                 task_manager.publish(
                     &task_id,
                     FederationTaskEvent::error(
