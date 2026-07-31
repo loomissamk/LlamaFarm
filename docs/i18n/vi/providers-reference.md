@@ -68,6 +68,17 @@ Với chuỗi provider dự phòng (`reliability.fallback_providers`), mỗi pro
 - Sau khi chuẩn hóa multimodal, LlamaFarm gửi payload hình ảnh qua trường `messages[].images` gốc của Ollama.
 - Nếu chọn provider không hỗ trợ vision, LlamaFarm trả về lỗi rõ ràng thay vì âm thầm bỏ qua hình ảnh.
 
+### Ngữ cảnh thích ứng của Ollama
+
+- `provider.ollama_num_ctx` là giá trị ghi đè thủ công chính xác.
+- Khi không đặt giá trị này, `OLLAMA_NUM_CTX` cung cấp mặc định môi trường; với
+  `LLAMAFARM_ADAPTIVE_CONTEXT=true`, nó trở thành mức cơ sở nhanh.
+- Profile RTX 5070 Ti bắt đầu ở 65.536 và chỉ chọn 131.072 hoặc 262.144 khi ước
+  tính yêu cầu cần bậc lớn hơn. Mức tăng bị giới hạn bởi giá trị nhỏ hơn giữa
+  ngữ cảnh gốc của model và `LLAMAFARM_ADAPTIVE_CONTEXT_MAX`.
+- Xác minh ngữ cảnh Ollama thực sự cấp phát bằng
+  `docker exec LlamaFarm ollama ps`.
+
 ### Ghi chú về Ollama Cloud Routing
 
 - Dùng hậu tố `:cloud` cho các Ollama cloud model.

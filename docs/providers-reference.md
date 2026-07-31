@@ -124,6 +124,13 @@ default_model = "qwen2.5-coder:7b"
 - After multimodal normalization, LlamaFarm sends image payloads through Ollama's native `messages[].images` field.
 - If a non-vision provider is selected, LlamaFarm returns a structured capability error instead of silently ignoring images.
 
+### Ollama Adaptive Context
+
+- `provider.ollama_num_ctx` is an exact manual override.
+- When that override is unset, `OLLAMA_NUM_CTX` supplies the environment default; with `LLAMAFARM_ADAPTIVE_CONTEXT=true`, it becomes the fast baseline.
+- The RTX 5070 Ti profile starts at 65,536 and selects 131,072 or 262,144 only when the request estimate needs the larger tier.
+- Adaptive growth is capped by both the model-native length and `LLAMAFARM_ADAPTIVE_CONTEXT_MAX`. Verify the allocation actually loaded by Ollama with `docker exec LlamaFarm ollama ps`.
+
 ### Ollama Cloud Routing Notes
 
 - Use the `:cloud` model suffix for Ollama cloud models.

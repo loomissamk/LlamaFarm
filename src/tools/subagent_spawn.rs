@@ -8,6 +8,9 @@ use super::subagent_registry::{
     RemoteSubAgentHandle, SubAgentHandle, SubAgentRegistry, SubAgentSession, SubAgentStatus,
 };
 use super::traits::{Tool, ToolResult};
+use crate::agent::loop_::{
+    DEFAULT_MAX_HISTORY_MESSAGES, run_tool_call_loop, with_tool_loop_history_limit,
+};
 use crate::config::DelegateAgentConfig;
 use crate::federation::remote_subagent::{
     FederationRemoteSubagentAdapter, FederationTaskRequest, current_chat_context,
@@ -39,6 +42,7 @@ pub struct SubAgentSpawnTool {
     registry: Arc<SubAgentRegistry>,
     parent_tools: Arc<Vec<Arc<dyn Tool>>>,
     multimodal_config: crate::config::MultimodalConfig,
+    max_history_messages: usize,
     federation: Option<Arc<FederationRemoteSubagentAdapter>>,
 }
 
@@ -61,8 +65,14 @@ impl SubAgentSpawnTool {
             registry,
             parent_tools,
             multimodal_config,
+            max_history_messages: DEFAULT_MAX_HISTORY_MESSAGES,
             federation: None,
         }
+    }
+
+    pub fn with_max_history_messages(mut self, max_history_messages: usize) -> Self {
+        self.max_history_messages = max_history_messages.max(1);
+        self
     }
 
     pub fn with_federation(mut self, federation: Arc<FederationRemoteSubagentAdapter>) -> Self {
@@ -324,6 +334,7 @@ impl SubAgentSpawnTool {
         let is_agentic = agent_config.agentic;
         let parent_tools = self.parent_tools.clone();
         let multimodal_config = self.multimodal_config.clone();
+        let max_history_messages = self.max_history_messages;
 
         // Atomically check concurrent limit and register session to prevent race conditions.
         let session = SubAgentSession {
@@ -360,6 +371,7 @@ impl SubAgentSpawnTool {
                     &full_prompt,
                     &parent_tools,
                     &multimodal_config,
+                    max_history_messages,
                 )
                 .await
             } else {
@@ -511,6 +523,7 @@ async fn run_agentic_background(
     full_prompt: &str,
     parent_tools: &[Arc<dyn Tool>],
     multimodal_config: &crate::config::MultimodalConfig,
+    max_history_messages: usize,
 ) -> anyhow::Result<ToolResult> {
     if agent_config.allowed_tools.is_empty() {
         return Ok(ToolResult {
@@ -562,23 +575,26 @@ async fn run_agentic_background(
 
     let result = tokio::time::timeout(
         Duration::from_secs(SPAWN_TIMEOUT_SECS),
-        crate::agent::loop_::run_tool_call_loop(
-            provider,
-            &mut history,
-            &sub_tools,
-            &noop_observer,
-            &agent_config.provider,
-            &agent_config.model,
-            temperature,
-            true,
-            None,
-            "subagent_spawn",
-            multimodal_config,
-            agent_config.max_iterations,
-            None,
-            None,
-            None,
-            &[],
+        with_tool_loop_history_limit(
+            max_history_messages,
+            run_tool_call_loop(
+                provider,
+                &mut history,
+                &sub_tools,
+                &noop_observer,
+                &agent_config.provider,
+                &agent_config.model,
+                temperature,
+                true,
+                None,
+                "subagent_spawn",
+                multimodal_config,
+                agent_config.max_iterations,
+                None,
+                None,
+                None,
+                &[],
+            ),
         ),
     )
     .await;
@@ -671,6 +687,13 @@ mod tests {
         assert!(required.contains(&json!("agent")));
         assert!(required.contains(&json!("task")));
         assert_eq!(schema["additionalProperties"], json!(false));
+    }
+
+    #[test]
+    fn background_subagent_inherits_root_history_policy() {
+        let tool =
+            make_tool(sample_agents(), test_security()).with_max_history_messages(512);
+        assert_eq!(tool.max_history_messages, 512);
     }
 
     #[test]

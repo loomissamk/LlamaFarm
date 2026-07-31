@@ -219,6 +219,32 @@ where
 /// used when callers omit the parameter.
 pub(crate) const DEFAULT_MAX_HISTORY_MESSAGES: usize = 50;
 
+fn plan_boundary_history_budget(history_budget: usize) -> Option<usize> {
+    // A value above the compact default is an explicit long-context policy.
+    // Preserve its raw messages so the provider can select 128K/256K from the
+    // actual request instead of discarding them at each completed plan item.
+    (history_budget <= DEFAULT_MAX_HISTORY_MESSAGES)
+        .then(|| history_budget.min(12).max(6))
+}
+
+fn context_pressure_history_budget(history: &[ChatMessage]) -> Option<usize> {
+    const MIN_PRESSURE_HISTORY_MESSAGES: usize = 12;
+
+    let has_system = history.first().is_some_and(|message| message.role == "system");
+    let non_system_count = history
+        .len()
+        .saturating_sub(if has_system { 1 } else { 0 });
+    if non_system_count <= MIN_PRESSURE_HISTORY_MESSAGES {
+        return None;
+    }
+
+    Some(
+        (non_system_count / 2)
+            .max(MIN_PRESSURE_HISTORY_MESSAGES)
+            .min(non_system_count - 1),
+    )
+}
+
 /// Minimum interval between progress sends to avoid flooding the draft channel.
 pub(crate) const PROGRESS_MIN_INTERVAL_MS: u64 = 500;
 
@@ -3437,6 +3463,39 @@ pub(crate) async fn run_tool_call_loop(
                     }),
                 );
 
+                if crate::providers::reliable::is_context_window_exceeded(&e) {
+                    if let Some(next_history_budget) = context_pressure_history_budget(history) {
+                        forced_history_budget = Some(next_history_budget);
+                        runtime_trace::record_event(
+                            "tool_loop_context_pressure_compacted",
+                            Some(channel_name),
+                            Some(provider_name),
+                            Some(model),
+                            Some(&turn_id),
+                            Some(true),
+                            Some(
+                                "provider reached its context ceiling; compacting old history and retrying",
+                            ),
+                            serde_json::json!({
+                                "iteration": iteration + 1,
+                                "next_history_budget": next_history_budget,
+                                "native_tools_preserved": use_native_tools,
+                                "error": safe_error,
+                            }),
+                        );
+                        if let Some(ref tx) = on_delta {
+                            let _ = tx
+                                .send(format!(
+                                    "{DRAFT_PROGRESS_SENTINEL}\u{21bb} Context is full; compacting older history and retrying\n"
+                                ))
+                                .await;
+                        }
+                        continue;
+                    }
+
+                    return Err(e);
+                }
+
                 let should_retry_with_prompt_tools = use_native_tools
                     && !prompt_tool_fallback_used
                     && !tool_specs.is_empty()
@@ -4580,7 +4639,7 @@ pub(crate) async fn run_tool_call_loop(
         }
 
         if iteration_resolved_plan_item {
-            forced_history_budget = Some(history_budget.min(12).max(6));
+            forced_history_budget = plan_boundary_history_budget(history_budget);
         }
 
         if !current_failed_tool_records.is_empty() {
@@ -5431,18 +5490,7 @@ pub async fn run(
         .or(config.default_model.as_deref())
         .unwrap_or("anthropic/claude-sonnet-4");
 
-    let provider_runtime_options = providers::ProviderRuntimeOptions {
-        auth_profile_override: None,
-        provider_api_url: config.api_url.clone(),
-        llamafarm_dir: config.config_path.parent().map(std::path::PathBuf::from),
-        secrets_encrypt: config.secrets.encrypt,
-        reasoning_enabled: config.runtime.reasoning_enabled,
-        reasoning_level: config.effective_provider_reasoning_level(),
-        custom_provider_api_mode: config.provider_api.map(|mode| mode.as_compatible_mode()),
-        max_tokens_override: config.agent.max_output_tokens_per_turn,
-        model_support_vision: config.model_support_vision,
-        ..Default::default()
-    };
+    let provider_runtime_options = providers::ProviderRuntimeOptions::from_config(&config);
 
     let provider: Box<dyn Provider> = providers::create_routed_provider_with_options(
         provider_name,
@@ -5589,11 +5637,11 @@ pub async fn run(
             "Query connected hardware for reported GPIO pins and LED pin. Use when: user asks what pins are available.",
         ));
     }
-    let bootstrap_max_chars = if config.agent.compact_context {
-        Some(6000)
+    let bootstrap_max_chars = Some(if config.agent.compact_context {
+        6000
     } else {
-        None
-    };
+        usize::MAX
+    });
     // Dynamic: use Ollama's cached `/api/show` capability report when available.
     // Falls back to hardcoded model heuristics + config tool_dispatcher.
     let native_tools = match provider.cached_model_tool_support(model_name) {
@@ -5937,18 +5985,7 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
         .default_model
         .clone()
         .unwrap_or_else(|| "anthropic/claude-sonnet-4-20250514".into());
-    let provider_runtime_options = providers::ProviderRuntimeOptions {
-        auth_profile_override: None,
-        provider_api_url: config.api_url.clone(),
-        llamafarm_dir: config.config_path.parent().map(std::path::PathBuf::from),
-        secrets_encrypt: config.secrets.encrypt,
-        reasoning_enabled: config.runtime.reasoning_enabled,
-        reasoning_level: config.effective_provider_reasoning_level(),
-        custom_provider_api_mode: config.provider_api.map(|mode| mode.as_compatible_mode()),
-        max_tokens_override: config.agent.max_output_tokens_per_turn,
-        model_support_vision: config.model_support_vision,
-        ..Default::default()
-    };
+    let provider_runtime_options = providers::ProviderRuntimeOptions::from_config(&config);
     let provider: Box<dyn Provider> = providers::create_routed_provider_with_options(
         provider_name,
         config.api_key.as_deref(),
@@ -6022,11 +6059,11 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
             "Query connected hardware for reported GPIO pins and LED pin. Use when user asks what pins are available.",
         ));
     }
-    let bootstrap_max_chars = if config.agent.compact_context {
-        Some(6000)
+    let bootstrap_max_chars = Some(if config.agent.compact_context {
+        6000
     } else {
-        None
-    };
+        usize::MAX
+    });
     let native_tools = match provider.cached_model_tool_support(&model_name) {
         Some(ollama_says_tools) => {
             ollama_says_tools && native_tool_transport_supported(provider_name, &model_name)
@@ -6856,6 +6893,7 @@ mod tests {
         responses: Arc<Mutex<VecDeque<anyhow::Result<ChatResponse>>>>,
         capabilities: ProviderCapabilities,
         calls: Arc<AtomicUsize>,
+        native_tool_requests: Arc<Mutex<Vec<bool>>>,
     }
 
     impl ResultScriptedProvider {
@@ -6867,7 +6905,20 @@ mod tests {
                 responses: Arc::new(Mutex::new(responses.into())),
                 capabilities: ProviderCapabilities::default(),
                 calls,
+                native_tool_requests: Arc::new(Mutex::new(Vec::new())),
             }
+        }
+
+        fn with_native_tool_support(mut self) -> Self {
+            self.capabilities.native_tool_calling = true;
+            self
+        }
+
+        fn native_tool_requests(&self) -> Vec<bool> {
+            self.native_tool_requests
+                .lock()
+                .expect("native tool request lock should be valid")
+                .clone()
         }
     }
 
@@ -6889,11 +6940,15 @@ mod tests {
 
         async fn chat(
             &self,
-            _request: ChatRequest<'_>,
+            request: ChatRequest<'_>,
             _model: &str,
             _temperature: f64,
         ) -> anyhow::Result<ChatResponse> {
             self.calls.fetch_add(1, Ordering::SeqCst);
+            self.native_tool_requests
+                .lock()
+                .expect("native tool request lock should be valid")
+                .push(request.tools.is_some());
             let mut responses = self
                 .responses
                 .lock()
@@ -8381,6 +8436,91 @@ mod tests {
         );
         assert_eq!(provider_calls.load(Ordering::SeqCst), 2);
         assert_eq!(invocations.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn context_pressure_compacts_and_retries_without_dropping_native_tools_or_plan() {
+        let provider_calls = Arc::new(AtomicUsize::new(0));
+        let provider = ResultScriptedProvider::from_results(
+            vec![
+                Ok(ChatResponse {
+                    text: None,
+                    tool_calls: vec![ToolCall {
+                        id: "call_before_pressure".to_string(),
+                        name: "test_tool".to_string(),
+                        arguments: "{}".to_string(),
+                    }],
+                    usage: None,
+                    metrics: None,
+                    reasoning_content: None,
+                }),
+                Err(anyhow::anyhow!(
+                    "context length exceeded: Ollama prompt reached the 262144-token context ceiling"
+                )),
+                Ok(ChatResponse {
+                    text: Some(
+                        "continued after context pressure with the verified result".to_string(),
+                    ),
+                    tool_calls: Vec::new(),
+                    usage: None,
+                    metrics: None,
+                    reasoning_content: None,
+                }),
+            ],
+            Arc::clone(&provider_calls),
+        )
+        .with_native_tool_support();
+
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(StaticOutputTool::new(
+            "test_tool",
+            "verified",
+            Arc::clone(&invocations),
+        ))];
+        let mut history = vec![ChatMessage::system("test-system")];
+        for index in 0..30 {
+            history.push(ChatMessage::user(format!("prior message {index}")));
+        }
+        history.push(ChatMessage::user("use test_tool and finish"));
+        let observer = NoopObserver;
+
+        let result = with_tool_loop_settings(
+            false,
+            true,
+            run_tool_call_loop(
+                &provider,
+                &mut history,
+                &tools_registry,
+                &observer,
+                "ollama",
+                "qwen3.6:35b-a3b-mtp-q4_K_M",
+                0.0,
+                true,
+                None,
+                "cli",
+                &crate::config::MultimodalConfig::default(),
+                5,
+                None,
+                None,
+                None,
+                &[],
+            ),
+        )
+        .await
+        .expect("context pressure should compact and resume the existing native-tool plan");
+
+        assert_eq!(
+            result,
+            "continued after context pressure with the verified result"
+        );
+        assert_eq!(provider_calls.load(Ordering::SeqCst), 3);
+        assert_eq!(invocations.load(Ordering::SeqCst), 1);
+        assert_eq!(provider.native_tool_requests(), vec![true, true, true]);
+        assert!(
+            history
+                .iter()
+                .all(|message| !message.content.contains("## Compatibility Fallback"))
+        );
     }
 
     #[tokio::test]
@@ -11710,6 +11850,12 @@ Tail"#;
         ];
         trim_history(&mut history, DEFAULT_MAX_HISTORY_MESSAGES);
         assert_eq!(history.len(), 3);
+    }
+
+    #[test]
+    fn plan_boundaries_preserve_explicit_long_context_history() {
+        assert_eq!(plan_boundary_history_budget(48), Some(12));
+        assert_eq!(plan_boundary_history_budget(512), None);
     }
 
     #[test]

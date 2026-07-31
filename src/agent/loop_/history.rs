@@ -134,7 +134,42 @@ pub(super) fn compaction_range(
         return None;
     }
 
-    Some((start, start + compact_count))
+    let mut compact_end = start + compact_count;
+    if history
+        .get(compact_end)
+        .is_some_and(|message| message.role == "tool")
+    {
+        let mut group_start = compact_end;
+        while group_start > start
+            && history
+                .get(group_start)
+                .is_some_and(|message| message.role == "tool")
+        {
+            group_start -= 1;
+        }
+
+        let starts_with_native_call = history.get(group_start).is_some_and(|message| {
+            message.role == "assistant"
+                && serde_json::from_str::<serde_json::Value>(&message.content)
+                    .ok()
+                    .and_then(|value| value.get("tool_calls").cloned())
+                    .is_some()
+        });
+        if starts_with_native_call && group_start > start {
+            compact_end = group_start;
+        } else if starts_with_native_call {
+            compact_end = group_start + 1;
+            while compact_end < history.len() && history[compact_end].role == "tool" {
+                compact_end += 1;
+            }
+        } else {
+            while compact_end < history.len() && history[compact_end].role == "tool" {
+                compact_end += 1;
+            }
+        }
+    }
+
+    (compact_end > start).then_some((start, compact_end))
 }
 
 pub(super) fn build_compaction_transcript(messages: &[ChatMessage]) -> String {
@@ -268,6 +303,35 @@ pub(super) fn deterministic_compact_history(
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn compaction_range_never_splits_native_parallel_tool_results() {
+        let native_call = serde_json::json!({
+            "content": null,
+            "tool_calls": [
+                {"id": "call_a", "name": "tool_a", "arguments": "{}"},
+                {"id": "call_b", "name": "tool_b", "arguments": "{}"}
+            ]
+        })
+        .to_string();
+        let history = vec![
+            ChatMessage::system("system"),
+            ChatMessage::user("old one"),
+            ChatMessage::assistant("old reply"),
+            ChatMessage::user("run both tools"),
+            ChatMessage::assistant(native_call),
+            ChatMessage::tool(r#"{"tool_call_id":"call_a","content":"a"}"#),
+            ChatMessage::tool(r#"{"tool_call_id":"call_b","content":"b"}"#),
+            ChatMessage::user("continue"),
+        ];
+
+        let (start, end) = compaction_range(&history, 2).expect("history should compact");
+        assert_eq!(start, 1);
+        assert_eq!(end, 4);
+        assert_eq!(history[end].role, "assistant");
+        assert_eq!(history[end + 1].role, "tool");
+        assert_eq!(history[end + 2].role, "tool");
+    }
 
     #[test]
     fn working_state_checkpoint_is_rolling_and_private() {

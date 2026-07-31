@@ -96,8 +96,8 @@ use tokio_util::sync::CancellationToken;
 
 /// Per-sender conversation history for channel messages.
 type ConversationHistoryMap = Arc<Mutex<HashMap<String, Vec<ChatMessage>>>>;
-/// Maximum history messages to keep per sender.
-const MAX_CHANNEL_HISTORY: usize = 50;
+/// Default history messages to keep per sender when no agent policy is set.
+const DEFAULT_CHANNEL_HISTORY: usize = 50;
 /// Minimum user-message length (in chars) for auto-save to memory.
 /// Messages shorter than this (e.g. "ok", "thanks") are not stored,
 /// reducing noise in memory recall.
@@ -238,6 +238,7 @@ struct ChannelRuntimeContext {
     temperature: f64,
     auto_save_memory: bool,
     max_tool_iterations: usize,
+    max_history_messages: usize,
     min_relevance_score: f64,
     conversation_histories: ConversationHistoryMap,
     provider_cache: ProviderCacheMap,
@@ -1553,7 +1554,7 @@ fn append_sender_turn(ctx: &ChannelRuntimeContext, sender_key: &str, turn: ChatM
         .unwrap_or_else(|e| e.into_inner());
     let turns = histories.entry(sender_key.to_string()).or_default();
     turns.push(turn);
-    while turns.len() > MAX_CHANNEL_HISTORY {
+    while turns.len() > ctx.max_history_messages {
         turns.remove(0);
     }
 }
@@ -3324,7 +3325,7 @@ semantic_match={:.2} (threshold {:.2}), category={}.",
         result = tokio::time::timeout(
             Duration::from_secs(timeout_budget_secs),
             crate::agent::loop_::with_tool_loop_history_limit(
-                crate::agent::loop_::DEFAULT_MAX_HISTORY_MESSAGES,
+                ctx.max_history_messages,
                 run_tool_call_loop_with_non_cli_approval_context(
                     active_provider.as_ref(),
                     &mut history,
@@ -4811,18 +4812,7 @@ pub async fn doctor_channels(config: Config) -> Result<()> {
 pub async fn start_channels(config: Config) -> Result<()> {
     let provider_name = resolved_default_provider(&config);
     let model = resolved_default_model(&config);
-    let provider_runtime_options = providers::ProviderRuntimeOptions {
-        auth_profile_override: None,
-        provider_api_url: config.api_url.clone(),
-        llamafarm_dir: config.config_path.parent().map(std::path::PathBuf::from),
-        secrets_encrypt: config.secrets.encrypt,
-        reasoning_enabled: config.runtime.reasoning_enabled,
-        reasoning_level: config.effective_provider_reasoning_level(),
-        custom_provider_api_mode: config.provider_api.map(|mode| mode.as_compatible_mode()),
-        max_tokens_override: config.agent.max_output_tokens_per_turn,
-        model_support_vision: config.model_support_vision,
-        ..Default::default()
-    };
+    let provider_runtime_options = providers::ProviderRuntimeOptions::from_config(&config);
     let provider: Arc<dyn Provider> = Arc::from(
         create_routed_provider_nonblocking(
             &provider_name,
@@ -4973,11 +4963,11 @@ pub async fn start_channels(config: Config) -> Result<()> {
         tool_descs.retain(|(name, _)| !excluded.iter().any(|ex| ex == name));
     }
 
-    let bootstrap_max_chars = if config.agent.compact_context {
-        Some(6000)
+    let bootstrap_max_chars = Some(if config.agent.compact_context {
+        6000
     } else {
-        None
-    };
+        usize::MAX
+    });
     let native_tools = provider.supports_native_tools();
     let mut system_prompt = build_system_prompt_with_mode(
         &workspace,
@@ -5121,6 +5111,7 @@ pub async fn start_channels(config: Config) -> Result<()> {
         temperature,
         auto_save_memory: config.memory.auto_save,
         max_tool_iterations: config.agent.max_tool_iterations,
+        max_history_messages: config.agent.max_history_messages.max(1),
         min_relevance_score: config.memory.min_relevance_score,
         conversation_histories: Arc::new(Mutex::new(HashMap::new())),
         provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
@@ -5474,6 +5465,7 @@ mod tests {
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 5,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(histories)),
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -5514,7 +5506,7 @@ mod tests {
     }
 
     #[test]
-    fn append_sender_turn_stores_single_turn_per_call() {
+    fn append_sender_turn_respects_configured_history_limit() {
         let sender = "telegram_u2".to_string();
         let ctx = ChannelRuntimeContext {
             channels_by_name: Arc::new(HashMap::new()),
@@ -5528,6 +5520,7 @@ mod tests {
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 5,
+            max_history_messages: 2,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -5549,16 +5542,18 @@ mod tests {
             )),
         };
 
-        append_sender_turn(&ctx, &sender, ChatMessage::user("hello"));
+        append_sender_turn(&ctx, &sender, ChatMessage::user("old"));
+        append_sender_turn(&ctx, &sender, ChatMessage::assistant("middle"));
+        append_sender_turn(&ctx, &sender, ChatMessage::user("latest"));
 
         let histories = ctx
             .conversation_histories
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let turns = histories.get(&sender).expect("sender history should exist");
-        assert_eq!(turns.len(), 1);
-        assert_eq!(turns[0].role, "user");
-        assert_eq!(turns[0].content, "hello");
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].content, "middle");
+        assert_eq!(turns[1].content, "latest");
     }
 
     #[test]
@@ -5585,6 +5580,7 @@ mod tests {
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 5,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(histories)),
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -6210,6 +6206,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 5,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
@@ -6287,6 +6284,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 10,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -6351,6 +6349,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 10,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -6429,6 +6428,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 10,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -6506,6 +6506,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 10,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -6575,6 +6576,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 10,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -6639,6 +6641,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 10,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -6712,6 +6715,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 5,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
@@ -6812,6 +6816,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 5,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
@@ -6951,6 +6956,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 5,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
@@ -7063,6 +7069,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 5,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
@@ -7170,6 +7177,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 5,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
@@ -7265,6 +7273,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 5,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
@@ -7410,6 +7419,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 5,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
@@ -7555,6 +7565,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 5,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
@@ -7676,6 +7687,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 5,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
@@ -7773,6 +7785,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 5,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
@@ -7896,6 +7909,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 5,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
@@ -8011,6 +8025,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 5,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
@@ -8087,6 +8102,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 5,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
@@ -8175,6 +8191,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 5,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(provider_cache_seed)),
@@ -8315,6 +8332,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 5,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -8451,6 +8469,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 12,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -8516,6 +8535,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 3,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -8691,6 +8711,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 10,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -8776,6 +8797,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 10,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -8877,6 +8899,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 10,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -8956,6 +8979,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 10,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -9020,6 +9044,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 10,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -9094,6 +9119,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 10,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -9638,6 +9664,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 5,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -9728,6 +9755,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 5,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -9818,6 +9846,7 @@ BTC is currently around $65,000 based on latest tool output."#
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 5,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(histories)),
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -10470,6 +10499,7 @@ BTC is currently around $65,000 based on latest tool output."#;
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 5,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -10541,6 +10571,7 @@ BTC is currently around $65,000 based on latest tool output."#;
             temperature: 0.0,
             auto_save_memory: false,
             max_tool_iterations: 5,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
             min_relevance_score: 0.0,
             conversation_histories: Arc::new(Mutex::new(HashMap::new())),
             provider_cache: Arc::new(Mutex::new(HashMap::new())),

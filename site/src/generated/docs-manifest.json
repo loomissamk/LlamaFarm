@@ -5108,7 +5108,7 @@
       "localize",
       "reference"
     ],
-    "readingMinutes": 18,
+    "readingMinutes": 19,
     "startHere": false,
     "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/config-reference.md"
   },
@@ -5775,7 +5775,7 @@
       "localize",
       "reference"
     ],
-    "readingMinutes": 7,
+    "readingMinutes": 8,
     "startHere": false,
     "sourceUrl": "https://github.com/llamafarm-labs/llamafarm/blob/main/docs/i18n/vi/providers-reference.md"
   },

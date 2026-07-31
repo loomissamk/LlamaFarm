@@ -1,5 +1,7 @@
 use super::traits::{Tool, ToolResult};
-use crate::agent::loop_::run_tool_call_loop;
+use crate::agent::loop_::{
+    DEFAULT_MAX_HISTORY_MESSAGES, run_tool_call_loop, with_tool_loop_history_limit,
+};
 use crate::config::DelegateAgentConfig;
 use crate::coordination::{CoordinationEnvelope, CoordinationPayload, InMemoryMessageBus};
 use crate::federation::remote_subagent::FederationRemoteSubagentAdapter;
@@ -40,6 +42,8 @@ pub struct DelegateTool {
     parent_tools: Arc<Vec<Arc<dyn Tool>>>,
     /// Inherited multimodal handling config for sub-agent loops.
     multimodal_config: crate::config::MultimodalConfig,
+    /// Root conversation-retention policy inherited by agentic delegates.
+    max_history_messages: usize,
     /// Optional typed coordination bus used to trace delegate lifecycle events.
     coordination_bus: Option<InMemoryMessageBus>,
     /// Logical lead agent identity used in coordination trace events.
@@ -76,6 +80,7 @@ impl DelegateTool {
             depth: 0,
             parent_tools: Arc::new(Vec::new()),
             multimodal_config: crate::config::MultimodalConfig::default(),
+            max_history_messages: DEFAULT_MAX_HISTORY_MESSAGES,
             coordination_bus,
             coordination_lead_agent: DEFAULT_COORDINATION_LEAD_AGENT.to_string(),
             federation: None,
@@ -116,6 +121,7 @@ impl DelegateTool {
             depth,
             parent_tools: Arc::new(Vec::new()),
             multimodal_config: crate::config::MultimodalConfig::default(),
+            max_history_messages: DEFAULT_MAX_HISTORY_MESSAGES,
             coordination_bus,
             coordination_lead_agent: DEFAULT_COORDINATION_LEAD_AGENT.to_string(),
             federation: None,
@@ -131,6 +137,11 @@ impl DelegateTool {
     /// Attach multimodal configuration for sub-agent tool loops.
     pub fn with_multimodal_config(mut self, config: crate::config::MultimodalConfig) -> Self {
         self.multimodal_config = config;
+        self
+    }
+
+    pub fn with_max_history_messages(mut self, max_history_messages: usize) -> Self {
+        self.max_history_messages = max_history_messages.max(1);
         self
     }
 
@@ -561,23 +572,26 @@ impl DelegateTool {
 
         let result = tokio::time::timeout(
             Duration::from_secs(DELEGATE_AGENTIC_TIMEOUT_SECS),
-            run_tool_call_loop(
-                provider,
-                &mut history,
-                &sub_tools,
-                &noop_observer,
-                &agent_config.provider,
-                &agent_config.model,
-                temperature,
-                true,
-                None,
-                "delegate",
-                &self.multimodal_config,
-                agent_config.max_iterations,
-                None,
-                None,
-                None,
-                &[],
+            with_tool_loop_history_limit(
+                self.max_history_messages,
+                run_tool_call_loop(
+                    provider,
+                    &mut history,
+                    &sub_tools,
+                    &noop_observer,
+                    &agent_config.provider,
+                    &agent_config.model,
+                    temperature,
+                    true,
+                    None,
+                    "delegate",
+                    &self.multimodal_config,
+                    agent_config.max_iterations,
+                    None,
+                    None,
+                    None,
+                    &[],
+                ),
             ),
         )
         .await;
@@ -1047,6 +1061,13 @@ mod tests {
         assert_eq!(schema["additionalProperties"], json!(false));
         assert_eq!(schema["properties"]["agent"]["minLength"], json!(1));
         assert_eq!(schema["properties"]["prompt"]["minLength"], json!(1));
+    }
+
+    #[test]
+    fn agentic_delegate_inherits_root_history_policy() {
+        let tool = DelegateTool::new(sample_agents(), None, test_security())
+            .with_max_history_messages(512);
+        assert_eq!(tool.max_history_messages, 512);
     }
 
     #[test]

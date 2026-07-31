@@ -12,6 +12,16 @@ import {
   Unplug,
 } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
+import {
+  automaticContextLabel,
+  CONTEXT_PRESETS,
+  contextDraftLabel,
+  contextSourceLabel,
+  formatContextTokens,
+  hasAdaptiveContextPolicy,
+  type ContextPolicyInfo,
+  type ContextSource,
+} from '@/lib/contextWindow';
 
 interface ConnectionsResponse {
   github:
@@ -28,8 +38,16 @@ interface ConnectionsResponse {
   };
 }
 
-interface ContextInfo {
+interface ContextInfo extends ContextPolicyInfo {
   num_ctx: number | null;
+  effective_default_num_ctx?: number | null;
+  source?: ContextSource;
+  adaptive?: {
+    enabled: boolean;
+    active?: boolean;
+    baseline: number | null;
+    max: number | null;
+  };
   min: number;
   max: number;
   gpu_layers: number | null;
@@ -114,7 +132,7 @@ export function ConnectionsPanel() {
       await loadContext();
       setContextStatus(
         value === 0
-          ? 'Context window reset to the model default.'
+          ? 'Explicit override cleared. The automatic runtime context policy is active.'
           : `Context window saved at ${value.toLocaleString()} tokens.`,
       );
     } catch (err) {
@@ -251,6 +269,8 @@ export function ConnectionsPanel() {
 
   const githubConnected = data?.github.status === 'connected';
   const contextDirty = ctxDraft !== (ctx?.num_ctx ?? 0);
+  const effectiveContext = ctx?.effective_default_num_ctx ?? ctx?.num_ctx ?? null;
+  const effectiveSource = ctx?.source ?? (ctx?.num_ctx !== null ? 'config' : 'model-native');
   const saveRangeFromKeyboard = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (
       [
@@ -472,13 +492,72 @@ export function ConnectionsPanel() {
               </p>
             </div>
           )}
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <label htmlFor="connection-context-window" className="font-medium text-white">
               Chat context window
             </label>
             <span className="font-mono text-sm text-blue-300">
-              {ctxDraft === 0 ? 'auto (model native)' : `${ctxDraft.toLocaleString()} tokens`}
+              {contextDraftLabel(ctx, ctxDraft)}
             </span>
+          </div>
+          <p className="mt-1 text-xs text-gray-500">
+            {ctxDraft === 0 ? (
+              hasAdaptiveContextPolicy(ctx) ? (
+                <>
+                  Starts at{' '}
+                  {formatContextTokens(
+                    ctx.adaptive?.baseline ?? effectiveContext ?? ctx.min,
+                  )}
+                  {' and expands only when the request needs it, up to '}
+                  {formatContextTokens(ctx.adaptive?.max ?? ctx.max)} or the model&apos;s native
+                  limit, whichever is lower.
+                </>
+              ) : effectiveContext ? (
+                <>
+                  Automatic currently uses the {contextSourceLabel(effectiveSource).toLowerCase()}{' '}
+                  setting of {formatContextTokens(effectiveContext)} tokens.
+                </>
+              ) : (
+                <>Automatic resolves the selected model&apos;s native context at request time.</>
+              )
+            ) : (
+              <>A fixed override replaces the automatic runtime policy.</>
+            )}
+          </p>
+          <div
+            className="mt-3 flex flex-wrap gap-2"
+            role="group"
+            aria-label="Context window presets"
+          >
+            {CONTEXT_PRESETS.map((preset) => {
+              const unavailable = preset.value > ctx.max;
+              return (
+                <button
+                  key={preset.value}
+                  type="button"
+                  onClick={() => {
+                    setCtxDraft(preset.value);
+                    void saveContext(preset.value);
+                  }}
+                  disabled={ctxSaving || unavailable}
+                  aria-pressed={ctxDraft === preset.value}
+                  title={
+                    unavailable
+                      ? `This runtime supports up to ${formatContextTokens(ctx.max)} tokens`
+                      : preset.value === 0
+                        ? `Use ${automaticContextLabel(ctx)}`
+                        : `Use a fixed ${preset.label} context`
+                  }
+                  className={`min-h-9 rounded-lg border px-3 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
+                    ctxDraft === preset.value
+                      ? 'border-blue-500 bg-blue-500/10 text-blue-200'
+                      : 'border-gray-700 text-gray-300 hover:border-blue-500 hover:text-white'
+                  }`}
+                >
+                  {preset.label}
+                </button>
+              );
+            })}
           </div>
           <input
             id="connection-context-window"
@@ -492,7 +571,9 @@ export function ConnectionsPanel() {
             onKeyUp={saveRangeFromKeyboard}
             onBlur={() => void saveContext(ctxDraft)}
             aria-valuetext={
-              ctxDraft === 0 ? 'Automatic model-native context' : `${ctxDraft} tokens`
+              ctxDraft === 0
+                ? `Automatic context: ${automaticContextLabel(ctx)}`
+                : `${ctxDraft} tokens`
             }
             disabled={ctxSaving}
             className="mt-3 w-full accent-blue-500"
@@ -508,8 +589,8 @@ export function ConnectionsPanel() {
             </button>
           </div>
           <div className="mt-1 flex justify-between text-[10px] text-gray-600">
-            <span>auto</span>
-            <span>{(ctx.max / 1024).toFixed(0)}k</span>
+            <span>automatic policy</span>
+            <span>{formatContextTokens(ctx.max)}</span>
           </div>
           <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
             <div className="rounded-lg border border-gray-800 bg-gray-950 p-2">
@@ -526,9 +607,9 @@ export function ConnectionsPanel() {
             </div>
           </div>
           <p className="mt-2 text-xs text-gray-500">
-            Fixed prompt cost (persona + tool schemas) is spent before your conversation. Subtasks
-            keep their own separate contexts. Raise the window on a bigger server; trim AGENTS.md or
-            disable unused tools if the fixed cost is a large share of a small window.
+            Fixed prompt cost (bootstrap files + full tool schemas) is spent before each
+            conversation. Local delegated agents inherit this policy but keep independent message
+            histories. External channel workers load persisted changes on restart.
           </p>
 
           {/* GPU layer offload */}

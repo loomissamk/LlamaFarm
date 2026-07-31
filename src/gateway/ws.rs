@@ -2081,7 +2081,11 @@ fn build_ws_turn_system_prompt(
         .iter()
         .map(|spec| (spec.name.as_str(), spec.description.as_str()))
         .collect::<Vec<_>>();
-    let bootstrap_max_chars = config.agent.compact_context.then_some(6000);
+    let bootstrap_max_chars = Some(if config.agent.compact_context {
+        6000
+    } else {
+        usize::MAX
+    });
     let mut prompt = crate::channels::build_system_prompt_with_mode(
         &config.workspace_dir,
         model,

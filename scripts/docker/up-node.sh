@@ -51,13 +51,7 @@ set +a
 for required in \
   LLAMAFARM_NODE_NAME \
   LLAMAFARM_MANUAL_PEERS \
-  LLAMAFARM_FEDERATION_TOKEN \
-  LLAMAFARM_MEMORY_LIMIT \
-  LLAMAFARM_CPU_LIMIT \
-  LLAMAFARM_PIDS_LIMIT \
-  QDRANT_MEMORY_LIMIT \
-  QDRANT_CPU_LIMIT \
-  QDRANT_PIDS_LIMIT; do
+  LLAMAFARM_FEDERATION_TOKEN; do
   if [ -z "${!required:-}" ]; then
     echo "Profile is missing required setting: $required" >&2
     exit 1
@@ -90,16 +84,11 @@ require_nvidia_toolkit
 
 cd "$ROOT_DIR"
 
-# Non-up compose commands are inspection operations; do not mutate cgroups.
+# Non-up compose commands are inspection operations.
 if [ "$#" -gt 0 ] && [ "$1" != "up" ]; then
   exec env LLAMAFARM_GPU_MODE=nvidia ./scripts/docker/up-bundle-nvidia.sh "$@"
 fi
 
 env LLAMAFARM_GPU_MODE=nvidia ./scripts/docker/up-bundle-nvidia.sh "$@"
 
-# The profile variables are rendered by docker-compose.bundle.yml before the
-# containers are created. Do not use `docker update` afterward: NVIDIA
-# documents that a post-start cgroup update can make a GPU disappear from a
-# running container with the legacy runtime hook. Change a ceiling with a
-# normal compose recreate (`up -d --force-recreate`) instead.
-echo "Applied $PROFILE_NAME resource limits at create time: LlamaFarm ${LLAMAFARM_MEMORY_LIMIT}/${LLAMAFARM_CPU_LIMIT} CPUs; Qdrant ${QDRANT_MEMORY_LIMIT}/${QDRANT_CPU_LIMIT} CPUs."
+echo "Applied $PROFILE_NAME with no Compose CPU, memory, swap, or PID ceilings."

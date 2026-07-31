@@ -67,6 +67,6 @@ echo
 echo "== Effective Ollama allocation =="
 docker exec LlamaFarm ollama ps
 echo
-echo "== Cgroup ceilings (bytes / NanoCPUs / PIDs) =="
+echo "== Cgroup status (max/0 means unlimited) =="
 docker inspect --format 'LlamaFarm: {{.HostConfig.Memory}} / {{.HostConfig.NanoCPUs}} / {{.HostConfig.PidsLimit}}' LlamaFarm
 docker inspect --format 'Qdrant: {{.HostConfig.Memory}} / {{.HostConfig.NanoCPUs}} / {{.HostConfig.PidsLimit}}' Qdrant

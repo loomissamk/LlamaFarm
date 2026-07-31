@@ -526,11 +526,11 @@ async fn execute_federation_task(
             .collect();
         let skills =
             crate::skills::load_skills_with_config(&config_guard.workspace_dir, &config_guard);
-        let bootstrap_max_chars = if config_guard.agent.compact_context {
-            Some(6000)
+        let bootstrap_max_chars = Some(if config_guard.agent.compact_context {
+            6000
         } else {
-            None
-        };
+            usize::MAX
+        });
         let native_tools = crate::agent::loop_::configured_native_tools_enabled(
             &config_guard.agent.tool_dispatcher,
             &provider_label,
@@ -3947,8 +3947,6 @@ fn query_gpu_memory() -> Option<(u64, u64, u64)> {
 }
 
 /// GET /api/context — current chat context window (num_ctx) + bounds.
-/// The main chat model's context size; subtask/subagent contexts are managed
-/// separately and are unaffected by this control.
 pub async fn handle_api_context_get(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -3956,46 +3954,57 @@ pub async fn handle_api_context_get(
     if let Err(e) = require_auth(&state, &headers) {
         return e.into_response();
     }
-    let (num_ctx, gpu_layers, workspace_dir) = {
+    let (num_ctx, gpu_layers, workspace_dir, compact_context) = {
         let c = state.config.lock();
         (
             c.provider.ollama_num_ctx,
             c.provider.ollama_gpu_layers,
             c.workspace_dir.clone(),
+            c.agent.compact_context,
         )
     };
+    let context_runtime = crate::providers::ollama::ollama_context_runtime_config(num_ctx);
     let runtime = state.runtime_snapshot();
 
     // Live GPU memory so the UI can show the VRAM tradeoff dynamically
     // (more context / more GPU layers → more VRAM used). Best-effort.
     let (gpu_total_mb, gpu_used_mb, gpu_free_mb) = query_gpu_memory().unwrap_or((0, 0, 0));
 
-    // Rough token budget so the operator can see if the .md files + tool
-    // schemas are eating the window (~4 chars/token). Persona files:
-    let est_tokens = |chars: usize| chars / 4;
-    let md_chars: usize = ["AGENTS.md", "AGENT.md"]
+    // Conservative fixed-cost estimate aligned with the provider's
+    // tokenizer-free policy: two bytes/token plus a 25% safety margin.
+    let est_tokens = |bytes: usize| {
+        let raw = bytes.saturating_add(1) / 2;
+        raw.saturating_add((raw / 4).max(1_024))
+    };
+    let bootstrap_max_chars = if compact_context { 6_000 } else { usize::MAX };
+    let md_chars: usize = ["AGENTS.md", "TOOLS.md", "USER.md", "BOOTSTRAP.md", "MEMORY.md"]
         .iter()
         .filter_map(|f| {
             std::fs::metadata(workspace_dir.join(f))
                 .ok()
-                .map(|m| m.len() as usize)
+                .map(|m| (m.len() as usize).min(bootstrap_max_chars))
         })
         .sum();
-    // Tool schemas dominate the fixed prompt cost; estimate from names+descriptions.
     let tool_count = runtime.tools_registry.len();
-    let tool_chars: usize = runtime
-        .tools_registry
-        .iter()
-        .map(|t| t.name.len() + t.description.len())
-        .sum();
+    let tool_chars = serde_json::to_vec(runtime.tools_registry.as_ref())
+        .map_or(0, |serialized| serialized.len());
     let fixed_prompt_tokens = est_tokens(md_chars + tool_chars);
 
     Json(serde_json::json!({
-        // null means "auto" (use the model's native context length).
-        "num_ctx": num_ctx,
+        // null means no persisted/manual override. The effective default can
+        // still come from OLLAMA_NUM_CTX, which is reported separately.
+        "num_ctx": context_runtime.configured_override,
+        "effective_default_num_ctx": context_runtime.effective_default,
+        "source": context_runtime.source,
         "min": 2048,
-        "max": 131072,
-        "note": "Chat context window. 'auto' uses the model's native length. Larger needs more VRAM; pair with OLLAMA_KV_CACHE_TYPE=q8_0. Subtask contexts are separate.",
+        "max": crate::providers::ollama::MAX_OLLAMA_CONTEXT_TOKENS,
+        "note": "A manual value is exact. Without one, adaptive mode grows the environment baseline to the model-native limit when needed. The live gateway and local delegated providers inherit this policy; already-running external channel workers apply persisted changes after restart.",
+        "adaptive": {
+            "enabled": context_runtime.adaptive_enabled,
+            "active": context_runtime.adaptive_active,
+            "baseline": context_runtime.adaptive_baseline,
+            "max": context_runtime.adaptive_max,
+        },
         // GPU layer offload: 999 = put all layers on GPU (use all VRAM), 0 =
         // CPU-only, null = let Ollama auto-decide. This is the "use the whole
         // GPU" knob the operator asked for.
@@ -4029,7 +4038,7 @@ pub async fn handle_api_context_get(
 
 #[derive(serde::Deserialize)]
 pub struct ContextPutBody {
-    /// null or 0 resets to auto (model native length).
+    /// null or 0 clears the fixed override and restores the automatic policy.
     #[serde(default)]
     pub num_ctx: Option<u32>,
     /// GPU layer offload: 999 = all layers on GPU, 0 = CPU-only, absent = leave
@@ -4041,8 +4050,17 @@ pub struct ContextPutBody {
     pub set_gpu_layers: bool,
 }
 
+fn normalize_context_override(num_ctx: Option<u32>) -> Option<u32> {
+    match num_ctx {
+        Some(0) | None => None,
+        Some(value) => {
+            Some(value.clamp(2_048, crate::providers::ollama::MAX_OLLAMA_CONTEXT_TOKENS))
+        }
+    }
+}
+
 /// PUT /api/context — set the chat context window and/or GPU layer offload,
-/// persisted live (per-request options the provider sends to Ollama).
+/// persist it, and replace the live provider/tool snapshot.
 pub async fn handle_api_context_put(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -4051,16 +4069,31 @@ pub async fn handle_api_context_put(
     if let Err(e) = require_auth(&state, &headers) {
         return e.into_response();
     }
-    let normalized_ctx = match body.num_ctx {
-        Some(0) | None => None,
-        Some(n) => Some(n.clamp(2048, 131072)),
-    };
+    let normalized_ctx = normalize_context_override(body.num_ctx);
     let mut updated = state.config.lock().clone();
     updated.provider.ollama_num_ctx = normalized_ctx;
     if body.set_gpu_layers || body.gpu_layers.is_some() {
         // 999 = fill GPU; clamp to a sane range, allow 0 (CPU) and None (auto).
         updated.provider.ollama_gpu_layers = body.gpu_layers.map(|n| n.clamp(0, 999));
     }
+    let runtime_snapshot = match build_gateway_runtime_snapshot_with_federation(
+        &updated,
+        state
+            .federation
+            .as_ref()
+            .map(|federation| federation.remote_adapter()),
+    ) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": format!("Context settings cannot be applied live: {error}")
+                })),
+            )
+                .into_response();
+        }
+    };
     if let Err(error) = updated.save().await {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -4070,6 +4103,7 @@ pub async fn handle_api_context_put(
     }
     let gpu = updated.provider.ollama_gpu_layers;
     *state.config.lock() = updated;
+    state.replace_runtime_snapshot(runtime_snapshot);
     Json(serde_json::json!({"status": "ok", "num_ctx": normalized_ctx, "gpu_layers": gpu}))
         .into_response()
 }
@@ -5203,6 +5237,14 @@ mod tests {
             Some("AGENTS.md")
         );
         assert_eq!(normalize_workspace_editor_name("SOUL.md"), None);
+    }
+
+    #[test]
+    fn context_override_accepts_full_262k_window() {
+        assert_eq!(normalize_context_override(Some(0)), None);
+        assert_eq!(normalize_context_override(Some(1)), Some(2_048));
+        assert_eq!(normalize_context_override(Some(262_144)), Some(262_144));
+        assert_eq!(normalize_context_override(Some(500_000)), Some(262_144));
     }
 
     #[test]

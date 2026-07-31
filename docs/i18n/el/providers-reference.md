@@ -55,6 +55,13 @@ llamafarm providers
 - **Vision**: Υποστηρίζεται μέσω της σύνταξης `[IMAGE:<source>]` στα μηνύματα.
 - **Cloud Routing**: Χρησιμοποιήστε το επίθεμα `:cloud` (π.χ. `llama3:cloud`) για Ollama cloud models. Τα τοπικά endpoints υποστηρίζονται όταν το runtime έχει ήδη κάνει `ollama signin`. Για απευθείας απομακρυσμένα endpoints, ορίστε `api_url` και `api_key` ή `OLLAMA_API_KEY`.
 - **Reasoning**: Η συμπεριφορά συλλογιστικής ελέγχεται μέσω της ρύθμισης `reasoning_enabled` στο αρχείο `config.toml`.
+- **Adaptive Context**: Το `provider.ollama_num_ctx` είναι ακριβής χειροκίνητη
+  παράκαμψη. Όταν δεν ορίζεται, το `OLLAMA_NUM_CTX` παρέχει την προεπιλογή
+  περιβάλλοντος και με `LLAMAFARM_ADAPTIVE_CONTEXT=true` γίνεται η γρήγορη βάση.
+  Το προφίλ RTX 5070 Ti ξεκινά από 65.536 και επιλέγει 131.072 ή 262.144 μόνο
+  όταν το απαιτεί η εκτίμηση του αιτήματος, έως το μικρότερο από το εγγενές
+  context του μοντέλου και το `LLAMAFARM_ADAPTIVE_CONTEXT_MAX`. Επαληθεύστε την
+  πραγματική κατανομή με `docker exec LlamaFarm ollama ps`.
 
 ### AWS Bedrock
 

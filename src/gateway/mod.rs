@@ -323,18 +323,7 @@ fn default_gateway_model(config: &Config) -> String {
 }
 
 fn build_provider_runtime_options(config: &Config) -> providers::ProviderRuntimeOptions {
-    providers::ProviderRuntimeOptions {
-        auth_profile_override: None,
-        provider_api_url: config.api_url.clone(),
-        llamafarm_dir: config.config_path.parent().map(std::path::PathBuf::from),
-        secrets_encrypt: config.secrets.encrypt,
-        reasoning_enabled: config.runtime.reasoning_enabled,
-        reasoning_level: config.effective_provider_reasoning_level(),
-        custom_provider_api_mode: config.provider_api.map(|mode| mode.as_compatible_mode()),
-        max_tokens_override: config.agent.max_output_tokens_per_turn,
-        model_support_vision: config.model_support_vision,
-        ..Default::default()
-    }
+    providers::ProviderRuntimeOptions::from_config(config)
 }
 
 pub(crate) fn build_gateway_runtime_snapshot(config: &Config) -> Result<GatewayRuntimeSnapshot> {
@@ -1127,13 +1116,18 @@ async fn run_gateway_chat_simple(state: &AppState, message: &str) -> anyhow::Res
     // workspace-aware system context before model invocation.
     let system_prompt = {
         let config_guard = state.config.lock();
+        let bootstrap_max_chars = Some(if config_guard.agent.compact_context {
+            6_000
+        } else {
+            usize::MAX
+        });
         crate::channels::build_system_prompt(
             &config_guard.workspace_dir,
             &runtime.model,
             &[], // tools - empty for simple chat
             &[], // skills
             Some(&config_guard.identity),
-            None, // bootstrap_max_chars - use default
+            bootstrap_max_chars,
         )
     };
 
@@ -2838,6 +2832,20 @@ Reminder set successfully."#;
 
     fn test_public_connect_info() -> ConnectInfo<SocketAddr> {
         ConnectInfo(SocketAddr::from(([203, 0, 113, 10], 30_300)))
+    }
+
+    #[test]
+    fn gateway_provider_options_include_ollama_runtime_controls() {
+        let mut config = Config::default();
+        config.provider.ollama_gpu_layers = Some(48);
+        config.provider.ollama_main_gpu = Some(1);
+        config.provider.ollama_num_ctx = Some(262_144);
+
+        let options = build_provider_runtime_options(&config);
+
+        assert_eq!(options.ollama_gpu_layers, Some(48));
+        assert_eq!(options.ollama_main_gpu, Some(1));
+        assert_eq!(options.ollama_num_ctx, Some(262_144));
     }
 
     #[tokio::test]

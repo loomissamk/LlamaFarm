@@ -155,12 +155,19 @@ Lưu ý:
 | Khóa | Mặc định | Mục đích |
 |---|---|---|
 | `reasoning_level` | chưa đặt (`None`) | Ghi đè mức reasoning cho provider hỗ trợ mức (hiện tại OpenAI Codex `/responses`) |
+| `ollama_num_ctx` | chưa đặt (`None`) | Ghi đè chính xác cửa sổ ngữ cảnh Ollama; dashboard hỗ trợ 2.048–262.144 token |
 
 Lưu ý:
 
 - Giá trị hỗ trợ: `minimal`, `low`, `medium`, `high`, `xhigh` (không phân biệt hoa/thường).
 - Khi đặt, ghi đè `LLAMAFARM_CODEX_REASONING_EFFORT` cho OpenAI Codex.
 - Để trống sẽ dùng `LLAMAFARM_CODEX_REASONING_EFFORT` nếu có, nếu không mặc định `xhigh`.
+- `provider.ollama_num_ctx` luôn là giá trị thủ công chính xác. Khi để trống,
+  `OLLAMA_NUM_CTX` cung cấp mặc định runtime.
+- Với `LLAMAFARM_ADAPTIVE_CONTEXT=true`, mặc định môi trường trở thành mức cơ sở
+  nhanh. LlamaFarm tăng cửa sổ theo bậc ×2 khi yêu cầu cần thêm ngữ cảnh, tối đa
+  bằng giá trị nhỏ hơn giữa ngữ cảnh gốc của model và
+  `LLAMAFARM_ADAPTIVE_CONTEXT_MAX` (mặc định 262.144).
 
 ## `[skills]`
 

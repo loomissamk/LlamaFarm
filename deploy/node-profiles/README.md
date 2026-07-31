@@ -5,12 +5,13 @@ These profiles turn the two NVIDIA hosts into an asymmetric local agent cluster:
 | Node | Role | Inference profile |
 | --- | --- | --- |
 | RTX 4070 Laptop, 8 GB | fast IDE / fallback worker | 32K, one stream |
-| RTX 5070 Ti, 16 GB | coordinator / RAG / quality worker | 64K, one stream |
+| RTX 5070 Ti, 16 GB + 123 GB RAM | coordinator / RAG / quality worker | adaptive 64K → 128K → 256K, one stream |
 
-They deliberately do **not** turn the model's 262K architectural context into
-an allocation target. Context, model concurrency, and KV cache all compete for
-VRAM. One well-provisioned stream produces much better agent behavior than six
-simultaneous, swapping streams.
+The 5070 Ti profile does not allocate 262K for every turn. It keeps 64K as the
+fast lane, then grows an individual request to 128K or 256K when LlamaFarm's
+conservative prompt, tool-schema, image, and output-reserve estimate needs the
+larger tier. Context, model concurrency, and KV cache still compete for VRAM,
+so both profiles keep one well-provisioned stream.
 
 ## Bring-up
 
@@ -80,19 +81,34 @@ inspect the matching persisted artifact before considering the node accepted.
 while normally retaining reliable long-context behavior. `q4_0` is a benchmark
 fallback only; it should not be enabled merely to advertise a larger number.
 
-LlamaFarm sends `OLLAMA_NUM_CTX` with each model request. `OLLAMA_CONTEXT_LENGTH`
-is set to the same value so direct Ollama calls behave consistently. Keep
-`OLLAMA_NUM_PARALLEL=1`: Ollama reserves context/KV capacity per parallel
+LlamaFarm normally sends `OLLAMA_NUM_CTX` with each model request.
+`OLLAMA_CONTEXT_LENGTH` is set to the same value so direct Ollama calls use the
+fast baseline. On the 5070 Ti, `LLAMAFARM_ADAPTIVE_CONTEXT=true` changes that
+environment value from a fixed limit into a baseline: requests stay at 65,536
+tokens until the estimated prompt plus output reserve needs 131,072 or 262,144.
+`LLAMAFARM_ADAPTIVE_CONTEXT_MAX` caps that growth, and the model's native
+context length is always an additional ceiling. A persisted
+`provider.ollama_num_ctx` remains an exact manual override and disables adaptive
+selection until reset to auto.
+
+The large-memory profile also retains up to 512 raw history messages and avoids
+the compact bootstrap mode. This lets the provider see the real long request
+before choosing a tier. If a response reports pressure at 64K or 128K,
+LlamaFarm retries once at the next tier; at the native/operator ceiling it
+returns an explicit error instead of accepting a possibly truncated automatic
+response.
+
+Keep `OLLAMA_NUM_PARALLEL=1`: Ollama reserves context/KV capacity per parallel
 request, so concurrency multiplies the allocation.
 
-Promotion path:
+Verification path:
 
-1. Keep the laptop at 24–32K.
-2. Keep the 5070 Ti at 64K and measure real tool/RAG tasks.
-3. Test 96K on the 5070 Ti only after it remains stable at 64K under a full
-   single-stream workload.
-4. If a workload needs more than that, retrieve a small relevant subset rather
-   than forcing a 131K × 6 allocation.
+1. Keep the laptop fixed at 32K.
+2. Measure the 5070 Ti fast path at 64K with real tool/RAG tasks.
+3. Exercise the same model at the 128K and 256K tiers and record prompt
+   throughput, decode throughput, VRAM, host RAM, and GPU/CPU split.
+4. Lower `LLAMAFARM_ADAPTIVE_CONTEXT_MAX` only if those long-request
+   measurements are not acceptable for the selected model.
 
 `docker exec LlamaFarm ollama ps` shows the actual loaded context and GPU/CPU
 offload after a request. This is the source of truth, not the model card's
@@ -130,22 +146,11 @@ Use the GPUs for active decoding; system RAM is a valuable, slower second tier:
   deliberate CPU-offloaded quality experiments.
 - NVMe: model volumes, source data, and optional future disk-backed KV cache.
 
-The resource ceilings are applied when Compose creates a container. The
-5070 Ti host receives 96 GB for the bundle so it can run controlled offloaded
-experiments without starving the OS; that does not make CPU-offloaded decoding
-as fast as a model that actually fits in VRAM. Never keep an offloaded 30B/35B
-quality model resident alongside the 9B interactive lane.
-
-If a ceiling changes, recreate through Compose:
-
-```bash
-./scripts/docker/up-node.sh rtx4070-laptop up -d --force-recreate
-```
-
-Never use `docker update` on a running GPU bundle. NVIDIA documents that the
-legacy container-runtime hook can lose GPU cgroup access after that operation,
-leaving `nvidia-smi` with `Failed to initialize NVML: Unknown Error` inside the
-container.
+Neither service has a Compose CPU, memory, swap, or PID ceiling. The 5070 Ti
+bundle can use the full 123 GB RAM pool and every host CPU for long context,
+RAG, and deliberate model offload; the laptop bundle likewise uses all
+available local capacity. Model concurrency remains one because simultaneous
+inference contexts would reduce throughput, not because of a container budget.
 
 ## NVIDIA Container Toolkit preflight
 

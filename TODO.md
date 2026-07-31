@@ -13,9 +13,123 @@ requested work.
 - [x] Keep models and Qdrant data volumes intact across redeploys.
 - [x] Browser pairing is permanently disabled for this private LAN deployment.
 - [x] Support distinct hardware profiles: 8 GB RTX 4070 Laptop and 16 GB RTX
-  5070 Ti, each with create-time Docker GPU/resource limits.
+  5070 Ti. Neither profile applies Compose CPU, memory, swap, or PID ceilings.
 - [x] Document deployment, verification, recovery, and acceptance tests in
   the repository for the next redeploy/operator.
+
+## Non-security product audit — current source of truth (2026-07-30)
+
+This section supersedes older entries where they disagree with the current
+implementation. It intentionally excludes security work, GitHub Pages, public
+hosting, and repository publishing.
+
+Delivered in this pass:
+
+- [x] Keep documentation tooling local-only; no GitHub Pages workflow or
+  publishing-source change.
+- [x] Add a lazy-loaded, local Monaco workspace IDE without removing the
+  existing file and prompt workflows.
+- [x] Add truthful Ollama context controls: Auto, fixed 64K/128K/256K,
+  model-native detection, a 64K -> 128K -> 256K adaptive policy, exact manual
+  overrides, live runtime replacement, and consistent provider options across
+  CLI, channels, gateway, routed agents, and delegated agents.
+- [x] Preserve long raw history on the 128 GB coordinator (512 messages), retry
+  under-estimated prompts at the next context tier, and reject a possibly
+  truncated automatic-context response at the final ceiling.
+- [x] Remove all Compose CPU, memory, swap, and PID budgets from both node
+  profiles so inference, RAG, Qdrant, and model offload can use the full hosts.
+- [x] Pull and run Qwen 3.5 35B-A3B, Qwen 3.6 35B-A3B, Qwen 3.6 35B-A3B MTP,
+  and Qwen 3.6 27B dense on the RTX 5070 Ti node.
+- [x] Verify native tool calls for shell, web search, task planning, and
+  database query across all four candidates.
+- [ ] Complete the final exact-build deployment and rendered browser acceptance
+  matrix on the laptop and RTX 5070 Ti node.
+
+### P0 — context and model acceptance
+
+- [ ] Persist native maximum, selected allocation, prompt estimate,
+  `prompt_eval_count`, reserve, tier retry, compaction, and truncation outcome
+  in run events/ledger, Agent Chat, and Runs instead of debug logs only.
+- [ ] Add deterministic CI fixtures for 64K/128K/256K needle retrieval,
+  late-context instructions, long-context native tool calls, images, and output
+  reserve. Keep live hardware results versioned by model digest, quantization,
+  Ollama version, node profile, and context size.
+- [ ] Calibrate the tokenizer-free context estimator against real
+  `prompt_eval_count`; improve image token estimates and key native-context
+  cache entries by digest rather than mutable tag alone.
+- [ ] Add explicit pre-inference admission/compaction when a request cannot fit
+  the model/operator ceiling, with durable citations to any compacted artifact.
+- [ ] Build a repeatable role bakeoff (planner/coder/verifier/operator,
+  patch-and-test, RAG citations, recovery, cold/warm TTFT/TPS, memory placement)
+  and promote models only when measured thresholds pass.
+- [ ] Rewrite or remove older stale backlog entries for features now present,
+  including specialist prompts, auto-extending plans, the run ledger, browser
+  tooling, inference metrics, and the SQLite embedding cache.
+
+### P1 — reliability and missing functionality
+
+- [ ] Replace in-memory federation tasks with a durable queue: persisted task
+  state, idempotency, leases/heartbeats, restart recovery, retry/failover,
+  capacity-aware routing, and the unfinished `node.invoke` path.
+- [ ] Move chat/session JSON read-modify-write persistence to a transactional
+  store with message IDs, checkpoints, concurrent-update protection, and
+  active-turn restart recovery.
+- [ ] Add a content-addressed durable artifact store with hashes, retention,
+  previews/downloads, and cleanup; stop treating `/tmp` excerpts as the durable
+  output of large tool runs.
+- [ ] Finish Cron agent jobs: edit job type/prompt/session/model/delivery,
+  delete-after-run, per-job timeout/retries, overlap policy, running state,
+  cancellation, and complete last-run evidence.
+- [ ] Distinguish registered tools from verified working tools in the UI, with
+  bounded smoke tests, last-check time, and inspectable evidence.
+- [ ] Route whole tasks between laptop and coordinator using loaded model,
+  measured role score, native context, RAM/VRAM, and queue pressure while
+  avoiding model thrash.
+- [ ] Persist Workspace RAG indexes; add git-aware incremental updates, batched
+  singleflight embeddings, exact file/line citations, and benchmark-gated
+  reranking.
+- [ ] Complete memory operations: pagination, bulk clear/dedupe/merge/retention,
+  session/run/artifact provenance, and cross-node synchronization.
+- [ ] Complete database operations: supported-driver alignment, server-side
+  cancellation, saved/history queries, full exports, counts, and explicit
+  unsupported-driver messaging.
+- [ ] Add cancel, resume, fork, and replay to Runs with objective, context,
+  tokens, node, model digest, queue, and resource facts.
+
+### P1 — UI/UX
+
+- [ ] Consolidate navigation into roughly 6-7 primary groups while preserving
+  all current deep links.
+- [ ] Surface active plan, evidence, selected context, node/model, and recent
+  runs directly in Agent Chat and Dashboard.
+- [ ] Harden Monaco editing with dirty-draft conflict/merge handling,
+  unload/navigation guards, keyboard-correct tabs, responsive layout, and
+  diff/apply/reject/rollback for agent edits.
+- [ ] Turn the one-shot terminal into a persistent process surface with cancel,
+  working directory, ANSI, resize, command history, and environment facts.
+- [ ] Add model pull/load/unload/remove, benchmark results, context controls,
+  and measured role-routing UX.
+- [ ] Preview screenshots and other tool artifacts in Chat/Runs with full-output
+  links and browser-session history.
+- [ ] Add rendered component/browser tests at desktop, tablet, and mobile for
+  keyboard navigation, accessibility, Monaco conflicts, every route's primary
+  actions, Cron, DB, memory, logs, doctor, Runs, and context controls.
+- [ ] Either complete UI localization consistently or make the current
+  English-only coverage explicit until translations are ready.
+
+### P2 — performance and observability
+
+- [ ] Stabilize reusable prompt prefixes and measure prefix-cache hit rate.
+- [ ] Share semantic/cached tool routing across chat, schedules, federation,
+  and delegated agents.
+- [ ] Add static compression/ETags and reduce the first-load Monaco worker and
+  language payload.
+- [ ] Batch Workspace RAG embeddings and persist reusable tool/result
+  embeddings.
+- [ ] Aggregate TTFT, prefill/decode TPS, token/context utilization, queue
+  delay, retries, node, model digest, and quantization at run level.
+- [ ] Add reusable Node/Rust/C++ workspace build caches comparable to the
+  existing Python environment.
 
 ## Session pass — cron reliability, honest ML, agent autonomy limits (2026-07-24)
 

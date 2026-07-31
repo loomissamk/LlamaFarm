@@ -7,8 +7,6 @@ use chrono::Local;
 use std::fmt::Write;
 use std::path::Path;
 
-const BOOTSTRAP_MAX_CHARS: usize = 20_000;
-
 pub struct PromptContext<'a> {
     pub workspace_dir: &'a Path,
     pub model_name: &'a str,
@@ -17,6 +15,8 @@ pub struct PromptContext<'a> {
     pub skills_prompt_mode: crate::config::SkillsPromptInjectionMode,
     pub identity_config: Option<&'a IdentityConfig>,
     pub dispatcher_instructions: &'a str,
+    pub bootstrap_max_chars: usize,
+    pub native_tools: bool,
 }
 
 pub trait PromptSection: Send + Sync {
@@ -98,7 +98,12 @@ impl PromptSection for IdentitySection {
             prompt.push_str(
                 "Use the repository's AGENTS.md for project-specific operating rules. Avoid redundant persona files in the hot context.\n\n",
             );
-            inject_workspace_file(&mut prompt, ctx.workspace_dir, "AGENTS.md");
+            inject_workspace_file(
+                &mut prompt,
+                ctx.workspace_dir,
+                "AGENTS.md",
+                ctx.bootstrap_max_chars,
+            );
         }
 
         // A history compaction checkpoint is small and intentionally durable:
@@ -106,7 +111,12 @@ impl PromptSection for IdentitySection {
         // survive without retaining the whole transcript in the prompt.
         let working_state = ctx.workspace_dir.join("memory/WORKING_STATE.md");
         if working_state.is_file() {
-            inject_workspace_file(&mut prompt, ctx.workspace_dir, "memory/WORKING_STATE.md");
+            inject_workspace_file(
+                &mut prompt,
+                ctx.workspace_dir,
+                "memory/WORKING_STATE.md",
+                ctx.bootstrap_max_chars.min(2_000),
+            );
         }
 
         Ok(prompt)
@@ -121,13 +131,17 @@ impl PromptSection for ToolsSection {
     fn build(&self, ctx: &PromptContext<'_>) -> Result<String> {
         let mut out = String::from("## Tools\n\n");
         for tool in ctx.tools {
-            let _ = writeln!(
-                out,
-                "- **{}**: {}\n  Parameters: `{}`",
-                tool.name(),
-                tool.description(),
-                tool.parameters_schema()
-            );
+            if ctx.native_tools {
+                let _ = writeln!(out, "- **{}**: {}", tool.name(), tool.description());
+            } else {
+                let _ = writeln!(
+                    out,
+                    "- **{}**: {}\n  Parameters: `{}`",
+                    tool.name(),
+                    tool.description(),
+                    tool.parameters_schema()
+                );
+            }
         }
         if !ctx.dispatcher_instructions.is_empty() {
             out.push('\n');
@@ -220,7 +234,12 @@ impl PromptSection for ChannelMediaSection {
     }
 }
 
-fn inject_workspace_file(prompt: &mut String, workspace_dir: &Path, filename: &str) {
+fn inject_workspace_file(
+    prompt: &mut String,
+    workspace_dir: &Path,
+    filename: &str,
+    max_chars: usize,
+) {
     let path = workspace_dir.join(filename);
     match std::fs::read_to_string(&path) {
         Ok(content) => {
@@ -229,10 +248,10 @@ fn inject_workspace_file(prompt: &mut String, workspace_dir: &Path, filename: &s
                 return;
             }
             let _ = writeln!(prompt, "### {filename}\n");
-            let truncated = if trimmed.chars().count() > BOOTSTRAP_MAX_CHARS {
+            let truncated = if trimmed.chars().count() > max_chars {
                 trimmed
                     .char_indices()
-                    .nth(BOOTSTRAP_MAX_CHARS)
+                    .nth(max_chars)
                     .map(|(idx, _)| &trimmed[..idx])
                     .unwrap_or(trimmed)
             } else {
@@ -242,7 +261,7 @@ fn inject_workspace_file(prompt: &mut String, workspace_dir: &Path, filename: &s
             if truncated.len() < trimmed.len() {
                 let _ = writeln!(
                     prompt,
-                    "\n\n[... truncated at {BOOTSTRAP_MAX_CHARS} chars — use `read` for full file]\n"
+                    "\n\n[... truncated at {max_chars} chars]\n"
                 );
             } else {
                 prompt.push_str("\n\n");
@@ -314,6 +333,8 @@ mod tests {
             skills_prompt_mode: crate::config::SkillsPromptInjectionMode::Full,
             identity_config: Some(&identity_config),
             dispatcher_instructions: "",
+            bootstrap_max_chars: usize::MAX,
+            native_tools: false,
         };
 
         let section = IdentitySection;
@@ -350,6 +371,8 @@ mod tests {
             skills_prompt_mode: crate::config::SkillsPromptInjectionMode::Full,
             identity_config: None,
             dispatcher_instructions: "",
+            bootstrap_max_chars: usize::MAX,
+            native_tools: false,
         };
 
         let output = IdentitySection.build(&ctx).unwrap();
@@ -370,11 +393,65 @@ mod tests {
             skills_prompt_mode: crate::config::SkillsPromptInjectionMode::Full,
             identity_config: None,
             dispatcher_instructions: "instr",
+            bootstrap_max_chars: usize::MAX,
+            native_tools: false,
         };
         let prompt = SystemPromptBuilder::with_defaults().build(&ctx).unwrap();
         assert!(prompt.contains("## Tools"));
         assert!(prompt.contains("test_tool"));
         assert!(prompt.contains("instr"));
+    }
+
+    #[test]
+    fn non_compact_identity_injects_bootstrap_beyond_legacy_twenty_k_limit() {
+        let workspace =
+            std::env::temp_dir().join(format!("llamafarm_prompt_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&workspace).unwrap();
+        let end_marker = "FULL_BOOTSTRAP_END_MARKER";
+        std::fs::write(
+            workspace.join("AGENTS.md"),
+            format!("{}{}", "x".repeat(25_000), end_marker),
+        )
+        .unwrap();
+
+        let tools: Vec<Box<dyn Tool>> = vec![];
+        let ctx = PromptContext {
+            workspace_dir: &workspace,
+            model_name: "test-model",
+            tools: &tools,
+            skills: &[],
+            skills_prompt_mode: crate::config::SkillsPromptInjectionMode::Full,
+            identity_config: None,
+            dispatcher_instructions: "",
+            bootstrap_max_chars: usize::MAX,
+            native_tools: true,
+        };
+
+        let output = IdentitySection.build(&ctx).unwrap();
+        assert!(output.contains(end_marker));
+        assert!(!output.contains("truncated at"));
+
+        let _ = std::fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn native_tools_section_does_not_duplicate_parameter_schema() {
+        let tools: Vec<Box<dyn Tool>> = vec![Box::new(TestTool)];
+        let ctx = PromptContext {
+            workspace_dir: Path::new("/tmp"),
+            model_name: "test-model",
+            tools: &tools,
+            skills: &[],
+            skills_prompt_mode: crate::config::SkillsPromptInjectionMode::Full,
+            identity_config: None,
+            dispatcher_instructions: "",
+            bootstrap_max_chars: usize::MAX,
+            native_tools: true,
+        };
+
+        let output = ToolsSection.build(&ctx).unwrap();
+        assert!(output.contains("test_tool"));
+        assert!(!output.contains("Parameters:"));
     }
 
     #[test]
@@ -405,6 +482,8 @@ mod tests {
             skills_prompt_mode: crate::config::SkillsPromptInjectionMode::Full,
             identity_config: None,
             dispatcher_instructions: "",
+            bootstrap_max_chars: usize::MAX,
+            native_tools: false,
         };
 
         let output = SkillsSection.build(&ctx).unwrap();
@@ -443,6 +522,8 @@ mod tests {
             skills_prompt_mode: crate::config::SkillsPromptInjectionMode::Compact,
             identity_config: None,
             dispatcher_instructions: "",
+            bootstrap_max_chars: 6_000,
+            native_tools: false,
         };
 
         let output = SkillsSection.build(&ctx).unwrap();
@@ -464,6 +545,8 @@ mod tests {
             skills_prompt_mode: crate::config::SkillsPromptInjectionMode::Full,
             identity_config: None,
             dispatcher_instructions: "instr",
+            bootstrap_max_chars: usize::MAX,
+            native_tools: false,
         };
 
         let rendered = DateTimeSection.build(&ctx).unwrap();
@@ -502,6 +585,8 @@ mod tests {
             skills_prompt_mode: crate::config::SkillsPromptInjectionMode::Full,
             identity_config: None,
             dispatcher_instructions: "",
+            bootstrap_max_chars: usize::MAX,
+            native_tools: false,
         };
 
         let prompt = SystemPromptBuilder::with_defaults().build(&ctx).unwrap();

@@ -625,23 +625,8 @@ pub fn all_tools_with_runtime_and_federation(
             let trimmed_value = value.trim();
             (!trimmed_value.is_empty()).then(|| trimmed_value.to_owned())
         });
-        let provider_runtime_options = crate::providers::ProviderRuntimeOptions {
-            auth_profile_override: None,
-            provider_api_url: root_config.api_url.clone(),
-            llamafarm_dir: root_config
-                .config_path
-                .parent()
-                .map(std::path::PathBuf::from),
-            secrets_encrypt: root_config.secrets.encrypt,
-            reasoning_enabled: root_config.runtime.reasoning_enabled,
-            reasoning_level: root_config.effective_provider_reasoning_level(),
-            custom_provider_api_mode: root_config
-                .provider_api
-                .map(|mode| mode.as_compatible_mode()),
-            max_tokens_override: root_config.agent.max_output_tokens_per_turn,
-            model_support_vision: root_config.model_support_vision,
-            ..Default::default()
-        };
+        let provider_runtime_options =
+            crate::providers::ProviderRuntimeOptions::from_config(root_config);
         let parent_tools = Arc::new(tool_arcs.clone());
         let mut delegate_tool = DelegateTool::new_with_options(
             delegate_agents.clone(),
@@ -650,7 +635,8 @@ pub fn all_tools_with_runtime_and_federation(
             provider_runtime_options.clone(),
         )
         .with_parent_tools(parent_tools.clone())
-        .with_multimodal_config(root_config.multimodal.clone());
+        .with_multimodal_config(root_config.multimodal.clone())
+        .with_max_history_messages(root_config.agent.max_history_messages);
         if let Some(federation) = federation.clone() {
             delegate_tool = delegate_tool.with_federation(federation);
         }
@@ -708,7 +694,8 @@ pub fn all_tools_with_runtime_and_federation(
             subagent_registry.clone(),
             parent_tools,
             root_config.multimodal.clone(),
-        );
+        )
+        .with_max_history_messages(root_config.agent.max_history_messages);
         if let Some(federation) = federation {
             subagent_spawn_tool = subagent_spawn_tool.with_federation(federation);
         }

@@ -712,6 +712,29 @@ impl Default for ProviderRuntimeOptions {
     }
 }
 
+impl ProviderRuntimeOptions {
+    /// Build the provider controls shared by CLI, channels, gateway, and
+    /// delegated agents. Keeping this mapping in one place prevents a saved
+    /// provider setting from applying to only one application surface.
+    #[must_use]
+    pub fn from_config(config: &crate::config::Config) -> Self {
+        Self {
+            auth_profile_override: None,
+            provider_api_url: config.api_url.clone(),
+            llamafarm_dir: config.config_path.parent().map(PathBuf::from),
+            secrets_encrypt: config.secrets.encrypt,
+            reasoning_enabled: config.runtime.reasoning_enabled,
+            reasoning_level: config.effective_provider_reasoning_level(),
+            custom_provider_api_mode: config.provider_api.map(|mode| mode.as_compatible_mode()),
+            max_tokens_override: config.agent.max_output_tokens_per_turn,
+            model_support_vision: config.model_support_vision,
+            ollama_gpu_layers: config.provider.ollama_gpu_layers,
+            ollama_main_gpu: config.provider.ollama_main_gpu,
+            ollama_num_ctx: config.provider.ollama_num_ctx,
+        }
+    }
+}
+
 fn is_secret_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':')
 }

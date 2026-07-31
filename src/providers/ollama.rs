@@ -9,6 +9,23 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
+pub const MAX_OLLAMA_CONTEXT_TOKENS: u32 = 262_144;
+const DEFAULT_OLLAMA_CONTEXT_TOKENS: u32 = 32_768;
+const DEFAULT_ADAPTIVE_OUTPUT_RESERVE: u32 = 8_192;
+const ADAPTIVE_CONTEXT_MESSAGE_OVERHEAD: u32 = 16;
+const ADAPTIVE_CONTEXT_IMAGE_TOKENS: u32 = 2_048;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OllamaContextRuntimeConfig {
+    pub configured_override: Option<u32>,
+    pub effective_default: Option<u32>,
+    pub source: &'static str,
+    pub adaptive_enabled: bool,
+    pub adaptive_active: bool,
+    pub adaptive_baseline: Option<u32>,
+    pub adaptive_max: u32,
+}
+
 pub struct OllamaProvider {
     base_url: String,
     api_key: Option<String>,
@@ -23,17 +40,26 @@ pub struct OllamaProvider {
     /// Context window override (tokens).
     /// - `None` → auto-detect: LlamaFarm fetches the model's native context length via
     ///   `/api/show` and uses it, so the full context the model was trained on is available.
-    /// - `Some(n)` → use exactly n tokens (manual override or from `OLLAMA_NUM_CTX`).
+    /// - `Some(n)` → use n tokens as either an exact manual override or the
+    ///   environment-provided adaptive baseline.
     /// Pair with `OLLAMA_KV_CACHE_TYPE=q8_0` server env to halve KV cache VRAM usage.
     num_ctx: Option<u32>,
+    /// True only when `num_ctx` came from the persisted/provider config. Manual
+    /// configuration always remains exact, even when adaptive context is enabled.
+    num_ctx_is_explicit: bool,
+    /// Grow an environment-provided baseline through larger context tiers when
+    /// the prompt, tools, and output reserve need them.
+    adaptive_context: bool,
+    /// Upper bound for adaptive growth, additionally capped by model-native context.
+    adaptive_context_max: u32,
     /// Maximum tokens produced by one `/api/chat` inference segment. Ollama
     /// counts hidden thinking tokens here too, so this is the hard per-turn
     /// reasoning/output budget used to prevent a single thought from pinning a
     /// local GPU indefinitely. The agent loop continues a length-stopped
     /// segment automatically with its checkpointed history.
     max_output_tokens: Option<u32>,
-    /// Cache of model-name → resolved num_ctx to avoid a `/api/show` round-trip on
-    /// every request when operating in auto-detect mode.
+    /// Cache of model-name → native num_ctx to avoid a `/api/show` round-trip on
+    /// every request when operating in auto-detect or adaptive mode.
     ctx_cache: Arc<RwLock<HashMap<String, u32>>>,
     /// Cache of model-name → Ollama-reported capabilities (e.g. ["tools", "completion"]).
     /// Populated lazily on first `/api/show` call for each model.
@@ -59,7 +85,7 @@ struct ChatRequest {
     keep_alive: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct Message {
     role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -72,14 +98,14 @@ struct Message {
     tool_name: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct OutgoingToolCall {
     #[serde(rename = "type")]
     kind: String,
     function: OutgoingFunction,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct OutgoingFunction {
     name: String,
     arguments: serde_json::Value,
@@ -167,6 +193,83 @@ fn resolve_keep_alive() -> String {
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| "-1".to_string())
+}
+
+fn env_flag_enabled(name: &str) -> bool {
+    std::env::var(name).ok().is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "on" | "yes"
+        )
+    })
+}
+
+fn env_num_ctx() -> Option<u32> {
+    std::env::var("OLLAMA_NUM_CTX")
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .filter(|value| *value > 0)
+        .map(|value| value.clamp(2_048, MAX_OLLAMA_CONTEXT_TOKENS))
+}
+
+fn adaptive_context_max() -> u32 {
+    std::env::var("LLAMAFARM_ADAPTIVE_CONTEXT_MAX")
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(MAX_OLLAMA_CONTEXT_TOKENS)
+        .clamp(2_048, MAX_OLLAMA_CONTEXT_TOKENS)
+}
+
+fn normalized_adaptive_baseline(
+    environment_default: Option<u32>,
+    adaptive_enabled: bool,
+    adaptive_max: u32,
+) -> Option<u32> {
+    environment_default.map(|baseline| {
+        if adaptive_enabled {
+            baseline.min(adaptive_max)
+        } else {
+            baseline
+        }
+    })
+}
+
+/// Resolve the operator-visible Ollama context configuration without querying
+/// a model. The provider uses the same result when it is constructed, keeping
+/// the API's reported source and effective default truthful.
+pub fn ollama_context_runtime_config(
+    configured_override: Option<u32>,
+) -> OllamaContextRuntimeConfig {
+    // Match the dashboard contract: zero clears a manual override instead of
+    // sending an invalid zero-token context to Ollama.
+    let configured_override = configured_override
+        .filter(|value| *value > 0)
+        .map(|value| value.clamp(2_048, MAX_OLLAMA_CONTEXT_TOKENS));
+    let environment_default = env_num_ctx();
+    let adaptive_enabled = env_flag_enabled("LLAMAFARM_ADAPTIVE_CONTEXT");
+    let adaptive_max = adaptive_context_max();
+    let adaptive_baseline =
+        normalized_adaptive_baseline(environment_default, adaptive_enabled, adaptive_max);
+    let source = if configured_override.is_some() {
+        "config"
+    } else if environment_default.is_some() {
+        "environment"
+    } else {
+        "model-native"
+    };
+
+    OllamaContextRuntimeConfig {
+        configured_override,
+        effective_default: configured_override.or(adaptive_baseline),
+        source,
+        adaptive_enabled,
+        adaptive_active: adaptive_enabled
+            && configured_override.is_none()
+            && environment_default.is_some(),
+        adaptive_baseline,
+        adaptive_max,
+    }
 }
 
 impl OllamaProvider {
@@ -258,12 +361,9 @@ impl OllamaProvider {
                 .and_then(|v| v.trim().parse::<i32>().ok())
         });
 
-        // Resolve num_ctx: caller value → OLLAMA_NUM_CTX env var → None.
-        let num_ctx = num_ctx.or_else(|| {
-            std::env::var("OLLAMA_NUM_CTX")
-                .ok()
-                .and_then(|v| v.trim().parse::<u32>().ok())
-        });
+        // Persisted/provider config is an exact override. An environment value
+        // can instead be an adaptive floor when LLAMAFARM_ADAPTIVE_CONTEXT is on.
+        let context_runtime = ollama_context_runtime_config(num_ctx);
 
         let max_output_tokens = max_output_tokens.filter(|value| *value > 0).or_else(|| {
             std::env::var("LLAMAFARM_AGENT_MAX_OUTPUT_TOKENS")
@@ -278,7 +378,10 @@ impl OllamaProvider {
             reasoning_enabled,
             gpu_layers,
             main_gpu,
-            num_ctx,
+            num_ctx: context_runtime.effective_default,
+            num_ctx_is_explicit: context_runtime.configured_override.is_some(),
+            adaptive_context: context_runtime.adaptive_active,
+            adaptive_context_max: context_runtime.adaptive_max,
             max_output_tokens,
             ctx_cache: Arc::new(RwLock::new(HashMap::new())),
             caps_cache: Arc::new(RwLock::new(HashMap::new())),
@@ -375,43 +478,213 @@ impl OllamaProvider {
             .to_string()
     }
 
-    /// Return the effective num_ctx for `model`.
-    ///
-    /// Resolution order:
-    /// 1. Caller-configured / env-var value (`self.num_ctx`) — explicit wins.
-    /// 2. Cache hit from a previous auto-detect for this model.
-    /// 3. Live `/api/show` lookup → model's native `context_length`.
-    /// 4. Fallback: 32768 (safe default for agentic runs, much better than
-    ///    Ollama's hardcoded 2048).
-    ///
-    /// The result is memoized so subsequent requests pay zero extra latency.
-    async fn resolve_num_ctx(&self, model: &str) -> u32 {
-        if let Some(n) = self.num_ctx {
-            return n;
+    fn bounded_native_context(native: u64) -> u32 {
+        u32::try_from(native.clamp(2_048, u64::from(MAX_OLLAMA_CONTEXT_TOKENS)))
+            .unwrap_or(MAX_OLLAMA_CONTEXT_TOKENS)
+    }
+
+    fn estimate_required_context(
+        &self,
+        messages: &[Message],
+        tools: Option<&[serde_json::Value]>,
+    ) -> u32 {
+        let mut text_chars = 0_u64;
+        let mut image_count = 0_u64;
+
+        for message in messages {
+            text_chars = text_chars
+                .saturating_add(message.role.len() as u64)
+                .saturating_add(
+                    message
+                        .content
+                        .as_ref()
+                        .map_or(0, |content| content.len() as u64),
+                )
+                .saturating_add(
+                    message
+                        .tool_name
+                        .as_ref()
+                        .map_or(0, |name| name.len() as u64),
+                );
+            image_count = image_count.saturating_add(
+                message
+                    .images
+                    .as_ref()
+                    .map_or(0, |images| images.len() as u64),
+            );
+            if let Some(tool_calls) = message.tool_calls.as_ref() {
+                text_chars = text_chars.saturating_add(
+                    serde_json::to_vec(tool_calls).map_or(0, |serialized| serialized.len() as u64),
+                );
+            }
         }
-        // Check cache first (read lock — contention-free in the normal case).
+
+        if let Some(tools) = tools {
+            text_chars = text_chars.saturating_add(
+                serde_json::to_vec(tools).map_or(0, |serialized| serialized.len() as u64),
+            );
+        }
+
+        // Two bytes per token deliberately allocates early for code, JSON,
+        // identifiers, and other token-dense prompts. Framing, vision tokens,
+        // and a 25% safety margin keep selection ahead of truncation. A
+        // response-side pressure check below catches inputs this tokenizer-free
+        // estimate still understates and retries at the next tier.
+        let text_tokens = text_chars.saturating_add(1) / 2;
+        let framing_tokens =
+            (messages.len() as u64).saturating_mul(u64::from(ADAPTIVE_CONTEXT_MESSAGE_OVERHEAD));
+        let image_tokens = image_count.saturating_mul(u64::from(ADAPTIVE_CONTEXT_IMAGE_TOKENS));
+        let prompt_tokens = text_tokens
+            .saturating_add(framing_tokens)
+            .saturating_add(image_tokens);
+        let safety_tokens = (prompt_tokens / 4).max(1_024);
+        let output_reserve = self.output_reserve();
+
+        u32::try_from(
+            prompt_tokens
+                .saturating_add(safety_tokens)
+                .saturating_add(u64::from(output_reserve)),
+        )
+        .unwrap_or(u32::MAX)
+    }
+
+    fn output_reserve(&self) -> u32 {
+        self.max_output_tokens
+            .unwrap_or(DEFAULT_ADAPTIVE_OUTPUT_RESERVE)
+    }
+
+    fn context_is_under_pressure(
+        prompt_eval_count: Option<u64>,
+        selected_context: u32,
+        output_reserve: u32,
+    ) -> bool {
+        let Some(prompt_tokens) = prompt_eval_count else {
+            return false;
+        };
+        let safety_tokens = (prompt_tokens / 32).max(1_024);
+        prompt_tokens
+            .saturating_add(u64::from(output_reserve))
+            .saturating_add(safety_tokens)
+            >= u64::from(selected_context)
+    }
+
+    fn select_adaptive_context(
+        baseline: u32,
+        native: u32,
+        adaptive_max: u32,
+        required: u32,
+    ) -> u32 {
+        let ceiling = native.min(adaptive_max);
+        let mut selected = baseline.min(ceiling);
+
+        while selected < ceiling && selected < required {
+            selected = selected.saturating_mul(2).min(ceiling);
+        }
+
+        selected
+    }
+
+    fn select_request_context(
+        configured: Option<u32>,
+        configured_is_explicit: bool,
+        adaptive: bool,
+        adaptive_max: u32,
+        native: u32,
+        required: u32,
+    ) -> u32 {
+        if configured_is_explicit {
+            return configured.unwrap_or(native);
+        }
+        if adaptive {
+            return Self::select_adaptive_context(
+                configured.unwrap_or(DEFAULT_OLLAMA_CONTEXT_TOKENS),
+                native,
+                adaptive_max,
+                required,
+            );
+        }
+        configured.unwrap_or(native)
+    }
+
+    async fn resolve_native_num_ctx(&self, model: &str, fallback: u32) -> u32 {
         if let Ok(cache) = self.ctx_cache.read() {
             if let Some(&cached) = cache.get(model) {
                 return cached;
             }
         }
-        // Cache miss: ask Ollama for the model's native context length.
+
         let resolved = match self.show_model(model).await {
-            Ok(info) => {
-                let native = info.context_length();
-                // Cap at 131072 (128k) — sensible ceiling even for models that
-                // report larger values, and avoids KV-cache OOM on most hardware.
-                u32::try_from(native.min(131_072)).unwrap_or(131_072)
-            }
-            Err(e) => {
-                tracing::debug!(model, "auto ctx lookup failed ({e}), using 32768 fallback");
-                32_768
+            Ok(info) => info
+                .native_context_length()
+                .map(Self::bounded_native_context),
+            Err(error) => {
+                tracing::debug!(
+                    model,
+                    "native context lookup failed ({error}), using {fallback} fallback"
+                );
+                None
             }
         };
-        if let Ok(mut cache) = self.ctx_cache.write() {
-            cache.insert(model.to_string(), resolved);
+        if let Some(resolved) = resolved {
+            if let Ok(mut cache) = self.ctx_cache.write() {
+                cache.insert(model.to_string(), resolved);
+            }
+            return resolved;
         }
-        resolved
+        tracing::debug!(
+            model,
+            "native context metadata unavailable; using uncached {fallback} fallback"
+        );
+        fallback
+    }
+
+    /// Return the effective num_ctx for this request.
+    ///
+    /// Resolution order:
+    /// 1. Caller-configured value — exact, even when adaptive mode is enabled.
+    /// 2. Environment baseline — exact unless adaptive mode is enabled.
+    /// 3. Adaptive mode — grow the baseline in 2x tiers to fit the estimated
+    ///    prompt + tools + output reserve, capped by native length and max.
+    /// 4. Auto mode — model-native length from `/api/show`, up to 262144.
+    /// 5. Failed native lookup — 32768, or the configured adaptive baseline.
+    ///
+    /// Native lengths are memoized so later requests avoid an extra round trip.
+    async fn resolve_num_ctx(
+        &self,
+        model: &str,
+        messages: &[Message],
+        tools: Option<&[serde_json::Value]>,
+    ) -> u32 {
+        if self.num_ctx_is_explicit {
+            return self.num_ctx.unwrap_or(DEFAULT_OLLAMA_CONTEXT_TOKENS);
+        }
+        if !self.adaptive_context {
+            if let Some(num_ctx) = self.num_ctx {
+                return num_ctx;
+            }
+        }
+
+        let fallback = self.num_ctx.unwrap_or(DEFAULT_OLLAMA_CONTEXT_TOKENS);
+        let native = self.resolve_native_num_ctx(model, fallback).await;
+        let required = self.estimate_required_context(messages, tools);
+        let selected = Self::select_request_context(
+            self.num_ctx,
+            self.num_ctx_is_explicit,
+            self.adaptive_context,
+            self.adaptive_context_max,
+            native,
+            required,
+        );
+
+        tracing::debug!(
+            model,
+            required_context_tokens = required,
+            native_context_tokens = native,
+            selected_context_tokens = selected,
+            adaptive_context = self.adaptive_context,
+            "resolved Ollama request context"
+        );
+        selected
     }
 
     fn build_chat_request(
@@ -596,66 +869,105 @@ impl OllamaProvider {
         should_auth: bool,
         tools: Option<&[serde_json::Value]>,
     ) -> anyhow::Result<ApiChatResponse> {
-        let num_ctx = self.resolve_num_ctx(model).await;
-        let request = self.build_chat_request(messages, model, temperature, tools, num_ctx);
+        let mut num_ctx = self.resolve_num_ctx(model, &messages, tools).await;
+        let may_grow_context =
+            !self.num_ctx_is_explicit && (self.adaptive_context || self.num_ctx.is_none());
 
         let url = format!("{}/api/chat", self.base_url);
+        loop {
+            let request =
+                self.build_chat_request(messages.clone(), model, temperature, tools, num_ctx);
 
-        tracing::debug!(
-            "Ollama request: url={} model={} message_count={} temperature={} think={:?} tool_count={} num_predict={:?}",
-            url,
-            model,
-            request.messages.len(),
-            temperature,
-            request.think,
-            request.tools.as_ref().map_or(0, |t| t.len()),
-            request.options.num_predict,
-        );
+            tracing::debug!(
+                "Ollama request: url={} model={} message_count={} temperature={} think={:?} tool_count={} num_ctx={} num_predict={:?}",
+                url,
+                model,
+                request.messages.len(),
+                temperature,
+                request.think,
+                request.tools.as_ref().map_or(0, |t| t.len()),
+                request.options.num_ctx.unwrap_or(DEFAULT_OLLAMA_CONTEXT_TOKENS),
+                request.options.num_predict,
+            );
 
-        let mut request_builder = self.chat_client().post(&url).json(&request);
+            let mut request_builder = self.chat_client().post(&url).json(&request);
 
-        if should_auth {
-            if let Some(key) = self.api_key.as_ref() {
-                request_builder = request_builder.bearer_auth(key);
+            if should_auth {
+                if let Some(key) = self.api_key.as_ref() {
+                    request_builder = request_builder.bearer_auth(key);
+                }
             }
-        }
 
-        let response = request_builder.send().await?;
-        let status = response.status();
-        tracing::debug!("Ollama response status: {}", status);
+            let response = request_builder.send().await?;
+            let status = response.status();
+            tracing::debug!("Ollama response status: {}", status);
 
-        let body = response.bytes().await?;
-        tracing::debug!("Ollama response body length: {} bytes", body.len());
+            let body = response.bytes().await?;
+            tracing::debug!("Ollama response body length: {} bytes", body.len());
 
-        if !status.is_success() {
-            let raw = String::from_utf8_lossy(&body);
-            let sanitized = super::sanitize_api_error(&raw);
-            tracing::error!(
-                "Ollama error response: status={} body_excerpt={}",
-                status,
-                sanitized
-            );
-            anyhow::bail!(
-                "Ollama API error ({}): {}. Is Ollama running? (brew install ollama && ollama serve)",
-                status,
-                sanitized
-            );
-        }
-
-        let chat_response: ApiChatResponse = match serde_json::from_slice(&body) {
-            Ok(r) => r,
-            Err(e) => {
+            if !status.is_success() {
                 let raw = String::from_utf8_lossy(&body);
                 let sanitized = super::sanitize_api_error(&raw);
                 tracing::error!(
-                    "Ollama response deserialization failed: {e}. body_excerpt={}",
+                    "Ollama error response: status={} body_excerpt={}",
+                    status,
                     sanitized
                 );
-                anyhow::bail!("Failed to parse Ollama response: {e}");
+                anyhow::bail!(
+                    "Ollama API error ({}): {}. Is Ollama running? (brew install ollama && ollama serve)",
+                    status,
+                    sanitized
+                );
             }
-        };
 
-        Ok(chat_response)
+            let chat_response: ApiChatResponse = match serde_json::from_slice(&body) {
+                Ok(r) => r,
+                Err(e) => {
+                    let raw = String::from_utf8_lossy(&body);
+                    let sanitized = super::sanitize_api_error(&raw);
+                    tracing::error!(
+                        "Ollama response deserialization failed: {e}. body_excerpt={}",
+                        sanitized
+                    );
+                    anyhow::bail!("Failed to parse Ollama response: {e}");
+                }
+            };
+
+            if Self::context_is_under_pressure(
+                chat_response.prompt_eval_count,
+                num_ctx,
+                self.output_reserve(),
+            ) {
+                if may_grow_context {
+                    let fallback = self.num_ctx.unwrap_or(DEFAULT_OLLAMA_CONTEXT_TOKENS);
+                    let native = self.resolve_native_num_ctx(model, fallback).await;
+                    let next_context = Self::select_adaptive_context(
+                        num_ctx,
+                        native,
+                        self.adaptive_context_max,
+                        num_ctx.saturating_add(1),
+                    );
+                    if next_context > num_ctx {
+                        tracing::info!(
+                            model,
+                            prompt_eval_count = chat_response.prompt_eval_count,
+                            previous_context_tokens = num_ctx,
+                            next_context_tokens = next_context,
+                            "retrying Ollama request at the next context tier"
+                        );
+                        num_ctx = next_context;
+                        continue;
+                    }
+                }
+                anyhow::bail!(
+                    "context length exceeded: Ollama prompt reached the {num_ctx}-token context \
+                     ceiling (prompt_eval_count={}); refusing a possibly truncated response",
+                    chat_response.prompt_eval_count.unwrap_or_default()
+                );
+            }
+
+            return Ok(chat_response);
+        }
     }
 
     /// Convert Ollama tool calls to the JSON format expected by parse_tool_calls in loop_.rs
@@ -949,12 +1261,13 @@ impl OllamaModelInfo {
 }
 
 impl OllamaModelInfo {
-    /// Extract the context window size from model_info, falling back to 4096.
-    pub fn context_length(&self) -> u64 {
+    /// Extract a confirmed native context window from model metadata.
+    pub fn native_context_length(&self) -> Option<u64> {
         // Common keys across model families
         for key in &[
             "llama.context_length",
             "qwen2.context_length",
+            "qwen3.context_length",
             "mistral.context_length",
             "phi3.context_length",
             "gemma.context_length",
@@ -964,11 +1277,27 @@ impl OllamaModelInfo {
         ] {
             if let Some(v) = self.model_info.get(*key) {
                 if let Some(n) = v.as_u64() {
-                    return n;
+                    return Some(n);
                 }
             }
         }
-        4096
+        // New Ollama architectures can introduce a family-specific prefix
+        // before this client is updated (for example qwen35/qwen36). Prefer the
+        // largest numeric context field so a smaller vision-encoder context
+        // cannot hide the language model's full window.
+        self.model_info
+            .iter()
+            .filter(|(key, _)| key.ends_with(".context_length"))
+            .filter_map(|(_, value)| value.as_u64())
+            .max()
+    }
+
+    /// Extract the context window size, retaining the historical 4096 fallback
+    /// for inventory/bakeoff displays. Runtime adaptive selection uses
+    /// `native_context_length` so an absent field is never mistaken for a real
+    /// 4K ceiling.
+    pub fn context_length(&self) -> u64 {
+        self.native_context_length().unwrap_or(4_096)
     }
 
     /// Whether this model supports native vision inputs.
@@ -1334,6 +1663,8 @@ impl Provider for OllamaProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{body_partial_json, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn default_url() {
@@ -1366,6 +1697,516 @@ mod tests {
     }
 
     #[test]
+    fn qwen_native_context_keeps_full_262k_window() {
+        assert_eq!(
+            OllamaProvider::bounded_native_context(262_144),
+            MAX_OLLAMA_CONTEXT_TOKENS
+        );
+        assert_eq!(OllamaProvider::bounded_native_context(0), 2_048);
+    }
+
+    #[test]
+    fn model_info_discovers_new_family_context_keys() {
+        let info: OllamaModelInfo = serde_json::from_value(serde_json::json!({
+            "model_info": {
+                "clip.context_length": 8192,
+                "qwen35.context_length": 262144
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(info.context_length(), 262_144);
+    }
+
+    #[test]
+    fn missing_native_context_is_not_a_real_4k_ceiling() {
+        let info = OllamaModelInfo {
+            template: None,
+            details: OllamaModelDetails::default(),
+            model_info: HashMap::new(),
+            capabilities: Vec::new(),
+        };
+
+        assert_eq!(info.native_context_length(), None);
+        assert_eq!(info.context_length(), 4_096);
+    }
+
+    #[test]
+    fn direct_context_values_are_normalized_to_supported_bounds() {
+        assert_eq!(
+            ollama_context_runtime_config(Some(1)).configured_override,
+            Some(2_048)
+        );
+        assert_eq!(
+            ollama_context_runtime_config(Some(500_000)).configured_override,
+            Some(MAX_OLLAMA_CONTEXT_TOKENS)
+        );
+    }
+
+    #[test]
+    fn adaptive_baseline_never_exceeds_its_operator_ceiling() {
+        assert_eq!(
+            normalized_adaptive_baseline(Some(65_536), true, 32_768),
+            Some(32_768)
+        );
+        assert_eq!(
+            normalized_adaptive_baseline(Some(65_536), false, 32_768),
+            Some(65_536)
+        );
+    }
+
+    #[test]
+    fn adaptive_context_uses_64k_128k_and_256k_tiers() {
+        assert_eq!(
+            OllamaProvider::select_adaptive_context(65_536, 262_144, 262_144, 40_000),
+            65_536
+        );
+        assert_eq!(
+            OllamaProvider::select_adaptive_context(65_536, 262_144, 262_144, 90_000),
+            131_072
+        );
+        assert_eq!(
+            OllamaProvider::select_adaptive_context(65_536, 262_144, 262_144, 180_000),
+            262_144
+        );
+    }
+
+    #[test]
+    fn adaptive_context_respects_model_and_operator_ceilings() {
+        assert_eq!(
+            OllamaProvider::select_adaptive_context(65_536, 196_608, 262_144, 220_000),
+            196_608
+        );
+        assert_eq!(
+            OllamaProvider::select_adaptive_context(65_536, 262_144, 131_072, 220_000),
+            131_072
+        );
+    }
+
+    #[test]
+    fn explicit_context_override_remains_exact() {
+        assert_eq!(
+            OllamaProvider::select_request_context(
+                Some(98_304),
+                true,
+                true,
+                262_144,
+                262_144,
+                200_000,
+            ),
+            98_304
+        );
+    }
+
+    #[test]
+    fn context_estimate_reserves_output_and_grows_before_truncation() {
+        let provider =
+            OllamaProvider::new_full(None, None, None, None, None, Some(65_536), Some(8_192));
+        let small = vec![Message {
+            role: "user".to_string(),
+            content: Some("Inspect the repository and fix the failing test.".to_string()),
+            images: None,
+            tool_calls: None,
+            tool_name: None,
+        }];
+        let large = vec![Message {
+            role: "user".to_string(),
+            content: Some("x".repeat(180_000)),
+            images: None,
+            tool_calls: None,
+            tool_name: None,
+        }];
+
+        assert!(provider.estimate_required_context(&small, None) < 65_536);
+        assert!(provider.estimate_required_context(&large, None) > 65_536);
+    }
+
+    #[test]
+    fn context_estimate_counts_system_and_tool_schema_boilerplate() {
+        let provider =
+            OllamaProvider::new_full(None, None, None, None, None, Some(65_536), Some(8_192));
+        let messages = vec![Message {
+            role: "system".to_string(),
+            content: Some("p".repeat(70_000)),
+            images: None,
+            tool_calls: None,
+            tool_name: None,
+        }];
+        let tools = vec![serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "large_schema_tool",
+                "description": "d".repeat(40_000),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "payload": {
+                            "type": "string",
+                            "description": "s".repeat(20_000)
+                        }
+                    }
+                }
+            }
+        })];
+
+        assert!(provider.estimate_required_context(&messages, None) < 65_536);
+        assert!(provider.estimate_required_context(&messages, Some(&tools)) > 65_536);
+    }
+
+    #[test]
+    fn response_pressure_detection_reserves_generation_space() {
+        assert!(!OllamaProvider::context_is_under_pressure(
+            Some(40_000),
+            65_536,
+            8_192
+        ));
+        assert!(OllamaProvider::context_is_under_pressure(
+            Some(56_000),
+            65_536,
+            8_192
+        ));
+    }
+
+    #[tokio::test]
+    async fn adaptive_request_serializes_128k_and_256k_tiers() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/show"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "model_info": {"qwen35moe.context_length": 262144},
+                "capabilities": ["completion", "tools"]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        for expected_context in [131_072, 262_144] {
+            Mock::given(method("POST"))
+                .and(path("/api/chat"))
+                .and(body_partial_json(serde_json::json!({
+                    "options": {"num_ctx": expected_context}
+                })))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "message": {"content": "ok"},
+                    "prompt_eval_count": 10,
+                    "eval_count": 1,
+                    "done_reason": "stop"
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+
+        let server_uri = server.uri();
+        let mut provider = OllamaProvider::new_full(
+            Some(&server_uri),
+            None,
+            Some(false),
+            None,
+            None,
+            Some(65_536),
+            Some(8_192),
+        );
+        provider.num_ctx_is_explicit = false;
+        provider.adaptive_context = true;
+        provider.adaptive_context_max = MAX_OLLAMA_CONTEXT_TOKENS;
+
+        for text_bytes in [100_000, 220_000] {
+            provider
+                .send_request(
+                    vec![Message {
+                        role: "user".to_string(),
+                        content: Some("x".repeat(text_bytes)),
+                        images: None,
+                        tool_calls: None,
+                        tool_name: None,
+                    }],
+                    "qwen-test",
+                    0.0,
+                    false,
+                    None,
+                )
+                .await
+                .expect("adaptive request should reach the matching mock tier");
+        }
+    }
+
+    #[tokio::test]
+    async fn adaptive_request_retries_when_ollama_reports_context_pressure() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/show"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "model_info": {"qwen35moe.context_length": 262144}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/chat"))
+            .and(body_partial_json(serde_json::json!({
+                "options": {"num_ctx": 65_536}
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "message": {"content": "pressure"},
+                "prompt_eval_count": 56_000,
+                "eval_count": 1
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/chat"))
+            .and(body_partial_json(serde_json::json!({
+                "options": {"num_ctx": 131_072}
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "message": {"content": "expanded"},
+                "prompt_eval_count": 56_000,
+                "eval_count": 1
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let server_uri = server.uri();
+        let mut provider = OllamaProvider::new_full(
+            Some(&server_uri),
+            None,
+            Some(false),
+            None,
+            None,
+            Some(65_536),
+            Some(8_192),
+        );
+        provider.num_ctx_is_explicit = false;
+        provider.adaptive_context = true;
+        provider.adaptive_context_max = MAX_OLLAMA_CONTEXT_TOKENS;
+
+        let response = provider
+            .send_request(
+                vec![Message {
+                    role: "user".to_string(),
+                    content: Some("small estimate, simulated tokenizer pressure".to_string()),
+                    images: None,
+                    tool_calls: None,
+                    tool_name: None,
+                }],
+                "qwen-test",
+                0.0,
+                false,
+                None,
+            )
+            .await
+            .expect("pressure should trigger a successful next-tier retry");
+
+        assert_eq!(response.message.content, "expanded");
+    }
+
+    #[tokio::test]
+    async fn fixed_context_detects_pressure_without_growing_the_exact_override() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/chat"))
+            .and(body_partial_json(serde_json::json!({
+                "options": {"num_ctx": 65_536}
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "message": {"content": "possibly truncated"},
+                "prompt_eval_count": 56_000,
+                "eval_count": 1
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let server_uri = server.uri();
+        let mut provider = OllamaProvider::new_full(
+            Some(&server_uri),
+            None,
+            Some(false),
+            None,
+            None,
+            Some(65_536),
+            Some(8_192),
+        );
+        provider.num_ctx_is_explicit = true;
+
+        let error = provider
+            .send_request(
+                vec![Message {
+                    role: "user".to_string(),
+                    content: Some("simulated tokenizer pressure".to_string()),
+                    images: None,
+                    tool_calls: None,
+                    tool_name: None,
+                }],
+                "qwen-test",
+                0.0,
+                false,
+                None,
+            )
+            .await
+            .expect_err("a fixed window must reject a response produced under context pressure");
+
+        assert!(error.to_string().contains("context length exceeded"));
+        assert!(crate::providers::reliable::is_context_window_exceeded(
+            &error
+        ));
+    }
+
+    #[tokio::test]
+    async fn adaptive_native_ceiling_returns_classified_context_pressure() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/show"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "model_info": {"qwen35moe.context_length": 262144}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/chat"))
+            .and(body_partial_json(serde_json::json!({
+                "options": {"num_ctx": 262_144}
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "message": {"content": "possibly truncated"},
+                "prompt_eval_count": 255_000,
+                "eval_count": 1
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let server_uri = server.uri();
+        let mut provider = OllamaProvider::new_full(
+            Some(&server_uri),
+            None,
+            Some(false),
+            None,
+            None,
+            Some(65_536),
+            Some(8_192),
+        );
+        provider.num_ctx_is_explicit = false;
+        provider.adaptive_context = true;
+        provider.adaptive_context_max = MAX_OLLAMA_CONTEXT_TOKENS;
+
+        let error = provider
+            .send_request(
+                vec![Message {
+                    role: "user".to_string(),
+                    content: Some("x".repeat(500_000)),
+                    images: None,
+                    tool_calls: None,
+                    tool_name: None,
+                }],
+                "qwen-test",
+                0.0,
+                false,
+                None,
+            )
+            .await
+            .expect_err("native context ceiling must return a classified pressure error");
+
+        assert!(error.to_string().contains("context length exceeded"));
+        assert!(crate::providers::reliable::is_context_window_exceeded(
+            &error
+        ));
+    }
+
+    #[tokio::test]
+    async fn adaptive_context_preserves_native_tool_schema_and_call() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/show"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "model_info": {"qwen35moe.context_length": 262144},
+                "capabilities": ["completion", "tools"]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/chat"))
+            .and(body_partial_json(serde_json::json!({
+                "options": {"num_ctx": 131_072},
+                "tools": [{
+                    "type": "function",
+                    "function": {"name": "shell"}
+                }]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "call_context_tool",
+                        "function": {
+                            "name": "shell",
+                            "arguments": {"command": "printf context_tool_ok"}
+                        }
+                    }]
+                },
+                "prompt_eval_count": 50_000,
+                "eval_count": 16,
+                "done_reason": "stop"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let server_uri = server.uri();
+        let mut provider = OllamaProvider::new_full(
+            Some(&server_uri),
+            None,
+            Some(false),
+            None,
+            None,
+            Some(65_536),
+            Some(8_192),
+        );
+        provider.num_ctx_is_explicit = false;
+        provider.adaptive_context = true;
+        provider.adaptive_context_max = MAX_OLLAMA_CONTEXT_TOKENS;
+
+        let response = provider
+            .chat_with_tools(
+                &[
+                    ChatMessage::system(&"p".repeat(100_000)),
+                    ChatMessage::user("Use the shell tool."),
+                ],
+                &[serde_json::json!({
+                    "type": "function",
+                    "function": {
+                        "name": "shell",
+                        "description": "Run a shell command",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "command": {"type": "string"}
+                            },
+                            "required": ["command"]
+                        }
+                    }
+                })],
+                "qwen-test",
+                0.0,
+            )
+            .await
+            .expect("adaptive request should preserve native tool calling");
+
+        assert_eq!(response.tool_calls.len(), 1);
+        assert_eq!(response.tool_calls[0].id, "call_context_tool");
+        assert_eq!(response.tool_calls[0].name, "shell");
+        assert_eq!(
+            response.tool_calls[0].arguments,
+            r#"{"command":"printf context_tool_ok"}"#
+        );
+    }
+
+    #[test]
     fn cloud_suffix_strips_model_name() {
         let p = OllamaProvider::new(Some("https://ollama.com"), Some("ollama-key"));
         let (model, should_auth) = p.resolve_request_details("qwen3:cloud").unwrap();
@@ -1387,11 +2228,9 @@ mod tests {
         let error = p
             .resolve_request_details("qwen3:cloud")
             .expect_err("cloud suffix should require API key");
-        assert!(
-            error
-                .to_string()
-                .contains("requested cloud routing, but no API key is configured")
-        );
+        assert!(error
+            .to_string()
+            .contains("requested cloud routing, but no API key is configured"));
     }
 
     #[test]

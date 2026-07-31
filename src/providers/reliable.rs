@@ -71,13 +71,17 @@ fn is_non_retryable(err: &anyhow::Error) -> bool {
             || msg_lower.contains("invalid"))
 }
 
-fn is_context_window_exceeded(err: &anyhow::Error) -> bool {
+pub(crate) fn is_context_window_exceeded(err: &anyhow::Error) -> bool {
     let lower = err.to_string().to_lowercase();
     let hints = [
         "exceeds the context window",
         "context window of this model",
         "maximum context length",
         "context length exceeded",
+        "context ceiling",
+        "context pressure",
+        "context-pressure",
+        "possibly truncated automatic-context response",
         "too many tokens",
         "token limit exceeded",
         "prompt is too long",
@@ -1160,6 +1164,27 @@ mod tests {
         )));
         assert!(is_non_retryable(&anyhow::anyhow!(
             "OpenAI Codex stream error: Your input exceeds the context window of this model."
+        )));
+    }
+
+    #[test]
+    fn context_window_classifier_recognizes_ollama_ceiling_and_pressure_errors() {
+        let ollama_ceiling = anyhow::anyhow!(
+            "Ollama prompt reached the 262144-token context ceiling \
+             (prompt_eval_count=253952); refusing a possibly truncated automatic-context response"
+        );
+        assert!(is_context_window_exceeded(&ollama_ceiling));
+        assert!(is_non_retryable(&ollama_ceiling));
+
+        for message in [
+            "Ollama request stopped because the context is under context pressure",
+            "provider rejected the request at its context-pressure limit",
+        ] {
+            assert!(is_context_window_exceeded(&anyhow::anyhow!(message)));
+        }
+
+        assert!(!is_context_window_exceeded(&anyhow::anyhow!(
+            "temporary failure while reading model context metadata"
         )));
     }
 

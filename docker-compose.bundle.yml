@@ -33,13 +33,6 @@ services:
     restart: unless-stopped
     init: true
     shm_size: ${LLAMAFARM_SHM_SIZE:-2gb}
-    # Set resource ceilings when the container is created. Do not move these
-    # to a post-start `docker update`: older NVIDIA Container Toolkit hooks can
-    # lose GPU cgroup access after a running-container update.
-    mem_limit: ${LLAMAFARM_MEMORY_LIMIT:-0}
-    memswap_limit: ${LLAMAFARM_MEMORY_LIMIT:-0}
-    cpus: ${LLAMAFARM_CPU_LIMIT:-0}
-    pids_limit: ${LLAMAFARM_PIDS_LIMIT:-0}
 
     environment:
       # The service listens on all container interfaces so Docker can publish
@@ -107,9 +100,12 @@ services:
       # context windows in the same VRAM budget (turboquant-style compression).
       - OLLAMA_KV_CACHE_TYPE=${OLLAMA_KV_CACHE_TYPE:-q8_0}
       # Keep direct Ollama calls and LlamaFarm's explicit per-request num_ctx
-      # in agreement. Parallel requests multiply context/KV-cache memory.
+      # in agreement. Adaptive mode treats OLLAMA_NUM_CTX as a fast baseline
+      # and grows per request; direct Ollama calls retain the baseline.
       - OLLAMA_CONTEXT_LENGTH=${OLLAMA_CONTEXT_LENGTH:-32768}
       - OLLAMA_NUM_CTX=${OLLAMA_NUM_CTX:-32768}
+      - LLAMAFARM_ADAPTIVE_CONTEXT=${LLAMAFARM_ADAPTIVE_CONTEXT:-false}
+      - LLAMAFARM_ADAPTIVE_CONTEXT_MAX=${LLAMAFARM_ADAPTIVE_CONTEXT_MAX:-262144}
       - OLLAMA_NUM_PARALLEL=${OLLAMA_NUM_PARALLEL:-1}
       - OLLAMA_MAX_LOADED_MODELS=${OLLAMA_MAX_LOADED_MODELS:-1}
       - OLLAMA_FLASH_ATTENTION=${OLLAMA_FLASH_ATTENTION:-1}
@@ -159,10 +155,6 @@ services:
     image: qdrant/qdrant:latest
     container_name: Qdrant
     restart: unless-stopped
-    mem_limit: ${QDRANT_MEMORY_LIMIT:-0}
-    memswap_limit: ${QDRANT_MEMORY_LIMIT:-0}
-    cpus: ${QDRANT_CPU_LIMIT:-0}
-    pids_limit: ${QDRANT_PIDS_LIMIT:-0}
     environment:
       - QDRANT__SERVICE__GRPC_PORT=6334
     volumes:

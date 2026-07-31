@@ -56,7 +56,8 @@ docker compose -f docker-compose.bundle.yml -f docker-compose.bundle.nvidia.yml 
 Use the checked-in profiles for the 8 GB RTX 4070 laptop and the 16 GB RTX
 5070 Ti coordinator. They set a quality-first Qwen 3.5 lane, q8_0 KV cache,
 Flash Attention, a single model stream, bounded agent history, and asymmetric
-RAM ceilings. Full details, model promotion rules, durable working-state
+context policies. Neither LlamaFarm nor Qdrant has a Compose CPU, memory, swap,
+or PID ceiling. Full details, model promotion rules, durable working-state
 memory, and the browser acceptance procedure are in
 [`deploy/node-profiles/README.md`](deploy/node-profiles/README.md).
 
@@ -69,15 +70,6 @@ The bundle has no browser or gateway pairing flow: the `/pair` endpoint and
 dashboard gate are removed, and stale paired config cannot re-enable them.
 The two hosts still authenticate federation task traffic with the private
 `LLAMAFARM_FEDERATION_TOKEN`; raw Ollama and Qdrant ports remain loopback-only.
-
-Resource ceilings are set during container creation. Do **not** run `docker
-update` on a live GPU bundle: older NVIDIA Container Toolkit hooks can lose
-GPU cgroup access and leave in-container `nvidia-smi` reporting `Unknown
-Error`. Change limits with a normal recreate instead:
-
-```bash
-./scripts/docker/up-node.sh rtx4070-laptop up -d --force-recreate
-```
 
 `up-node.sh` requires NVIDIA Container Toolkit 1.19.1+ and verifies a real
 `nvidia-smi -L` GPU container before deployment. Upgrade/configure the toolkit

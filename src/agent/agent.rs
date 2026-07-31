@@ -303,13 +303,15 @@ impl Agent {
             .unwrap_or("anthropic/claude-sonnet-4-20250514")
             .to_string();
 
-        let provider: Box<dyn Provider> = providers::create_routed_provider(
+        let provider_runtime_options = providers::ProviderRuntimeOptions::from_config(config);
+        let provider: Box<dyn Provider> = providers::create_routed_provider_with_options(
             provider_name,
             config.api_key.as_deref(),
             config.api_url.as_deref(),
             &config.reliability,
             &config.model_routes,
             &model_name,
+            &provider_runtime_options,
         )?;
 
         let dispatcher_choice = config.agent.tool_dispatcher.as_str();
@@ -383,8 +385,61 @@ impl Agent {
         self.history.extend(other_messages);
     }
 
+    fn compact_history_for_context_pressure(&mut self) -> bool {
+        const MIN_PRESSURE_HISTORY_MESSAGES: usize = 12;
+
+        let first_non_system = self
+            .history
+            .iter()
+            .position(|message| {
+                !matches!(
+                    message,
+                    ConversationMessage::Chat(chat) if chat.role == "system"
+                )
+            })
+            .unwrap_or(self.history.len());
+        let non_system_count = self.history.len().saturating_sub(first_non_system);
+        if non_system_count <= MIN_PRESSURE_HISTORY_MESSAGES {
+            return false;
+        }
+
+        let target = (non_system_count / 2)
+            .max(MIN_PRESSURE_HISTORY_MESSAGES)
+            .min(non_system_count - 1);
+        let preferred_end = first_non_system + non_system_count.saturating_sub(target);
+        let current_request = self.history[first_non_system..]
+            .iter()
+            .rposition(|message| {
+                matches!(
+                    message,
+                    ConversationMessage::Chat(chat) if chat.role == "user"
+                )
+            })
+            .map(|relative| first_non_system + relative);
+
+        let compact_end = self.history[preferred_end..]
+            .iter()
+            .position(|message| {
+                matches!(
+                    message,
+                    ConversationMessage::Chat(chat) if chat.role == "user"
+                )
+            })
+            .map(|relative| preferred_end + relative)
+            .or(current_request)
+            .unwrap_or(preferred_end);
+
+        if compact_end <= first_non_system {
+            return false;
+        }
+
+        self.history.drain(first_non_system..compact_end);
+        true
+    }
+
     fn build_system_prompt(&self) -> Result<String> {
         let instructions = self.tool_dispatcher.prompt_instructions(&self.tools);
+        let native_tools = self.tool_dispatcher.should_send_tool_specs();
         let ctx = PromptContext {
             workspace_dir: &self.workspace_dir,
             model_name: &self.model_name,
@@ -393,6 +448,12 @@ impl Agent {
             skills_prompt_mode: self.skills_prompt_mode,
             identity_config: Some(&self.identity_config),
             dispatcher_instructions: &instructions,
+            bootstrap_max_chars: if self.config.compact_context {
+                6_000
+            } else {
+                usize::MAX
+            },
+            native_tools,
         };
         self.prompt_builder.build(&ctx)
     }
@@ -577,7 +638,18 @@ impl Agent {
                 .await
             {
                 Ok(resp) => resp,
-                Err(err) => return Err(err),
+                Err(err) => {
+                    if providers::reliable::is_context_window_exceeded(&err)
+                        && self.compact_history_for_context_pressure()
+                    {
+                        tracing::warn!(
+                            retained_messages = self.history.len(),
+                            "provider reached its context ceiling; compacted older conversation history and retrying"
+                        );
+                        continue;
+                    }
+                    return Err(err);
+                }
             };
 
             let (text, calls) = self.tool_dispatcher.parse_response(&response);
@@ -715,6 +787,7 @@ mod tests {
     use async_trait::async_trait;
     use parking_lot::Mutex;
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct MockProvider {
         responses: Mutex<Vec<crate::providers::ChatResponse>>,
@@ -755,6 +828,47 @@ mod tests {
     struct ModelCaptureProvider {
         responses: Mutex<Vec<crate::providers::ChatResponse>>,
         seen_models: Arc<Mutex<Vec<String>>>,
+    }
+
+    struct ContextPressureThenSuccessProvider {
+        calls: Arc<AtomicUsize>,
+        native_tool_requests: Arc<Mutex<Vec<bool>>>,
+    }
+
+    #[async_trait]
+    impl Provider for ContextPressureThenSuccessProvider {
+        async fn chat_with_system(
+            &self,
+            _system_prompt: Option<&str>,
+            _message: &str,
+            _model: &str,
+            _temperature: f64,
+        ) -> Result<String> {
+            anyhow::bail!("chat_with_system should not be used")
+        }
+
+        async fn chat(
+            &self,
+            request: ChatRequest<'_>,
+            _model: &str,
+            _temperature: f64,
+        ) -> Result<crate::providers::ChatResponse> {
+            self.native_tool_requests
+                .lock()
+                .push(request.tools.is_some());
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                anyhow::bail!(
+                    "context length exceeded: Ollama prompt reached the 262144-token context ceiling"
+                );
+            }
+            Ok(crate::providers::ChatResponse {
+                text: Some("continued after compaction".into()),
+                tool_calls: vec![],
+                usage: None,
+                metrics: None,
+                reasoning_content: None,
+            })
+        }
     }
 
     #[async_trait]
@@ -904,6 +1018,58 @@ mod tests {
                 .iter()
                 .any(|msg| matches!(msg, ConversationMessage::ToolResults(_)))
         );
+    }
+
+    #[tokio::test]
+    async fn turn_compacts_context_pressure_and_preserves_native_tool_transport() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let native_tool_requests = Arc::new(Mutex::new(Vec::new()));
+        let provider = Box::new(ContextPressureThenSuccessProvider {
+            calls: Arc::clone(&calls),
+            native_tool_requests: Arc::clone(&native_tool_requests),
+        });
+        let memory_cfg = crate::config::MemoryConfig {
+            backend: "none".into(),
+            ..crate::config::MemoryConfig::default()
+        };
+        let mem: Arc<dyn Memory> = Arc::from(
+            crate::memory::create_memory(&memory_cfg, std::path::Path::new("/tmp"), None)
+                .expect("memory creation should succeed with valid config"),
+        );
+        let observer: Arc<dyn Observer> = Arc::from(crate::observability::NoopObserver {});
+        let mut agent = Agent::builder()
+            .provider(provider)
+            .tools(vec![Box::new(MockTool)])
+            .memory(mem)
+            .observer(observer)
+            .tool_dispatcher(Box::new(NativeToolDispatcher))
+            .workspace_dir(std::path::PathBuf::from("/tmp"))
+            .build()
+            .expect("agent builder should succeed with valid config");
+        agent
+            .history
+            .push(ConversationMessage::Chat(ChatMessage::system("system")));
+        for index in 0..30 {
+            agent
+                .history
+                .push(ConversationMessage::Chat(ChatMessage::user(format!(
+                    "prior message {index}"
+                ))));
+        }
+
+        let response = agent.turn("current request").await.unwrap();
+
+        assert_eq!(response, "continued after compaction");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(*native_tool_requests.lock(), vec![true, true]);
+        assert!(agent.history.len() < 33);
+        assert!(agent.history.iter().any(|message| {
+            matches!(
+                message,
+                ConversationMessage::Chat(chat)
+                    if chat.role == "user" && chat.content.contains("current request")
+            )
+        }));
     }
 
     #[tokio::test]

@@ -363,6 +363,7 @@ Local host/operator profile template:
 | Key | Default | Purpose |
 |---|---|---|
 | `reasoning_level` | unset (`None`) | Reasoning effort/level override for providers that support explicit levels (currently OpenAI Codex `/responses`) |
+| `ollama_num_ctx` | unset (`None`) | Exact Ollama context-window override in tokens; dashboard range is 2,048–262,144 |
 
 Notes:
 
@@ -370,6 +371,16 @@ Notes:
 - When set, overrides `LLAMAFARM_CODEX_REASONING_EFFORT` for OpenAI Codex requests.
 - Unset falls back to `LLAMAFARM_CODEX_REASONING_EFFORT` if present, otherwise defaults to `xhigh`.
 - If both `provider.reasoning_level` and deprecated `runtime.reasoning_level` are set, provider-level value wins.
+- `provider.ollama_num_ctx` is an exact manual value. When it is unset,
+  `OLLAMA_NUM_CTX` supplies the runtime default.
+- With `LLAMAFARM_ADAPTIVE_CONTEXT=true`, an environment-provided
+  `OLLAMA_NUM_CTX` becomes the fast baseline rather than a fixed ceiling.
+  LlamaFarm estimates the messages, tool schemas, images, output reserve, and a
+  safety margin, then grows the request in 2x tiers up to the lower of the
+  model-native context and `LLAMAFARM_ADAPTIVE_CONTEXT_MAX` (default and
+  supported maximum: `262144`).
+- Auto mode with no manual override or environment baseline uses the
+  Ollama-reported native context, up to 262,144 tokens.
 
 ## `[skills]`
 
