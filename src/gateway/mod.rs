@@ -946,6 +946,7 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
             "/api/connections/github/disconnect",
             post(api::handle_api_github_disconnect),
         )
+        .route("/api/agent-modes", get(api::handle_api_agent_modes))
         .route("/api/runs", get(api::handle_api_runs_list))
         .route("/api/runs/{run_id}", get(api::handle_api_run_get))
         .route(

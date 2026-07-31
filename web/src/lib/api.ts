@@ -115,6 +115,18 @@ export function getHealth(): Promise<HealthSnapshot> {
   );
 }
 
+export interface AgentModeOption {
+  id: string;
+  label: string;
+  kind: 'builtin' | 'persona' | 'variant';
+}
+
+export function getAgentModes(): Promise<AgentModeOption[]> {
+  return apiFetch<{ modes: AgentModeOption[] }>('/api/agent-modes').then(
+    (data) => data.modes,
+  );
+}
+
 export function getFederationPeers(): Promise<FederationPeersResponse> {
   return apiFetch<FederationPeersResponse>('/api/federation/peers');
 }

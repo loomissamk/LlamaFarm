@@ -28,6 +28,8 @@ export interface SendChatMessageOptions {
   temporary?: boolean;
   historySeed?: SeedChatMessage[];
   federationPeerIds?: string[];
+  /** "agent" (or omitted) is the unchanged default AGENTS.md-driven mode. */
+  agentMode?: string;
 }
 
 const DEFAULT_RECONNECT_DELAY = 1000;
@@ -111,6 +113,7 @@ export class WebSocketClient {
         temporary: options.temporary,
         history_seed: options.historySeed,
         federation_peer_ids: options.federationPeerIds,
+        agent_mode: options.agentMode,
       }),
     );
   }

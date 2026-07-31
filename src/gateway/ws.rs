@@ -2342,6 +2342,83 @@ fn has_undeclared_skill_dependencies(
         || skills_supported_by_selected_tools(skills.to_vec(), selected_specs).len() != skills.len()
 }
 
+/// How an `agent_mode` override should apply to the base system prompt.
+#[derive(Debug, PartialEq, Eq)]
+enum ModePromptEffect {
+    /// Absent/"agent"/unrecognized with no matching persona or variant file —
+    /// keep today's default behavior.
+    Unchanged,
+    /// "chat", or a persona with its own configured `system_prompt`: this
+    /// text replaces the base prompt entirely.
+    Replace(String),
+    /// An `AGENTS.<mode>.md` variant file: appended after the base prompt as
+    /// a precedence override, not a replacement.
+    Append(String),
+}
+
+const CHAT_MODE_SYSTEM_PROMPT: &str = "You are a helpful, direct assistant having a normal \
+    conversation. You do not have tools available in this mode — answer from your own \
+    knowledge and reasoning only.";
+
+/// Resolve what an `agent_mode` value should do to the base turn prompt.
+/// Pure and file-read-only — no session/socket state — so it's directly
+/// testable without a mock WebSocket connection.
+fn resolve_mode_prompt_effect(mode: &str, config: &crate::config::Config) -> ModePromptEffect {
+    if mode == "chat" {
+        return ModePromptEffect::Replace(CHAT_MODE_SYSTEM_PROMPT.to_string());
+    }
+    if let Some(persona) = config.agents.get(mode) {
+        return match persona
+            .system_prompt
+            .as_deref()
+            .filter(|prompt| !prompt.trim().is_empty())
+        {
+            Some(persona_prompt) => ModePromptEffect::Replace(persona_prompt.to_string()),
+            None => ModePromptEffect::Unchanged,
+        };
+    }
+    let variant_path = config.workspace_dir.join(format!("AGENTS.{mode}.md"));
+    match std::fs::read_to_string(&variant_path) {
+        Ok(content) if !content.trim().is_empty() => ModePromptEffect::Append(format!(
+            "\n\n## Active profile override: {mode}\n\n\
+            The following instructions from AGENTS.{mode}.md take precedence over the \
+            AGENTS.md guidance above wherever they conflict:\n\n{}\n",
+            content.trim()
+        )),
+        _ => ModePromptEffect::Unchanged,
+    }
+}
+
+/// Resolve which tools `agent_mode` excludes for this turn and what
+/// temperature it should run at. `all_tool_names` is every tool name in the
+/// exec registry, used to compute "everything except the persona's
+/// allowlist" without needing to clone/filter the tool registry itself.
+fn resolve_mode_tools_and_temperature(
+    mode: &str,
+    config: &crate::config::Config,
+    all_tool_names: &[String],
+    base_temperature: f64,
+) -> (Vec<String>, f64) {
+    if mode == "chat" {
+        return (all_tool_names.to_vec(), base_temperature);
+    }
+    let Some(persona) = config.agents.get(mode) else {
+        return (Vec::new(), base_temperature);
+    };
+    let temperature = persona.temperature.unwrap_or(base_temperature);
+    if persona.allowed_tools.is_empty() {
+        return (Vec::new(), temperature);
+    }
+    let allowed: std::collections::HashSet<&str> =
+        persona.allowed_tools.iter().map(String::as_str).collect();
+    let excluded = all_tool_names
+        .iter()
+        .filter(|name| !allowed.contains(name.as_str()))
+        .cloned()
+        .collect();
+    (excluded, temperature)
+}
+
 fn build_ws_turn_system_prompt(
     config: &crate::config::Config,
     model: &str,
@@ -2470,6 +2547,18 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         if content.is_empty() {
             continue;
         }
+        // Optional per-turn mode: "agent" (or absent) is today's unchanged
+        // AGENTS.md-driven agentic behavior. "chat" is a plain conversation
+        // with no tools. Anything else is looked up as a configured delegate
+        // persona (system_prompt/allowed_tools/temperature) first, then as
+        // an AGENTS.<name>.md variant file in the workspace. An unrecognized
+        // value silently falls back to the default rather than erroring.
+        let agent_mode = parsed
+            .get("agent_mode")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty() && *s != "agent")
+            .map(str::to_string);
 
         let runtime = state.runtime_snapshot();
         let selected_federation_peer_ids =
@@ -2730,6 +2819,17 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                             ),
                         );
                     }
+                }
+            }
+
+            // Optional per-turn mode override (see resolve_mode_prompt_effect).
+            // Absent/"agent"/unrecognized all fall through unchanged — today's
+            // default behavior.
+            if let Some(mode) = agent_mode.as_deref() {
+                match resolve_mode_prompt_effect(mode, &config) {
+                    ModePromptEffect::Unchanged => {}
+                    ModePromptEffect::Replace(prompt) => system_prompt = prompt,
+                    ModePromptEffect::Append(addition) => system_prompt.push_str(&addition),
                 }
             }
 
@@ -3039,7 +3139,23 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 return;
             }
 
-            let excluded_tools = tool_route.excluded.clone();
+            let mut excluded_tools = tool_route.excluded.clone();
+            let mut turn_temperature = runtime.temperature;
+            if let Some(mode) = agent_mode.as_deref() {
+                let all_tool_names: Vec<String> = runtime
+                    .tools_registry_exec
+                    .iter()
+                    .map(|tool| tool.name().to_string())
+                    .collect();
+                let (mut mode_excluded, temperature) =
+                    resolve_mode_tools_and_temperature(mode, &config, &all_tool_names, turn_temperature);
+                turn_temperature = temperature;
+                if !mode_excluded.is_empty() {
+                    excluded_tools.append(&mut mode_excluded);
+                    excluded_tools.sort();
+                    excluded_tools.dedup();
+                }
+            }
 
             // Durable run ledger for the inspector: one ledger per chat
             // session, appended across turns, keyed by the session id.
@@ -3108,7 +3224,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                     state.observer.as_ref(),
                                     &provider_label,
                                     &runtime.model,
-                                    runtime.temperature,
+                                    turn_temperature,
                                     true,
                                     Some(&approval_manager),
                                     "webchat",
@@ -4384,6 +4500,181 @@ Bus 003 Device 004: ID 8087:0033 Intel Corp.";
             1
         );
         assert!(skills_supported_by_selected_tools(vec![http_skill], &shell).is_empty());
+    }
+
+    fn sample_persona(
+        system_prompt: Option<&str>,
+        allowed_tools: Vec<&str>,
+        temperature: Option<f64>,
+    ) -> crate::config::DelegateAgentConfig {
+        crate::config::DelegateAgentConfig {
+            provider: "ollama".to_string(),
+            model: "qwen3.5:9b".to_string(),
+            system_prompt: system_prompt.map(str::to_string),
+            api_key: None,
+            temperature,
+            max_depth: 2,
+            agentic: true,
+            allowed_tools: allowed_tools.into_iter().map(str::to_string).collect(),
+            max_iterations: 0,
+        }
+    }
+
+    #[test]
+    fn resolve_mode_prompt_effect_defaults_to_unchanged_for_unrecognized_mode() {
+        let workspace = tempdir().unwrap();
+        let mut config = crate::config::Config::default();
+        config.workspace_dir = workspace.path().to_path_buf();
+
+        assert_eq!(
+            resolve_mode_prompt_effect("nonexistent-mode", &config),
+            ModePromptEffect::Unchanged
+        );
+    }
+
+    #[test]
+    fn resolve_mode_prompt_effect_chat_replaces_with_plain_prompt() {
+        let workspace = tempdir().unwrap();
+        let mut config = crate::config::Config::default();
+        config.workspace_dir = workspace.path().to_path_buf();
+
+        assert_eq!(
+            resolve_mode_prompt_effect("chat", &config),
+            ModePromptEffect::Replace(CHAT_MODE_SYSTEM_PROMPT.to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_mode_prompt_effect_persona_replaces_with_its_own_prompt() {
+        let workspace = tempdir().unwrap();
+        let mut config = crate::config::Config::default();
+        config.workspace_dir = workspace.path().to_path_buf();
+        config.agents.insert(
+            "planner".to_string(),
+            sample_persona(Some("You are the PLANNER."), vec![], None),
+        );
+
+        assert_eq!(
+            resolve_mode_prompt_effect("planner", &config),
+            ModePromptEffect::Replace("You are the PLANNER.".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_mode_prompt_effect_persona_without_prompt_is_unchanged() {
+        let workspace = tempdir().unwrap();
+        let mut config = crate::config::Config::default();
+        config.workspace_dir = workspace.path().to_path_buf();
+        config
+            .agents
+            .insert("bare".to_string(), sample_persona(None, vec![], None));
+
+        assert_eq!(
+            resolve_mode_prompt_effect("bare", &config),
+            ModePromptEffect::Unchanged
+        );
+    }
+
+    #[test]
+    fn resolve_mode_prompt_effect_reads_agents_variant_file_and_appends() {
+        let workspace = tempdir().unwrap();
+        let mut config = crate::config::Config::default();
+        config.workspace_dir = workspace.path().to_path_buf();
+        std::fs::write(
+            workspace.path().join("AGENTS.safe.md"),
+            "Never run destructive commands without asking first.",
+        )
+        .unwrap();
+
+        let effect = resolve_mode_prompt_effect("safe", &config);
+        match effect {
+            ModePromptEffect::Append(text) => {
+                assert!(text.contains("AGENTS.safe.md"));
+                assert!(text.contains("Never run destructive commands without asking first."));
+            }
+            other => panic!("expected Append, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_mode_prompt_effect_missing_variant_file_is_unchanged() {
+        let workspace = tempdir().unwrap();
+        let mut config = crate::config::Config::default();
+        config.workspace_dir = workspace.path().to_path_buf();
+
+        assert_eq!(
+            resolve_mode_prompt_effect("god", &config),
+            ModePromptEffect::Unchanged
+        );
+    }
+
+    #[test]
+    fn resolve_mode_tools_and_temperature_agent_mode_is_default_untouched() {
+        let config = crate::config::Config::default();
+        let all_tools = vec!["shell".to_string(), "file_read".to_string()];
+
+        // "agent" is filtered out by the caller before this function is ever
+        // reached (see the agent_mode parsing at message intake), but confirm
+        // an unrecognized name is also a safe no-op.
+        let (excluded, temperature) =
+            resolve_mode_tools_and_temperature("unrecognized", &config, &all_tools, 0.4);
+        assert!(excluded.is_empty());
+        assert_eq!(temperature, 0.4);
+    }
+
+    #[test]
+    fn resolve_mode_tools_and_temperature_chat_excludes_every_tool() {
+        let config = crate::config::Config::default();
+        let all_tools = vec![
+            "shell".to_string(),
+            "file_read".to_string(),
+            "delegate".to_string(),
+        ];
+
+        let (excluded, temperature) =
+            resolve_mode_tools_and_temperature("chat", &config, &all_tools, 0.5);
+        assert_eq!(excluded.len(), 3);
+        assert!(excluded.contains(&"shell".to_string()));
+        assert_eq!(temperature, 0.5);
+    }
+
+    #[test]
+    fn resolve_mode_tools_and_temperature_persona_restricts_to_allowlist_and_overrides_temperature()
+    {
+        let mut config = crate::config::Config::default();
+        config.agents.insert(
+            "coder".to_string(),
+            sample_persona(None, vec!["file_read", "shell"], Some(0.1)),
+        );
+        let all_tools = vec![
+            "shell".to_string(),
+            "file_read".to_string(),
+            "delegate".to_string(),
+            "web_search_tool".to_string(),
+        ];
+
+        let (mut excluded, temperature) =
+            resolve_mode_tools_and_temperature("coder", &config, &all_tools, 0.7);
+        excluded.sort();
+        assert_eq!(
+            excluded,
+            vec!["delegate".to_string(), "web_search_tool".to_string()]
+        );
+        assert_eq!(temperature, 0.1);
+    }
+
+    #[test]
+    fn resolve_mode_tools_and_temperature_persona_with_empty_allowlist_excludes_nothing() {
+        let mut config = crate::config::Config::default();
+        config
+            .agents
+            .insert("operator".to_string(), sample_persona(None, vec![], None));
+        let all_tools = vec!["shell".to_string(), "file_read".to_string()];
+
+        let (excluded, temperature) =
+            resolve_mode_tools_and_temperature("operator", &config, &all_tools, 0.6);
+        assert!(excluded.is_empty());
+        assert_eq!(temperature, 0.6);
     }
 
     #[test]

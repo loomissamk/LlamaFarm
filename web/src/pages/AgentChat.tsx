@@ -21,7 +21,7 @@ import {
   Wrench,
   X,
 } from 'lucide-react';
-import { getChatSession, getChatSessions } from '@/lib/api';
+import { getChatSession, getChatSessions, getAgentModes, type AgentModeOption } from '@/lib/api';
 import { getFederationPeers } from '@/lib/api';
 import {
   loadFederationPeerSelections,
@@ -783,6 +783,11 @@ export default function AgentChat() {
   const [streaming, setStreaming] = useState(false);
   const [federation, setFederation] = useState<FederationPeersResponse | null>(null);
   const [federationLoading, setFederationLoading] = useState(true);
+  // "agent" is the unchanged default (full AGENTS.md-driven agentic
+  // behavior) — never persisted across reloads so a stale non-default
+  // choice can't silently linger into a fresh session.
+  const [agentMode, setAgentMode] = useState<string>('agent');
+  const [agentModeOptions, setAgentModeOptions] = useState<AgentModeOption[]>([]);
   // Session ids present in the sidebar as a lightweight placeholder fetched
   // from this node's server-side store (title/timestamp only, no messages
   // yet) — hydrated with the real transcript lazily, the first time the
@@ -880,6 +885,20 @@ export default function AgentChat() {
     return () => {
       cancelled = true;
       globalThis.clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    getAgentModes()
+      .then((modes) => {
+        if (!cancelled) setAgentModeOptions(modes);
+      })
+      .catch(() => {
+        // Dropdown just falls back to the two always-present built-ins.
+      });
+    return () => {
+      cancelled = true;
     };
   }, []);
 
@@ -1800,6 +1819,7 @@ export default function AgentChat() {
         temporary: session.temporary,
         historySeed: buildHistorySeed(updatedSession.messages),
         federationPeerIds: federationEnabled ? selectedFederationPeerIds : [],
+        agentMode,
       });
       if (!sent) {
         return false;
@@ -2152,9 +2172,29 @@ export default function AgentChat() {
                 {selectedFederationWorkerCount > 0 ? ` · ${selectedFederationWorkerCount} selected` : ''}
               </span>
             )}
+            <select
+              value={agentMode}
+              onChange={(event) => setAgentMode(event.target.value)}
+              title="Chat mode: how this turn's system prompt and tools are built"
+              className={`ml-auto rounded-full border px-2 py-0.5 text-[11px] ${
+                agentMode === 'agent'
+                  ? 'border-gray-700 bg-gray-900 text-gray-300'
+                  : 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
+              }`}
+            >
+              <option value="agent">Agent (default)</option>
+              {agentModeOptions
+                .filter((mode) => mode.id !== 'agent')
+                .map((mode) => (
+                  <option key={mode.id} value={mode.id}>
+                    {mode.label}
+                    {mode.kind === 'variant' ? ' (AGENTS.md variant)' : ''}
+                  </option>
+                ))}
+            </select>
             <button
               onClick={() => setFederationBarCollapsed((prev) => !prev)}
-              className="ml-auto rounded p-0.5 text-gray-500 transition-colors hover:bg-gray-800 hover:text-gray-300"
+              className="rounded p-0.5 text-gray-500 transition-colors hover:bg-gray-800 hover:text-gray-300"
               title={federationBarCollapsed ? 'Expand federation bar' : 'Collapse federation bar'}
             >
               {federationBarCollapsed ? (

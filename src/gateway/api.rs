@@ -4421,6 +4421,49 @@ pub async fn handle_api_runs_list(
     Json(serde_json::json!({"runs": runs, "live": live})).into_response()
 }
 
+/// GET /api/agent-modes — the chat turn modes the "agent_mode" WS field
+/// accepts: the always-present built-ins ("agent" default, "chat" plain
+/// conversation), configured delegate personas (config.agents), and any
+/// AGENTS.<name>.md variant files found in the workspace root.
+pub async fn handle_api_agent_modes(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+    let config = state.config.lock().clone();
+
+    let mut modes = vec![
+        serde_json::json!({"id": "agent", "label": "Agent (default)", "kind": "builtin"}),
+        serde_json::json!({"id": "chat", "label": "Chat", "kind": "builtin"}),
+    ];
+
+    let mut persona_names: Vec<&String> = config.agents.keys().collect();
+    persona_names.sort();
+    for name in persona_names {
+        modes.push(serde_json::json!({"id": name, "label": name, "kind": "persona"}));
+    }
+
+    let mut variant_names: Vec<String> = std::fs::read_dir(&config.workspace_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let file_name = entry.file_name();
+            let name = file_name.to_str()?;
+            let inner = name.strip_prefix("AGENTS.")?.strip_suffix(".md")?;
+            (!inner.is_empty()).then(|| inner.to_string())
+        })
+        .collect();
+    variant_names.sort();
+    for name in variant_names {
+        modes.push(serde_json::json!({"id": name, "label": name, "kind": "variant"}));
+    }
+
+    Json(serde_json::json!({"modes": modes})).into_response()
+}
+
 /// GET /api/runs/{run_id} — full run ledger: plan, evidence, tool timeline.
 pub async fn handle_api_run_get(
     State(state): State<AppState>,
