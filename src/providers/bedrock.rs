@@ -470,7 +470,11 @@ impl BedrockProvider {
     }
 
     fn http_client(&self) -> Client {
-        crate::config::build_runtime_proxy_client_with_timeouts("provider.bedrock", 120, 10)
+        crate::config::build_runtime_proxy_client_with_optional_timeouts(
+            "provider.bedrock",
+            None,
+            Some(10),
+        )
     }
 
     /// Percent-encode the model ID for URL path: only encode `:` to `%3A`.

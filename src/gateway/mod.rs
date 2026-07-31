@@ -1,10 +1,11 @@
-//! Axum-based HTTP gateway with proper HTTP/1.1 compliance, body limits, and timeouts.
+//! Axum-based HTTP gateway with proper HTTP/1.1 compliance and body limits.
 //!
 //! This module replaces the raw TCP implementation with axum for:
 //! - Proper HTTP/1.1 parsing and compliance
 //! - Content-Length validation (handled by hyper)
 //! - Request body size limits (64KB max)
-//! - Request timeouts (default 30s, configurable) to prevent slow-loris attacks
+//! - Unbounded active request handling; long inference and tool runs remain
+//!   cancellable by disconnecting or using their explicit cancellation controls
 //! - Header sanitization (handled by axum/hyper)
 
 pub mod api;
@@ -46,13 +47,10 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tower_http::limit::RequestBodyLimitLayer;
-use tower_http::timeout::TimeoutLayer;
 use uuid::Uuid;
 
 /// Maximum request body size (64KB) — prevents memory exhaustion
 pub const MAX_BODY_SIZE: usize = 65_536;
-/// Default request timeout (30s) — prevents slow-loris attacks
-pub const REQUEST_TIMEOUT_SECS_DEFAULT: u64 = 30;
 /// Sliding window used by gateway rate limiting.
 pub const RATE_LIMIT_WINDOW_SECS: u64 = 60;
 /// Fallback max distinct client keys tracked in gateway rate limiter.
@@ -827,8 +825,6 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         federation,
         federation_tasks,
     };
-    let request_timeout_secs = config.gateway.request_timeout_secs.max(1);
-
     // Config PUT needs larger body limit (1MB)
     let config_put_router = Router::new()
         .route("/api/config", put(api::handle_api_config_put))
@@ -853,8 +849,9 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         )
         .layer(RequestBodyLimitLayer::new(52_428_800));
 
-    // IDE terminal exec: merged after the global TimeoutLayer so long-running
-    // commands (e.g. `ollama pull`) are never cut off by request_timeout_secs.
+    // Keep IDE terminal exec state isolated from the main router. Like model
+    // requests, commands such as `ollama pull` run until completion or explicit
+    // caller cancellation.
     let workspace_exec_router = Router::new()
         .route("/api/workspace/exec", post(api::handle_api_workspace_exec))
         .with_state(state.clone());
@@ -1022,10 +1019,6 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .merge(workspace_blob_routes)
         .with_state(state)
         .layer(RequestBodyLimitLayer::new(MAX_BODY_SIZE))
-        .layer(TimeoutLayer::with_status_code(
-            StatusCode::REQUEST_TIMEOUT,
-            Duration::from_secs(request_timeout_secs),
-        ))
         .merge(workspace_exec_router)
         // ── SPA fallback: non-API GET requests serve index.html ──
         .fallback(get(static_files::handle_spa_fallback));
@@ -2122,15 +2115,6 @@ mod tests {
     #[test]
     fn security_body_limit_is_64kb() {
         assert_eq!(MAX_BODY_SIZE, 65_536);
-    }
-
-    #[test]
-    fn security_timeout_is_30_seconds() {
-        assert_eq!(REQUEST_TIMEOUT_SECS_DEFAULT, 30);
-        assert_eq!(
-            crate::config::GatewayConfig::default().request_timeout_secs,
-            30
-        );
     }
 
     #[test]

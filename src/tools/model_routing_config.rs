@@ -9,7 +9,7 @@ use std::fs;
 use std::sync::Arc;
 
 const DEFAULT_AGENT_MAX_DEPTH: u32 = 3;
-const DEFAULT_AGENT_MAX_ITERATIONS: usize = 10;
+const DEFAULT_AGENT_MAX_ITERATIONS: usize = 0;
 
 pub struct ModelRoutingConfigTool {
     config: Arc<Config>,
@@ -700,10 +700,6 @@ impl ModelRoutingConfigTool {
             anyhow::bail!("'max_depth' must be greater than 0");
         }
 
-        if next_agent.max_iterations == 0 {
-            anyhow::bail!("'max_iterations' must be greater than 0");
-        }
-
         if next_agent.agentic && next_agent.allowed_tools.is_empty() {
             anyhow::bail!(
                 "Agent '{name}' has agentic=true but allowed_tools is empty. Set allowed_tools or disable agentic mode."
@@ -859,8 +855,8 @@ impl Tool for ModelRoutingConfigTool {
                 },
                 "max_iterations": {
                     "type": ["integer", "null"],
-                    "minimum": 1,
-                    "description": "Maximum tool-call iterations for agentic delegate mode"
+                    "minimum": 0,
+                    "description": "Maximum tool-call iterations for agentic delegate mode; 0 means unlimited"
                 }
             },
             "additionalProperties": false
@@ -1079,7 +1075,7 @@ mod tests {
                 "model": "gpt-5.3-codex",
                 "agentic": true,
                 "allowed_tools": ["file_read", "file_write", "shell"],
-                "max_iterations": 6
+                "max_iterations": 0
             }))
             .await
             .unwrap();
@@ -1090,6 +1086,7 @@ mod tests {
         assert_eq!(output["agents"]["coder"]["provider"], json!("openai"));
         assert_eq!(output["agents"]["coder"]["model"], json!("gpt-5.3-codex"));
         assert_eq!(output["agents"]["coder"]["agentic"], json!(true));
+        assert_eq!(output["agents"]["coder"]["max_iterations"], json!(0));
 
         let remove = tool
             .execute(json!({

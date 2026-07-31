@@ -145,7 +145,11 @@ impl GlmProvider {
     }
 
     fn http_client(&self) -> Client {
-        crate::config::build_runtime_proxy_client_with_timeouts("provider.glm", 120, 10)
+        crate::config::build_runtime_proxy_client_with_optional_timeouts(
+            "provider.glm",
+            None,
+            Some(10),
+        )
     }
 }
 

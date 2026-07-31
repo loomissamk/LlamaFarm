@@ -528,7 +528,7 @@ pub struct DelegateAgentConfig {
     /// Allowlist of tool names available to the sub-agent in agentic mode.
     #[serde(default)]
     pub allowed_tools: Vec<String>,
-    /// Maximum tool-call iterations in agentic mode.
+    /// Maximum tool-call iterations in agentic mode. `0` means unlimited.
     #[serde(default = "default_max_tool_iterations")]
     pub max_iterations: usize,
 }
@@ -538,7 +538,7 @@ fn default_max_depth() -> u32 {
 }
 
 fn default_max_tool_iterations() -> usize {
-    10
+    0
 }
 
 impl std::fmt::Debug for DelegateAgentConfig {
@@ -842,11 +842,11 @@ pub struct AgentConfig {
     /// routing is on. Default: 12. Set 0 to expose all tools.
     #[serde(default = "default_tool_routing_top_k")]
     pub tool_routing_top_k: usize,
-    /// Maximum tool-call loop turns per user message. Default: `100_000`
-    /// (effectively unbounded for real usage) -- real non-progress is
-    /// caught by dedicated stall detectors in the loop itself (duplicate
-    /// tool calls, empty reasoning-only checkpoints), not a step count.
-    /// Setting to `0` falls back to the default.
+    /// Maximum tool-call loop turns per user message. Default: `0` (unlimited).
+    ///
+    /// Unlimited runs end when the task completes, a dedicated stall/error
+    /// detector fires, or the operator explicitly cancels the turn. Set a
+    /// positive value only when an explicit per-turn iteration cap is wanted.
     #[serde(default = "default_agent_max_tool_iterations")]
     pub max_tool_iterations: usize,
     /// Maximum conversation history messages retained per session. Default: `50`.
@@ -854,15 +854,14 @@ pub struct AgentConfig {
     pub max_history_messages: usize,
     /// Maximum tokens a provider may generate for one inference segment.
     ///
-    /// This is deliberately a *per-segment* budget, not a task budget.  When a
-    /// local thinking model reaches it, the agent checkpoints the partial turn
-    /// and continues the task in a fresh request.  That keeps a pathological
-    /// reasoning pass from monopolising a GPU while allowing long autonomous
-    /// tasks to keep running until they genuinely finish or are cancelled.
+    /// This is an operator opt-in *per-segment* budget, not a task budget. When
+    /// set and reached, the agent checkpoints the partial turn and continues
+    /// the task in a fresh request.
     ///
     /// For Ollama this is sent as `options.num_predict`, which includes hidden
-    /// thinking tokens as well as visible output. `None` leaves the provider's
-    /// native default unchanged.
+    /// thinking tokens as well as visible output. `None` sends
+    /// `options.num_predict = -1` to Ollama so generation ends naturally or by
+    /// explicit cancellation.
     #[serde(default)]
     pub max_output_tokens_per_turn: Option<u32>,
     /// Enable parallel tool execution within a single iteration. Default: `false`.
@@ -878,7 +877,7 @@ fn default_tool_routing_top_k() -> usize {
 }
 
 fn default_agent_max_tool_iterations() -> usize {
-    100_000
+    0
 }
 
 fn default_agent_max_history_messages() -> usize {
@@ -1230,7 +1229,8 @@ pub struct GatewayConfig {
     /// Allow binding to non-localhost without a tunnel (default: false)
     #[serde(default)]
     pub allow_public_bind: bool,
-    /// HTTP request timeout in seconds for gateway routes (default: 30)
+    /// Deprecated compatibility field. Active gateway requests are not ended
+    /// by a global wall-clock deadline.
     #[serde(default = "default_gateway_request_timeout_secs")]
     pub request_timeout_secs: u64,
     /// Paired bearer tokens (managed automatically, not user-edited)
@@ -3244,7 +3244,7 @@ pub enum ResearchTrigger {
 /// enabled = true
 /// trigger = "keywords"
 /// keywords = ["find", "search", "check", "investigate"]
-/// max_iterations = 5
+/// max_iterations = 0
 /// show_progress = true
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -3265,7 +3265,8 @@ pub struct ResearchPhaseConfig {
     #[serde(default = "default_research_min_length")]
     pub min_message_length: usize,
 
-    /// Maximum tool call iterations during research phase.
+    /// Maximum tool-call iterations during the research phase. `0` means
+    /// unlimited; positive values opt into an explicit cap.
     #[serde(default = "default_research_max_iterations")]
     pub max_iterations: usize,
 
@@ -3299,7 +3300,7 @@ fn default_research_min_length() -> usize {
 }
 
 fn default_research_max_iterations() -> usize {
-    5
+    0
 }
 
 impl Default for ResearchPhaseConfig {
@@ -3861,11 +3862,9 @@ pub struct ChannelsConfig {
     pub nostr: Option<NostrConfig>,
     /// ClawdTalk voice channel configuration.
     pub clawdtalk: Option<crate::channels::clawdtalk::ClawdTalkConfig>,
-    /// Base timeout in seconds for processing a single channel message (LLM + tools).
-    /// Runtime uses this as a per-turn budget that scales with tool-loop depth
-    /// (up to 4x, capped) so one slow/retried model call does not consume the
-    /// entire conversation budget.
-    /// Default: 300s for on-device LLMs (Ollama) which are slower than cloud APIs.
+    /// Deprecated compatibility field. Active channel model/tool work has no
+    /// wall-clock deadline and ends naturally or by explicit cancellation.
+    /// The value is retained so older configuration files still deserialize.
     #[serde(default = "default_channel_message_timeout_secs")]
     pub message_timeout_secs: u64,
 }
@@ -7242,19 +7241,27 @@ impl Config {
 
         if let Ok(max_iterations) = std::env::var("LLAMAFARM_AGENT_MAX_TOOL_ITERATIONS") {
             match max_iterations.trim().parse::<usize>() {
-                Ok(value) if value > 0 => self.agent.max_tool_iterations = value,
+                Ok(value) => self.agent.max_tool_iterations = value,
                 _ => tracing::warn!(
-                    "Ignoring invalid LLAMAFARM_AGENT_MAX_TOOL_ITERATIONS (must be a positive integer)"
+                    "Ignoring invalid LLAMAFARM_AGENT_MAX_TOOL_ITERATIONS (must be a non-negative integer; 0 means unlimited)"
                 ),
             }
         }
 
         if let Ok(max_output_tokens) = std::env::var("LLAMAFARM_AGENT_MAX_OUTPUT_TOKENS") {
-            match max_output_tokens.trim().parse::<u32>() {
-                Ok(value) if value > 0 => self.agent.max_output_tokens_per_turn = Some(value),
-                _ => tracing::warn!(
-                    "Ignoring invalid LLAMAFARM_AGENT_MAX_OUTPUT_TOKENS (must be a positive integer)"
-                ),
+            let normalized = max_output_tokens.trim().to_ascii_lowercase();
+            match normalized.as_str() {
+                "0" | "-1" | "none" | "unlimited" => {
+                    self.agent.max_output_tokens_per_turn = None;
+                }
+                _ => match normalized.parse::<u32>() {
+                    Ok(value) if value > 0 => {
+                        self.agent.max_output_tokens_per_turn = Some(value);
+                    }
+                    _ => tracing::warn!(
+                        "Ignoring invalid LLAMAFARM_AGENT_MAX_OUTPUT_TOKENS (use a positive integer or unlimited)"
+                    ),
+                },
             }
         }
 
@@ -8547,7 +8554,7 @@ reasoning_level = "high"
         assert!(!cfg.compact_context);
         assert!(cfg.tool_routing_enabled);
         assert_eq!(cfg.tool_routing_top_k, 12);
-        assert_eq!(cfg.max_tool_iterations, 100_000);
+        assert_eq!(cfg.max_tool_iterations, 0);
         assert_eq!(cfg.max_history_messages, 50);
         assert_eq!(cfg.max_output_tokens_per_turn, None);
         assert!(!cfg.parallel_tools);
@@ -11036,6 +11043,12 @@ default_model = "legacy-model"
         assert_eq!(config.agent.max_tool_iterations, 96);
         assert_eq!(config.agent.max_output_tokens_per_turn, Some(2048));
         assert!(config.agent.parallel_tools);
+
+        std::env::set_var("LLAMAFARM_AGENT_MAX_TOOL_ITERATIONS", "0");
+        std::env::set_var("LLAMAFARM_AGENT_MAX_OUTPUT_TOKENS", "unlimited");
+        config.apply_env_overrides();
+        assert_eq!(config.agent.max_tool_iterations, 0);
+        assert_eq!(config.agent.max_output_tokens_per_turn, None);
 
         std::env::remove_var("LLAMAFARM_AGENT_COMPACT_CONTEXT");
         std::env::remove_var("LLAMAFARM_AGENT_TOOL_ROUTING_ENABLED");

@@ -269,7 +269,7 @@ impl FederationRemoteSubagentAdapter {
             requester_node_id: Some(self.local_node_id.read().clone()),
             requester_name: Some(self.local_node_name.read().clone()),
             agentic: true,
-            max_iterations: 12,
+            max_iterations: 0,
         };
 
         let accepted = self.start_remote_task(&peer, &request).await?;

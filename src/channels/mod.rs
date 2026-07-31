@@ -108,12 +108,10 @@ const BOOTSTRAP_MAX_CHARS: usize = 20_000;
 
 const DEFAULT_CHANNEL_INITIAL_BACKOFF_SECS: u64 = 2;
 const DEFAULT_CHANNEL_MAX_BACKOFF_SECS: u64 = 60;
-const MIN_CHANNEL_MESSAGE_TIMEOUT_SECS: u64 = 30;
-/// Default timeout for processing a single channel message (LLM + tools).
-/// Used as fallback when not configured in channels_config.message_timeout_secs.
+/// Legacy configuration default retained for config compatibility. Active
+/// model/tool work is not wrapped in a wall-clock deadline; it ends naturally
+/// or through the existing per-sender cancellation token.
 const CHANNEL_MESSAGE_TIMEOUT_SECS: u64 = 300;
-/// Cap timeout scaling so large max_tool_iterations values do not create unbounded waits.
-const CHANNEL_MESSAGE_TIMEOUT_SCALE_CAP: u64 = 4;
 const CHANNEL_PARALLELISM_PER_CHANNEL: usize = 4;
 const CHANNEL_MIN_IN_FLIGHT_MESSAGES: usize = 8;
 const CHANNEL_MAX_IN_FLIGHT_MESSAGES: usize = 64;
@@ -131,19 +129,8 @@ const CHANNEL_HOOK_MAX_OUTBOUND_CHARS: usize = 20_000;
 
 type ProviderCacheMap = Arc<Mutex<HashMap<String, Arc<dyn Provider>>>>;
 type RouteSelectionMap = Arc<Mutex<HashMap<String, ChannelRouteSelection>>>;
-
-fn effective_channel_message_timeout_secs(configured: u64) -> u64 {
-    configured.max(MIN_CHANNEL_MESSAGE_TIMEOUT_SECS)
-}
-
-fn channel_message_timeout_budget_secs(
-    message_timeout_secs: u64,
-    max_tool_iterations: usize,
-) -> u64 {
-    let iterations = max_tool_iterations.max(1) as u64;
-    let scale = iterations.min(CHANNEL_MESSAGE_TIMEOUT_SCALE_CAP);
-    message_timeout_secs.saturating_mul(scale)
-}
+type InFlightChannelTaskMap =
+    Arc<tokio::sync::Mutex<HashMap<String, HashMap<u64, InFlightSenderTaskState>>>>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ChannelRouteSelection {
@@ -248,6 +235,7 @@ struct ChannelRuntimeContext {
     reliability: Arc<crate::config::ReliabilityConfig>,
     provider_runtime_options: providers::ProviderRuntimeOptions,
     workspace_dir: Arc<PathBuf>,
+    #[allow(dead_code)] // legacy snapshot field retained for config compatibility
     message_timeout_secs: u64,
     interrupt_on_new_message: bool,
     multimodal: crate::config::MultimodalConfig,
@@ -260,7 +248,6 @@ struct ChannelRuntimeContext {
 
 #[derive(Clone)]
 struct InFlightSenderTaskState {
-    task_id: u64,
     cancellation: CancellationToken,
     completion: Arc<InFlightTaskCompletion>,
 }
@@ -284,10 +271,15 @@ impl InFlightTaskCompletion {
     }
 
     async fn wait(&self) {
-        if self.done.load(Ordering::Acquire) {
-            return;
+        loop {
+            // Register the waiter before checking the flag so mark_done()
+            // cannot notify between the check and subscription.
+            let notified = self.notify.notified();
+            if self.done.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
         }
-        self.notify.notified().await;
     }
 }
 
@@ -309,6 +301,78 @@ fn conversation_history_key(msg: &traits::ChannelMessage) -> String {
 
 fn interruption_scope_key(msg: &traits::ChannelMessage) -> String {
     format!("{}_{}_{}", msg.channel, msg.reply_target, msg.sender)
+}
+
+fn is_channel_stop_command(content: &str) -> bool {
+    let Some(command_token) = content.trim().split_whitespace().next() else {
+        return false;
+    };
+    let base_command = command_token
+        .split('@')
+        .next()
+        .unwrap_or(command_token)
+        .to_ascii_lowercase();
+    matches!(base_command.as_str(), "/stop" | "/cancel" | "/abort")
+}
+
+async fn remove_in_flight_channel_task(
+    in_flight: &InFlightChannelTaskMap,
+    scope_key: &str,
+    task_id: u64,
+) {
+    let mut active = in_flight.lock().await;
+    let remove_scope = if let Some(tasks) = active.get_mut(scope_key) {
+        tasks.remove(&task_id);
+        tasks.is_empty()
+    } else {
+        false
+    };
+    if remove_scope {
+        active.remove(scope_key);
+    }
+}
+
+async fn handle_channel_stop_before_dispatch(
+    ctx: &ChannelRuntimeContext,
+    msg: &traits::ChannelMessage,
+    in_flight: &InFlightChannelTaskMap,
+) -> bool {
+    if !is_channel_stop_command(&msg.content) {
+        return false;
+    }
+
+    let scope_key = interruption_scope_key(msg);
+    let active_tasks = {
+        let active = in_flight.lock().await;
+        active
+            .get(&scope_key)
+            .map(|tasks| tasks.values().cloned().collect::<Vec<_>>())
+            .unwrap_or_default()
+    };
+
+    for task in &active_tasks {
+        task.cancellation.cancel();
+    }
+
+    let response = match active_tasks.len() {
+        0 => "No active run to stop.".to_string(),
+        1 => "Stopping the active run.".to_string(),
+        count => format!("Stopping {count} active runs."),
+    };
+    if let Some(channel) = ctx.channels_by_name.get(&msg.channel) {
+        if let Err(error) = channel
+            .send(&SendMessage::new(response, &msg.reply_target).in_thread(msg.thread_ts.clone()))
+            .await
+        {
+            tracing::warn!(
+                channel = %msg.channel,
+                sender = %msg.sender,
+                "Failed to acknowledge channel stop command: {error}"
+            );
+        }
+    }
+
+    true
 }
 
 /// Strip tool-call XML tags from outgoing messages.
@@ -3273,12 +3337,10 @@ semantic_match={:.2} (threshold {:.2}), category={}.",
     let history_len_before_tools = history.len();
 
     enum LlmExecutionResult {
-        Completed(Result<Result<String, anyhow::Error>, tokio::time::error::Elapsed>),
+        Completed(Result<String, anyhow::Error>),
         Cancelled,
     }
 
-    let timeout_budget_secs =
-        channel_message_timeout_budget_secs(ctx.message_timeout_secs, ctx.max_tool_iterations);
     let (approval_prompt_tx, mut approval_prompt_rx) =
         tokio::sync::mpsc::unbounded_channel::<crate::agent::loop_::NonCliApprovalPrompt>();
     let approval_prompt_task = if msg.channel == "cli" {
@@ -3322,29 +3384,26 @@ semantic_match={:.2} (threshold {:.2}), category={}.",
 
     let llm_result = tokio::select! {
         () = cancellation_token.cancelled() => LlmExecutionResult::Cancelled,
-        result = tokio::time::timeout(
-            Duration::from_secs(timeout_budget_secs),
-            crate::agent::loop_::with_tool_loop_history_limit(
-                ctx.max_history_messages,
-                run_tool_call_loop_with_non_cli_approval_context(
-                    active_provider.as_ref(),
-                    &mut history,
-                    ctx.tools_registry.as_ref(),
-                    ctx.observer.as_ref(),
-                    route.provider.as_str(),
-                    route.model.as_str(),
-                    runtime_defaults.temperature,
-                    true,
-                    Some(ctx.approval_manager.as_ref()),
-                    msg.channel.as_str(),
-                    non_cli_approval_context,
-                    &ctx.multimodal,
-                    ctx.max_tool_iterations,
-                    Some(cancellation_token.clone()),
-                    delta_tx,
-                    ctx.hooks.as_deref(),
-                    &excluded_tools_snapshot,
-                ),
+        result = crate::agent::loop_::with_tool_loop_history_limit(
+            ctx.max_history_messages,
+            run_tool_call_loop_with_non_cli_approval_context(
+                active_provider.as_ref(),
+                &mut history,
+                ctx.tools_registry.as_ref(),
+                ctx.observer.as_ref(),
+                route.provider.as_str(),
+                route.model.as_str(),
+                runtime_defaults.temperature,
+                true,
+                Some(ctx.approval_manager.as_ref()),
+                msg.channel.as_str(),
+                non_cli_approval_context,
+                &ctx.multimodal,
+                ctx.max_tool_iterations,
+                Some(cancellation_token.clone()),
+                delta_tx,
+                ctx.hooks.as_deref(),
+                &excluded_tools_snapshot,
             ),
         ) => LlmExecutionResult::Completed(result),
     };
@@ -3366,8 +3425,8 @@ semantic_match={:.2} (threshold {:.2}), category={}.",
     }
 
     let reaction_done_emoji = match &llm_result {
-        LlmExecutionResult::Completed(Ok(Ok(_))) => "\u{2705}", // ✅
-        _ => "\u{26A0}\u{FE0F}",                                // ⚠️
+        LlmExecutionResult::Completed(Ok(_)) => "\u{2705}", // ✅
+        _ => "\u{26A0}\u{FE0F}",                            // ⚠️
     };
 
     match llm_result {
@@ -3398,7 +3457,7 @@ semantic_match={:.2} (threshold {:.2}), category={}.",
                 }
             }
         }
-        LlmExecutionResult::Completed(Ok(Ok(response))) => {
+        LlmExecutionResult::Completed(Ok(response)) => {
             // ── Hook: on_message_sending (modifying) ─────────
             let mut outbound_response = response;
             if canary_guard
@@ -3572,7 +3631,7 @@ semantic_match={:.2} (threshold {:.2}), category={}.",
                 }
             }
         }
-        LlmExecutionResult::Completed(Ok(Err(e))) => {
+        LlmExecutionResult::Completed(Err(e)) => {
             if crate::agent::loop_::is_tool_loop_cancelled(&e) || cancellation_token.is_cancelled()
             {
                 tracing::info!(
@@ -3730,53 +3789,6 @@ semantic_match={:.2} (threshold {:.2}), category={}.",
                 }
             }
         }
-        LlmExecutionResult::Completed(Err(_)) => {
-            let timeout_msg = format!(
-                "LLM response timed out after {}s (base={}s, max_tool_iterations={})",
-                timeout_budget_secs, ctx.message_timeout_secs, ctx.max_tool_iterations
-            );
-            runtime_trace::record_event(
-                "channel_message_timeout",
-                Some(msg.channel.as_str()),
-                Some(route.provider.as_str()),
-                Some(route.model.as_str()),
-                None,
-                Some(false),
-                Some(&timeout_msg),
-                serde_json::json!({
-                    "sender": msg.sender,
-                    "elapsed_ms": started_at.elapsed().as_millis(),
-                }),
-            );
-            eprintln!(
-                "  ❌ {} (elapsed: {}ms)",
-                timeout_msg,
-                started_at.elapsed().as_millis()
-            );
-            // Close the orphan user turn so subsequent messages don't
-            // inherit this timed-out request as unfinished context.
-            append_sender_turn(
-                ctx.as_ref(),
-                &history_key,
-                ChatMessage::assistant("[Task timed out — not continuing this request]"),
-            );
-            if let Some(channel) = target_channel.as_ref() {
-                let error_text =
-                    "⚠️ Request timed out while waiting for the model. Please try again.";
-                if let Some(ref draft_id) = draft_message_id {
-                    let _ = channel
-                        .finalize_draft(&msg.reply_target, draft_id, error_text)
-                        .await;
-                } else {
-                    let _ = channel
-                        .send(
-                            &SendMessage::new(error_text, &msg.reply_target)
-                                .in_thread(msg.thread_ts.clone()),
-                        )
-                        .await;
-                }
-            }
-        }
     }
 
     // Swap 👀 → ✅ (or ⚠️ on error) to signal processing is complete
@@ -3797,66 +3809,85 @@ async fn run_message_dispatch_loop(
 ) {
     let semaphore = Arc::new(tokio::sync::Semaphore::new(max_in_flight_messages));
     let mut workers = tokio::task::JoinSet::new();
-    let in_flight_by_sender = Arc::new(tokio::sync::Mutex::new(HashMap::<
-        String,
-        InFlightSenderTaskState,
-    >::new()));
+    let in_flight_by_sender: InFlightChannelTaskMap =
+        Arc::new(tokio::sync::Mutex::new(HashMap::new()));
     let task_sequence = Arc::new(AtomicU64::new(1));
 
     while let Some(msg) = rx.recv().await {
-        let permit = match Arc::clone(&semaphore).acquire_owned().await {
-            Ok(permit) => permit,
-            Err(_) => break,
-        };
+        // Stop is handled by the dispatcher itself, before any worker permit is
+        // acquired. A saturated pool therefore cannot prevent an operator from
+        // cancelling a hung inference or approval wait.
+        if handle_channel_stop_before_dispatch(ctx.as_ref(), &msg, &in_flight_by_sender).await {
+            while let Some(result) = workers.try_join_next() {
+                log_worker_join_result(result);
+            }
+            continue;
+        }
 
         let worker_ctx = Arc::clone(&ctx);
         let in_flight = Arc::clone(&in_flight_by_sender);
-        let task_sequence = Arc::clone(&task_sequence);
+        let worker_semaphore = Arc::clone(&semaphore);
+        let interrupt_enabled = worker_ctx.interrupt_on_new_message && msg.channel == "telegram";
+        let sender_scope_key = interruption_scope_key(&msg);
+        let cancellation_token = CancellationToken::new();
+        let completion = Arc::new(InFlightTaskCompletion::new());
+        let task_id = task_sequence.fetch_add(1, Ordering::Relaxed);
+        let previous_tasks = {
+            let mut active = in_flight.lock().await;
+            let scoped_tasks = active.entry(sender_scope_key.clone()).or_default();
+            let previous = if interrupt_enabled {
+                scoped_tasks.values().cloned().collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            scoped_tasks.insert(
+                task_id,
+                InFlightSenderTaskState {
+                    cancellation: cancellation_token.clone(),
+                    completion: Arc::clone(&completion),
+                },
+            );
+            previous
+        };
+
+        if interrupt_enabled {
+            for previous in &previous_tasks {
+                tracing::info!(
+                    channel = %msg.channel,
+                    sender = %msg.sender,
+                    "Interrupting previous in-flight request for sender"
+                );
+                previous.cancellation.cancel();
+            }
+        }
+
         workers.spawn(async move {
-            let _permit = permit;
-            let interrupt_enabled =
-                worker_ctx.interrupt_on_new_message && msg.channel == "telegram";
-            let sender_scope_key = interruption_scope_key(&msg);
-            let cancellation_token = CancellationToken::new();
-            let completion = Arc::new(InFlightTaskCompletion::new());
-            let task_id = task_sequence.fetch_add(1, Ordering::Relaxed);
+            let mut should_process = true;
 
-            if interrupt_enabled {
-                let previous = {
-                    let mut active = in_flight.lock().await;
-                    active.insert(
-                        sender_scope_key.clone(),
-                        InFlightSenderTaskState {
-                            task_id,
-                            cancellation: cancellation_token.clone(),
-                            completion: Arc::clone(&completion),
-                        },
-                    )
-                };
-
-                if let Some(previous) = previous {
-                    tracing::info!(
-                        channel = %msg.channel,
-                        sender = %msg.sender,
-                        "Interrupting previous in-flight request for sender"
-                    );
-                    previous.cancellation.cancel();
-                    previous.completion.wait().await;
+            for previous in previous_tasks {
+                tokio::select! {
+                    () = cancellation_token.cancelled() => {
+                        should_process = false;
+                        break;
+                    }
+                    () = previous.completion.wait() => {}
                 }
             }
 
-            process_channel_message(worker_ctx, msg, cancellation_token).await;
-
-            if interrupt_enabled {
-                let mut active = in_flight.lock().await;
-                if active
-                    .get(&sender_scope_key)
-                    .is_some_and(|state| state.task_id == task_id)
-                {
-                    active.remove(&sender_scope_key);
+            let permit = if should_process {
+                tokio::select! {
+                    () = cancellation_token.cancelled() => None,
+                    result = worker_semaphore.acquire_owned() => result.ok(),
                 }
+            } else {
+                None
+            };
+
+            if permit.is_some() && !cancellation_token.is_cancelled() {
+                process_channel_message(worker_ctx, msg, cancellation_token).await;
             }
 
+            remove_in_flight_channel_task(&in_flight, &sender_scope_key, task_id).await;
             completion.mark_done();
         });
 
@@ -5091,8 +5122,9 @@ pub async fn start_channels(config: Config) -> Result<()> {
 
     let mut provider_cache_seed: HashMap<String, Arc<dyn Provider>> = HashMap::new();
     provider_cache_seed.insert(provider_name.clone(), Arc::clone(&provider));
-    let message_timeout_secs =
-        effective_channel_message_timeout_secs(config.channels_config.message_timeout_secs);
+    // Retain the legacy value in the runtime snapshot for config/API
+    // compatibility. It no longer wraps active model/tool work in a deadline.
+    let message_timeout_secs = config.channels_config.message_timeout_secs;
     let interrupt_on_new_message = config
         .channels_config
         .telegram
@@ -5159,8 +5191,8 @@ mod tests {
     use crate::providers::{ChatMessage, Provider};
     use crate::tools::{Tool, ToolResult};
     use std::collections::{HashMap, HashSet};
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     fn make_workspace() -> TempDir {
@@ -5186,37 +5218,6 @@ mod tests {
         .unwrap();
         std::fs::write(tmp.path().join("MEMORY.md"), "# Memory\nUser likes Rust.").unwrap();
         tmp
-    }
-
-    #[test]
-    fn effective_channel_message_timeout_secs_clamps_to_minimum() {
-        assert_eq!(
-            effective_channel_message_timeout_secs(0),
-            MIN_CHANNEL_MESSAGE_TIMEOUT_SECS
-        );
-        assert_eq!(
-            effective_channel_message_timeout_secs(15),
-            MIN_CHANNEL_MESSAGE_TIMEOUT_SECS
-        );
-        assert_eq!(effective_channel_message_timeout_secs(300), 300);
-    }
-
-    #[test]
-    fn channel_message_timeout_budget_scales_with_tool_iterations() {
-        assert_eq!(channel_message_timeout_budget_secs(300, 1), 300);
-        assert_eq!(channel_message_timeout_budget_secs(300, 2), 600);
-        assert_eq!(channel_message_timeout_budget_secs(300, 3), 900);
-    }
-
-    #[test]
-    fn channel_message_timeout_budget_uses_safe_defaults_and_cap() {
-        // 0 iterations falls back to 1x timeout budget.
-        assert_eq!(channel_message_timeout_budget_secs(300, 0), 300);
-        // Large iteration counts are capped to avoid runaway waits.
-        assert_eq!(
-            channel_message_timeout_budget_secs(300, 10),
-            300 * CHANNEL_MESSAGE_TIMEOUT_SCALE_CAP
-        );
     }
 
     #[test]
@@ -5826,6 +5827,103 @@ mod tests {
         ) -> anyhow::Result<String> {
             tokio::time::sleep(self.delay).await;
             Ok(format!("echo: {message}"))
+        }
+    }
+
+    struct BlockingFirstProvider {
+        calls: AtomicUsize,
+        first_started: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Provider for BlockingFirstProvider {
+        async fn chat_with_system(
+            &self,
+            _system_prompt: Option<&str>,
+            _message: &str,
+            _model: &str,
+            _temperature: f64,
+        ) -> anyhow::Result<String> {
+            anyhow::bail!("chat_with_system is not used by channel dispatch tests")
+        }
+
+        async fn chat_with_history(
+            &self,
+            _messages: &[ChatMessage],
+            _model: &str,
+            _temperature: f64,
+        ) -> anyhow::Result<String> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            if call == 0 {
+                if let Some(started) = self
+                    .first_started
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .take()
+                {
+                    let _ = started.send(());
+                }
+                std::future::pending::<()>().await;
+            }
+            Ok(format!("response-{}", call + 1))
+        }
+    }
+
+    fn channel_dispatch_test_context(
+        channel: Arc<dyn Channel>,
+        provider: Arc<dyn Provider>,
+    ) -> Arc<ChannelRuntimeContext> {
+        let mut channels_by_name = HashMap::new();
+        channels_by_name.insert(channel.name().to_string(), channel);
+
+        Arc::new(ChannelRuntimeContext {
+            channels_by_name: Arc::new(channels_by_name),
+            provider,
+            default_provider: Arc::new("test-provider".to_string()),
+            memory: Arc::new(NoopMemory),
+            tools_registry: Arc::new(vec![]),
+            observer: Arc::new(NoopObserver),
+            system_prompt: Arc::new("test-system-prompt".to_string()),
+            model: Arc::new("test-model".to_string()),
+            temperature: 0.0,
+            auto_save_memory: false,
+            max_tool_iterations: 10,
+            max_history_messages: DEFAULT_CHANNEL_HISTORY,
+            min_relevance_score: 0.0,
+            conversation_histories: Arc::new(Mutex::new(HashMap::new())),
+            provider_cache: Arc::new(Mutex::new(HashMap::new())),
+            route_overrides: Arc::new(Mutex::new(HashMap::new())),
+            api_key: None,
+            api_url: None,
+            reliability: Arc::new(crate::config::ReliabilityConfig::default()),
+            provider_runtime_options: providers::ProviderRuntimeOptions::default(),
+            workspace_dir: Arc::new(std::env::temp_dir()),
+            message_timeout_secs: CHANNEL_MESSAGE_TIMEOUT_SECS,
+            interrupt_on_new_message: false,
+            multimodal: crate::config::MultimodalConfig::default(),
+            hooks: None,
+            non_cli_excluded_tools: Arc::new(Mutex::new(Vec::new())),
+            query_classification: crate::config::QueryClassificationConfig::default(),
+            model_routes: Vec::new(),
+            approval_manager: Arc::new(ApprovalManager::from_config(
+                &crate::config::AutonomyConfig::default(),
+            )),
+        })
+    }
+
+    fn channel_dispatch_test_message(
+        id: &str,
+        sender: &str,
+        content: &str,
+    ) -> traits::ChannelMessage {
+        traits::ChannelMessage {
+            id: id.to_string(),
+            sender: sender.to_string(),
+            reply_target: "room-1".to_string(),
+            content: content.to_string(),
+            channel: "test-channel".to_string(),
+            timestamp: 1,
+            thread_ts: None,
         }
     }
 
@@ -8874,6 +8972,112 @@ BTC is currently around $65,000 based on latest tool output."#
         assert!(
             !second_call.iter().any(|(role, _)| role == "assistant"),
             "cancelled turn should not persist an assistant response"
+        );
+    }
+
+    #[tokio::test]
+    async fn message_dispatch_stop_cancels_non_telegram_run() {
+        let channel_impl = Arc::new(RecordingChannel::default());
+        let channel: Arc<dyn Channel> = channel_impl.clone();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let provider_impl = Arc::new(BlockingFirstProvider {
+            calls: AtomicUsize::new(0),
+            first_started: std::sync::Mutex::new(Some(started_tx)),
+        });
+        let provider: Arc<dyn Provider> = provider_impl.clone();
+        let runtime_ctx = channel_dispatch_test_context(channel, provider);
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+
+        let dispatch =
+            tokio::spawn(run_message_dispatch_loop(rx, runtime_ctx, 1));
+        tx.send(channel_dispatch_test_message(
+            "msg-1",
+            "alice",
+            "hang until stopped",
+        ))
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), started_rx)
+            .await
+            .expect("first provider call should start")
+            .expect("first provider start signal should be delivered");
+
+        tx.send(channel_dispatch_test_message("msg-stop", "alice", "/stop"))
+            .await
+            .unwrap();
+        drop(tx);
+
+        tokio::time::timeout(Duration::from_secs(1), dispatch)
+            .await
+            .expect("non-Telegram /stop should unblock dispatch")
+            .expect("dispatch task should finish");
+
+        assert_eq!(provider_impl.calls.load(Ordering::SeqCst), 1);
+        let sent_messages = channel_impl.sent_messages.lock().await;
+        assert_eq!(
+            sent_messages.as_slice(),
+            ["room-1:Stopping the active run."]
+        );
+    }
+
+    #[tokio::test]
+    async fn message_dispatch_reads_stop_while_next_message_waits_for_permit() {
+        let channel_impl = Arc::new(RecordingChannel::default());
+        let channel: Arc<dyn Channel> = channel_impl.clone();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let provider_impl = Arc::new(BlockingFirstProvider {
+            calls: AtomicUsize::new(0),
+            first_started: std::sync::Mutex::new(Some(started_tx)),
+        });
+        let provider: Arc<dyn Provider> = provider_impl.clone();
+        let runtime_ctx = channel_dispatch_test_context(channel, provider);
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+
+        let dispatch =
+            tokio::spawn(run_message_dispatch_loop(rx, runtime_ctx, 1));
+        tx.send(channel_dispatch_test_message(
+            "msg-1",
+            "alice",
+            "hold the only permit",
+        ))
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), started_rx)
+            .await
+            .expect("first provider call should hold the permit")
+            .expect("first provider start signal should be delivered");
+
+        // FIFO ordering guarantees Bob's worker is queued on the only permit
+        // before Alice's stop command reaches the dispatcher. The dispatcher
+        // must still consume Stop rather than blocking on Bob's permit.
+        tx.send(channel_dispatch_test_message(
+            "msg-2",
+            "bob",
+            "run after alice stops",
+        ))
+        .await
+        .unwrap();
+        tx.send(channel_dispatch_test_message("msg-stop", "alice", "/stop"))
+            .await
+            .unwrap();
+        drop(tx);
+
+        tokio::time::timeout(Duration::from_secs(1), dispatch)
+            .await
+            .expect("stop should bypass the saturated worker semaphore")
+            .expect("dispatch task should finish");
+
+        assert_eq!(provider_impl.calls.load(Ordering::SeqCst), 2);
+        let sent_messages = channel_impl.sent_messages.lock().await;
+        assert!(
+            sent_messages
+                .iter()
+                .any(|message| message == "room-1:Stopping the active run.")
+        );
+        assert!(
+            sent_messages
+                .iter()
+                .any(|message| message.contains("response-2"))
         );
     }
 

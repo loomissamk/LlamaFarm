@@ -66,6 +66,77 @@ struct WsChatSession {
 static WS_CHAT_SESSIONS: LazyLock<Mutex<HashMap<String, WsChatSession>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+#[derive(Clone)]
+struct ActiveWsChatRun {
+    registration_id: Uuid,
+    cancellation: CancellationToken,
+}
+
+/// Server-owned cancellation handles for live web-chat turns.
+///
+/// The websocket that submitted a turn is only a viewer/controller. Keeping
+/// the token here means a replacement websocket can still issue an explicit
+/// Stop after the original tab navigates away, without making client
+/// disconnect itself a cancellation signal.
+static ACTIVE_WS_CHAT_RUNS: LazyLock<Mutex<HashMap<String, ActiveWsChatRun>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+struct ActiveWsChatRunRegistration {
+    session_id: String,
+    registration_id: Uuid,
+}
+
+impl ActiveWsChatRunRegistration {
+    fn register(session_id: &str, cancellation: CancellationToken) -> Option<Self> {
+        let mut active_runs = ACTIVE_WS_CHAT_RUNS.lock();
+        if active_runs.contains_key(session_id) {
+            return None;
+        }
+
+        let registration_id = Uuid::new_v4();
+        active_runs.insert(
+            session_id.to_string(),
+            ActiveWsChatRun {
+                registration_id,
+                cancellation,
+            },
+        );
+        Some(Self {
+            session_id: session_id.to_string(),
+            registration_id,
+        })
+    }
+}
+
+impl Drop for ActiveWsChatRunRegistration {
+    fn drop(&mut self) {
+        let mut active_runs = ACTIVE_WS_CHAT_RUNS.lock();
+        if active_runs
+            .get(&self.session_id)
+            .is_some_and(|run| run.registration_id == self.registration_id)
+        {
+            active_runs.remove(&self.session_id);
+        }
+    }
+}
+
+fn request_active_ws_chat_run_cancel(session_id: &str) -> bool {
+    let cancellation = ACTIVE_WS_CHAT_RUNS
+        .lock()
+        .get(session_id)
+        .map(|run| run.cancellation.clone());
+    if let Some(cancellation) = cancellation {
+        cancellation.cancel();
+        true
+    } else {
+        false
+    }
+}
+
+fn mark_ws_client_disconnected(socket_disconnected: &mut bool) {
+    *socket_disconnected = true;
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct PersistedWsChatSessions {
     #[serde(default)]
@@ -2194,15 +2265,23 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             }
 
             if msg_type == "cancel" {
-                // A cancellation frame is normally consumed by the in-flight
-                // turn's select loop. If it reached this idle path there is no
-                // run left to interrupt, but still acknowledge it explicitly.
-                let cancelled = json!({
-                    "type": "cancelled",
-                    "session_id": session_id,
-                    "message": "No active run to stop.",
-                });
-                let _ = socket.send(Message::Text(cancelled.to_string().into())).await;
+                // A replacement websocket can stop a server-owned run after
+                // the submitting browser disconnected. Disconnect itself
+                // never touches this token.
+                let payload = if request_active_ws_chat_run_cancel(&session_id) {
+                    json!({
+                        "type": "cancelling",
+                        "session_id": session_id,
+                        "message": "Stopping the active run…",
+                    })
+                } else {
+                    json!({
+                        "type": "cancelled",
+                        "session_id": session_id,
+                        "message": "No active run to stop.",
+                    })
+                };
+                let _ = socket.send(Message::Text(payload.to_string().into())).await;
                 return;
             }
 
@@ -2214,6 +2293,18 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             if content.is_empty() {
                 return;
             }
+
+            let Some(_active_run_registration) =
+                ActiveWsChatRunRegistration::register(&session_id, turn_cancellation.clone())
+            else {
+                let payload = json!({
+                    "type": "error",
+                    "session_id": session_id,
+                    "message": "This chat already has an active server-side run. Wait for it to finish or use Stop before starting another turn.",
+                });
+                let _ = socket.send(Message::Text(payload.to_string().into())).await;
+                return;
+            };
 
             let direct_intent = classify_direct_intent(&content);
             let temporary = parsed["temporary"].as_bool().unwrap_or(false);
@@ -2686,7 +2777,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                             // work instead of a truncated, cancelled one. Stop trying to
                                             // write to the dead socket; the `if !socket_disconnected`
                                             // branch guard above stops re-polling `socket_rx` too.
-                                            socket_disconnected = true;
+                                            mark_ws_client_disconnected(&mut socket_disconnected);
                                         }
                                         _ => {}
                                     }
@@ -2971,6 +3062,41 @@ mod tests {
         assert_eq!(
             parse_inflight_ws_control("not-json"),
             InFlightWsControl::InvalidJson
+        );
+    }
+
+    #[test]
+    fn client_stream_disconnect_does_not_cancel_server_owned_run() {
+        let session_id = format!("disconnect-test-{}", Uuid::new_v4());
+        let cancellation = CancellationToken::new();
+        let _registration =
+            ActiveWsChatRunRegistration::register(&session_id, cancellation.clone())
+                .expect("test run should register");
+        let mut socket_disconnected = false;
+
+        mark_ws_client_disconnected(&mut socket_disconnected);
+
+        assert!(socket_disconnected);
+        assert!(
+            !cancellation.is_cancelled(),
+            "losing the client stream must not cancel server-owned work"
+        );
+    }
+
+    #[test]
+    fn explicit_stop_cancels_server_owned_run_after_client_disconnect() {
+        let session_id = format!("stop-test-{}", Uuid::new_v4());
+        let cancellation = CancellationToken::new();
+        let _registration =
+            ActiveWsChatRunRegistration::register(&session_id, cancellation.clone())
+                .expect("test run should register");
+        let mut socket_disconnected = false;
+        mark_ws_client_disconnected(&mut socket_disconnected);
+
+        assert!(request_active_ws_chat_run_cancel(&session_id));
+        assert!(
+            cancellation.is_cancelled(),
+            "an explicit Stop from a replacement client must cancel the run"
         );
     }
 

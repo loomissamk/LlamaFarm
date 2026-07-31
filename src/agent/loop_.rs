@@ -69,19 +69,6 @@ const STREAM_TOOL_MARKER_WINDOW_CHARS: usize = 512;
 /// non-streaming response so structured tool calls remain reliable.
 const MODEL_PROGRESS_HEARTBEAT_SECS: u64 = 10;
 
-/// Default maximum agentic tool-use iterations per user message. Used as a
-/// fallback when `max_tool_iterations` is unset or configured as zero.
-///
-/// Deliberately very large, not a tight runaway guard: real non-progress
-/// (duplicate tool calls, empty reasoning-only checkpoints, repeated
-/// no-tool-call text) is caught by dedicated stall detectors elsewhere in
-/// this loop (see the duplicate-tool-call streak guard and
-/// MAX_CONSECUTIVE_EMPTY_OUTPUT_BUDGET_CHECKPOINTS), which check for actual
-/// lack of progress rather than just counting steps. A blunt step-count
-/// ceiling on top of those would only ever cut off a *legitimately*
-/// productive long-running task.
-const DEFAULT_MAX_TOOL_ITERATIONS: usize = 100_000;
-
 /// Minimum user-message length (in chars) for auto-save to memory.
 /// Matches the channel-side constant in `channels/mod.rs`.
 const AUTOSAVE_MIN_MESSAGE_CHARS: usize = 20;
@@ -284,7 +271,6 @@ tokio::task_local! {
 
 const AUTO_CRON_DELIVERY_CHANNELS: &[&str] = &["telegram", "discord", "slack", "mattermost"];
 
-const NON_CLI_APPROVAL_WAIT_TIMEOUT_SECS: u64 = 900;
 const NON_CLI_APPROVAL_POLL_INTERVAL_MS: u64 = 250;
 const REPEATED_FILE_WRITE_STALL_THRESHOLD: usize = 3;
 const AUTO_PLAN_RETRY_LIMIT: usize = 4;
@@ -501,13 +487,8 @@ fn maybe_inject_cron_add_delivery(
 async fn await_non_cli_approval_decision(
     mgr: &ApprovalManager,
     request_id: &str,
-    sender: &str,
-    channel_name: &str,
-    reply_target: &str,
     cancellation_token: Option<&CancellationToken>,
 ) -> ApprovalResponse {
-    let started = Instant::now();
-
     loop {
         if let Some(decision) = mgr.take_non_cli_pending_resolution(request_id) {
             return decision;
@@ -519,13 +500,6 @@ async fn await_non_cli_approval_decision(
         }
 
         if cancellation_token.is_some_and(CancellationToken::is_cancelled) {
-            return ApprovalResponse::No;
-        }
-
-        if started.elapsed() >= Duration::from_secs(NON_CLI_APPROVAL_WAIT_TIMEOUT_SECS) {
-            let _ =
-                mgr.reject_non_cli_pending_request(request_id, sender, channel_name, reply_target);
-            let _ = mgr.take_non_cli_pending_resolution(request_id);
             return ApprovalResponse::No;
         }
 
@@ -2937,8 +2911,16 @@ pub(crate) async fn run_tool_call_loop_with_non_cli_approval_context(
 // full conversation so far (system prompt + user messages + prior tool
 // results). The loop exits when:
 //   • the LLM returns no tool calls (final answer), or
-//   • max_iterations is reached (runaway safety), or
+//   • an explicitly configured positive max_iterations is reached, or
 //   • the cancellation token fires (external abort).
+//
+// A zero max_iterations value is deliberately unlimited. Real non-progress is
+// handled by the loop's duplicate-call, repeated-failure, and empty-output
+// stall detectors rather than by an arbitrary count of productive tool calls.
+
+fn tool_loop_has_next_iteration(iteration: usize, limit: Option<usize>) -> bool {
+    limit.is_none_or(|limit| iteration.saturating_add(1) < limit)
+}
 
 /// Execute a single turn of the agent loop: send messages, parse tool calls,
 /// execute tools, and loop until the LLM produces a final text response.
@@ -2975,11 +2957,7 @@ pub(crate) async fn run_tool_call_loop(
                 .map(|ctx| ctx.reply_target.clone())
         });
 
-    let max_iterations = if max_tool_iterations == 0 {
-        DEFAULT_MAX_TOOL_ITERATIONS
-    } else {
-        max_tool_iterations
-    };
+    let configured_iteration_limit = (max_tool_iterations > 0).then_some(max_tool_iterations);
     let parallel_tools_enabled = TOOL_LOOP_PARALLEL_TOOLS_ENABLED
         .try_with(|enabled| *enabled)
         .unwrap_or(true);
@@ -3076,18 +3054,18 @@ pub(crate) async fn run_tool_call_loop(
         );
     }
 
-    // A task plan is a durable run-and-forget contract, so it may extend past
-    // its initial tool-iteration batch until all of its items reach a terminal
-    // state. Loop-stall guards and the operator cancellation token remain the
-    // termination controls; do not turn a large valid task into a 5× counter
-    // failure just because it needs more checkpoints.
-    let plan_extend_hard_cap = usize::MAX;
-    let mut effective_limit = max_iterations;
+    // With the default zero value there is no fixed step count: completion, a
+    // real stall/error, or explicit cancellation is the termination control.
+    // A positive operator value remains a real hard cap.
+    let mut effective_limit = configured_iteration_limit;
+    let mut next_iteration = 0usize;
 
-    for iteration in 0..plan_extend_hard_cap {
-        if iteration >= effective_limit {
+    loop {
+        if effective_limit.is_some_and(|limit| next_iteration >= limit) {
             break;
         }
+        let iteration = next_iteration;
+        next_iteration = next_iteration.saturating_add(1);
         if cancellation_token
             .as_ref()
             .is_some_and(CancellationToken::is_cancelled)
@@ -3671,11 +3649,12 @@ pub(crate) async fn run_tool_call_loop(
                 missing_tool_call_retry_prompt = Some(build_output_budget_continuation_prompt(
                     response_was_thinking_only,
                 ));
-                // A per-segment continuation must not consume the task's tool
-                // iteration budget. Task plans and output boundaries may keep
-                // extending this limit; cancellation and real terminal states
-                // end the run.
-                effective_limit = effective_limit.saturating_add(1).min(plan_extend_hard_cap);
+                // A per-segment continuation must not consume an explicitly
+                // configured finite tool-iteration budget. Unlimited runs need
+                // no adjustment.
+                if let Some(limit) = effective_limit.as_mut() {
+                    *limit = limit.saturating_add(1);
+                }
 
                 runtime_trace::record_event(
                     "llm_output_budget_checkpoint",
@@ -3811,7 +3790,7 @@ pub(crate) async fn run_tool_call_loop(
                         &recent_failed_tool_records,
                     ));
             let missing_tool_call_followthrough = !missing_tool_call_retry_used
-                && iteration + 1 < effective_limit
+                && tool_loop_has_next_iteration(iteration, effective_limit)
                 && !tool_specs.is_empty()
                 && missing_tool_call_signal;
 
@@ -3977,7 +3956,7 @@ pub(crate) async fn run_tool_call_loop(
             let grounding_issue = tool_result_grounding_retry_needed;
             let can_retry_grounding = grounding_issue
                 && !tool_result_grounding_retry_used
-                && iteration + 1 < effective_limit;
+                && tool_loop_has_next_iteration(iteration, effective_limit);
             if can_retry_grounding {
                 tool_result_grounding_retry_used = true;
                 retry_count += 1;
@@ -4015,7 +3994,7 @@ pub(crate) async fn run_tool_call_loop(
             // plan-create start prompt, force one retry with a strong execute directive.
             if pending_post_plan_create_retry
                 && !missing_tool_call_retry_used
-                && iteration + 1 < effective_limit
+                && tool_loop_has_next_iteration(iteration, effective_limit)
             {
                 missing_tool_call_retry_used = true;
                 retry_count += 1;
@@ -4305,9 +4284,6 @@ pub(crate) async fn run_tool_call_loop(
                         await_non_cli_approval_decision(
                             mgr,
                             &pending.request_id,
-                            &ctx.sender,
-                            channel_name,
-                            &ctx.reply_target,
                             cancellation_token.as_ref(),
                         )
                         .await
@@ -4965,7 +4941,7 @@ pub(crate) async fn run_tool_call_loop(
         let should_nudge = all_tool_calls_were_duplicates
             && duplicate_nudge_count < DUPLICATE_TOOL_CALL_MAX_NUDGES
             && consecutive_all_duplicate_iterations >= DUPLICATE_TOOL_CALL_STREAK_PER_NUDGE
-            && iteration + 1 < effective_limit;
+            && tool_loop_has_next_iteration(iteration, effective_limit);
         if should_nudge {
             let prompt = DUPLICATE_TOOL_CALL_NUDGE_PROMPTS
                 [duplicate_nudge_count.min(DUPLICATE_TOOL_CALL_NUDGE_PROMPTS.len() - 1)];
@@ -4996,28 +4972,6 @@ pub(crate) async fn run_tool_call_loop(
             }
             continue;
         }
-
-        // Auto-extend iteration limit when a task_plan has remaining steps so the
-        // agent runs to true completion without user re-prompting. Each extension
-        // grants one more batch of max_iterations; terminal plan states and the
-        // cancellation token, not an arbitrary multiplier, end a valid long run.
-        if iteration + 1 >= effective_limit && effective_limit < plan_extend_hard_cap {
-            let plan_has_remaining = task_plan_progress_snapshot(&recent_successful_tool_records)
-                .map(|p| p.resolved < p.total)
-                .unwrap_or(false);
-            if plan_has_remaining {
-                effective_limit = effective_limit
-                    .saturating_add(max_iterations)
-                    .min(plan_extend_hard_cap);
-                if let Some(ref tx) = on_delta {
-                    let _ = tx
-                        .send(format!(
-                            "{DRAFT_PROGRESS_SENTINEL}\u{21bb} Task plan has remaining steps — extending to {effective_limit} iterations\n"
-                        ))
-                        .await;
-                }
-            }
-        }
     }
 
     let (stop_reason, error_message) = if let Some((reason, message)) = early_exit_reason {
@@ -5025,7 +4979,7 @@ pub(crate) async fn run_tool_call_loop(
     } else {
         (
             "max_iterations_exhausted",
-            format!("Agent exceeded maximum tool iterations ({max_iterations})"),
+            format!("Agent exceeded maximum tool iterations ({max_tool_iterations})"),
         )
     };
 
@@ -5038,7 +4992,7 @@ pub(crate) async fn run_tool_call_loop(
         Some(false),
         Some(&error_message),
         serde_json::json!({
-            "max_iterations": max_iterations,
+            "max_iterations": max_tool_iterations,
             "retry_count": retry_count,
             "stop_reason": stop_reason,
         }),
@@ -5879,10 +5833,7 @@ pub async fn run(
                         let pause_notice = format!(
                             "⚠️ Reached tool-iteration limit ({}). Context and progress are preserved. \
                             Reply \"continue\" to resume, or increase `agent.max_tool_iterations` in config.",
-                            config
-                                .agent
-                                .max_tool_iterations
-                                .max(DEFAULT_MAX_TOOL_ITERATIONS)
+                            config.agent.max_tool_iterations
                         );
                         history.push(ChatMessage::assistant(&pause_notice));
                         eprintln!("\n{pause_notice}\n");
@@ -8521,6 +8472,74 @@ mod tests {
                 .iter()
                 .all(|message| !message.content.contains("## Compatibility Fallback"))
         );
+    }
+
+    #[tokio::test]
+    async fn zero_iteration_limit_runs_native_tool_loop_until_completion() {
+        let provider_calls = Arc::new(AtomicUsize::new(0));
+        let mut responses = Vec::new();
+        for index in 0..4 {
+            responses.push(Ok(ChatResponse {
+                text: None,
+                tool_calls: vec![ToolCall {
+                    id: format!("call_{index}"),
+                    name: "test_tool".to_string(),
+                    arguments: format!(r#"{{"index":{index}}}"#),
+                }],
+                usage: None,
+                metrics: None,
+                reasoning_content: None,
+            }));
+        }
+        responses.push(Ok(ChatResponse {
+            text: Some("completed all four tool calls".to_string()),
+            tool_calls: Vec::new(),
+            usage: None,
+            metrics: None,
+            reasoning_content: None,
+        }));
+        let provider = ResultScriptedProvider::from_results(responses, Arc::clone(&provider_calls))
+            .with_native_tool_support();
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(StaticOutputTool::new(
+            "test_tool",
+            "verified",
+            Arc::clone(&invocations),
+        ))];
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("run every required tool call, then finish"),
+        ];
+        let observer = NoopObserver;
+
+        let result = with_tool_loop_settings(
+            false,
+            true,
+            run_tool_call_loop(
+                &provider,
+                &mut history,
+                &tools_registry,
+                &observer,
+                "ollama",
+                "test-model",
+                0.0,
+                true,
+                None,
+                "cli",
+                &crate::config::MultimodalConfig::default(),
+                0,
+                None,
+                None,
+                None,
+                &[],
+            ),
+        )
+        .await
+        .expect("zero must keep the tool loop running until completion");
+
+        assert_eq!(result, "completed all four tool calls");
+        assert_eq!(provider_calls.load(Ordering::SeqCst), 5);
+        assert_eq!(invocations.load(Ordering::SeqCst), 4);
     }
 
     #[tokio::test]
@@ -12218,7 +12237,6 @@ Done."#;
     // ═══════════════════════════════════════════════════════════════════════
 
     const _: () = {
-        assert!(DEFAULT_MAX_TOOL_ITERATIONS > 0);
         assert!(DEFAULT_MAX_HISTORY_MESSAGES > 0);
         assert!(DEFAULT_MAX_HISTORY_MESSAGES <= 1000);
     };
@@ -12226,6 +12244,22 @@ Done."#;
     #[test]
     fn constants_bounds_are_compile_time_checked() {
         // Bounds are enforced by the const assertions above.
+    }
+
+    #[test]
+    fn zero_tool_iteration_limit_always_has_capacity() {
+        let limit = None;
+        assert!(tool_loop_has_next_iteration(0, limit));
+        assert!(tool_loop_has_next_iteration(100_000, limit));
+        assert!(tool_loop_has_next_iteration(usize::MAX, limit));
+    }
+
+    #[test]
+    fn positive_tool_iteration_limit_stays_bounded() {
+        let limit = Some(3);
+        assert!(tool_loop_has_next_iteration(0, limit));
+        assert!(tool_loop_has_next_iteration(1, limit));
+        assert!(!tool_loop_has_next_iteration(2, limit));
     }
 
     // ═══════════════════════════════════════════════════════════════════════

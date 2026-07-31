@@ -117,11 +117,12 @@ The committed [platform backlog](TODO.md) is the durable record of operator
 requests and next-generation work. Update it alongside implementation; do not
 rely on a transient chat context to preserve requested features.
 
-Local Ollama inference has no response wall-clock deadline. The per-node
-`LLAMAFARM_AGENT_MAX_OUTPUT_TOKENS` value is a generation checkpoint, not a job
-timeout: if a model reaches it while thinking or answering, LlamaFarm preserves
-the run/plan state and continues in another segment. Long plans retain their
-task-plan ledger, compact completed item context into
+Local Ollama inference has no response wall-clock deadline, and the bundled
+node profiles do not impose a generated-token ceiling. A model runs until it
+finishes naturally or the operator explicitly presses Stop. Operators can still
+opt into `LLAMAFARM_AGENT_MAX_OUTPUT_TOKENS` for a deployment that deliberately
+wants segmented generation. Long plans retain their task-plan ledger, compact
+completed item context into
 `memory/WORKING_STATE.md`, and require a final evidence pass before returning.
 The hot prompt intentionally loads `AGENTS.md`, `TOOLS.md`, `USER.md`, and the
 bounded working-state checkpoint rather than redundant persona files.

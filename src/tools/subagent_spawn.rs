@@ -210,7 +210,7 @@ impl Tool for SubAgentSpawnTool {
                     requester_node_id: None,
                     requester_name: None,
                     agentic: true,
-                    max_iterations: 12,
+                    max_iterations: 0,
                 };
                 let accepted = federation.start_remote_task(&peer, &request).await?;
                 let registry = self.registry.clone();

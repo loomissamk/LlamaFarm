@@ -109,11 +109,11 @@ impl OpenAiCodexProvider {
                 options.reasoning_level.as_deref(),
                 "provider.reasoning_level",
             ),
-            client: Client::builder()
-                .timeout(std::time::Duration::from_secs(120))
-                .connect_timeout(std::time::Duration::from_secs(10))
-                .build()
-                .unwrap_or_else(|_| Client::new()),
+            client: crate::config::build_runtime_proxy_client_with_optional_timeouts(
+                "provider.openai_codex",
+                None,
+                Some(10),
+            ),
         })
     }
 }

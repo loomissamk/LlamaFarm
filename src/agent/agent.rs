@@ -619,7 +619,18 @@ impl Agent {
 
         let effective_model = self.classify_model(user_message);
 
-        for _ in 0..self.config.max_tool_iterations {
+        let mut iterations_started = 0usize;
+        loop {
+            if self.config.max_tool_iterations > 0
+                && iterations_started >= self.config.max_tool_iterations
+            {
+                anyhow::bail!(
+                    "Agent exceeded maximum tool iterations ({})",
+                    self.config.max_tool_iterations
+                );
+            }
+            iterations_started = iterations_started.saturating_add(1);
+
             let messages = self.tool_dispatcher.to_provider_messages(&self.history);
             let response = match self
                 .provider
@@ -689,11 +700,6 @@ impl Agent {
             self.history.push(formatted);
             self.trim_history();
         }
-
-        anyhow::bail!(
-            "Agent exceeded maximum tool iterations ({})",
-            self.config.max_tool_iterations
-        )
     }
 
     pub async fn run_single(&mut self, message: &str) -> Result<String> {

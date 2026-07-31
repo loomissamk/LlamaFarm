@@ -485,6 +485,44 @@ async fn turn_bails_out_at_max_iterations() {
     );
 }
 
+#[tokio::test]
+async fn turn_with_zero_max_iterations_runs_until_completion() {
+    let (counting_tool, count) = CountingTool::new();
+    let provider = Box::new(ScriptedProvider::new(vec![
+        tool_response(vec![ToolCall {
+            id: "tc1".into(),
+            name: "counter".into(),
+            arguments: "{}".into(),
+        }]),
+        tool_response(vec![ToolCall {
+            id: "tc2".into(),
+            name: "counter".into(),
+            arguments: "{}".into(),
+        }]),
+        tool_response(vec![ToolCall {
+            id: "tc3".into(),
+            name: "counter".into(),
+            arguments: "{}".into(),
+        }]),
+        tool_response(vec![ToolCall {
+            id: "tc4".into(),
+            name: "counter".into(),
+            arguments: "{}".into(),
+        }]),
+        text_response("Completed without an iteration cap"),
+    ]));
+    let config = AgentConfig {
+        max_tool_iterations: 0,
+        ..AgentConfig::default()
+    };
+    let mut agent = build_agent_with_config(provider, vec![Box::new(counting_tool)], config);
+
+    let response = agent.turn("count four times").await.unwrap();
+
+    assert_eq!(response, "Completed without an iteration cap");
+    assert_eq!(*count.lock().unwrap(), 4);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 5. Unknown tool name recovery
 // ═══════════════════════════════════════════════════════════════════════════

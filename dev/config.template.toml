@@ -26,7 +26,8 @@ request_timeout_secs = 300
 compact_context = false
 tool_routing_enabled = true
 tool_routing_top_k = 12
-max_tool_iterations = 100000
+# 0 means the turn runs until completion, a real stall/error, or explicit Stop.
+max_tool_iterations = 0
 max_history_messages = 160
 parallel_tools = false
 # Local Ollama models on this machine are still more reliable with the XML
@@ -317,7 +318,8 @@ timeout_secs = 20
 enabled = true
 trigger = "keywords"
 keywords = ["check", "compare", "find", "how", "inspect", "investigate", "search", "show", "where", "why"]
-max_iterations = 16
+# 0 means research continues until completion or genuine non-progress.
+max_iterations = 0
 show_progress = true
 
 [skills]
@@ -454,7 +456,7 @@ allowed_tools = [
   "web_fetch",
   "web_search_tool",
 ]
-max_iterations = 24
+max_iterations = 0
 
 [agents.coder]
 # Empty provider/model follows whatever default_provider/default_model
@@ -501,7 +503,7 @@ allowed_tools = [
   "process",
   "shell",
 ]
-max_iterations = 48
+max_iterations = 0
 
 [agents.verifier]
 # Empty provider/model follows whatever default_provider/default_model
@@ -547,7 +549,7 @@ allowed_tools = [
   "shell",
   "web_fetch",
 ]
-max_iterations = 24
+max_iterations = 0
 
 [agents.operator]
 # Empty provider/model follows whatever default_provider/default_model
@@ -597,7 +599,7 @@ allowed_tools = [
   "shell",
   "web_fetch",
 ]
-max_iterations = 32
+max_iterations = 0
 
 [agents.devsecops]
 # Follow the dashboard-selected default model unless the operator deliberately
@@ -662,7 +664,7 @@ allowed_tools = [
   "service_control",
   "shell",
 ]
-max_iterations = 48
+max_iterations = 0
 
 
 # ── arXiv RAG ──────────────────────────────────────────────────────────────────

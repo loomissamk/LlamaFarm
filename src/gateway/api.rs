@@ -487,6 +487,18 @@ async fn build_federation_capabilities(state: &AppState) -> anyhow::Result<Feder
     Ok(build_local_capabilities(state).await)
 }
 
+/// Combine caller and worker iteration policies without losing the `0 =
+/// unlimited` sentinel. The federation contract has historically selected the
+/// more permissive of the two values; unlimited is therefore more permissive
+/// than every positive cap.
+fn combine_tool_iteration_limits(requested: usize, configured: usize) -> usize {
+    if requested == 0 || configured == 0 {
+        0
+    } else {
+        requested.max(configured)
+    }
+}
+
 async fn execute_federation_task(
     state: AppState,
     task_manager: Arc<FederationTaskManager>,
@@ -599,7 +611,7 @@ async fn execute_federation_task(
                 Some(&approval_manager),
                 "federation",
                 &state.multimodal,
-                request.max_iterations.max(max_tool_iterations),
+                combine_tool_iteration_limits(request.max_iterations, max_tool_iterations),
                 Some(cancellation_token.clone()),
                 Some(delta_tx),
                 None,
@@ -5251,6 +5263,14 @@ mod tests {
         assert_eq!(normalize_context_override(Some(1)), Some(2_048));
         assert_eq!(normalize_context_override(Some(262_144)), Some(262_144));
         assert_eq!(normalize_context_override(Some(500_000)), Some(262_144));
+    }
+
+    #[test]
+    fn federation_iteration_policy_preserves_unlimited_sentinel() {
+        assert_eq!(combine_tool_iteration_limits(0, 0), 0);
+        assert_eq!(combine_tool_iteration_limits(0, 24), 0);
+        assert_eq!(combine_tool_iteration_limits(24, 0), 0);
+        assert_eq!(combine_tool_iteration_limits(12, 24), 24);
     }
 
     #[test]

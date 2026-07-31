@@ -11,7 +11,10 @@ use std::sync::{Arc, RwLock};
 
 pub const MAX_OLLAMA_CONTEXT_TOKENS: u32 = 262_144;
 const DEFAULT_OLLAMA_CONTEXT_TOKENS: u32 = 32_768;
-const DEFAULT_ADAPTIVE_OUTPUT_RESERVE: u32 = 8_192;
+/// Context capacity reserved while choosing an adaptive tier so a response has
+/// room to begin. This does not cap generation; `num_predict = -1` remains
+/// unbounded and a natural context-length stop can continue at a larger tier.
+const DEFAULT_ADAPTIVE_GENERATION_RESERVE: u32 = 8_192;
 const ADAPTIVE_CONTEXT_MESSAGE_OVERHEAD: u32 = 16;
 const ADAPTIVE_CONTEXT_IMAGE_TOKENS: u32 = 2_048;
 
@@ -126,10 +129,10 @@ struct Options {
     /// Requires sufficient VRAM; pair with `OLLAMA_KV_CACHE_TYPE=q8_0` to stretch VRAM.
     #[serde(skip_serializing_if = "Option::is_none")]
     num_ctx: Option<u32>,
-    /// Maximum generated tokens for this inference segment. Ollama calls this
-    /// `num_predict`; it includes hidden thinking/reasoning tokens.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    num_predict: Option<u32>,
+    /// Generated-token policy for this inference segment. Ollama calls this
+    /// `num_predict`; `-1` means generation is unbounded and ends at the
+    /// model's natural stop or an explicit operator cancellation.
+    num_predict: i64,
 }
 
 // ─── Response Structures ──────────────────────────────────────────────────────
@@ -399,11 +402,10 @@ impl OllamaProvider {
         crate::config::build_runtime_proxy_client_with_timeouts("provider.ollama", 300, 10)
     }
 
-    /// Generation deliberately has no fixed wall-clock deadline. A local model
-    /// may be slow while it is CPU-spilling or pre-filling a large context; the
-    /// per-segment `num_predict` budget gives it regular safe continuation
-    /// boundaries instead. The agent's cancellation token can still abort the
-    /// request immediately when the operator presses Stop.
+    /// Generation deliberately has no fixed wall-clock or generated-token
+    /// deadline. A local model may be slow while it is CPU-spilling or
+    /// pre-filling a large context. The agent's cancellation token can still
+    /// abort the request immediately when the operator presses Stop.
     fn chat_client(&self) -> Client {
         crate::config::build_runtime_proxy_client_with_optional_timeouts(
             "provider.ollama.chat",
@@ -550,7 +552,7 @@ impl OllamaProvider {
 
     fn output_reserve(&self) -> u32 {
         self.max_output_tokens
-            .unwrap_or(DEFAULT_ADAPTIVE_OUTPUT_RESERVE)
+            .unwrap_or(DEFAULT_ADAPTIVE_GENERATION_RESERVE)
     }
 
     fn context_is_under_pressure(
@@ -704,7 +706,7 @@ impl OllamaProvider {
                 num_gpu: self.gpu_layers,
                 main_gpu: self.main_gpu,
                 num_ctx: Some(num_ctx),
-                num_predict: self.max_output_tokens,
+                num_predict: self.max_output_tokens.map(i64::from).unwrap_or(-1),
             },
             keep_alive: Some(resolve_keep_alive()),
             // Only send think:true when the model reports "thinking" capability.
@@ -2326,6 +2328,38 @@ mod tests {
         assert_eq!(json["options"]["num_predict"], serde_json::json!(2_048));
         // The cap must not silently turn off the model's reasoning mode.
         assert!(provider.reasoning_enabled == Some(true));
+    }
+
+    #[test]
+    fn request_explicitly_serializes_unbounded_generation_by_default() {
+        let mut provider = OllamaProvider::new_full(
+            None,
+            None,
+            Some(true),
+            None,
+            None,
+            Some(32_768),
+            None,
+        );
+        // Keep this test independent of process-wide env mutation in the
+        // config override suite.
+        provider.max_output_tokens = None;
+        let request = provider.build_chat_request(
+            vec![Message {
+                role: "user".to_string(),
+                content: Some("reason until the task is complete".to_string()),
+                images: None,
+                tool_calls: None,
+                tool_name: None,
+            }],
+            "qwen3.6:35b-a3b-mtp-q4_K_M",
+            0.2,
+            None,
+            32_768,
+        );
+
+        let json = serde_json::to_value(request).unwrap();
+        assert_eq!(json["options"]["num_predict"], serde_json::json!(-1));
     }
 
     #[test]

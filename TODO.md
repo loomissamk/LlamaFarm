@@ -62,6 +62,14 @@ Delivered in this pass:
 - [ ] Build a repeatable role bakeoff (planner/coder/verifier/operator,
   patch-and-test, RAG citations, recovery, cold/warm TTFT/TPS, memory placement)
   and promote models only when measured thresholds pass.
+- [ ] When a 32 GB V100 is added beside the 16 GB RTX 5070 Ti, treat the
+  resulting 48 GB aggregate VRAM as a measured heterogeneous-GPU experiment,
+  not assumed additive performance. Benchmark the current 35B-A3B-MTP Q4
+  baseline first, then Qwen3.6 35B-A3B-MTP Q8 (~39 GB), Qwen3-Next
+  80B-A3B-Instruct Q4 (~50 GB, likely slight RAM spill), and Qwen3.5
+  122B-A10B Q4 (~81 GB, substantial RAM spill). Record per-GPU placement,
+  PCIe transfer pressure, 64K/128K/256K TTFT/TPS, tool-call correctness,
+  long-run completion, and explicit cancellation before changing defaults.
 - [ ] Rewrite or remove older stale backlog entries for features now present,
   including specialist prompts, auto-extending plans, the run ledger, browser
   tooling, inference metrics, and the SQLite embedding cache.
@@ -152,11 +160,10 @@ Delivered, LlamaFarm core:
   model off before it could react to its own crash. Added shared
   `output_shows_uncaught_exception` helper (`src/util.rs`), fixed both
   (`src/agent/loop_.rs`).
-- [x] No stall guard existed for a thinking model that exhausts its
-  reasoning budget over and over with zero visible output — saw 11
-  consecutive empty checkpoints in a real session with nothing to stop
-  it (the loop has no overall iteration cap by design). Added
-  `MAX_CONSECUTIVE_EMPTY_OUTPUT_BUDGET_CHECKPOINTS` hard-exit.
+- [x] Keep the old empty-checkpoint stall detector only for deployments that
+  explicitly opt into segmented generation. Bundled node profiles now clear
+  legacy 4K/8K values and send Ollama `num_predict = -1`, so normal inference
+  has no generated-token checkpoint or wall-clock deadline.
 - [x] Cross-device chat session discovery: `GET /api/chat-sessions` (list)
   + `GET /api/chat-sessions/{id}` (full reconstruction), wired into
   `AgentChat.tsx` so a session started on one device is fully resumable
@@ -167,16 +174,13 @@ Delivered, LlamaFarm core:
 
 In progress / queued this pass, LlamaFarm core:
 
-- [ ] `SHELL_JOB_TIMEOUT_SECS` (`src/cron/scheduler.rs`) is a hardcoded
-  120s with a hard SIGKILL on expiry, no per-job override — too low for
-  real automation (e.g. a model-retrain subprocess). Operator directive:
-  remove/raise it, and similarly reconsider `max_iterations` on the tool
-  loop — the loop already has real stall-detection (duplicate-tool-call
-  streak, empty-reasoning-checkpoint streak, repeated-intent matching)
-  added this pass, so a blunt step-count ceiling on top of that is
-  redundant for genuinely productive long runs. Keep the *smart* guards;
-  relax the *dumb* ones. Not yet implemented — see this session's chat
-  for the live decision, applying next.
+- [x] Remove default fixed tool-iteration ceilings. Main agents, bundled
+  personas, delegates, subagents, and federation now use `0 = unlimited`;
+  explicit positive operator limits remain supported. Productive work ends on
+  completion, a real terminal/stall condition, or explicit Stop/kill.
+- [ ] Remove the remaining fixed cron shell-job wall-clock cutoff and replace
+  it with natural completion plus explicit cancellation. Long deterministic
+  jobs such as model retraining must not receive a hidden SIGKILL deadline.
 - [ ] The four `delegate` personas (planner/coder/verifier/operator,
   `dev/config.template.toml`) have distinct tool allowlists/temperature
   but **no system_prompt set on any of them** — structurally separate
@@ -464,12 +468,11 @@ My honest thoughts on each idea, with a plan:
 - [ ] Add a token-budget allocator and layered memory/project evidence ledger.
   Reserve context for instructions, tools, current task, retrieved evidence,
   and response; summarize old tool output into cited artifact references.
-- [x] Enforce per-segment generation/reasoning checkpoints. Preserve deep
-  reasoning and autonomous continuation, but checkpoint after a bounded tool
-  decision rather than allowing one hidden-thinking segment to monopolize the
-  node. Local Ollama inference has no response wall-clock deadline and a
-  length-stopped segment continues automatically until a real terminal state
-  or an operator presses Stop. Adaptive allocation remains future work.
+- [x] Run bundled Ollama generation without a token or wall-clock ceiling:
+  explicitly send `num_predict = -1`, preserve native EOS/tool-call stops, and
+  let the operator Stop token cancel immediately. Keep length-stop
+  checkpoint/continuation only as compatibility for an explicitly configured
+  positive limit or a natural context-window boundary.
 
 ## Deploy status (2026-07-16)
 

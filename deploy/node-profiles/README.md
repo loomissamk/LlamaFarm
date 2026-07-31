@@ -1,17 +1,19 @@
-# Two-node local-agent profiles
+# Three-node local-agent profiles
 
-These profiles turn the two NVIDIA hosts into an asymmetric local agent cluster:
+These profiles turn the three NVIDIA hosts into an asymmetric local agent cluster:
 
 | Node | Role | Inference profile |
 | --- | --- | --- |
-| RTX 4070 Laptop, 8 GB | fast IDE / fallback worker | 32K, one stream |
+| Windows WSL2 RTX 3050 Ti Laptop, 4 GB + 64 GB RAM | additional worker | adaptive 32K → 128K → 256K, one stream |
+| RTX 4070 Laptop, 8 GB + 32 GB RAM | fast IDE / fallback worker | adaptive 32K → 128K → 256K, one stream |
 | RTX 5070 Ti, 16 GB + 123 GB RAM | coordinator / RAG / quality worker | adaptive 64K → 128K → 256K, one stream |
 
-The 5070 Ti profile does not allocate 262K for every turn. It keeps 64K as the
-fast lane, then grows an individual request to 128K or 256K when LlamaFarm's
-conservative prompt, tool-schema, image, and output-reserve estimate needs the
-larger tier. Context, model concurrency, and KV cache still compete for VRAM,
-so both profiles keep one well-provisioned stream.
+The profiles do not allocate 262K for every turn. They keep a 32K or 64K fast
+lane, then grow an individual request to 128K or 256K when the actual prompt
+needs the larger tier. No profile caps generated tokens, tool iterations,
+research iterations, delegate iterations, CPU, RAM, swap, PIDs, or GPU access.
+All three keep one inference stream so a single request can use the complete
+node resource envelope.
 
 ## Bring-up
 
@@ -34,6 +36,7 @@ it before launch) only when an immutable deployment-level override is
 intentional. Then run the matching profile:
 
 ```bash
+./scripts/docker/up-node.sh rtx3050ti-windows-wsl
 ./scripts/docker/up-node.sh rtx4070-laptop
 ./scripts/docker/up-node.sh rtx5070ti-16gb
 ```
@@ -47,6 +50,7 @@ rather than exposing raw inference/control ports.
 After startup, verify both nodes:
 
 ```bash
+./scripts/docker/check-node.sh rtx3050ti-windows-wsl
 ./scripts/docker/check-node.sh rtx4070-laptop
 ./scripts/docker/check-node.sh rtx5070ti-16gb
 ```
@@ -83,17 +87,17 @@ fallback only; it should not be enabled merely to advertise a larger number.
 
 LlamaFarm normally sends `OLLAMA_NUM_CTX` with each model request.
 `OLLAMA_CONTEXT_LENGTH` is set to the same value so direct Ollama calls use the
-fast baseline. On the 5070 Ti, `LLAMAFARM_ADAPTIVE_CONTEXT=true` changes that
-environment value from a fixed limit into a baseline: requests stay at 65,536
-tokens until the estimated prompt plus output reserve needs 131,072 or 262,144.
+fast baseline. On every node, `LLAMAFARM_ADAPTIVE_CONTEXT=true` changes that
+environment value from a fixed limit into a baseline: requests grow to 131,072
+or 262,144 when the estimated prompt needs the larger tier.
 `LLAMAFARM_ADAPTIVE_CONTEXT_MAX` caps that growth, and the model's native
 context length is always an additional ceiling. A persisted
 `provider.ollama_num_ctx` remains an exact manual override and disables adaptive
 selection until reset to auto.
 
-The large-memory profile also retains up to 512 raw history messages and avoids
-the compact bootstrap mode. This lets the provider see the real long request
-before choosing a tier. If a response reports pressure at 64K or 128K,
+Every node profile also retains up to 512 raw history messages and avoids the
+compact bootstrap mode. This lets the provider see the real long request
+before choosing a tier. If a response reports pressure at 32K, 64K, or 128K,
 LlamaFarm retries once at the next tier; at the native/operator ceiling it
 returns an explicit error instead of accepting a possibly truncated automatic
 response.
@@ -103,11 +107,10 @@ request, so concurrency multiplies the allocation.
 
 Verification path:
 
-1. Keep the laptop fixed at 32K.
-2. Measure the 5070 Ti fast path at 64K with real tool/RAG tasks.
-3. Exercise the same model at the 128K and 256K tiers and record prompt
+1. Measure each node's 32K/64K fast path with real tool/RAG tasks.
+2. Exercise the selected model at the 128K and 256K tiers and record prompt
    throughput, decode throughput, VRAM, host RAM, and GPU/CPU split.
-4. Lower `LLAMAFARM_ADAPTIVE_CONTEXT_MAX` only if those long-request
+3. Lower `LLAMAFARM_ADAPTIVE_CONTEXT_MAX` only if those long-request
    measurements are not acceptable for the selected model.
 
 `docker exec LlamaFarm ollama ps` shows the actual loaded context and GPU/CPU

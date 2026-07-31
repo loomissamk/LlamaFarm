@@ -106,14 +106,16 @@ Operational note for container users:
 | `compact_context` | `false` | When true: bootstrap_max_chars=6000, rag_chunk_limit=2. Use for 13B or smaller models |
 | `tool_routing_enabled` | `true` | Route the WebSocket Agent Chat registry per turn using the current request plus recent user-task context |
 | `tool_routing_top_k` | `12` | Maximum relevant non-essential tools to select before adding core tools and required workflow dependencies; `0` disables routing |
-| `max_tool_iterations` | `100000` | Effectively unbounded tool-call loop turns per user message; dedicated stall detectors stop repeated non-progress |
+| `max_tool_iterations` | `0` | Tool-call loop turns per user message; `0` is unlimited, while dedicated stall detectors stop repeated non-progress |
 | `max_history_messages` | `50` | Maximum conversation history messages retained per session |
 | `parallel_tools` | `false` | Enable parallel tool execution within a single iteration |
 | `tool_dispatcher` | `auto` | Tool dispatch strategy |
 
 Notes:
 
-- Setting `max_tool_iterations = 0` falls back to `100000`.
+- `max_tool_iterations = 0` runs until completion, a real stall/error, or
+  explicit operator cancellation. A positive value enables an explicit
+  per-turn iteration cap.
 - Tool routing is currently applied to WebSocket Agent Chat turns. The selected
   set is used consistently for prompt descriptions, XML/native schemas,
   compatibility fallback, and execution filtering. Empty, context-free,
@@ -230,7 +232,7 @@ Delegate sub-agent configurations. Each key under `[agents]` defines a named sub
 | `max_depth` | `3` | Max recursion depth for nested delegation |
 | `agentic` | `false` | Enable multi-turn tool-call loop mode for the sub-agent |
 | `allowed_tools` | `[]` | Tool allowlist for agentic mode |
-| `max_iterations` | `10` | Max tool-call iterations for agentic mode |
+| `max_iterations` | `0` | Max tool-call iterations for agentic mode; `0` is unlimited |
 
 Notes:
 
@@ -264,7 +266,7 @@ Research phase allows the agent to gather information through tools before gener
 | `trigger` | `never` | Research trigger strategy: `never`, `always`, `keywords`, `length`, `question` |
 | `keywords` | `["find", "search", "check", "investigate"]` | Keywords that trigger research (when trigger = `keywords`) |
 | `min_message_length` | `50` | Minimum message length to trigger research (when trigger = `length`) |
-| `max_iterations` | `5` | Maximum tool calls during research phase |
+| `max_iterations` | `0` | Maximum research iterations; `0` is unlimited |
 | `show_progress` | `true` | Show research progress to user |
 
 Notes:
@@ -272,6 +274,9 @@ Notes:
 - Research phase is **disabled by default** (`trigger = never`).
 - When enabled, the agent first gathers facts through tools (grep, file_read, shell, memory search), then responds using the collected context.
 - Research runs before the main agent turn and does not count toward `agent.max_tool_iterations`.
+- With `max_iterations = 0`, productive research continues until completion,
+  a provider/tool error, or the dedicated identical-call/result stall detector
+  fires. A positive value sets an explicit research-iteration cap.
 - Trigger strategies:
   - `never` — research disabled (default)
   - `always` — research on every user message
@@ -286,7 +291,7 @@ Example:
 enabled = true
 trigger = "keywords"
 keywords = ["find", "show", "check", "how many"]
-max_iterations = 3
+max_iterations = 0
 show_progress = true
 ```
 
@@ -526,7 +531,7 @@ Notes:
 | `port` | `42617` | gateway listen port |
 | `require_pairing` | `false` | Legacy compatibility field; pairing is retired and this value is ignored at runtime |
 | `allow_public_bind` | `false` | block accidental public exposure |
-| `request_timeout_secs` | `30` | HTTP request timeout for gateway routes |
+| `request_timeout_secs` | `30` | Deprecated compatibility key; active gateway requests have no global wall-clock deadline |
 
 ## `[gateway.node_control]` (experimental)
 
@@ -720,7 +725,7 @@ Top-level channel options are configured under `channels_config`.
 
 | Key | Default | Purpose |
 |---|---|---|
-| `message_timeout_secs` | `300` | Base timeout in seconds for channel message processing; runtime scales this with tool-loop depth (up to 4x) |
+| `message_timeout_secs` | `300` | Deprecated compatibility key; retained for older configs but no longer terminates active channel model/tool work |
 
 Examples:
 
@@ -734,11 +739,10 @@ Examples:
 
 Notes:
 
-- Default `300s` is optimized for on-device LLMs (Ollama) which are slower than cloud APIs.
-- Runtime timeout budget is `message_timeout_secs * scale`, where `scale = min(max_tool_iterations, 4)` and a minimum of `1`.
-- This scaling avoids false timeouts when the first LLM turn is slow/retried but later tool-loop turns still need to complete.
-- If using cloud APIs (OpenAI, Anthropic, etc.), you can reduce this to `60` or lower.
-- Values below `30` are clamped to `30` to avoid immediate timeout churn.
+- `message_timeout_secs` is read for backward compatibility but is not applied
+  to active channel inference or tool loops.
+- A channel task runs until natural completion, a terminal error, or explicit
+  cancellation by the operator/newer-message policy.
 - When a timeout occurs, users receive: `⚠️ Request timed out while waiting for the model. Please try again.`
 - Telegram-only interruption behavior is controlled with `channels_config.telegram.interrupt_on_new_message` (default `false`).
   When enabled, a newer message from the same sender in the same chat cancels the in-flight request and preserves interrupted user context.

@@ -39,11 +39,14 @@ use super::autonomous::{AutonomousLoop, LoopOutcome};
 /// Default number of plan→patch→build→verify attempts before giving up.
 const DEFAULT_RETRY_BUDGET: u32 = 5;
 
-/// Default wall-clock cap for a repo workflow run (30 minutes).
-const DEFAULT_WALL_CLOCK_CAP_SECS: u64 = 1800;
+/// Default wall-clock cap for a repo workflow run.
+///
+/// Zero means unlimited; callers can still opt into a finite cap explicitly.
+const DEFAULT_WALL_CLOCK_CAP_SECS: u64 = 0;
 
-/// Default max tool iterations per attempt (more tools needed for patch work).
-const DEFAULT_MAX_TOOL_ITERATIONS: usize = 30;
+/// Default max tool iterations per attempt. Zero follows the main runtime
+/// contract and runs until completion, a real stall/error, or cancellation.
+const DEFAULT_MAX_TOOL_ITERATIONS: usize = 0;
 
 /// Result of a [`RepoWorkflowAgent`] run.
 #[derive(Debug)]
@@ -142,7 +145,7 @@ impl<'a> RepoWorkflowAgent<'a> {
         self
     }
 
-    /// Override the wall-clock cap in seconds (default: 1800).
+    /// Override the wall-clock cap in seconds (`0` means unlimited).
     pub fn with_wall_clock_cap(mut self, secs: u64) -> Self {
         self.wall_clock_cap_secs = secs;
         self

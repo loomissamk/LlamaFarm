@@ -307,7 +307,11 @@ impl OpenRouterProvider {
     }
 
     fn http_client(&self) -> Client {
-        crate::config::build_runtime_proxy_client_with_timeouts("provider.openrouter", 120, 10)
+        crate::config::build_runtime_proxy_client_with_optional_timeouts(
+            "provider.openrouter",
+            None,
+            Some(10),
+        )
     }
 }
 

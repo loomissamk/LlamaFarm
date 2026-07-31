@@ -218,7 +218,11 @@ impl CopilotProvider {
     }
 
     fn http_client(&self) -> Client {
-        crate::config::build_runtime_proxy_client_with_timeouts("provider.copilot", 120, 10)
+        crate::config::build_runtime_proxy_client_with_optional_timeouts(
+            "provider.copilot",
+            None,
+            Some(10),
+        )
     }
 
     /// Required headers for Copilot API requests (editor identification).

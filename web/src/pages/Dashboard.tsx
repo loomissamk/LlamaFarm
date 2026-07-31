@@ -342,7 +342,9 @@ export default function Dashboard() {
                 </p>
               </div>
             </div>
-            <span className="font-mono text-xs text-gray-500">{runtime.tool_count} tools · {runtime.max_tool_iterations.toLocaleString()} max iterations</span>
+            <span className="font-mono text-xs text-gray-500">
+              {runtime.tool_count} tools · {runtime.max_tool_iterations === 0 ? 'unlimited iterations' : `${runtime.max_tool_iterations.toLocaleString()} max iterations`}
+            </span>
           </div>
         )}
       </section>

@@ -76,14 +76,16 @@ Lưu ý cho người dùng container:
 | `compact_context` | `false` | Khi bật: bootstrap_max_chars=6000, rag_chunk_limit=2. Dùng cho model 13B trở xuống |
 | `tool_routing_enabled` | `true` | Chọn registry tool theo từng lượt cho WebSocket Agent Chat, dựa trên yêu cầu hiện tại và ngữ cảnh tác vụ gần đây |
 | `tool_routing_top_k` | `12` | Số tool không thiết yếu liên quan tối đa trước khi thêm tool lõi và các phụ thuộc bắt buộc; `0` tắt định tuyến |
-| `max_tool_iterations` | `100000` | Số vòng lặp tool-call gần như không giới hạn cho mỗi tin nhắn; bộ phát hiện đình trệ chuyên dụng dừng tiến trình không có tiến triển lặp lại |
+| `max_tool_iterations` | `0` | Số vòng lặp tool-call cho mỗi tin nhắn; `0` nghĩa là không giới hạn, còn bộ phát hiện đình trệ chuyên dụng sẽ dừng tình trạng lặp lại không có tiến triển |
 | `max_history_messages` | `50` | Số tin nhắn lịch sử tối đa giữ lại mỗi phiên |
 | `parallel_tools` | `false` | Bật thực thi tool song song trong một lượt |
 | `tool_dispatcher` | `auto` | Chiến lược dispatch tool |
 
 Lưu ý:
 
-- Đặt `max_tool_iterations = 0` sẽ dùng giá trị mặc định `100000`.
+- `max_tool_iterations = 0` chạy cho đến khi hoàn thành, gặp lỗi/đình trệ thực
+  sự hoặc bị người vận hành hủy rõ ràng. Giá trị dương đặt giới hạn vòng lặp
+  cụ thể cho mỗi lượt.
 - Định tuyến tool hiện áp dụng cho các lượt WebSocket Agent Chat. Cùng một tập
   tool được dùng cho mô tả prompt, schema XML/native, chế độ fallback tương
   thích và bộ lọc thực thi. Khi truy vấn không đủ tín hiệu hoặc không khớp, hệ
@@ -114,7 +116,7 @@ Cấu hình agent phụ (sub-agent). Mỗi khóa dưới `[agents]` định ngh�
 | `max_depth` | `3` | Độ sâu đệ quy tối đa cho ủy quyền lồng nhau |
 | `agentic` | `false` | Bật chế độ vòng lặp tool-call nhiều lượt cho agent phụ |
 | `allowed_tools` | `[]` | Danh sách tool được phép ở chế độ agentic |
-| `max_iterations` | `10` | Số vòng tool-call tối đa cho chế độ agentic |
+| `max_iterations` | `0` | Số vòng tool-call tối đa cho chế độ agentic; `0` nghĩa là không giới hạn |
 
 Lưu ý:
 
@@ -137,6 +139,23 @@ provider = "ollama"
 model = "qwen2.5-coder:32b"
 temperature = 0.2
 ```
+
+## `[research]`
+
+Giai đoạn nghiên cứu cho phép agent thu thập dữ kiện bằng tool trước khi tạo
+câu trả lời chính.
+
+| Khóa | Mặc định | Mục đích |
+|---|---|---|
+| `enabled` | `false` | Bật giai đoạn nghiên cứu |
+| `trigger` | `never` | Cách kích hoạt: `never`, `always`, `keywords`, `length`, `question` |
+| `max_iterations` | `0` | Số vòng nghiên cứu tối đa; `0` nghĩa là không giới hạn |
+| `show_progress` | `true` | Hiển thị tiến trình nghiên cứu |
+
+Với `max_iterations = 0`, nghiên cứu có tiến triển tiếp tục cho đến khi hoàn
+thành, gặp lỗi provider/tool hoặc bộ phát hiện đình trệ nhận ra các vòng
+tool-call/kết quả giống hệt nhau. Giá trị dương đặt giới hạn vòng nghiên cứu rõ
+ràng.
 
 ## `[runtime]`
 
@@ -299,7 +318,7 @@ Lưu ý:
 | `port` | `3000` | Cổng lắng nghe gateway |
 | `require_pairing` | `false` | Trường tương thích cũ; pairing đã ngừng dùng và giá trị này bị bỏ qua khi chạy |
 | `allow_public_bind` | `false` | Chặn lộ public do vô ý |
-| `request_timeout_secs` | `30` | Timeout HTTP cho các route của gateway |
+| `request_timeout_secs` | `30` | Khóa tương thích đã ngừng dùng; yêu cầu gateway đang chạy không có thời hạn tổng thể |
 
 ## `[gateway.node_control]` (thử nghiệm)
 
@@ -451,7 +470,7 @@ Cấu hình kênh cấp cao nằm dưới `channels_config`.
 
 | Khóa | Mặc định | Mục đích |
 |---|---|---|
-| `message_timeout_secs` | `300` | Thời gian chờ cơ bản (giây) cho xử lý tin nhắn kênh; runtime tự điều chỉnh theo độ sâu tool-loop (lên đến 4x) |
+| `message_timeout_secs` | `300` | Khóa tương thích đã ngừng dùng; được giữ cho cấu hình cũ nhưng không còn kết thúc tác vụ mô hình/công cụ đang chạy |
 
 Ví dụ:
 
@@ -462,11 +481,10 @@ Ví dụ:
 
 Lưu ý:
 
-- Mặc định `300s` tối ưu cho LLM chạy cục bộ (Ollama) vốn chậm hơn cloud API.
-- Ngân sách timeout runtime là `message_timeout_secs * scale`, trong đó `scale = min(max_tool_iterations, 4)` và tối thiểu `1`.
-- Việc điều chỉnh này tránh timeout sai khi lượt LLM đầu chậm/retry nhưng các lượt tool-loop sau vẫn cần hoàn tất.
-- Nếu dùng cloud API (OpenAI, Anthropic, v.v.), có thể giảm xuống `60` hoặc thấp hơn.
-- Giá trị dưới `30` bị giới hạn thành `30` để tránh timeout liên tục.
+- `message_timeout_secs` chỉ được đọc để tương thích ngược và không áp dụng cho
+  suy luận hoặc vòng lặp công cụ đang chạy.
+- Tác vụ kênh chạy đến khi hoàn tất tự nhiên, gặp lỗi kết thúc, hoặc được người
+  vận hành/chính sách tin nhắn mới hủy rõ ràng.
 - Khi timeout xảy ra, người dùng nhận: `⚠️ Request timed out while waiting for the model. Please try again.`
 - Hành vi ngắt chỉ Telegram được điều khiển bằng `channels_config.telegram.interrupt_on_new_message` (mặc định `false`).
   Khi bật, tin nhắn mới từ cùng người gửi trong cùng chat sẽ hủy yêu cầu đang xử lý và giữ ngữ cảnh người dùng bị ngắt.

@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROFILE_DIR="$ROOT_DIR/deploy/node-profiles"
 
 if [ "$#" -ne 1 ]; then
-  echo "Usage: scripts/docker/check-node.sh <rtx4070-laptop|rtx5070ti-16gb>" >&2
+  echo "Usage: scripts/docker/check-node.sh <rtx3050ti-windows-wsl|rtx4070-laptop|rtx5070ti-16gb>" >&2
   exit 2
 fi
 

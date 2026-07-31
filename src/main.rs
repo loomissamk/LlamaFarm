@@ -216,7 +216,7 @@ Examples:
         #[arg(long)]
         max_actions_per_hour: Option<u32>,
 
-        /// Maximum tool-call iterations per message
+        /// Maximum tool-call iterations per message (0 = unlimited)
         #[arg(long)]
         max_tool_iterations: Option<usize>,
 

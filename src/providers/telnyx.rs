@@ -53,11 +53,11 @@ impl TelnyxProvider {
         let resolved_key = resolve_telnyx_api_key(api_key);
         Self {
             api_key: resolved_key,
-            client: Client::builder()
-                .timeout(std::time::Duration::from_secs(120))
-                .connect_timeout(std::time::Duration::from_secs(10))
-                .build()
-                .unwrap_or_else(|_| Client::new()),
+            client: crate::config::build_runtime_proxy_client_with_optional_timeouts(
+                "provider.telnyx",
+                None,
+                Some(10),
+            ),
         }
     }
 
