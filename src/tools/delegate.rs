@@ -13,13 +13,8 @@ use async_trait::async_trait;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 use uuid::Uuid;
 
-/// Default timeout for sub-agent provider calls.
-const DELEGATE_TIMEOUT_SECS: u64 = 120;
-/// Default timeout for agentic sub-agent runs.
-const DELEGATE_AGENTIC_TIMEOUT_SECS: u64 = 300;
 /// Default synthetic lead-agent name used for coordination event tracing.
 const DEFAULT_COORDINATION_LEAD_AGENT: &str = "delegate-lead";
 /// Maximum characters retained in coordination event previews.
@@ -452,36 +447,16 @@ impl DelegateTool {
             return Ok(result);
         }
 
-        // Wrap the provider call in a timeout to prevent indefinite blocking
-        let result = tokio::time::timeout(
-            Duration::from_secs(DELEGATE_TIMEOUT_SECS),
-            provider.chat_with_system(
+        // The parent turn's cancellation token remains the lifetime control.
+        // Do not impose an arbitrary wall-clock deadline on model inference.
+        let result = provider
+            .chat_with_system(
                 agent_config.system_prompt.as_deref(),
                 &full_prompt,
                 &agent_config.model,
                 temperature,
-            ),
-        )
-        .await;
-
-        let result = match result {
-            Ok(inner) => inner,
-            Err(_elapsed) => {
-                let timeout_message =
-                    format!("Agent '{agent_name}' timed out after {DELEGATE_TIMEOUT_SECS}s");
-                self.finish_coordination_trace(
-                    agent_name,
-                    &coordination_trace,
-                    false,
-                    &timeout_message,
-                );
-                return Ok(ToolResult {
-                    success: false,
-                    output: String::new(),
-                    error: Some(timeout_message),
-                });
-            }
-        };
+            )
+            .await;
 
         match result {
             Ok(response) => {
@@ -570,34 +545,31 @@ impl DelegateTool {
 
         let noop_observer = NoopObserver;
 
-        let result = tokio::time::timeout(
-            Duration::from_secs(DELEGATE_AGENTIC_TIMEOUT_SECS),
-            with_tool_loop_history_limit(
-                self.max_history_messages,
-                run_tool_call_loop(
-                    provider,
-                    &mut history,
-                    &sub_tools,
-                    &noop_observer,
-                    &agent_config.provider,
-                    &agent_config.model,
-                    temperature,
-                    true,
-                    None,
-                    "delegate",
-                    &self.multimodal_config,
-                    agent_config.max_iterations,
-                    None,
-                    None,
-                    None,
-                    &[],
-                ),
+        let result = with_tool_loop_history_limit(
+            self.max_history_messages,
+            run_tool_call_loop(
+                provider,
+                &mut history,
+                &sub_tools,
+                &noop_observer,
+                &agent_config.provider,
+                &agent_config.model,
+                temperature,
+                true,
+                None,
+                "delegate",
+                &self.multimodal_config,
+                agent_config.max_iterations,
+                None,
+                None,
+                None,
+                &[],
             ),
         )
         .await;
 
         match result {
-            Ok(Ok(response)) => {
+            Ok(response) => {
                 let rendered = if response.trim().is_empty() {
                     "[Empty response]".to_string()
                 } else {
@@ -614,17 +586,10 @@ impl DelegateTool {
                     error: None,
                 })
             }
-            Ok(Err(e)) => Ok(ToolResult {
+            Err(e) => Ok(ToolResult {
                 success: false,
                 output: String::new(),
                 error: Some(format!("Agent '{agent_name}' failed: {e}")),
-            }),
-            Err(_) => Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!(
-                    "Agent '{agent_name}' timed out after {DELEGATE_AGENTIC_TIMEOUT_SECS}s"
-                )),
             }),
         }
     }

@@ -6,23 +6,39 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 const TASK_EVENT_HISTORY_LIMIT: usize = 256;
-const REMOTE_TASK_START_TIMEOUT_SECS: u64 = 10;
+/// Bounds only connection/control-plane handshakes. Model execution and its
+/// event stream have no wall-clock deadline and end on completion or cancel.
+const FEDERATION_CONTROL_TIMEOUT_SECS: u64 = 10;
 pub const FEDERATION_AUTH_HEADER: &str = "x-llamafarm-federation-token";
+pub const FEDERATION_TASK_ID_HEADER: &str = "x-llamafarm-task-id";
+
+fn build_federation_http_client(connect_timeout: Duration) -> anyhow::Result<reqwest::Client> {
+    Ok(reqwest::Client::builder()
+        .connect_timeout(connect_timeout)
+        .build()?)
+}
+
+fn configured_federation_token() -> Option<String> {
+    std::env::var("LLAMAFARM_FEDERATION_TOKEN")
+        .ok()
+        .map(|token| token.trim().to_string())
+        .filter(|token| !token.is_empty())
+}
 
 /// Attach the optional shared node token to peer-to-peer federation traffic.
 /// An unset token preserves standalone/local federation behavior, while the
 /// deployed two-node profiles require one at their gateway boundary.
 fn with_federation_auth(request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-    match std::env::var("LLAMAFARM_FEDERATION_TOKEN") {
-        Ok(token) if !token.trim().is_empty() => {
-            request.header(FEDERATION_AUTH_HEADER, token.trim().to_string())
-        }
-        _ => request,
+    if let Some(token) = configured_federation_token() {
+        request.header(FEDERATION_AUTH_HEADER, token)
+    } else {
+        request
     }
 }
 
@@ -191,11 +207,8 @@ impl FederationRemoteSubagentAdapter {
         local_node_id: Arc<RwLock<String>>,
         local_node_name: Arc<RwLock<String>>,
     ) -> anyhow::Result<Self> {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(
-                REMOTE_TASK_START_TIMEOUT_SECS,
-            ))
-            .build()?;
+        let client =
+            build_federation_http_client(Duration::from_secs(FEDERATION_CONTROL_TIMEOUT_SECS))?;
 
         Ok(Self {
             registry,
@@ -207,6 +220,10 @@ impl FederationRemoteSubagentAdapter {
 
     pub fn http_client(&self) -> reqwest::Client {
         self.client.clone()
+    }
+
+    pub fn federation_auth_token(&self) -> Option<String> {
+        configured_federation_token()
     }
 
     pub fn available_remote_agents(&self) -> Vec<String> {
@@ -330,6 +347,7 @@ impl FederationRemoteSubagentAdapter {
             self.client
                 .post(format!("{}/federation/tasks", peer.base_url)),
         )
+        .timeout(Duration::from_secs(FEDERATION_CONTROL_TIMEOUT_SECS))
         .json(request)
         .send()
         .await?;
@@ -345,6 +363,20 @@ impl FederationRemoteSubagentAdapter {
             );
         }
 
+        if let Some(task_id) = response
+            .headers()
+            .get(FEDERATION_TASK_ID_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Ok(FederationTaskAccepted {
+                task_id: task_id.to_string(),
+                status: "accepted".to_string(),
+            });
+        }
+
+        // Compatibility with peers predating the acceptance header.
         Ok(response.json::<FederationTaskAccepted>().await?)
     }
 
@@ -360,6 +392,7 @@ impl FederationRemoteSubagentAdapter {
             "{}/federation/tasks/{task_id}/cancel",
             peer.base_url
         )))
+        .timeout(Duration::from_secs(FEDERATION_CONTROL_TIMEOUT_SECS))
         .send()
         .await;
     }
@@ -500,6 +533,7 @@ pub async fn fetch_capabilities(
     base_url: &str,
 ) -> anyhow::Result<FederationCapabilities> {
     let response = with_federation_auth(client.get(format!("{base_url}/federation/capabilities")))
+        .timeout(Duration::from_secs(FEDERATION_CONTROL_TIMEOUT_SECS))
         .send()
         .await?;
 
@@ -623,5 +657,131 @@ impl FederationTaskManager {
 impl Default for FederationTaskManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::FederationRole;
+    use crate::federation::peer_registry::FederationPeerTarget;
+    use parking_lot::RwLock;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    fn test_adapter(connect_timeout: Duration) -> FederationRemoteSubagentAdapter {
+        FederationRemoteSubagentAdapter {
+            registry: Arc::new(FederationPeerRegistry::new(
+                Duration::from_secs(30),
+                FederationRole::Worker,
+            )),
+            client: build_federation_http_client(connect_timeout).expect("build client"),
+            local_node_id: Arc::new(RwLock::new("node-a".to_string())),
+            local_node_name: Arc::new(RwLock::new("Node A".to_string())),
+        }
+    }
+
+    #[tokio::test]
+    async fn federation_task_start_uses_header_without_waiting_for_body() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock federation worker");
+        let address = listener.local_addr().expect("mock worker address");
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept request");
+            let mut request = vec![0_u8; 4096];
+            let _ = socket.read(&mut request).await.expect("read request");
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\n\
+                      content-type: application/json\r\n\
+                      x-llamafarm-task-id: task-from-header\r\n\
+                      content-length: 1024\r\n\
+                      connection: close\r\n\r\n{",
+                )
+                .await
+                .expect("write response headers and partial body");
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        });
+
+        let adapter = test_adapter(Duration::from_secs(1));
+        let peer = FederationPeerTarget {
+            peer_id: "peer-1".to_string(),
+            node_id: "node-b".to_string(),
+            display_name: "Node B".to_string(),
+            delegate_agent: "peer_node_b".to_string(),
+            base_url: format!("http://{address}"),
+            online: true,
+            role_support: FederationRole::Worker,
+            assigned_role: FederationRole::Worker,
+            allow_remote_subagents: true,
+        };
+        let request = FederationTaskRequest {
+            prompt: "respond".to_string(),
+            context: None,
+            session_id: None,
+            requester_node_id: None,
+            requester_name: None,
+            agentic: false,
+            max_iterations: 1,
+        };
+
+        let accepted = tokio::time::timeout(
+            Duration::from_millis(100),
+            adapter.start_remote_task(&peer, &request),
+        )
+        .await
+        .expect("task start must not wait for the response body")
+        .expect("task accepted");
+
+        assert_eq!(accepted.task_id, "task-from-header");
+        assert_eq!(accepted.status, "accepted");
+        server.await.expect("mock worker task");
+    }
+
+    #[tokio::test]
+    async fn federation_stream_can_outlive_connect_timeout() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock federation worker");
+        let address = listener.local_addr().expect("mock worker address");
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept request");
+            let mut request = vec![0_u8; 4096];
+            let _ = socket.read(&mut request).await.expect("read request");
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\n\
+                      content-type: text/event-stream\r\n\
+                      connection: close\r\n\r\n",
+                )
+                .await
+                .expect("write response headers");
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let event = FederationTaskEvent::done("task-1", "stream completed");
+            let payload = serde_json::to_string(&event).expect("serialize event");
+            socket
+                .write_all(format!("data: {payload}\n\n").as_bytes())
+                .await
+                .expect("write delayed event");
+        });
+
+        let adapter = test_adapter(Duration::from_millis(25));
+        let mut events = Vec::new();
+
+        adapter
+            .stream_remote_task_events(
+                &format!("http://{address}/federation/tasks/task-1/stream"),
+                |event| events.push(event),
+            )
+            .await
+            .expect("stream must not inherit the shorter connect timeout");
+        server.await.expect("mock worker task");
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "done");
+        assert_eq!(events[0].full_response.as_deref(), Some("stream completed"));
     }
 }

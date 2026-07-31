@@ -24,10 +24,7 @@ use chrono::Utc;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 
-/// Default timeout for background sub-agent provider calls.
-const SPAWN_TIMEOUT_SECS: u64 = 300;
 /// Maximum number of concurrent background sub-agents.
 const MAX_CONCURRENT_SUBAGENTS: usize = 10;
 
@@ -220,6 +217,7 @@ impl Tool for SubAgentSpawnTool {
                 let session_id_clone = session_id.clone();
                 let federation = federation.clone();
                 let federation_client = federation.http_client();
+                let cancel_token = federation.federation_auth_token();
                 let peer_clone = peer.clone();
                 let task_id = accepted.task_id.clone();
                 let relay_handle = tokio::spawn(async move {
@@ -246,6 +244,7 @@ impl Tool for SubAgentSpawnTool {
                             peer.base_url, accepted.task_id
                         ),
                         client: federation_client,
+                        cancel_token,
                     }),
                 );
 
@@ -424,29 +423,14 @@ async fn run_simple_background(
 ) -> anyhow::Result<ToolResult> {
     let temperature = agent_config.temperature.unwrap_or(0.7);
 
-    let result = tokio::time::timeout(
-        Duration::from_secs(SPAWN_TIMEOUT_SECS),
-        provider.chat_with_system(
+    let result = provider
+        .chat_with_system(
             agent_config.system_prompt.as_deref(),
             full_prompt,
             &agent_config.model,
             temperature,
-        ),
-    )
-    .await;
-
-    let result = match result {
-        Ok(inner) => inner,
-        Err(_elapsed) => {
-            return Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!(
-                    "Agent '{agent_name}' timed out after {SPAWN_TIMEOUT_SECS}s"
-                )),
-            });
-        }
-    };
+        )
+        .await;
 
     match result {
         Ok(response) => {
@@ -573,34 +557,31 @@ async fn run_agentic_background(
 
     let noop_observer = NoopObserver;
 
-    let result = tokio::time::timeout(
-        Duration::from_secs(SPAWN_TIMEOUT_SECS),
-        with_tool_loop_history_limit(
-            max_history_messages,
-            run_tool_call_loop(
-                provider,
-                &mut history,
-                &sub_tools,
-                &noop_observer,
-                &agent_config.provider,
-                &agent_config.model,
-                temperature,
-                true,
-                None,
-                "subagent_spawn",
-                multimodal_config,
-                agent_config.max_iterations,
-                None,
-                None,
-                None,
-                &[],
-            ),
+    let result = with_tool_loop_history_limit(
+        max_history_messages,
+        run_tool_call_loop(
+            provider,
+            &mut history,
+            &sub_tools,
+            &noop_observer,
+            &agent_config.provider,
+            &agent_config.model,
+            temperature,
+            true,
+            None,
+            "subagent_spawn",
+            multimodal_config,
+            agent_config.max_iterations,
+            None,
+            None,
+            None,
+            &[],
         ),
     )
     .await;
 
     match result {
-        Ok(Ok(response)) => {
+        Ok(response) => {
             let rendered = if response.trim().is_empty() {
                 "[Empty response]".to_string()
             } else {
@@ -617,17 +598,10 @@ async fn run_agentic_background(
                 error: None,
             })
         }
-        Ok(Err(e)) => Ok(ToolResult {
+        Err(e) => Ok(ToolResult {
             success: false,
             output: String::new(),
             error: Some(format!("Agent '{agent_name}' failed: {e}")),
-        }),
-        Err(_) => Ok(ToolResult {
-            success: false,
-            output: String::new(),
-            error: Some(format!(
-                "Agent '{agent_name}' timed out after {SPAWN_TIMEOUT_SECS}s"
-            )),
         }),
     }
 }

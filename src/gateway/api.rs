@@ -10,7 +10,7 @@ use crate::federation::peer_registry::{
 };
 use crate::federation::remote_subagent::{
     FederationTaskAccepted, FederationTaskEvent, FederationTaskManager, FederationTaskRequest,
-    FEDERATION_AUTH_HEADER,
+    FEDERATION_AUTH_HEADER, FEDERATION_TASK_ID_HEADER,
 };
 use crate::security::pairing::constant_time_eq;
 use axum::{
@@ -2918,11 +2918,17 @@ pub async fn handle_federation_task_create(
     });
     task_manager.set_running_handle(&task_id, handle, cancellation);
 
-    Json(FederationTaskAccepted {
-        task_id,
+    let mut response = Json(FederationTaskAccepted {
+        task_id: task_id.clone(),
         status: "accepted".to_string(),
     })
-    .into_response()
+    .into_response();
+    if let Ok(value) = HeaderValue::from_str(&task_id) {
+        response
+            .headers_mut()
+            .insert(FEDERATION_TASK_ID_HEADER, value);
+    }
+    response
 }
 
 /// GET /federation/tasks/:task_id/stream — private/LAN-only SSE task stream.

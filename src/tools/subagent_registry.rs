@@ -3,15 +3,18 @@
 //! Provides [`SubAgentRegistry`] for tracking background sub-agent sessions
 //! with status lifecycle management, concurrent access, and automatic cleanup.
 
+use crate::federation::remote_subagent::FEDERATION_AUTH_HEADER;
 use crate::tools::traits::ToolResult;
 use chrono::{DateTime, Utc};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::task::JoinHandle;
 
 /// Maximum age (in seconds) for completed/failed/killed sessions before cleanup.
 const SESSION_MAX_AGE_SECS: i64 = 3600;
+const REMOTE_CANCEL_TIMEOUT_SECS: u64 = 10;
 
 /// Status of a sub-agent session.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +61,7 @@ pub struct RemoteSubAgentHandle {
     pub relay_handle: JoinHandle<()>,
     pub cancel_url: String,
     pub client: reqwest::Client,
+    pub cancel_token: Option<String>,
 }
 
 pub enum SubAgentHandle {
@@ -153,8 +157,15 @@ impl SubAgentRegistry {
                     SubAgentHandle::Remote(remote) => {
                         let cancel_url = remote.cancel_url.clone();
                         let client = remote.client.clone();
+                        let cancel_token = remote.cancel_token.clone();
                         tokio::spawn(async move {
-                            let _ = client.post(cancel_url).send().await;
+                            let mut request = client
+                                .post(cancel_url)
+                                .timeout(Duration::from_secs(REMOTE_CANCEL_TIMEOUT_SECS));
+                            if let Some(token) = cancel_token {
+                                request = request.header(FEDERATION_AUTH_HEADER, token);
+                            }
+                            let _ = request.send().await;
                         });
                         remote.relay_handle.abort();
                     }
@@ -299,6 +310,7 @@ fn truncate_task(task: &str, max_len: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn make_session(id: &str, agent: &str, task: &str) -> SubAgentSession {
         SubAgentSession {
@@ -372,6 +384,52 @@ mod tests {
                 .unwrap()
                 .contains("killed")
         );
+    }
+
+    #[tokio::test]
+    async fn registry_remote_kill_sends_authenticated_cancel() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind cancel endpoint");
+        let address = listener.local_addr().expect("cancel endpoint address");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept cancel request");
+            let mut request = vec![0_u8; 4096];
+            let bytes = socket
+                .read(&mut request)
+                .await
+                .expect("read cancel request");
+            let request = String::from_utf8_lossy(&request[..bytes]).to_ascii_lowercase();
+            assert!(request.contains("x-llamafarm-federation-token: expected-federation-token"));
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\n\
+                      content-type: application/json\r\n\
+                      content-length: 2\r\n\
+                      connection: close\r\n\r\n{}",
+                )
+                .await
+                .expect("write cancel response");
+        });
+
+        let registry = SubAgentRegistry::new();
+        let mut session = make_session("remote-1", "remote-worker", "long task");
+        session.handle = Some(SubAgentHandle::Remote(RemoteSubAgentHandle {
+            relay_handle: tokio::spawn(async { std::future::pending::<()>().await }),
+            cancel_url: format!("http://{address}/federation/tasks/task-1/cancel"),
+            client: reqwest::Client::new(),
+            cancel_token: Some("expected-federation-token".to_string()),
+        }));
+        registry.insert(session);
+
+        assert!(registry.kill("remote-1"));
+        tokio::time::timeout(Duration::from_secs(1), server)
+            .await
+            .expect("authenticated cancel must be sent")
+            .expect("cancel server task");
+
+        let snapshot = registry.get_status("remote-1").expect("killed session");
+        assert_eq!(snapshot.status, SubAgentStatus::Killed);
     }
 
     #[test]
