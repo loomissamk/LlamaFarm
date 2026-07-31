@@ -8594,6 +8594,8 @@ tool_dispatcher = "xml"
     async fn agent_config_accepts_zero_as_unlimited_history_policy() {
         let parsed: Config = toml::from_str(
             r#"
+default_temperature = 0.7
+
 [agent]
 max_history_messages = 0
 "#,
