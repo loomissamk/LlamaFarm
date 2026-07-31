@@ -661,13 +661,38 @@ async fn execute_federation_task(
             );
         }
         Err(error) => {
-            task_manager.publish(
-                &task_id,
-                FederationTaskEvent::error(
+            // The model produced text but never made (or finished with) a
+            // grounding tool call. That's not nothing — a controller
+            // delegating a subtask to this worker still wants whatever the
+            // worker actually said, same as a Claude Code/Codex subagent
+            // that returns its report even when it didn't call a tool.
+            // Surface it as a completed-but-unverified result instead of an
+            // opaque failure that silently drops the model's output.
+            if let Some((text, _retry_count)) = crate::agent::loop_::ungrounded_final_text(&error)
+            {
+                let rendered =
+                    super::sanitize_gateway_response(text, runtime.tools_registry_exec.as_ref());
+                let final_response = if rendered.trim().is_empty() {
+                    "Tool execution completed, but no final response text was returned."
+                        .to_string()
+                } else {
+                    format!(
+                        "[unverified: no tool call grounded this answer]\n{rendered}"
+                    )
+                };
+                task_manager.publish(
                     &task_id,
-                    crate::providers::sanitize_api_error(&error.to_string()),
-                ),
-            );
+                    FederationTaskEvent::done(&task_id, final_response),
+                );
+            } else {
+                task_manager.publish(
+                    &task_id,
+                    FederationTaskEvent::error(
+                        &task_id,
+                        crate::providers::sanitize_api_error(&error.to_string()),
+                    ),
+                );
+            }
         }
     }
 }

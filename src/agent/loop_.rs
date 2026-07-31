@@ -2584,6 +2584,42 @@ pub(crate) fn is_tool_loop_cancelled(err: &anyhow::Error) -> bool {
     err.chain().any(|source| source.is::<ToolLoopCancelled>())
 }
 
+/// Carries the model's last no-tool-call text alongside the "repeated intent"
+/// bail so callers that can usefully consume ungrounded text (e.g. a
+/// federation worker reporting back to its controller) don't lose it. Display
+/// matches the original bail message exactly, so any caller that only reads
+/// `.to_string()` sees no change in behavior.
+pub(crate) struct UngroundedFinalText {
+    pub text: String,
+    pub retry_count: usize,
+}
+
+impl std::fmt::Display for UngroundedFinalText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Model repeated intent text without a tool call after {} retries",
+            self.retry_count
+        )
+    }
+}
+
+impl std::fmt::Debug for UngroundedFinalText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "UngroundedFinalText(retry_count={})", self.retry_count)
+    }
+}
+
+impl std::error::Error for UngroundedFinalText {}
+
+/// If `err` is (or wraps) an [`UngroundedFinalText`], return the model's last
+/// raw text and the retry count that triggered the fast-exit.
+pub(crate) fn ungrounded_final_text(err: &anyhow::Error) -> Option<(&str, usize)> {
+    err.chain()
+        .find_map(|source| source.downcast_ref::<UngroundedFinalText>())
+        .map(|marker| (marker.text.as_str(), marker.retry_count))
+}
+
 pub(crate) fn is_tool_iteration_limit_error(err: &anyhow::Error) -> bool {
     err.chain().any(|source| {
         source
@@ -3773,10 +3809,11 @@ pub(crate) async fn run_tool_call_loop(
                     )
                     .await;
                 }
-                anyhow::bail!(
-                    "Model repeated intent text without a tool call after {} retries",
-                    retry_count
-                );
+                return Err(UngroundedFinalText {
+                    text: display_text.clone(),
+                    retry_count,
+                }
+                .into());
             }
 
             let action_oriented_request =
