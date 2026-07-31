@@ -736,6 +736,77 @@ pub fn runs_dir(workspace_dir: &Path) -> PathBuf {
     workspace_dir.join("state").join("runs")
 }
 
+/// Flip any on-disk ledger still marked `Running` to `Cancelled`.
+///
+/// A run can only be genuinely `Running` while its `RunLedger` is registered
+/// in the in-process `ACTIVE_RUNS` map. That map starts empty on every boot,
+/// so any ledger file that still says `Running` at startup was orphaned by an
+/// unclean shutdown or restart — it did not survive the process and never
+/// will. Left alone these rows linger forever as phantom "running" entries in
+/// `GET /api/runs`. Call once, early, before anything registers a live run.
+pub fn reap_stale_running_runs(workspace_dir: &Path) -> usize {
+    let dir = runs_dir(workspace_dir);
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return 0;
+    };
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let mut reaped = 0usize;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(mut data) = serde_json::from_str::<RunLedgerData>(&raw) else {
+            continue;
+        };
+        if data.meta.status != RunStatus::Running {
+            continue;
+        }
+        data.meta.status = RunStatus::Cancelled;
+        data.meta.ended_at_ms = Some(now_ms);
+        if let Ok(serialized) = serde_json::to_string_pretty(&data) {
+            if std::fs::write(&path, serialized).is_ok() {
+                reaped += 1;
+            }
+        }
+    }
+    reaped
+}
+
+/// Force a run's on-disk ledger to `Cancelled`, independent of whether it is
+/// currently live. Used by the manual "Cancel" control so pressing it always
+/// leaves the run in a terminal state — whether it was truly in-flight or
+/// already an orphaned "running" row nothing is actually driving.
+pub fn force_cancel_on_disk(workspace_dir: &Path, run_id: &str) -> bool {
+    let path = runs_dir(workspace_dir).join(format!("{}.ledger.json", sanitize_run_id(run_id)));
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return false;
+    };
+    let Ok(mut data) = serde_json::from_str::<RunLedgerData>(&raw) else {
+        return false;
+    };
+    if data.meta.status != RunStatus::Running {
+        return true;
+    }
+    data.meta.status = RunStatus::Cancelled;
+    data.meta.ended_at_ms = Some(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0),
+    );
+    let Ok(serialized) = serde_json::to_string_pretty(&data) else {
+        return false;
+    };
+    std::fs::write(&path, serialized).is_ok()
+}
+
 /// Load one ledger snapshot by run id — live registry first, then disk.
 pub fn load_snapshot(workspace_dir: &Path, run_id: &str) -> Option<RunLedgerData> {
     if let Some(live) = live_snapshot(run_id) {

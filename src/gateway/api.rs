@@ -3995,14 +3995,20 @@ pub async fn handle_api_context_get(
         raw.saturating_add((raw / 4).max(1_024))
     };
     let bootstrap_max_chars = if compact_context { 6_000 } else { usize::MAX };
-    let md_chars: usize = ["AGENTS.md", "TOOLS.md", "USER.md", "BOOTSTRAP.md", "MEMORY.md"]
-        .iter()
-        .filter_map(|f| {
-            std::fs::metadata(workspace_dir.join(f))
-                .ok()
-                .map(|m| (m.len() as usize).min(bootstrap_max_chars))
-        })
-        .sum();
+    let md_chars: usize = [
+        "AGENTS.md",
+        "TOOLS.md",
+        "USER.md",
+        "BOOTSTRAP.md",
+        "MEMORY.md",
+    ]
+    .iter()
+    .filter_map(|f| {
+        std::fs::metadata(workspace_dir.join(f))
+            .ok()
+            .map(|m| (m.len() as usize).min(bootstrap_max_chars))
+    })
+    .sum();
     let tool_count = runtime.tools_registry.len();
     let tool_chars = serde_json::to_vec(runtime.tools_registry.as_ref())
         .map_or(0, |serialized| serialized.len());
@@ -4379,6 +4385,44 @@ pub async fn handle_api_run_get(
         )
             .into_response(),
     }
+}
+
+/// POST /api/runs/{run_id}/cancel — stop a run from the Runs page, whether or
+/// not the chat tab that started it is still open. Always leaves the run's
+/// on-disk ledger in a terminal `Cancelled` state: it cancels the live
+/// websocket-owned task if one is actually running, and separately forces
+/// the on-disk status so a stale "running" row left by an unclean restart
+/// can be cleared even though nothing is really driving it.
+pub async fn handle_api_run_cancel(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(run_id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+    let workspace_dir = state.config.lock().workspace_dir.clone();
+    let Some(snapshot) = crate::agent::run_ledger::load_snapshot(&workspace_dir, &run_id) else {
+        return (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("run '{run_id}' not found")})),
+        )
+            .into_response();
+    };
+
+    let mut live_cancelled = false;
+    if let Some(session_id) = snapshot.meta.session_id.as_deref() {
+        live_cancelled = crate::gateway::ws::cancel_run_by_session(session_id).await;
+    }
+    let forced = crate::agent::run_ledger::force_cancel_on_disk(&workspace_dir, &run_id);
+
+    Json(serde_json::json!({
+        "run_id": run_id,
+        "live_cancelled": live_cancelled,
+        "status": "cancelled",
+        "ok": forced || live_cancelled,
+    }))
+    .into_response()
 }
 
 // ── Helpers ─────────────────────────────────────────────────────

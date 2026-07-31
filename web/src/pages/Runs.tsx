@@ -406,6 +406,8 @@ export default function Runs() {
   const [statusFilter, setStatusFilter] = useState<RunStatusFilter>('all');
   const [query, setQuery] = useState('');
   const [linkCopied, setLinkCopied] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
   const liveIdsRef = useRef<string[]>([]);
   const listFailureCountRef = useRef(0);
   const detailRequestRef = useRef(0);
@@ -533,6 +535,19 @@ export default function Runs() {
       return runId;
     });
   }, [searchParams]);
+
+  const cancelRun = async (runId: string) => {
+    setCancelling(true);
+    setCancelError(null);
+    try {
+      await apiFetch(`/api/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST' });
+      await Promise.all([refreshList(), refreshDetail(runId)]);
+    } catch (err: unknown) {
+      setCancelError(err instanceof Error ? err.message : 'Failed to cancel run');
+    } finally {
+      setCancelling(false);
+    }
+  };
 
   const selectRun = (runId: string) => {
     if (selected === runId) {
@@ -710,20 +725,39 @@ export default function Runs() {
                   <StatusChip status={detail.meta.status} />
                   <span className="font-mono text-sm text-gray-200">{detail.meta.run_id}</span>
                   {detail.meta.session_id && (
-                    <span className="text-xs text-gray-500">
-                      session {detail.meta.session_id} — use Stop in Agent Chat to cancel a live
-                      run
-                    </span>
+                    <span className="text-xs text-gray-500">session {detail.meta.session_id}</span>
                   )}
-                  <button
-                    type="button"
-                    onClick={() => void copyRunLink()}
-                    className="ml-auto inline-flex min-h-9 items-center gap-1.5 rounded-md border border-gray-700 px-2.5 text-xs text-gray-300 transition-colors hover:bg-gray-800"
-                  >
-                    <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
-                    {linkCopied ? 'Copied' : 'Copy link'}
-                  </button>
+                  <div className="ml-auto flex items-center gap-2">
+                    {detail.meta.status === 'running' && (
+                      <button
+                        type="button"
+                        onClick={() => void cancelRun(detail.meta.run_id)}
+                        disabled={cancelling}
+                        className="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-red-700/50 bg-red-900/20 px-2.5 text-xs text-red-300 transition-colors hover:bg-red-900/40 disabled:opacity-50"
+                      >
+                        {cancelling ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                        ) : (
+                          <XCircle className="h-3.5 w-3.5" aria-hidden="true" />
+                        )}
+                        {cancelling ? 'Cancelling…' : 'Cancel run'}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => void copyRunLink()}
+                      className="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-gray-700 px-2.5 text-xs text-gray-300 transition-colors hover:bg-gray-800"
+                    >
+                      <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
+                      {linkCopied ? 'Copied' : 'Copy link'}
+                    </button>
+                  </div>
                 </div>
+                {cancelError && (
+                  <div className="rounded-md border border-red-700/40 bg-red-900/10 px-3 py-2 text-xs text-red-300">
+                    {cancelError}
+                  </div>
+                )}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-1 text-sm text-gray-300">
                   <span>model: {detail.meta.model}</span>
                   <span>provider: {detail.meta.provider}</span>

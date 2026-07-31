@@ -102,8 +102,7 @@ impl ActiveWsChatRunRegistration {
 
         let registration_id = Uuid::new_v4();
         let (completion, completion_rx) = tokio::sync::watch::channel(false);
-        let delete_on_terminal =
-            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let delete_on_terminal = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         active_runs.insert(
             session_id.to_string(),
             ActiveWsChatRun {
@@ -162,6 +161,23 @@ fn request_active_ws_chat_run_cancel(
     }
     cancellation.cancel();
     Some(completion)
+}
+
+/// Cancel a live web-chat run by session id, regardless of whether the
+/// websocket that submitted it is still connected. Used by the `POST
+/// /api/runs/{run_id}/cancel` control so a run can be stopped from the Runs
+/// page even after its originating chat tab is gone. Returns `true` if a
+/// live run was found and cancelled, `false` if nothing was actively running
+/// for that session (e.g. it already finished, or the ledger row is a stale
+/// leftover from before a restart).
+pub async fn cancel_run_by_session(session_id: &str) -> bool {
+    match request_active_ws_chat_run_cancel(session_id, false) {
+        Some(completion) => {
+            wait_for_active_ws_chat_run_completion(completion).await;
+            true
+        }
+        None => false,
+    }
 }
 
 async fn wait_for_active_ws_chat_run_completion(
@@ -538,19 +554,19 @@ async fn persist_ws_chat_session(store_path: &Path, session_id: &str, history: &
     );
 
     if let Some(max_sessions) = ws_persisted_session_limit() {
-      if persisted.sessions.len() > max_sessions {
-        let mut ordered: Vec<(String, u64)> = persisted
-            .sessions
-            .iter()
-            .map(|(session_id, session)| (session_id.clone(), session.updated_at_unix))
-            .collect();
-        ordered.sort_by_key(|(_, updated_at_unix)| *updated_at_unix);
+        if persisted.sessions.len() > max_sessions {
+            let mut ordered: Vec<(String, u64)> = persisted
+                .sessions
+                .iter()
+                .map(|(session_id, session)| (session_id.clone(), session.updated_at_unix))
+                .collect();
+            ordered.sort_by_key(|(_, updated_at_unix)| *updated_at_unix);
 
-        let remove_count = persisted.sessions.len() - max_sessions;
-        for (session_id, _) in ordered.into_iter().take(remove_count) {
-            persisted.sessions.remove(&session_id);
+            let remove_count = persisted.sessions.len() - max_sessions;
+            for (session_id, _) in ordered.into_iter().take(remove_count) {
+                persisted.sessions.remove(&session_id);
+            }
         }
-      }
     }
 
     if let Err(error) = write_persisted_ws_chat_sessions(store_path, &persisted).await {
@@ -2484,11 +2500,8 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         // the submitting socket while capability discovery runs. Closing the
         // viewer merely detaches it; an explicit Stop races and drops prefetch.
         let mut socket_disconnected_during_prefetch = false;
-        let mut prefetch = std::pin::pin!(
-            runtime
-                .provider
-                .prefetch_model_capabilities(&runtime.model)
-        );
+        let mut prefetch =
+            std::pin::pin!(runtime.provider.prefetch_model_capabilities(&runtime.model));
         let prefetch_completed = loop {
             tokio::select! {
                 biased;
@@ -3578,9 +3591,8 @@ mod tests {
     async fn replacement_stop_observes_terminal_completion() {
         let session_id = format!("stop-terminal-test-{}", Uuid::new_v4());
         let cancellation = CancellationToken::new();
-        let registration =
-            ActiveWsChatRunRegistration::register(&session_id, cancellation.clone())
-                .expect("test run should register");
+        let registration = ActiveWsChatRunRegistration::register(&session_id, cancellation.clone())
+            .expect("test run should register");
         let completion = request_active_ws_chat_run_cancel(&session_id, false)
             .expect("replacement Stop should find the active run");
         assert!(cancellation.is_cancelled());
@@ -3599,9 +3611,8 @@ mod tests {
     fn replacement_delete_marks_active_run_before_cancelling() {
         let session_id = format!("delete-active-test-{}", Uuid::new_v4());
         let cancellation = CancellationToken::new();
-        let registration =
-            ActiveWsChatRunRegistration::register(&session_id, cancellation.clone())
-                .expect("test run should register");
+        let registration = ActiveWsChatRunRegistration::register(&session_id, cancellation.clone())
+            .expect("test run should register");
 
         assert!(request_active_ws_chat_run_cancel(&session_id, true).is_some());
         assert!(cancellation.is_cancelled());
@@ -3859,10 +3870,7 @@ Reminder set successfully."#;
     #[test]
     fn persisted_history_limit_follows_unlimited_agent_profile() {
         assert_eq!(parse_ws_persisted_message_limit(Some("0")), None);
-        assert_eq!(
-            parse_ws_persisted_message_limit(Some("1250")),
-            Some(1250)
-        );
+        assert_eq!(parse_ws_persisted_message_limit(Some("1250")), Some(1250));
         assert_eq!(
             parse_ws_persisted_message_limit(None),
             Some(WS_PERSISTED_MAX_MESSAGES_DEFAULT)

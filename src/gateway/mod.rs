@@ -949,6 +949,10 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .route("/api/runs", get(api::handle_api_runs_list))
         .route("/api/runs/{run_id}", get(api::handle_api_run_get))
         .route(
+            "/api/runs/{run_id}/cancel",
+            post(api::handle_api_run_cancel),
+        )
+        .route(
             "/api/federation/peers",
             get(api::handle_api_federation_peers).post(api::handle_api_federation_peer_add),
         )
