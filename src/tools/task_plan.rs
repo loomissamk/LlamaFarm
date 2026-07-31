@@ -443,10 +443,18 @@ impl TaskPlanTool {
 
     fn normalize_create_tasks(args: &serde_json::Value) -> serde_json::Value {
         // Try `tasks` first, then `steps` as a fallback alias.
-        let items = args
-            .get("tasks")
-            .or_else(|| args.get("steps"))
-            .and_then(|v| v.as_array());
+        let raw_items = args.get("tasks").or_else(|| args.get("steps"));
+
+        // Some native-tool models serialize a large array as a JSON string
+        // inside the otherwise-valid arguments object. Accept that equivalent
+        // representation so a long plan does not need a corrective model turn.
+        let parsed_items = raw_items
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok());
+        let items = parsed_items
+            .as_ref()
+            .or(raw_items)
+            .and_then(serde_json::Value::as_array);
 
         let Some(items) = items else {
             return json!([]);
