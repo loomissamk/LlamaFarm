@@ -1602,20 +1602,18 @@ impl Provider for OllamaProvider {
             .is_some_and(|t| !t.trim().is_empty());
         let text = if let Some(content) = Self::normalize_response_text(content) {
             Some(content)
-        } else if has_thinking {
-            // Model finished its internal reasoning but emitted no visible text.
-            // Return None so the loop's missing-tool-call retry fires and asks the
-            // model to write its actual answer, rather than surfacing a raw error.
+        } else {
+            // A tool-capable model may finish a generation segment without
+            // visible text or a parsed tool call. This happens both with an
+            // explicit `thinking` field and with models whose hidden reasoning
+            // is not exposed by Ollama. Return None so the agent loop continues
+            // the same turn instead of presenting a bogus final error message.
             tracing::warn!(
                 model = normalized_model.as_str(),
-                "model returned thinking with no content — triggering loop retry"
+                thinking = has_thinking,
+                "model returned no content or tool call — triggering loop continuation"
             );
             None
-        } else {
-            Some(Self::fallback_text_for_empty_content(
-                &normalized_model,
-                None,
-            ))
         };
         Ok(ChatResponse {
             text,

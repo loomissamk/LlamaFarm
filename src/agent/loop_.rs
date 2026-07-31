@@ -3282,7 +3282,7 @@ pub(crate) async fn run_tool_call_loop(
             native_tool_calls,
             parse_issue_detected,
             response_streamed_live,
-            response_was_thinking_only,
+            response_was_empty,
             response_output_budget_exhausted,
         ) = match chat_result {
             Ok(resp) => {
@@ -3324,13 +3324,11 @@ pub(crate) async fn run_tool_call_loop(
                     .usage
                     .as_ref()
                     .is_some_and(|usage| usage.output_truncated);
-                // True when the model finished a thinking pass but emitted no output text
-                // and no tool calls — we must not treat this as a completed turn.
-                let response_was_thinking_only = resp.text.is_none()
-                    && resp
-                        .reasoning_content
-                        .as_deref()
-                        .is_some_and(|t| !t.trim().is_empty());
+                // True whenever the provider emitted neither visible text nor
+                // a tool call. Some Ollama models expose hidden work in
+                // `thinking`; others return only an empty natural-stop segment.
+                // Neither case is a completed turn.
+                let response_was_empty = resp.text.is_none();
                 // First try native structured tool calls (OpenAI-format).
                 // Fall back to text-based parsing (XML tags, markdown blocks,
                 // GLM format) only if the provider returned no native calls —
@@ -3416,7 +3414,7 @@ pub(crate) async fn run_tool_call_loop(
                     native_calls,
                     parse_issue.is_some(),
                     streamed_live_deltas,
-                    response_was_thinking_only,
+                    response_was_empty,
                     response_output_budget_exhausted,
                 )
             }
@@ -3651,7 +3649,7 @@ pub(crate) async fn run_tool_call_loop(
                 }
 
                 missing_tool_call_retry_prompt = Some(build_output_budget_continuation_prompt(
-                    response_was_thinking_only,
+                    response_was_empty,
                 ));
                 // A per-segment continuation must not consume an explicitly
                 // configured finite tool-iteration budget. Unlimited runs need
@@ -3672,13 +3670,52 @@ pub(crate) async fn run_tool_call_loop(
                         "iteration": iteration + 1,
                         "continuation_count": output_budget_continuation_count,
                         "checkpointed_visible_segments": checkpointed_output_segments.len(),
-                        "thinking_only": response_was_thinking_only,
+                        "empty_response": response_was_empty,
                     }),
                 );
                 if let Some(ref tx) = on_delta {
                     let _ = tx
                         .send(format!(
                             "{DRAFT_PROGRESS_SENTINEL}↪ Reasoning segment checkpointed — continuing automatically (segment {output_budget_continuation_count})\n"
+                        ))
+                        .await;
+                }
+                continue;
+            }
+
+            // Ollama can report a natural stop after generating hidden or
+            // otherwise unparseable tokens while returning neither content nor
+            // a tool call. Preserve native tool mode and continue the same turn
+            // instead of surfacing an "incomplete response" placeholder.
+            if response_was_empty {
+                retry_count = retry_count.saturating_add(1);
+                missing_tool_call_retry_prompt = Some(
+                    "Internal continuation: the prior inference segment ended without visible text or a valid tool call. This is not task completion. Continue the current user task now using the native runtime tools. Emit the next real tool call, or provide the complete final answer only if no work remains."
+                        .to_string(),
+                );
+                // An empty provider segment is not a real tool-loop step, so it
+                // must not consume an explicitly configured finite iteration.
+                if let Some(limit) = effective_limit.as_mut() {
+                    *limit = limit.saturating_add(1);
+                }
+                runtime_trace::record_event(
+                    "llm_empty_response_continuation",
+                    Some(channel_name),
+                    Some(provider_name),
+                    Some(model),
+                    Some(&turn_id),
+                    Some(true),
+                    Some("empty provider segment continued without changing tool protocol"),
+                    serde_json::json!({
+                        "iteration": iteration + 1,
+                        "retry_count": retry_count,
+                        "native_tools_preserved": use_native_tools,
+                    }),
+                );
+                if let Some(ref tx) = on_delta {
+                    let _ = tx
+                        .send(format!(
+                            "{DRAFT_PROGRESS_SENTINEL}↪ Empty inference segment — continuing automatically\n"
                         ))
                         .await;
                 }
@@ -3787,7 +3824,7 @@ pub(crate) async fn run_tool_call_loop(
                 || bare_tool_name_response
                 // Model finished thinking but emitted nothing — force a retry so
                 // mid-sequence thinking-only responses don't silently end the turn.
-                || response_was_thinking_only
+                || response_was_empty
                 || (!successful_tool_execution_seen
                     && looks_like_failed_tool_followthrough(
                         &display_text,
@@ -3803,11 +3840,11 @@ pub(crate) async fn run_tool_call_loop(
                 // it immediately instead of queuing a retry that risks a downstream 502.
                 // This handles the case where the model emits JSON-ish success prose after a
                 // successful tool call — the turn is done; don't spend another LLM round.
-                // Exception: when the model was mid-sequence thinking (response_was_thinking_only),
+                // Exception: when the model emitted an empty segment,
                 // skip the grounded-answer shortcut and force a real retry so it can continue.
                 if successful_tool_execution_seen
                     && !recent_successful_tool_records.is_empty()
-                    && !response_was_thinking_only
+                    && !response_was_empty
                 {
                     if let Some(final_text) =
                         synthesize_grounded_final_answer(&recent_successful_tool_records, history)
