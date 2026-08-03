@@ -31,6 +31,9 @@
 - `LLAMAFARM_ADAPTIVE_CONTEXT=true` の場合、環境の既定値は高速な基準値となり、
   リクエストに必要なときだけ 2 倍の段階で拡張されます。上限はモデル固有の長さと
   `LLAMAFARM_ADAPTIVE_CONTEXT_MAX`（既定 262,144）の小さい方です。
+- `provider.ollama_workers` は単一 GPU または GPU セットに固定した Ollama worker を定義し、
+  `provider.ollama_model_placements` はモデルを worker にルーティングします。複数 GPU で
+  `spread = true` にするとモデルを分散でき、別 worker なら複数モデルを同時常駐できます。
 - 名前付き `[[db_connections]]` は Database Explorer と
   `db_schema`/`db_query` ツールで使用されます。対応 driver は `sqlite`、
   `postgres`、`mysql`（MariaDB を含む）、`mongodb` です。MySQL/MariaDB には

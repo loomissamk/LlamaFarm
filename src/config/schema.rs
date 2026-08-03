@@ -414,6 +414,35 @@ pub struct ModelProviderConfig {
 }
 
 /// Provider behavior overrides (`[provider]` section).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
+pub struct OllamaWorkerConfig {
+    /// Stable worker identifier used by model placement rules.
+    pub id: String,
+    /// Ollama API endpoint for this GPU-bound worker.
+    pub endpoint: String,
+    /// Optional operator-facing label.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// NVIDIA GPU UUIDs or indices exposed to this worker.
+    #[serde(default)]
+    pub gpu_ids: Vec<String>,
+    /// Ask Ollama to spread a model across every GPU exposed to this worker.
+    #[serde(default)]
+    pub spread: bool,
+    /// Whether LlamaFarm may provision this worker as a sibling container.
+    #[serde(default)]
+    pub managed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
+pub struct OllamaModelPlacementConfig {
+    /// Exact Ollama model name/tag to route.
+    pub model: String,
+    /// Worker id from `provider.ollama_workers`.
+    pub worker_id: String,
+}
+
+/// Provider behavior overrides (`[provider]` section).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct ProviderConfig {
     /// Optional reasoning level override for providers that support explicit levels
@@ -456,6 +485,14 @@ pub struct ProviderConfig {
     /// The env var `OLLAMA_NUM_CTX` is also read as a fallback.
     #[serde(default)]
     pub ollama_num_ctx: Option<u32>,
+
+    /// GPU-bound Ollama worker endpoints available for explicit model placement.
+    #[serde(default)]
+    pub ollama_workers: Vec<OllamaWorkerConfig>,
+
+    /// Per-model worker assignments. Unlisted models use the primary endpoint.
+    #[serde(default)]
+    pub ollama_model_placements: Vec<OllamaModelPlacementConfig>,
 }
 
 /// Multi-workspace registry configuration (`[workspaces]`).
@@ -6636,6 +6673,57 @@ impl Config {
         // request immediately exhaust without producing a usable checkpoint.
         if self.agent.max_output_tokens_per_turn == Some(0) {
             anyhow::bail!("agent.max_output_tokens_per_turn must be greater than 0 when set");
+        }
+
+        // Ollama GPU worker placement. Worker ids become container/DNS labels,
+        // so keep them portable and make every model route unambiguous.
+        let mut ollama_worker_ids = std::collections::HashSet::new();
+        for (index, worker) in self.provider.ollama_workers.iter().enumerate() {
+            let worker_id = worker.id.trim();
+            if worker_id.is_empty()
+                || !worker_id.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+                })
+            {
+                anyhow::bail!(
+                    "provider.ollama_workers[{index}].id must contain only letters, numbers, '-' or '_'"
+                );
+            }
+            if !ollama_worker_ids.insert(worker_id.to_string()) {
+                anyhow::bail!("provider.ollama_workers contains duplicate id: {worker_id}");
+            }
+            let endpoint = reqwest::Url::parse(worker.endpoint.trim()).with_context(|| {
+                format!("provider.ollama_workers[{index}].endpoint must be a valid URL")
+            })?;
+            if !matches!(endpoint.scheme(), "http" | "https") {
+                anyhow::bail!("provider.ollama_workers[{index}].endpoint must use http or https");
+            }
+            if worker.managed && worker.gpu_ids.is_empty() {
+                anyhow::bail!(
+                    "provider.ollama_workers[{index}].gpu_ids must not be empty for a managed worker"
+                );
+            }
+            if worker.gpu_ids.iter().any(|gpu| gpu.trim().is_empty()) {
+                anyhow::bail!(
+                    "provider.ollama_workers[{index}].gpu_ids contains an empty GPU identifier"
+                );
+            }
+        }
+        let mut placed_models = std::collections::HashSet::new();
+        for (index, placement) in self.provider.ollama_model_placements.iter().enumerate() {
+            let model = placement.model.trim();
+            let worker_id = placement.worker_id.trim();
+            if model.is_empty() {
+                anyhow::bail!("provider.ollama_model_placements[{index}].model must not be empty");
+            }
+            if !placed_models.insert(model.to_ascii_lowercase()) {
+                anyhow::bail!("provider.ollama_model_placements contains duplicate model: {model}");
+            }
+            if !ollama_worker_ids.contains(worker_id) {
+                anyhow::bail!(
+                    "provider.ollama_model_placements[{index}] references unknown worker: {worker_id}"
+                );
+            }
         }
 
         // Host runner. This bridge is opt-in and must always resolve to an

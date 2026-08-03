@@ -909,6 +909,19 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .route("/api/cron/{id}/run", post(api::handle_api_cron_run))
         .route("/api/integrations", get(api::handle_api_integrations))
         .route(
+            "/api/ollama/gpu-placement",
+            get(api::handle_api_ollama_gpu_placement_get)
+                .put(api::handle_api_ollama_gpu_placement_put),
+        )
+        .route(
+            "/api/ollama/gpu-workers",
+            post(api::handle_api_ollama_gpu_worker_action),
+        )
+        .route(
+            "/api/ollama/model-residency",
+            post(api::handle_api_ollama_model_residency),
+        )
+        .route(
             "/api/integrations/settings",
             get(api::handle_api_integrations_settings),
         )

@@ -31,6 +31,8 @@ pub struct OllamaContextRuntimeConfig {
 
 pub struct OllamaProvider {
     base_url: String,
+    /// Per-model routes to GPU-bound Ollama worker endpoints.
+    model_routes: HashMap<String, String>,
     api_key: Option<String>,
     reasoning_enabled: Option<bool>,
     /// Number of model layers to load onto GPU(s).
@@ -393,6 +395,7 @@ impl OllamaProvider {
 
         Self {
             base_url: Self::normalize_base_url(base_url.unwrap_or("http://localhost:11434")),
+            model_routes: HashMap::new(),
             api_key,
             reasoning_enabled,
             gpu_layers,
@@ -407,11 +410,48 @@ impl OllamaProvider {
         }
     }
 
-    fn is_local_endpoint(&self) -> bool {
-        reqwest::Url::parse(&self.base_url)
+    /// Route selected models to dedicated Ollama workers. Worker endpoints are
+    /// normalized once when the runtime snapshot is built, so request paths do
+    /// not need to reinterpret dashboard input.
+    #[must_use]
+    pub fn with_model_routes(mut self, routes: HashMap<String, String>) -> Self {
+        self.model_routes = routes
+            .into_iter()
+            .filter_map(|(model, endpoint)| {
+                let model = model.trim();
+                let endpoint = Self::normalize_base_url(&endpoint);
+                (!model.is_empty() && !endpoint.is_empty())
+                    .then(|| (Self::canonical_model_route_key(model), endpoint))
+            })
+            .collect();
+        self
+    }
+
+    fn canonical_model_route_key(model: &str) -> String {
+        let normalized = model.trim().to_ascii_lowercase();
+        if normalized.contains(':') {
+            normalized
+        } else {
+            format!("{normalized}:latest")
+        }
+    }
+
+    fn endpoint_for_model(&self, model: &str) -> &str {
+        self.model_routes
+            .get(&Self::canonical_model_route_key(model))
+            .map(String::as_str)
+            .unwrap_or(&self.base_url)
+    }
+
+    fn is_local_endpoint_url(endpoint: &str) -> bool {
+        reqwest::Url::parse(endpoint)
             .ok()
             .and_then(|url| url.host_str().map(|host| host.to_string()))
             .is_some_and(|host| matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1"))
+    }
+
+    fn is_local_endpoint(&self) -> bool {
+        Self::is_local_endpoint_url(&self.base_url)
     }
 
     fn http_client(&self) -> Client {
@@ -902,7 +942,10 @@ impl OllamaProvider {
         let may_grow_context =
             !self.num_ctx_is_explicit && (self.adaptive_context || self.num_ctx.is_none());
 
-        let url = format!("{}/api/chat", self.base_url);
+        let endpoint = self.endpoint_for_model(model);
+        let url = format!("{endpoint}/api/chat");
+        let should_auth =
+            should_auth || (self.api_key.is_some() && !Self::is_local_endpoint_url(endpoint));
         loop {
             let request =
                 self.build_chat_request(messages.clone(), model, temperature, tools, num_ctx);
@@ -1128,7 +1171,7 @@ impl OllamaProvider {
             embedding: Vec<f32>,
         }
 
-        let url = format!("{}/api/embeddings", self.base_url);
+        let url = format!("{}/api/embeddings", self.endpoint_for_model(model));
         let client = self.http_client();
         let body = EmbedRequest {
             model,
@@ -1165,7 +1208,7 @@ impl OllamaProvider {
             status: String,
         }
 
-        let url = format!("{}/api/pull", self.base_url);
+        let url = format!("{}/api/pull", self.endpoint_for_model(model));
         let client = self.pull_client();
         let body = PullRequest {
             name: model,
@@ -1206,7 +1249,7 @@ impl OllamaProvider {
             name: &'a str,
         }
 
-        let url = format!("{}/api/show", self.base_url);
+        let url = format!("{}/api/show", self.endpoint_for_model(model));
         let client = self.http_client();
         let body = ShowRequest { name: model };
 

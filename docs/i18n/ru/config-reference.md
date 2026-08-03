@@ -32,6 +32,10 @@
   базовым уровнем. LlamaFarm увеличивает окно ступенями ×2 по потребности запроса
   до меньшего из нативного окна модели и `LLAMAFARM_ADAPTIVE_CONTEXT_MAX`
   (по умолчанию 262 144).
+- `provider.ollama_workers` задаёт процессы Ollama, привязанные к одному GPU или
+  набору GPU, а `provider.ollama_model_placements` направляет модели к ним.
+  `spread = true` распределяет модель по набору GPU; отдельные workers позволяют
+  одновременно держать разные модели в памяти.
 - Именованные подключения `[[db_connections]]` используются в Database Explorer
   и инструментах `db_schema`/`db_query`. Поддерживаются драйверы `sqlite`,
   `postgres`, `mysql` (включая MariaDB) и `mongodb`. Для MySQL/MariaDB нужен

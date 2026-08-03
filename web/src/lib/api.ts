@@ -28,6 +28,9 @@ import type {
   DbDiscoveryResponse,
   ChatSessionsListResponse,
   ChatSessionDetailResponse,
+  OllamaGpuPlacement,
+  OllamaGpuWorker,
+  OllamaModelPlacement,
 } from '../types/api';
 import { clearToken, getToken } from './auth';
 
@@ -484,6 +487,38 @@ export function putIntegrationCredentials(
       body: JSON.stringify(body),
     },
   );
+}
+
+export function getOllamaGpuPlacement(): Promise<OllamaGpuPlacement> {
+  return apiFetch<OllamaGpuPlacement>('/api/ollama/gpu-placement');
+}
+
+export function putOllamaGpuPlacement(body: {
+  workers: OllamaGpuWorker[];
+  placements: OllamaModelPlacement[];
+}): Promise<{ status: string }> {
+  return apiFetch('/api/ollama/gpu-placement', { method: 'PUT', body: JSON.stringify(body) });
+}
+
+export function manageOllamaGpuWorker(
+  worker_id: string,
+  action: 'start' | 'reconcile' | 'remove',
+): Promise<{ status: string; container: string }> {
+  return apiFetch('/api/ollama/gpu-workers', {
+    method: 'POST',
+    body: JSON.stringify({ worker_id, action }),
+  });
+}
+
+export function setOllamaModelResidency(
+  model: string,
+  worker_id: string | null,
+  action: 'load' | 'unload',
+): Promise<{ status: string }> {
+  return apiFetch('/api/ollama/model-residency', {
+    method: 'POST',
+    body: JSON.stringify({ model, worker_id, action }),
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -3,6 +3,7 @@
 //! All `/api/*` routes require bearer token authentication (PairingGuard).
 
 use super::{build_gateway_runtime_snapshot_with_federation, client_key_from_request, AppState};
+use crate::config::schema::{OllamaModelPlacementConfig, OllamaWorkerConfig};
 use crate::config::FederationRole;
 use crate::federation::peer_registry::{
     FederationCapabilities, FederationLoadedModel, FederationLocalNodeSummary,
@@ -4020,6 +4021,419 @@ fn query_gpu_memory() -> Option<(u64, u64, u64)> {
         return None;
     }
     parse_gpu_memory_output(&String::from_utf8_lossy(&out.stdout))
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OllamaGpuDevice {
+    index: u32,
+    uuid: String,
+    name: String,
+    memory_total_mb: u64,
+}
+
+fn query_ollama_gpu_devices() -> Vec<OllamaGpuDevice> {
+    let output = match std::process::Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=index,uuid,name,memory.total",
+            "--format=csv,noheader,nounits",
+        ])
+        .output()
+    {
+        Ok(output) if output.status.success() => output,
+        _ => return Vec::new(),
+    };
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let fields = line.split(',').map(str::trim).collect::<Vec<_>>();
+            if fields.len() != 4 {
+                return None;
+            }
+            Some(OllamaGpuDevice {
+                index: fields[0].parse().ok()?,
+                uuid: fields[1].to_string(),
+                name: fields[2].to_string(),
+                memory_total_mb: fields[3].parse().ok()?,
+            })
+        })
+        .collect()
+}
+
+fn managed_ollama_worker_container_name(worker_id: &str) -> String {
+    format!(
+        "llamafarm-ollama-worker-{}",
+        worker_id.trim().to_ascii_lowercase().replace('_', "-")
+    )
+}
+
+fn run_docker_command(arguments: &[String]) -> Result<String, String> {
+    let output = std::process::Command::new("docker")
+        .args(arguments)
+        .output()
+        .map_err(|error| format!("Failed to run Docker: {error}"))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        Err(format!(
+            "Docker command failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+}
+
+fn docker_inspect_format(format: &str, target: &str) -> Result<String, String> {
+    run_docker_command(&[
+        "inspect".to_string(),
+        "--format".to_string(),
+        format.to_string(),
+        target.to_string(),
+    ])
+}
+
+fn provision_managed_ollama_worker(worker: &OllamaWorkerConfig) -> Result<String, String> {
+    let container_name = managed_ollama_worker_container_name(&worker.id);
+    let network = docker_inspect_format(
+        "{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}\n{{end}}",
+        "LlamaFarm",
+    )?
+    .lines()
+    .map(str::trim)
+    .find(|line| !line.is_empty())
+    .ok_or_else(|| "LlamaFarm container has no Docker network".to_string())?
+    .to_string();
+    let image = docker_inspect_format("{{.Config.Image}}", "LlamaFarm")?;
+    if image.trim().is_empty() {
+        return Err("Could not determine the LlamaFarm bundle image".to_string());
+    }
+
+    // Reconciliation is explicit: replacing this one managed worker is the
+    // only way to change the GPU visibility of an already-running process.
+    let _ = run_docker_command(&["rm".to_string(), "-f".to_string(), container_name.clone()]);
+
+    let gpu_devices = worker
+        .gpu_ids
+        .iter()
+        .map(|gpu| gpu.trim())
+        .filter(|gpu| !gpu.is_empty())
+        .collect::<Vec<_>>()
+        .join(",");
+    let kv_cache_type = std::env::var("OLLAMA_KV_CACHE_TYPE")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "q8_0".to_string());
+    let spread = if worker.spread { "1" } else { "0" };
+
+    let arguments = vec![
+        "run".to_string(),
+        "-d".to_string(),
+        "--name".to_string(),
+        container_name.clone(),
+        "--restart".to_string(),
+        "unless-stopped".to_string(),
+        "--label".to_string(),
+        "com.llamafarm.ollama-worker=true".to_string(),
+        "--label".to_string(),
+        format!("com.llamafarm.ollama-worker-id={}", worker.id),
+        "--network".to_string(),
+        network,
+        "--volumes-from".to_string(),
+        "LlamaFarm:rw".to_string(),
+        "--gpus".to_string(),
+        format!("device={gpu_devices}"),
+        "-e".to_string(),
+        "HOME=/llamafarm-data".to_string(),
+        "-e".to_string(),
+        "OLLAMA_MODELS=/llamafarm-data/.ollama/models".to_string(),
+        "-e".to_string(),
+        "OLLAMA_HOST=0.0.0.0:11434".to_string(),
+        "-e".to_string(),
+        "OLLAMA_KEEP_ALIVE=-1".to_string(),
+        "-e".to_string(),
+        "OLLAMA_NO_CLOUD=true".to_string(),
+        "-e".to_string(),
+        "OLLAMA_FLASH_ATTENTION=true".to_string(),
+        "-e".to_string(),
+        format!("OLLAMA_KV_CACHE_TYPE={kv_cache_type}"),
+        "-e".to_string(),
+        format!("OLLAMA_SCHED_SPREAD={spread}"),
+        "--entrypoint".to_string(),
+        "/usr/bin/ollama".to_string(),
+        image,
+        "serve".to_string(),
+    ];
+    run_docker_command(&arguments)?;
+    Ok(container_name)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OllamaGpuPlacementPutBody {
+    #[serde(default)]
+    workers: Vec<OllamaWorkerConfig>,
+    #[serde(default)]
+    placements: Vec<OllamaModelPlacementConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OllamaGpuWorkerActionBody {
+    worker_id: String,
+    action: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OllamaModelResidencyBody {
+    model: String,
+    #[serde(default)]
+    worker_id: Option<String>,
+    action: String,
+}
+
+async fn ollama_worker_runtime_status(worker: &OllamaWorkerConfig) -> serde_json::Value {
+    let client = crate::config::build_runtime_proxy_client_with_timeouts(
+        "provider.ollama.worker-status",
+        10,
+        3,
+    );
+    let endpoint = worker.endpoint.trim_end_matches('/');
+    let tags = client.get(format!("{endpoint}/api/tags")).send().await;
+    let running = client.get(format!("{endpoint}/api/ps")).send().await;
+    let reachable = tags
+        .as_ref()
+        .is_ok_and(|response| response.status().is_success())
+        || running
+            .as_ref()
+            .is_ok_and(|response| response.status().is_success());
+    let loaded_models = match running {
+        Ok(response) if response.status().is_success() => response
+            .json::<OllamaModelListResponse>()
+            .await
+            .map(|body| body.models.into_iter().map(|model| model.name).collect())
+            .unwrap_or_default(),
+        _ => Vec::<String>::new(),
+    };
+    serde_json::json!({
+        "id": worker.id,
+        "endpoint": worker.endpoint,
+        "label": worker.label,
+        "gpu_ids": worker.gpu_ids,
+        "spread": worker.spread,
+        "managed": worker.managed,
+        "reachable": reachable,
+        "loaded_models": loaded_models,
+        "container_name": worker.managed.then(|| managed_ollama_worker_container_name(&worker.id)),
+    })
+}
+
+/// GET /api/ollama/gpu-placement — detected GPUs, worker pools and model routes.
+pub async fn handle_api_ollama_gpu_placement_get(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(error) = require_auth(&state, &headers) {
+        return error.into_response();
+    }
+    let config = state.config.lock().clone();
+    let mut workers = Vec::with_capacity(config.provider.ollama_workers.len());
+    for worker in &config.provider.ollama_workers {
+        workers.push(ollama_worker_runtime_status(worker).await);
+    }
+    Json(serde_json::json!({
+        "primary_endpoint": normalize_ollama_base_url(&config),
+        "gpus": query_ollama_gpu_devices(),
+        "workers": workers,
+        "placements": config.provider.ollama_model_placements,
+        "managed_workers_supported": which::which("docker").is_ok(),
+        "note": "Exact per-model placement uses one GPU-bound Ollama worker per GPU set. Unassigned models use the primary Ollama endpoint.",
+    }))
+    .into_response()
+}
+
+/// PUT /api/ollama/gpu-placement — persist workers/routes and apply routing live.
+pub async fn handle_api_ollama_gpu_placement_put(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<OllamaGpuPlacementPutBody>,
+) -> impl IntoResponse {
+    if let Err(error) = require_auth(&state, &headers) {
+        return error.into_response();
+    }
+    let mut updated = state.config.lock().clone();
+    updated.provider.ollama_workers = body.workers;
+    updated.provider.ollama_model_placements = body.placements;
+    if let Err(error) = updated.validate() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": error.to_string()})),
+        )
+            .into_response();
+    }
+    let runtime_snapshot = match build_gateway_runtime_snapshot_with_federation(
+        &updated,
+        state
+            .federation
+            .as_ref()
+            .map(|federation| federation.remote_adapter()),
+    ) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": format!("GPU placement cannot be applied live: {error}")
+                })),
+            )
+                .into_response();
+        }
+    };
+    if let Err(error) = updated.save().await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to save GPU placement: {error}")})),
+        )
+            .into_response();
+    }
+    *state.config.lock() = updated;
+    state.replace_runtime_snapshot(runtime_snapshot);
+    Json(serde_json::json!({"status": "ok"})).into_response()
+}
+
+/// POST /api/ollama/gpu-workers — start/reconcile or remove one managed worker.
+pub async fn handle_api_ollama_gpu_worker_action(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<OllamaGpuWorkerActionBody>,
+) -> impl IntoResponse {
+    if let Err(error) = require_auth(&state, &headers) {
+        return error.into_response();
+    }
+    let worker = state
+        .config
+        .lock()
+        .provider
+        .ollama_workers
+        .iter()
+        .find(|worker| worker.id == body.worker_id)
+        .cloned();
+    let Some(worker) = worker else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Unknown Ollama worker"})),
+        )
+            .into_response();
+    };
+    if !worker.managed {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Worker is externally managed"})),
+        )
+            .into_response();
+    }
+    let action = body.action.trim().to_ascii_lowercase();
+    let result = tokio::task::spawn_blocking(move || match action.as_str() {
+        "start" | "reconcile" => provision_managed_ollama_worker(&worker),
+        "remove" => {
+            let name = managed_ollama_worker_container_name(&worker.id);
+            run_docker_command(&["rm".to_string(), "-f".to_string(), name.clone()])?;
+            Ok(name)
+        }
+        _ => Err("Action must be start, reconcile, or remove".to_string()),
+    })
+    .await;
+    match result {
+        Ok(Ok(container)) => Json(serde_json::json!({
+            "status": "ok",
+            "container": container,
+        }))
+        .into_response(),
+        Ok(Err(error)) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": error})),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Worker task failed: {error}")})),
+        )
+            .into_response(),
+    }
+}
+
+/// POST /api/ollama/model-residency — load/pin or explicitly unload a model.
+pub async fn handle_api_ollama_model_residency(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<OllamaModelResidencyBody>,
+) -> impl IntoResponse {
+    if let Err(error) = require_auth(&state, &headers) {
+        return error.into_response();
+    }
+    let config = state.config.lock().clone();
+    let endpoint = body
+        .worker_id
+        .as_deref()
+        .and_then(|worker_id| {
+            config
+                .provider
+                .ollama_workers
+                .iter()
+                .find(|worker| worker.id == worker_id)
+                .map(|worker| worker.endpoint.clone())
+        })
+        .unwrap_or_else(|| normalize_ollama_base_url(&config));
+    let model = body.model.trim();
+    if model.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "model must not be empty"})),
+        )
+            .into_response();
+    }
+    let keep_alive = match body.action.trim().to_ascii_lowercase().as_str() {
+        "load" | "pin" => serde_json::json!(-1),
+        "unload" => serde_json::json!(0),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "action must be load or unload"})),
+            )
+                .into_response();
+        }
+    };
+    let client = crate::config::build_runtime_proxy_client_with_optional_timeouts(
+        "provider.ollama.model-residency",
+        None,
+        Some(10),
+    );
+    let response = client
+        .post(format!("{}/api/generate", endpoint.trim_end_matches('/')))
+        .json(&serde_json::json!({
+            "model": model,
+            "prompt": "",
+            "stream": false,
+            "keep_alive": keep_alive,
+        }))
+        .send()
+        .await;
+    match response {
+        Ok(response) if response.status().is_success() => Json(serde_json::json!({
+            "status": "ok",
+            "model": model,
+            "endpoint": endpoint,
+        }))
+        .into_response(),
+        Ok(response) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({
+                "error": format!("Ollama worker returned HTTP {}", response.status())
+            })),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": format!("Cannot reach Ollama worker: {error}")})),
+        )
+            .into_response(),
+    }
 }
 
 /// GET /api/context — current chat context window (num_ctx) + bounds.

@@ -383,6 +383,8 @@ Local host/operator profile template:
 |---|---|---|
 | `reasoning_level` | unset (`None`) | Reasoning effort/level override for providers that support explicit levels (currently OpenAI Codex `/responses`) |
 | `ollama_num_ctx` | unset (`None`) | Exact Ollama context-window override in tokens; dashboard range is 2,048–262,144 |
+| `ollama_workers` | `[]` | Named Ollama endpoints bound to a GPU or GPU set (`id`, `endpoint`, `gpu_ids`, `spread`, `managed`) |
+| `ollama_model_placements` | `[]` | Exact model-to-worker routes (`model`, `worker_id`); unassigned models use the primary endpoint |
 
 Notes:
 
@@ -400,6 +402,12 @@ Notes:
   supported maximum: `262144`).
 - Auto mode with no manual override or environment baseline uses the
   Ollama-reported native context, up to 262,144 tokens.
+- Exact GPU placement is implemented with separate Ollama worker processes.
+  A managed worker exposes only its selected GPU UUIDs; selecting multiple GPUs
+  with `spread = true` lets Ollama distribute a model across that pool. Separate
+  single-GPU workers can keep different models resident at the same time. The
+  Ollama dashboard can create/reconcile these workers and load, pin, or unload
+  models without imposing an inference response deadline.
 
 ## `[skills]`
 

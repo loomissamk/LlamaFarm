@@ -33,6 +33,10 @@ Source anglaise:
   base rapide. LlamaFarm agrandit la fenêtre par paliers ×2 selon le besoin,
   jusqu'au minimum entre la longueur native du modèle et
   `LLAMAFARM_ADAPTIVE_CONTEXT_MAX` (262 144 par défaut).
+- `provider.ollama_workers` définit des processus Ollama liés à un GPU ou à un
+  groupe de GPU ; `provider.ollama_model_placements` leur affecte les modèles.
+  `spread = true` répartit un modèle sur le groupe, tandis que des workers
+  séparés permettent de garder plusieurs modèles résidents simultanément.
 - Les connexions nommées `[[db_connections]]` alimentent Database Explorer et
   les outils `db_schema`/`db_query`. Les drivers pris en charge sont `sqlite`,
   `postgres`, `mysql` (y compris MariaDB) et `mongodb`. MySQL/MariaDB nécessite

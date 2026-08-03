@@ -31,6 +31,9 @@
 - 设置 `LLAMAFARM_ADAPTIVE_CONTEXT=true` 后，环境默认值会成为快速基线；
   LlamaFarm 根据请求需要按 2 倍档位增长，最高不超过模型原生上下文和
   `LLAMAFARM_ADAPTIVE_CONTEXT_MAX`（默认 262,144）中的较小值。
+- `provider.ollama_workers` 定义绑定到单个 GPU 或 GPU 集合的 Ollama worker；
+  `provider.ollama_model_placements` 将指定模型路由到 worker。多个 GPU 且
+  `spread = true` 时可拆分模型，独立 worker 可同时驻留不同模型。
 - 命名的 `[[db_connections]]` 供 Database Explorer 和
   `db_schema`/`db_query` 工具使用。支持 `sqlite`、`postgres`、`mysql`
   （包括 MariaDB）和 `mongodb` 驱动。MySQL/MariaDB 需要 Cargo feature

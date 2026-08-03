@@ -201,6 +201,8 @@ Lưu ý:
 |---|---|---|
 | `reasoning_level` | chưa đặt (`None`) | Ghi đè mức reasoning cho provider hỗ trợ mức (hiện tại OpenAI Codex `/responses`) |
 | `ollama_num_ctx` | chưa đặt (`None`) | Ghi đè chính xác cửa sổ ngữ cảnh Ollama; dashboard hỗ trợ 2.048–262.144 token |
+| `ollama_workers` | `[]` | Worker Ollama được gán cho một GPU hoặc một nhóm GPU |
+| `ollama_model_placements` | `[]` | Ánh xạ model đến worker; model chưa gán dùng endpoint chính |
 
 Lưu ý:
 

@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import type { IntegrationSettingsEntry, StatusResponse } from '@/types/api';
 import { getIntegrationSettings, getStatus, putIntegrationCredentials } from '@/lib/api';
+import OllamaGpuPlacementPanel from '@/components/OllamaGpuPlacement';
 
 const CUSTOM_MODEL = '__custom__';
 
@@ -577,6 +578,8 @@ export function IntegrationsPanel() {
           )}
         </div>
       </div>
+
+      <OllamaGpuPlacementPanel models={installedModels} />
 
       {editorOpen && (
         <div

@@ -76,6 +76,39 @@ export interface OllamaModelDetail {
   expires_at?: string | null;
 }
 
+export interface OllamaGpuDevice {
+  index: number;
+  uuid: string;
+  name: string;
+  memory_total_mb: number;
+}
+
+export interface OllamaGpuWorker {
+  id: string;
+  endpoint: string;
+  label?: string | null;
+  gpu_ids: string[];
+  spread: boolean;
+  managed: boolean;
+  reachable?: boolean;
+  loaded_models?: string[];
+  container_name?: string | null;
+}
+
+export interface OllamaModelPlacement {
+  model: string;
+  worker_id: string;
+}
+
+export interface OllamaGpuPlacement {
+  primary_endpoint: string;
+  gpus: OllamaGpuDevice[];
+  workers: OllamaGpuWorker[];
+  placements: OllamaModelPlacement[];
+  managed_workers_supported: boolean;
+  note: string;
+}
+
 export interface HealthSnapshot {
   pid: number;
   updated_at: string;

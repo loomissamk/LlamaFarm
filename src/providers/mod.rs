@@ -40,6 +40,7 @@ use crate::auth::AuthService;
 use compatible::{AuthStyle, CompatibleApiMode, OpenAiCompatibleProvider};
 use reliable::ReliableProvider;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 const MAX_API_ERROR_CHARS: usize = 200;
@@ -691,6 +692,8 @@ pub struct ProviderRuntimeOptions {
     /// Ollama: context window size override. `None` uses the model's default.
     /// Set to e.g. 32768 or 65536 for long autonomous runs.
     pub ollama_num_ctx: Option<u32>,
+    /// Exact model name/tag to GPU-bound Ollama worker endpoint.
+    pub ollama_model_routes: HashMap<String, String>,
 }
 
 impl Default for ProviderRuntimeOptions {
@@ -708,6 +711,7 @@ impl Default for ProviderRuntimeOptions {
             ollama_gpu_layers: None,
             ollama_main_gpu: None,
             ollama_num_ctx: None,
+            ollama_model_routes: HashMap::new(),
         }
     }
 }
@@ -731,6 +735,19 @@ impl ProviderRuntimeOptions {
             ollama_gpu_layers: config.provider.ollama_gpu_layers,
             ollama_main_gpu: config.provider.ollama_main_gpu,
             ollama_num_ctx: config.provider.ollama_num_ctx,
+            ollama_model_routes: config
+                .provider
+                .ollama_model_placements
+                .iter()
+                .filter_map(|placement| {
+                    config
+                        .provider
+                        .ollama_workers
+                        .iter()
+                        .find(|worker| worker.id == placement.worker_id)
+                        .map(|worker| (placement.model.clone(), worker.endpoint.clone()))
+                })
+                .collect(),
         }
     }
 }
@@ -1099,15 +1116,18 @@ fn create_provider_with_url_and_options(
             ),
         )),
         // Ollama uses api_url for custom base URL (e.g. remote Ollama instance)
-        "ollama" => Ok(Box::new(ollama::OllamaProvider::new_full(
-            api_url,
-            key,
-            options.reasoning_enabled,
-            options.ollama_gpu_layers,
-            options.ollama_main_gpu,
-            options.ollama_num_ctx,
-            options.max_tokens_override,
-        ))),
+        "ollama" => Ok(Box::new(
+            ollama::OllamaProvider::new_full(
+                api_url,
+                key,
+                options.reasoning_enabled,
+                options.ollama_gpu_layers,
+                options.ollama_main_gpu,
+                options.ollama_num_ctx,
+                options.max_tokens_override,
+            )
+            .with_model_routes(options.ollama_model_routes.clone()),
+        )),
         "gemini" | "google" | "google-gemini" => {
             let state_dir = options.llamafarm_dir.clone().unwrap_or_else(|| {
                 directories::UserDirs::new().map_or_else(
@@ -2464,14 +2484,18 @@ mod tests {
 
     #[test]
     fn factory_lmstudio_with_custom_url() {
-        assert!(
-            create_provider_with_url("lmstudio", Some("key"), Some("http://10.0.0.22:1234/v1"))
-                .is_ok()
-        );
-        assert!(
-            create_provider_with_url("lm-studio", None, Some("http://host.docker.internal:1234"))
-                .is_ok()
-        );
+        assert!(create_provider_with_url(
+            "lmstudio",
+            Some("key"),
+            Some("http://10.0.0.22:1234/v1")
+        )
+        .is_ok());
+        assert!(create_provider_with_url(
+            "lm-studio",
+            None,
+            Some("http://host.docker.internal:1234")
+        )
+        .is_ok());
     }
 
     #[test]
