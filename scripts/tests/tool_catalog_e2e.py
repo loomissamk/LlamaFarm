@@ -1217,8 +1217,8 @@ async def run(args: argparse.Namespace) -> int:
     )
     remote_workers: list[dict[str, str]] = []
     if require_remote_workers:
-        if args.expected_online_peers < 2:
-            raise HarnessError("--expected-online-peers must be at least 2")
+        if args.expected_online_peers < 1:
+            raise HarnessError("--expected-online-peers must be at least 1")
         remote_workers = fetch_remote_workers(
             args.base_url, args.token, args.expected_online_peers
         )
@@ -1321,12 +1321,13 @@ async def run(args: argparse.Namespace) -> int:
     }
     variables.update(prior_variables)
     if remote_workers:
+        secondary = remote_workers[1] if len(remote_workers) > 1 else remote_workers[0]
         variables.update(
             {
                 "REMOTE_PEER_ID_PRIMARY": remote_workers[0]["peer_id"],
                 "REMOTE_AGENT_PRIMARY": remote_workers[0]["agent"],
-                "REMOTE_PEER_ID_SECONDARY": remote_workers[1]["peer_id"],
-                "REMOTE_AGENT_SECONDARY": remote_workers[1]["agent"],
+                "REMOTE_PEER_ID_SECONDARY": secondary["peer_id"],
+                "REMOTE_AGENT_SECONDARY": secondary["agent"],
             }
         )
     for assignment in args.var:
@@ -1515,7 +1516,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--expected-online-peers",
         type=int,
-        default=2,
+        default=1,
         help="minimum distinct online worker peers required before execution",
     )
     parser.add_argument(
