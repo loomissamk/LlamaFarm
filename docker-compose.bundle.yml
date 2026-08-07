@@ -147,6 +147,10 @@ services:
       - /srv:/srv
       - /mnt:/mnt
       - /media:/media
+      # Authoritative, checkpointed end-to-end catalogue audit. Keep these at
+      # stable paths so agents never substitute a remembered partial tool list.
+      - ./scripts/tests/tool_catalog_e2e.py:/usr/local/share/llamafarm/tool-catalog/tool_catalog_e2e.py:ro
+      - ./scripts/tests/tool_catalog_matrix.json:/usr/local/share/llamafarm/tool-catalog/tool_catalog_matrix.json:ro
       # Docker socket — lets the docker tool control the host Docker daemon
       - /var/run/docker.sock:/var/run/docker.sock
 
