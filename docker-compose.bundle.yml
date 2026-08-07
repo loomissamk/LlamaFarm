@@ -115,7 +115,7 @@ services:
       # This platform is local-first: never route inference to an Ollama cloud
       # model. Model pulls still use the registry, while generation stays on
       # the GPU attached to this node.
-      - OLLAMA_NO_CLOUD=true
+      - OLLAMA_NO_CLOUD=${OLLAMA_NO_CLOUD:-true}
       - OLLAMA_PULL_MODELS=${OLLAMA_PULL_MODELS:-}
       # KV cache quantization: halves KV cache VRAM usage, allowing ~2x larger
       # context windows in the same VRAM budget (turboquant-style compression).
