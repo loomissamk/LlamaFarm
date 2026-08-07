@@ -1141,16 +1141,24 @@ async def execute_case(
         if not disconnected_after_result:
             raise
 
-    if tool_calls != [case["tool"]]:
+    expected_tool = case["tool"]
+    relevant_calls = [name for name in tool_calls if name != "task_plan" or expected_tool == "task_plan"]
+    if relevant_calls != [expected_tool]:
         return (
             "failed",
             {},
-            f"expected one {case['tool']} tool_call; observed {tool_calls}",
+            f"expected one {expected_tool} tool_call (auxiliary task_plan is allowed); "
+            f"observed {tool_calls}",
         )
     matching = [
-        result for result in tool_results if result.get("name") == case["tool"]
+        result for result in tool_results if result.get("name") == expected_tool
     ]
-    if len(matching) != 1 or len(tool_results) != 1:
+    relevant_results = [
+        result
+        for result in tool_results
+        if result.get("name") != "task_plan" or expected_tool == "task_plan"
+    ]
+    if len(matching) != 1 or len(relevant_results) != 1:
         return (
             "failed",
             {},
