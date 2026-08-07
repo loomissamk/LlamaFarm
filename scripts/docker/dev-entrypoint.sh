@@ -27,6 +27,20 @@ ensure_runtime_layout() {
 
   # SOUL.md is never injected into the prompt; remove any stale copy.
   rm -f "$WORKSPACE_DIR/SOUL.md"
+
+  if [ -n "${LLAMAFARM_WORKSPACE_GIT_REMOTE:-}" ]; then
+    git config --global --add safe.directory "$WORKSPACE_DIR"
+    if [ ! -d "$WORKSPACE_DIR/.git" ]; then
+      git -C "$WORKSPACE_DIR" init -b main
+      git -C "$WORKSPACE_DIR" remote add origin "$LLAMAFARM_WORKSPACE_GIT_REMOTE"
+    elif ! git -C "$WORKSPACE_DIR" remote get-url origin >/dev/null 2>&1; then
+      git -C "$WORKSPACE_DIR" remote add origin "$LLAMAFARM_WORKSPACE_GIT_REMOTE"
+    fi
+    git -C "$WORKSPACE_DIR" config user.name \
+      "${LLAMAFARM_WORKSPACE_GIT_NAME:-LlamaFarmAgent}"
+    git -C "$WORKSPACE_DIR" config user.email \
+      "${LLAMAFARM_WORKSPACE_GIT_EMAIL:-llamafarm-agent@users.noreply.github.com}"
+  fi
 }
 
 if [ "$(id -u)" = "0" ]; then

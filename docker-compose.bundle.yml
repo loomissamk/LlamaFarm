@@ -86,6 +86,10 @@ services:
       - LLAMAFARM_ALLOW_REMOTE_SUBAGENTS=${LLAMAFARM_ALLOW_REMOTE_SUBAGENTS:-true}
       - LLAMAFARM_RUNTIME_UID=${LLAMAFARM_RUNTIME_UID:-0}
       - LLAMAFARM_RUNTIME_GID=${LLAMAFARM_RUNTIME_GID:-0}
+      # Optional private Git remote for the persistent workspace root. The
+      # entrypoint initializes metadata only; authenticated network operations
+      # remain brokered by LlamaFarm's connected GitHub tool.
+      - LLAMAFARM_WORKSPACE_GIT_REMOTE=${LLAMAFARM_WORKSPACE_GIT_REMOTE:-}
       # Runtime topology is injected into the agent prompt so it can publish
       # generated apps truthfully and understand that this socket controls the
       # host daemon (this is not an isolated Docker-in-Docker daemon).

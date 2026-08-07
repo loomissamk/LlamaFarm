@@ -67,6 +67,16 @@ echo
 echo "== Effective Ollama allocation =="
 docker exec LlamaFarm ollama ps
 echo
+echo "== Persistent workspace Git and SOPs =="
+docker exec LlamaFarm sh -lc '
+  cd "${LLAMAFARM_WORKSPACE:-/llamafarm-data/workspace}"
+  git rev-parse --is-inside-work-tree
+  git remote -v
+  test -f workflows/tool-capability-audit.md
+  test -f sops/authorized-wlan-audit/SOP.toml
+'
+docker logs --since 10m LlamaFarm 2>&1 | grep -E 'SOP engine loaded [1-9][0-9]* SOPs' | tail -1
+echo
 echo "== Cgroup status (max/0 means unlimited) =="
 docker inspect --format 'LlamaFarm: {{.HostConfig.Memory}} / {{.HostConfig.NanoCPUs}} / {{.HostConfig.PidsLimit}}' LlamaFarm
 docker inspect --format 'Qdrant: {{.HostConfig.Memory}} / {{.HostConfig.NanoCPUs}} / {{.HostConfig.PidsLimit}}' Qdrant

@@ -244,7 +244,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --break-system-packages \
     pymongo qdrant-client requests \
     numpy pandas scipy scikit-learn \
-    httpx aiohttp \
+    httpx aiohttp websockets \
     openai \
     tqdm rich \
     python-dotenv pyyaml \

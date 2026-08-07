@@ -68,6 +68,31 @@ ensure_runtime_layout() {
   fi
 
   ensure_bundle_config_defaults
+  ensure_workspace_git
+}
+
+ensure_workspace_git() {
+  local remote="${LLAMAFARM_WORKSPACE_GIT_REMOTE:-}"
+  [ -n "$remote" ] || return 0
+
+  git config --global --add safe.directory "$WORKSPACE_DIR"
+  if [ ! -d "$WORKSPACE_DIR/.git" ]; then
+    git -C "$WORKSPACE_DIR" init -b main
+    git -C "$WORKSPACE_DIR" remote add origin "$remote"
+  else
+    local current
+    current="$(git -C "$WORKSPACE_DIR" remote get-url origin 2>/dev/null || true)"
+    if [ -z "$current" ]; then
+      git -C "$WORKSPACE_DIR" remote add origin "$remote"
+    elif [ "$current" != "$remote" ]; then
+      echo "WARN: workspace origin is '$current'; not replacing it with '$remote'" >&2
+    fi
+  fi
+
+  git -C "$WORKSPACE_DIR" config user.name \
+    "${LLAMAFARM_WORKSPACE_GIT_NAME:-LlamaFarmAgent}"
+  git -C "$WORKSPACE_DIR" config user.email \
+    "${LLAMAFARM_WORKSPACE_GIT_EMAIL:-llamafarm-agent@users.noreply.github.com}"
 }
 
 ensure_x11_socket_dir() {

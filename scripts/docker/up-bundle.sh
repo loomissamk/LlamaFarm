@@ -226,6 +226,18 @@ fi
 export LLAMAFARM_LAN_IP
 export LLAMAFARM_TAILSCALE_IP
 export LLAMAFARM_PUBLIC_APP_HOSTS
+
+# Automatically retain the complete host_exec catalogue when the operator has
+# installed the owner-scoped runner. The host home is already mounted into the
+# bundle, so the socket path is identical inside and outside the container.
+DEFAULT_HOST_RUNNER_SOCKET="${HOME}/.llamafarm/run/host-runner.sock"
+if [ -z "${LLAMAFARM_HOST_RUNNER_ENABLED+x}" ] && [ -S "$DEFAULT_HOST_RUNNER_SOCKET" ]; then
+  LLAMAFARM_HOST_RUNNER_ENABLED=true
+  LLAMAFARM_HOST_RUNNER_SOCKET="$DEFAULT_HOST_RUNNER_SOCKET"
+fi
+export LLAMAFARM_HOST_RUNNER_ENABLED
+export LLAMAFARM_HOST_RUNNER_SOCKET
+
 write_override "$BACKEND" "$EXPOSE_DRI" "$EXPOSE_KFD" "$EXPOSE_ACCEL" "${GROUP_IDS[@]}"
 
 export OLLAMA_PULL_MODELS="${OLLAMA_PULL_MODELS-$DEFAULT_PULL_MODELS}"
