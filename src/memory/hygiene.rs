@@ -1,7 +1,7 @@
 use crate::config::MemoryConfig;
 use anyhow::Result;
 use chrono::{DateTime, Duration, Local, NaiveDate, Utc};
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -17,6 +17,7 @@ struct HygieneReport {
     purged_memory_archives: u64,
     purged_session_archives: u64,
     pruned_conversation_rows: u64,
+    run_artifacts_removed: u64,
 }
 
 impl HygieneReport {
@@ -26,6 +27,7 @@ impl HygieneReport {
             + self.purged_memory_archives
             + self.purged_session_archives
             + self.pruned_conversation_rows
+            + self.run_artifacts_removed
     }
 }
 
@@ -59,18 +61,27 @@ pub fn run_if_due(config: &MemoryConfig, workspace_dir: &Path) -> Result<()> {
             workspace_dir,
             config.conversation_retention_days,
         )?,
+        run_artifacts_removed: {
+            let cutoff = Utc::now() - Duration::days(7);
+            crate::agent::run_ledger::clear_terminal_run_artifacts(
+                workspace_dir,
+                Some(cutoff.timestamp_millis().max(0) as u64),
+            )
+            .0 as u64
+        },
     };
 
     write_state(workspace_dir, &report)?;
 
     if report.total_actions() > 0 {
         tracing::info!(
-            "memory hygiene complete: archived_memory={} archived_sessions={} purged_memory={} purged_sessions={} pruned_conversation_rows={}",
+            "memory hygiene complete: archived_memory={} archived_sessions={} purged_memory={} purged_sessions={} pruned_conversation_rows={} run_artifacts_removed={}",
             report.archived_memory_files,
             report.archived_session_files,
             report.purged_memory_archives,
             report.purged_session_archives,
             report.pruned_conversation_rows,
+            report.run_artifacts_removed,
         );
     }
 

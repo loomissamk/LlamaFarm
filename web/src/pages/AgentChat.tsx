@@ -68,6 +68,9 @@ interface ChatMessageStats {
   completionSeconds: number;
   estimatedOutputTokens: number;
   estimatedTokensPerSecond: number;
+  generationTokensPerSecond?: number;
+  ttftMs?: number | null;
+  promptTokens?: number | null;
 }
 
 interface ChatSession {
@@ -241,12 +244,19 @@ function formatAssistantMessageMeta(message: ChatMessage): string {
     return timestamp;
   }
 
+  const measured = message.stats.generationTokensPerSecond;
   return [
     timestamp,
     formatCompletionSeconds(message.stats.completionSeconds),
     `~${message.stats.estimatedOutputTokens} tok`,
-    `~${message.stats.estimatedTokensPerSecond.toFixed(1)} t/s`,
-  ].join(' · ');
+    measured !== undefined
+      ? `${measured.toFixed(1)} t/s`
+      : `~${message.stats.estimatedTokensPerSecond.toFixed(1)} t/s`,
+    message.stats.ttftMs != null ? `ttft ${(message.stats.ttftMs / 1000).toFixed(2)}s` : null,
+    message.stats.promptTokens != null
+      ? `${message.stats.promptTokens.toLocaleString()} prompt tok`
+      : null,
+  ].filter(Boolean).join(' · ');
 }
 
 function createChatSession(temporary: boolean): ChatSession {
@@ -780,6 +790,11 @@ export default function AgentChat() {
     ttftMs: number | null;
     promptTokens: number | null;
   } | null>(null);
+  const realMetricsBySessionRef = useRef<Record<string, {
+    generationTps: number;
+    ttftMs: number | null;
+    promptTokens: number | null;
+  }>>({});
   const [streaming, setStreaming] = useState(false);
   const [federation, setFederation] = useState<FederationPeersResponse | null>(null);
   const [federationLoading, setFederationLoading] = useState(true);
@@ -1167,11 +1182,13 @@ export default function AgentChat() {
             typeof m.generation_tps === 'number' &&
             sessionId === activeSessionIdRef.current
           ) {
-            setRealMetrics({
+            const metrics = {
               generationTps: m.generation_tps,
               ttftMs: typeof m.ttft_ms === 'number' ? m.ttft_ms : null,
               promptTokens: typeof m.prompt_tokens === 'number' ? m.prompt_tokens : null,
-            });
+            };
+            realMetricsBySessionRef.current[sessionId] = metrics;
+            setRealMetrics(metrics);
           }
           break;
         }
@@ -1204,6 +1221,7 @@ export default function AgentChat() {
           // only one completed assistant message should be retained per turn.
           if (!completedResponseSessionIdsRef.current.has(sessionId)) {
             const finalContent = content || EMPTY_DONE_FALLBACK;
+            const measuredMetrics = realMetricsBySessionRef.current[sessionId];
             appendMessage('agent', 'message', finalContent, new Date(), {
               stats:
                 completionSeconds > 0 &&
@@ -1213,6 +1231,9 @@ export default function AgentChat() {
                       completionSeconds,
                       estimatedOutputTokens: outputTokens,
                       estimatedTokensPerSecond,
+                      generationTokensPerSecond: measuredMetrics?.generationTps,
+                      ttftMs: measuredMetrics?.ttftMs,
+                      promptTokens: measuredMetrics?.promptTokens,
                     }
                   : undefined,
               seed: {
@@ -1226,6 +1247,7 @@ export default function AgentChat() {
           delete responseStartRef.current[sessionId];
           delete streamStartRef.current[sessionId];
           delete charCountRef.current[sessionId];
+          delete realMetricsBySessionRef.current[sessionId];
           setStreaming(false);
           break;
         }

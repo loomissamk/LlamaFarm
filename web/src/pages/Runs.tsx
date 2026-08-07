@@ -13,6 +13,7 @@ import {
   Search,
   ShieldAlert,
   ShieldCheck,
+  Trash2,
   XCircle,
 } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
@@ -408,6 +409,7 @@ export default function Runs() {
   const [linkCopied, setLinkCopied] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
+  const [clearing, setClearing] = useState(false);
   const liveIdsRef = useRef<string[]>([]);
   const listFailureCountRef = useRef(0);
   const detailRequestRef = useRef(0);
@@ -549,6 +551,27 @@ export default function Runs() {
     }
   };
 
+  const clearCompletedRuns = async () => {
+    if (!window.confirm('Clear all completed, failed, and cancelled run records? Active runs will continue.')) return;
+    setClearing(true);
+    setListError(null);
+    try {
+      await apiFetch('/api/runs/clear', { method: 'POST' });
+      setSelected(null);
+      setDetail(null);
+      setSearchParams((current) => {
+        const next = new URLSearchParams(current);
+        next.delete('run');
+        return next;
+      });
+      await refreshList();
+    } catch (err: unknown) {
+      setListError(err instanceof Error ? err.message : 'Failed to clear completed runs');
+    } finally {
+      setClearing(false);
+    }
+  };
+
   const selectRun = (runId: string) => {
     if (selected === runId) {
       void refreshDetail(runId);
@@ -603,18 +626,29 @@ export default function Runs() {
             </p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => void refreshList()}
-          disabled={refreshing}
-          className="inline-flex min-h-10 items-center gap-2 rounded-md border border-gray-700 px-3 text-sm text-gray-300 transition-colors hover:bg-gray-800 disabled:cursor-wait disabled:opacity-60"
-        >
-          <RefreshCw
-            className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`}
-            aria-hidden="true"
-          />
-          Refresh
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => void clearCompletedRuns()}
+            disabled={clearing || runs.every((run) => liveIds.includes(run.run_id))}
+            className="inline-flex min-h-10 items-center gap-2 rounded-md border border-red-800/60 px-3 text-sm text-red-300 transition-colors hover:bg-red-950/30 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {clearing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+            Clear completed
+          </button>
+          <button
+            type="button"
+            onClick={() => void refreshList()}
+            disabled={refreshing}
+            className="inline-flex min-h-10 items-center gap-2 rounded-md border border-gray-700 px-3 text-sm text-gray-300 transition-colors hover:bg-gray-800 disabled:cursor-wait disabled:opacity-60"
+          >
+            <RefreshCw
+              className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`}
+              aria-hidden="true"
+            />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {listError && (

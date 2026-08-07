@@ -76,9 +76,37 @@ impl Tool for DbSchemaTool {
                     error: Some("No database connections configured.".to_string()),
                 });
             }
+            // Probe independently and concurrently. One stale remote connection
+            // must not hold the entire catalogue/schema view hostage.
+            let probes = futures_util::future::join_all(self.connections.iter().map(
+                |conn_cfg| async move {
+                    let result = match build_adapter(conn_cfg) {
+                        Err(error) => Err(format!(
+                            "connect error: {}",
+                            sanitize_connection_error(&error, &conn_cfg.uri)
+                        )),
+                        Ok(adapter) => match tokio::time::timeout(
+                            std::time::Duration::from_secs(5),
+                            adapter.schema(),
+                        )
+                        .await
+                        {
+                            Ok(Ok(schema)) => Ok(schema),
+                            Ok(Err(error)) => Err(format!(
+                                "schema error: {}",
+                                sanitize_connection_error(&error, &conn_cfg.uri)
+                            )),
+                            Err(_) => Err("schema error: probe timed out after 5s".to_string()),
+                        },
+                    };
+                    (conn_cfg, result)
+                },
+            ))
+            .await;
+
             let mut all_out = String::new();
-            let mut any_error = false;
-            for conn_cfg in &self.connections {
+            let mut any_success = false;
+            for (conn_cfg, result) in probes {
                 all_out.push_str(&format!(
                     "=== {} ({}{}) ===\n",
                     conn_cfg.name,
@@ -89,44 +117,29 @@ impl Tool for DbSchemaTool {
                         .map(|d| format!(" / db:{d}"))
                         .unwrap_or_default(),
                 ));
-                match build_adapter(conn_cfg) {
-                    Err(e) => {
-                        all_out.push_str(&format!(
-                            "  [connect error: {}]\n\n",
-                            sanitize_connection_error(&e, &conn_cfg.uri)
-                        ));
-                        any_error = true;
-                    }
-                    Ok(adapter) => match adapter.schema().await {
-                        Err(e) => {
-                            all_out.push_str(&format!(
-                                "  [schema error: {}]\n\n",
-                                sanitize_connection_error(&e, &conn_cfg.uri)
-                            ));
-                            any_error = true;
-                        }
-                        Ok(schema) => {
-                            if schema.tables.is_empty() {
-                                all_out.push_str("  No tables or collections found.\n\n");
-                            } else {
-                                for table in &schema.tables {
+                match result {
+                    Err(error) => all_out.push_str(&format!("  [{error}]\n\n")),
+                    Ok(schema) => {
+                        any_success = true;
+                        if schema.tables.is_empty() {
+                            all_out.push_str("  No tables or collections found.\n\n");
+                        } else {
+                            for table in &schema.tables {
+                                all_out.push_str(&format!("  {} ({}):\n", table.name, table.kind));
+                                for col in &table.columns {
                                     all_out
-                                        .push_str(&format!("  {} ({}):\n", table.name, table.kind));
-                                    for col in &table.columns {
-                                        all_out.push_str(&format!(
-                                            "    {} {}\n",
-                                            col.name, col.data_type
-                                        ));
-                                    }
+                                        .push_str(&format!("    {} {}\n", col.name, col.data_type));
                                 }
-                                all_out.push('\n');
                             }
+                            all_out.push('\n');
                         }
-                    },
+                    }
                 }
             }
             return Ok(ToolResult {
-                success: !any_error,
+                // Aggregate discovery is useful when at least one configured
+                // database responds; individual failures remain visible inline.
+                success: any_success,
                 output: all_out,
                 error: None,
             });

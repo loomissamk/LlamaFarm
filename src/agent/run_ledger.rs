@@ -736,6 +736,58 @@ pub fn runs_dir(workspace_dir: &Path) -> PathBuf {
     workspace_dir.join("state").join("runs")
 }
 
+/// Remove durable artifacts for terminal runs, never touching a currently
+/// registered run. When `older_than_ms` is set, only runs whose terminal (or
+/// fallback start) timestamp predates the cutoff are removed.
+pub fn clear_terminal_run_artifacts(
+    workspace_dir: &Path,
+    older_than_ms: Option<u64>,
+) -> (usize, u64) {
+    let dir = runs_dir(workspace_dir);
+    let live = live_run_ids();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return (0, 0);
+    };
+    let mut removed = 0usize;
+    let mut bytes = 0u64;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        if live.iter().any(|id| name.starts_with(id)) {
+            continue;
+        }
+        let eligible = if name.ends_with(".ledger.json") {
+            std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|raw| serde_json::from_str::<RunLedgerData>(&raw).ok())
+                .is_some_and(|data| {
+                    data.meta.status != RunStatus::Running
+                        && older_than_ms.is_none_or(|cutoff| {
+                            data.meta.ended_at_ms.unwrap_or(data.meta.started_at_ms) < cutoff
+                        })
+                })
+        } else if name.ends_with(".jsonl") {
+            older_than_ms.is_none_or(|cutoff| {
+                entry
+                    .metadata()
+                    .ok()
+                    .and_then(|meta| meta.modified().ok())
+                    .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                    .is_some_and(|age| (age.as_millis() as u64) < cutoff)
+            })
+        } else {
+            false
+        };
+        if eligible {
+            bytes += entry.metadata().map(|meta| meta.len()).unwrap_or(0);
+            if std::fs::remove_file(path).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    (removed, bytes)
+}
+
 /// Flip any on-disk ledger still marked `Running` to `Cancelled`.
 ///
 /// A run can only be genuinely `Running` while its `RunLedger` is registered

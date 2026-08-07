@@ -4835,6 +4835,27 @@ pub async fn handle_api_runs_list(
     Json(serde_json::json!({"runs": runs, "live": live})).into_response()
 }
 
+/// POST /api/runs/clear — remove all terminal run ledgers and per-run traces.
+/// Active runs are deliberately preserved.
+pub async fn handle_api_runs_clear(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+    let workspace_dir = state.config.lock().workspace_dir.clone();
+    let (artifacts_removed, bytes_freed) =
+        crate::agent::run_ledger::clear_terminal_run_artifacts(&workspace_dir, None);
+    Json(serde_json::json!({
+        "status": "ok",
+        "artifacts_removed": artifacts_removed,
+        "bytes_freed": bytes_freed,
+        "active_runs_preserved": crate::agent::run_ledger::live_run_ids().len(),
+    }))
+    .into_response()
+}
+
 /// GET /api/agent-modes — the chat turn modes the "agent_mode" WS field
 /// accepts: the always-present built-ins ("agent" default, "chat" plain
 /// conversation), configured delegate personas (config.agents), and any
