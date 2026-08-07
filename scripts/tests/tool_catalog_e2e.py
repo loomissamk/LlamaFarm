@@ -1073,6 +1073,7 @@ async def execute_case(
         "session_id": session_id,
         "temporary": True,
         "agent_mode": "catalog-audit",
+        "allowed_tools": [case["tool"]],
     }
     selected_peer_ids = case.get("federation_peer_ids")
     if selected_peer_ids is not None:

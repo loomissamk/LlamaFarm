@@ -2561,6 +2561,19 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             .map(str::to_string);
 
         let runtime = state.runtime_snapshot();
+        let turn_allowed_tools: Vec<String> = parsed
+            .get("allowed_tools")
+            .and_then(serde_json::Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
         let selected_federation_peer_ids =
             parse_selected_federation_peer_ids(parsed.get("federation_peer_ids"));
         let (federation_event_tx, mut federation_event_rx) =
@@ -2710,7 +2723,15 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             } else {
                 crate::skills::load_skills_with_config(&config.workspace_dir, &config)
             };
-            let mut tool_route = match direct_intent.as_ref() {
+            let mut tool_route = if !turn_allowed_tools.is_empty() {
+                let allowed: Vec<&str> = turn_allowed_tools.iter().map(String::as_str).collect();
+                crate::agent::tool_router::direct_selection(
+                    runtime.tools_registry.as_ref(),
+                    &allowed,
+                    "explicit per-turn tool allowlist",
+                )
+            } else {
+                match direct_intent.as_ref() {
                 Some(DirectIntent::ForceTool(DirectForcedToolIntent::FileWrite(_))) => {
                     crate::agent::tool_router::direct_selection(
                         runtime.tools_registry.as_ref(),
@@ -2734,6 +2755,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     crate::agent::tool_router::ToolRouteStrategy::Disabled,
                     "agent.tool_routing_enabled is false",
                 ),
+                }
             };
             let mut selected_specs = tool_route.selected_specs(runtime.tools_registry.as_ref());
 
