@@ -56,6 +56,9 @@ services:
       # Set LLAMAFARM_MODEL explicitly only when an immutable deployment-level
       # override is intentional.
       - LLAMAFARM_MODEL=${LLAMAFARM_MODEL:-}
+      # Applied only when the persistent config is first created. Dashboard
+      # selections saved afterward remain authoritative across restarts.
+      - LLAMAFARM_INITIAL_MODEL=${LLAMAFARM_INITIAL_MODEL:-}
       - LLAMAFARM_AGENT_COMPACT_CONTEXT=${LLAMAFARM_AGENT_COMPACT_CONTEXT:-true}
       - LLAMAFARM_AGENT_TOOL_ROUTING_ENABLED=${LLAMAFARM_AGENT_TOOL_ROUTING_ENABLED:-true}
       - LLAMAFARM_AGENT_TOOL_ROUTING_TOP_K=${LLAMAFARM_AGENT_TOOL_ROUTING_TOP_K:-12}

@@ -38,12 +38,18 @@ ensure_runtime_identity() {
 }
 
 ensure_runtime_layout() {
+  local config_created=false
   mkdir -p "$CONFIG_DIR" "$WORKSPACE_DIR" "$DATA_DIR/.ollama"
   mkdir -p "${OLLAMA_MODELS:-$DATA_DIR/.ollama/models}"
 
   if [ ! -f "$CONFIG_DIR/config.toml" ] && [ -f "$CONFIG_TEMPLATE" ]; then
     cp "$CONFIG_TEMPLATE" "$CONFIG_DIR/config.toml"
     chmod 600 "$CONFIG_DIR/config.toml"
+    config_created=true
+  fi
+
+  if [ "$config_created" = true ]; then
+    apply_initial_model
   fi
 
   if [ ! -f "$WORKSPACE_DIR/AGENTS.md" ] && [ -f "$DEFAULT_AGENTS" ]; then
@@ -69,6 +75,34 @@ ensure_runtime_layout() {
 
   ensure_bundle_config_defaults
   ensure_workspace_git
+}
+
+apply_initial_model() {
+  local model="${LLAMAFARM_INITIAL_MODEL:-}"
+  local config_path="$CONFIG_DIR/config.toml"
+  [ -n "$model" ] || return 0
+
+  python3 - "$config_path" "$model" <<'PY'
+import json
+from pathlib import Path
+import re
+import sys
+
+config_path = Path(sys.argv[1])
+model = sys.argv[2]
+text = config_path.read_text()
+replacement = f"default_model = {json.dumps(model)}"
+updated, count = re.subn(
+    r'^default_model\s*=\s*"[^"]*"',
+    replacement,
+    text,
+    count=1,
+    flags=re.MULTILINE,
+)
+if count == 0:
+    updated = replacement + "\n" + text
+config_path.write_text(updated)
+PY
 }
 
 ensure_workspace_git() {
