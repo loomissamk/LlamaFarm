@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily private LlamaFarm workspace refresh
+
+[Timer]
+OnBootSec=5m
+OnUnitActiveSec=1d
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

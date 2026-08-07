@@ -1,0 +1,6 @@
+[Unit]
+Description=Refresh the private LlamaFarm agent workspace
+
+[Service]
+Type=oneshot
+ExecStart=@SCRIPT@
