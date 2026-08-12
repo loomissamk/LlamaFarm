@@ -1,4 +1,4 @@
-# Three-node local-agent profiles
+# Local-agent node profiles
 
 These profiles turn the three NVIDIA hosts into an asymmetric local agent cluster:
 
@@ -7,6 +7,7 @@ These profiles turn the three NVIDIA hosts into an asymmetric local agent cluste
 | Windows WSL2 RTX 3050 Ti Laptop, 4 GB + 64 GB RAM | additional worker | adaptive 32K → 128K → 256K, Ollama-managed concurrency |
 | RTX 4070 Laptop, 8 GB + 32 GB RAM | fast IDE / fallback worker | adaptive 32K → 128K → 256K, Ollama-managed concurrency |
 | RTX 5070 Ti, 16 GB + 128 GB installed RAM (~123 GiB usable) | coordinator / RAG / quality worker | adaptive 64K → 128K → 256K, Ollama-managed concurrency |
+| Tesla V100 PCIe, 32 GB + 128 GB installed RAM | Volta CUDA coordinator / quality worker | adaptive 64K → 128K → 256K, Ollama-managed concurrency |
 
 The profiles do not allocate 262K for every turn. They keep a 32K or 64K fast
 lane, then grow an individual request to 128K or 256K when the actual prompt
@@ -42,6 +43,7 @@ intentional. Then run the matching profile:
 ./scripts/docker/up-node.sh rtx3050ti-windows-wsl
 ./scripts/docker/up-node.sh rtx4070-laptop
 ./scripts/docker/up-node.sh rtx5070ti-16gb
+./scripts/docker/up-node.sh v100-32gb
 ```
 
 The dashboard is direct-access: browser/gateway pairing and the `/pair`
@@ -56,6 +58,7 @@ After startup, verify both nodes:
 ./scripts/docker/check-node.sh rtx3050ti-windows-wsl
 ./scripts/docker/check-node.sh rtx4070-laptop
 ./scripts/docker/check-node.sh rtx5070ti-16gb
+./scripts/docker/check-node.sh v100-32gb
 ```
 
 ## Browser acceptance

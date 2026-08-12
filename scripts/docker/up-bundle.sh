@@ -171,7 +171,7 @@ write_override() {
       echo "      - LLAMAFARM_SUPP_GROUPS=$(IFS=,; echo "${groups[*]}")"
     fi
     if [ "$backend" = "nvidia" ]; then
-      echo "      - NVIDIA_VISIBLE_DEVICES=all"
+      echo "      - NVIDIA_VISIBLE_DEVICES=${LLAMAFARM_NVIDIA_VISIBLE_DEVICES:-all}"
       echo "      - NVIDIA_DRIVER_CAPABILITIES=compute,utility"
     fi
     if [ "$backend" = "vulkan" ]; then

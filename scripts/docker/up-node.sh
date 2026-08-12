@@ -6,7 +6,7 @@ PROFILE_DIR="$ROOT_DIR/deploy/node-profiles"
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/docker/up-node.sh <rtx3050ti-windows-wsl|rtx4070-laptop|rtx5070ti-16gb> [docker-compose up arguments]
+Usage: scripts/docker/up-node.sh <rtx3050ti-windows-wsl|rtx4070-laptop|rtx5070ti-16gb|v100-32gb> [docker-compose up arguments]
 
 Starts the NVIDIA bundle with a checked-in GPU profile and an optional private
 host override at ~/.config/llamafarm/node.env (or $LLAMAFARM_NODE_ENV).
@@ -15,6 +15,7 @@ Examples:
   ./scripts/docker/up-node.sh rtx4070-laptop
   ./scripts/docker/up-node.sh rtx3050ti-windows-wsl up -d --build
   ./scripts/docker/up-node.sh rtx5070ti-16gb up -d --build
+  ./scripts/docker/up-node.sh v100-32gb up -d --build
   ./scripts/docker/up-node.sh rtx5070ti-16gb config
 USAGE
 }
