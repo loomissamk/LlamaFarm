@@ -22,6 +22,7 @@ import {
   type ContextPolicyInfo,
   type ContextSource,
 } from '@/lib/contextWindow';
+import { GPU_LAYER_PRESETS } from '@/lib/gpuPlacement';
 
 interface ConnectionsResponse {
   github:
@@ -143,7 +144,7 @@ export function ConnectionsPanel() {
     }
   };
 
-  const saveGpuLayers = async (value: number) => {
+  const saveGpuLayers = async (value: number | null) => {
     setCtxSaving(true);
     setContextError(null);
     setContextStatus(null);
@@ -621,15 +622,11 @@ export function ConnectionsPanel() {
               </span>
             </div>
             <div className="mt-2 flex gap-2">
-              {[
-                ['All GPU', 999],
-                ['Auto', -1],
-                ['CPU only', 0],
-              ].map(([label, val]) => (
+              {GPU_LAYER_PRESETS.map(({ label, value }) => (
                 <button
-                  key={label as string}
+                  key={label}
                   disabled={ctxSaving}
-                  onClick={() => saveGpuLayers(val as number)}
+                  onClick={() => saveGpuLayers(value)}
                   className="rounded-lg border border-gray-700 px-3 py-1 text-xs text-gray-300 hover:border-blue-500 hover:text-white disabled:opacity-40"
                 >
                   {label}

@@ -579,7 +579,7 @@ export function IntegrationsPanel() {
         </div>
       </div>
 
-      <OllamaGpuPlacementPanel models={installedModels} />
+      <OllamaGpuPlacementPanel models={installedModels} currentModel={currentModel} />
 
       {editorOpen && (
         <div
