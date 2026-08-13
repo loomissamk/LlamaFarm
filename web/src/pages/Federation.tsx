@@ -826,6 +826,15 @@ allow_public_bind = true`}
                       </span>
                     </div>
                     <p className="mt-2 text-sm text-gray-200">{task.message}</p>
+                    {typeof task.generationTps === 'number' && (
+                      <p className="mt-2 font-mono text-xs tabular-nums text-emerald-400">
+                        {task.generationTps.toFixed(1)} t/s
+                        {typeof task.ttftMs === 'number' &&
+                          ` · ttft ${(task.ttftMs / 1000).toFixed(2)}s`}
+                        {typeof task.promptTokens === 'number' &&
+                          ` · ${task.promptTokens.toLocaleString()} prompt tok`}
+                      </p>
+                    )}
                     {task.content && (
                       <pre className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg border border-gray-800 bg-gray-900 p-2 text-xs text-gray-300">
                         {task.content}

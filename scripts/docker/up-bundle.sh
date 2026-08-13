@@ -107,10 +107,12 @@ collect_group_ids() {
     ids+=("$gid")
   done
 
-  for candidate in /dev/dri/renderD* /dev/dri/card* /dev/kfd /dev/accel/*; do
-    [ -e "$candidate" ] || continue
-    ids+=("$(stat -c '%g' "$candidate")")
-  done
+  if [ "${LLAMAFARM_NVIDIA_COMPUTE_ONLY:-false}" != true ]; then
+    for candidate in /dev/dri/renderD* /dev/dri/card* /dev/kfd /dev/accel/*; do
+      [ -e "$candidate" ] || continue
+      ids+=("$(stat -c '%g' "$candidate")")
+    done
+  fi
 
   if [ "${#ids[@]}" -eq 0 ]; then
     return 0
@@ -133,7 +135,15 @@ write_override() {
     echo "services:"
     echo "  llamafarm:"
     if [ "$backend" = "nvidia" ]; then
-      echo "    gpus: all"
+      if [ "${LLAMAFARM_NVIDIA_REQUIRE_EXACT_UUID:-false}" = true ]; then
+        echo "    gpus:"
+        echo "      - driver: nvidia"
+        echo "        device_ids:"
+        echo "          - \"$LLAMAFARM_NVIDIA_VISIBLE_DEVICES\""
+        echo "        capabilities: [gpu]"
+      else
+        echo "    gpus: all"
+      fi
     fi
     if [ "$backend" = "rocm" ]; then
       echo "    build:"
@@ -185,15 +195,28 @@ EXPOSE_DRI=0
 EXPOSE_KFD=0
 EXPOSE_ACCEL=0
 
-if have_render_device; then
+if [ "${LLAMAFARM_NVIDIA_REQUIRE_EXACT_UUID:-false}" = true ]; then
+  if [ "$BACKEND" != nvidia ]; then
+    echo "Exact NVIDIA UUID mode requires the NVIDIA backend." >&2
+    exit 1
+  fi
+  if [[ ! "${LLAMAFARM_NVIDIA_VISIBLE_DEVICES:-}" =~ ^GPU-[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]]; then
+    echo "Exact NVIDIA UUID mode requires one full GPU UUID; broad visibility is rejected." >&2
+    exit 1
+  fi
+fi
+
+if [ "${LLAMAFARM_NVIDIA_COMPUTE_ONLY:-false}" != true ] \
+  && [ "${LLAMAFARM_EXPOSE_DRI:-auto}" != false ] \
+  && have_render_device; then
   EXPOSE_DRI=1
 fi
 
-if have_kfd_device; then
+if [ "${LLAMAFARM_NVIDIA_COMPUTE_ONLY:-false}" != true ] && have_kfd_device; then
   EXPOSE_KFD=1
 fi
 
-if have_accel_device; then
+if [ "${LLAMAFARM_NVIDIA_COMPUTE_ONLY:-false}" != true ] && have_accel_device; then
   EXPOSE_ACCEL=1
 fi
 

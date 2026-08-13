@@ -50,6 +50,41 @@ else
 fi
 set +a
 
+if [ "$PROFILE_NAME" = v100-32gb ]; then
+  # These are invariants of this profile, not private override knobs.
+  LLAMAFARM_NVIDIA_REQUIRE_EXACT_UUID=true
+  LLAMAFARM_NVIDIA_COMPUTE_ONLY=true
+  LLAMAFARM_EXPOSE_DRI=false
+  V100_HOST_CONFIG="${LLAMAFARM_V100_HOST_CONFIG:-/etc/llamafarm/v100-cuda-5070-nvk.env}"
+  if [ ! -r "$V100_HOST_CONFIG" ]; then
+    echo "V100 host configuration is not readable: $V100_HOST_CONFIG" >&2
+    exit 1
+  fi
+  # The installed root-owned profile contains hardware identifiers only.
+  # shellcheck disable=SC1090
+  source "$V100_HOST_CONFIG"
+  if [[ ! "${V100_GPU_UUID:-}" =~ ^GPU-[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]]; then
+    echo "V100_GPU_UUID in $V100_HOST_CONFIG is missing or invalid." >&2
+    exit 1
+  fi
+  case "${LLAMAFARM_NVIDIA_VISIBLE_DEVICES:-}" in
+    ""|all|ALL|*,*)
+      echo "v100-32gb requires exactly one V100 GPU UUID; 'all', empty, and lists are rejected." >&2
+      exit 1
+      ;;
+  esac
+  if [ "$LLAMAFARM_NVIDIA_VISIBLE_DEVICES" != "$V100_GPU_UUID" ]; then
+    echo "LLAMAFARM_NVIDIA_VISIBLE_DEVICES must exactly match V100_GPU_UUID in $V100_HOST_CONFIG." >&2
+    exit 1
+  fi
+  LLAMAFARM_NVIDIA_REQUIRE_EXACT_UUID=true
+  LLAMAFARM_NVIDIA_COMPUTE_ONLY=true
+  LLAMAFARM_EXPOSE_DRI=false
+  export V100_GPU_UUID LLAMAFARM_NVIDIA_REQUIRE_EXACT_UUID \
+    LLAMAFARM_NVIDIA_COMPUTE_ONLY LLAMAFARM_EXPOSE_DRI
+  "$ROOT_DIR/scripts/host/v100-cuda-5070-nvk.sh" verify "$V100_HOST_CONFIG"
+fi
+
 for required in \
   LLAMAFARM_NODE_NAME \
   LLAMAFARM_MANUAL_PEERS \

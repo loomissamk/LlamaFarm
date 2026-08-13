@@ -59,10 +59,22 @@ interface ContextInfo extends ContextPolicyInfo {
   };
   gpu: { total_mb: number; used_mb: number; free_mb: number };
   budget: {
-    persona_md_tokens: number;
-    tool_count: number;
-    tool_schema_tokens: number;
-    fixed_prompt_tokens_est: number;
+    workspace_files: string[];
+    soul_included: boolean;
+    working_state_included: boolean;
+    workspace_instruction_tokens_est: number;
+    routed_baseline: {
+      tool_count: number;
+      schema_tokens_est: number;
+      compact_catalogue_tokens_est: number;
+      note: string;
+    };
+    full_catalogue_upper_bound: {
+      tool_count: number;
+      schema_tokens_est: number;
+      note: string;
+    };
+    actual_prompt_tokens_source: string;
   };
 }
 
@@ -522,7 +534,10 @@ export function ConnectionsPanel() {
                 <>Automatic resolves the selected model&apos;s native context at request time.</>
               )
             ) : (
-              <>A fixed override replaces the automatic runtime policy.</>
+              <>
+                This is a capacity ceiling for the request, not tokens already spent. Actual
+                prompt usage comes from provider-reported chat metrics.
+              </>
             )}
           </p>
           <div
@@ -595,22 +610,45 @@ export function ConnectionsPanel() {
           </div>
           <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
             <div className="rounded-lg border border-gray-800 bg-gray-950 p-2">
-              <div className="text-gray-500">Persona .md</div>
-              <div className="font-mono text-gray-300">~{ctx.budget.persona_md_tokens} tok</div>
+              <div className="text-gray-500">Hot workspace</div>
+              <div className="font-mono text-gray-300">
+                ~{ctx.budget.workspace_instruction_tokens_est.toLocaleString()} tok
+              </div>
+              <div className="mt-1 text-[10px] text-gray-600">
+                AGENTS.md{ctx.budget.working_state_included ? ' + bounded working state' : ' only'}
+              </div>
             </div>
             <div className="rounded-lg border border-gray-800 bg-gray-950 p-2">
-              <div className="text-gray-500">Tools ({ctx.budget.tool_count})</div>
-              <div className="font-mono text-gray-300">~{ctx.budget.tool_schema_tokens} tok</div>
+              <div className="text-gray-500">
+                Routed baseline ({ctx.budget.routed_baseline.tool_count})
+              </div>
+              <div className="font-mono text-green-300">
+                ~{ctx.budget.routed_baseline.schema_tokens_est.toLocaleString()} schema tok
+              </div>
+              <div className="mt-1 text-[10px] text-gray-600">
+                +~{ctx.budget.routed_baseline.compact_catalogue_tokens_est.toLocaleString()} tok
+                names/purposes
+              </div>
             </div>
             <div className="rounded-lg border border-gray-800 bg-gray-950 p-2">
-              <div className="text-gray-500">Fixed prompt</div>
-              <div className="font-mono text-amber-300">~{ctx.budget.fixed_prompt_tokens_est} tok</div>
+              <div className="text-gray-500">
+                Full catalogue ({ctx.budget.full_catalogue_upper_bound.tool_count})
+              </div>
+              <div className="font-mono text-amber-300">
+                ~{ctx.budget.full_catalogue_upper_bound.schema_tokens_est.toLocaleString()} tok max
+              </div>
+              <div className="mt-1 text-[10px] text-gray-600">
+                Explicit full run or one-time discovery recovery
+              </div>
             </div>
           </div>
           <p className="mt-2 text-xs text-gray-500">
-            Fixed prompt cost (bootstrap files + full tool schemas) is spent before each
-            conversation. Local delegated agents inherit this policy but keep independent message
-            histories. External channel workers load persisted changes on restart.
+            Ordinary turns send essential/relevant schemas plus a compact catalogue of tool names
+            and purposes. The model activates extra schemas on demand with tool_search; Test All
+            Tools explicitly requests the full catalogue. If discovery misses or still cannot make
+            progress, one policy-filtered recovery may expose the remaining schemas once. SOUL.md
+            is not injected. These are conservative estimates—provider-reported prompt tokens in
+            chat are the real usage.
           </p>
 
           {/* GPU layer offload */}

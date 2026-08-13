@@ -1088,6 +1088,7 @@ data: [DONE]
             ollama_gpu_layers: None,
             ollama_main_gpu: None,
             ollama_num_ctx: None,
+            ollama_model_routes: std::collections::HashMap::new(),
         };
         let provider =
             OpenAiCodexProvider::new(&options, None).expect("provider should initialize");

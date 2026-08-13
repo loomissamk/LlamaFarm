@@ -20,6 +20,42 @@ test('agent preserves drafts and clears the composer only after a successful sen
   assert.match(agent, /disabled=\{!activeSession\}/);
 });
 
+test('agent continuously discovers remote chats and audits the authoritative tool catalogue', () => {
+  const agent = readPage('AgentChat');
+  const ws = readFileSync(
+    fileURLToPath(new URL('../src/lib/ws.ts', import.meta.url)),
+    'utf8',
+  );
+
+  assert.match(agent, /REMOTE_SESSION_REFRESH_MS = 7500/);
+  assert.match(agent, /globalThis\.setInterval\(\(\) => \{/);
+  assert.match(agent, /if \(cancelled \|\| refreshInFlight\) return/);
+  assert.match(agent, /void discoverRemoteSessions\(\)/);
+  assert.match(agent, /globalThis\.clearInterval\(interval\)/);
+  assert.match(agent, /const localById = new Map\(sessionsRef\.current/);
+  assert.match(agent, /const detail = await getChatSession\(selectedId\)/);
+  assert.match(agent, /const registeredTools = await getTools\(\)/);
+  assert.match(agent, /createChatSession\(false\)/);
+  assert.match(agent, /dispatchUserMessage\(session, TEST_ALL_TOOLS_PROMPT, allowedTools\)/);
+  assert.match(ws, /allowed_tools: options\.allowedTools/);
+});
+
+test('agent retains measured throughput for background chats and federated workers', () => {
+  const agent = readPage('AgentChat');
+  const federation = readPage('Federation');
+  const state = readFileSync(
+    fileURLToPath(new URL('../src/lib/federationState.ts', import.meta.url)),
+    'utf8',
+  );
+
+  assert.match(agent, /realMetricsBySessionRef\.current\[sessionId\] = metrics/);
+  assert.match(agent, /case 'federation_metrics'/);
+  assert.match(agent, /latestFederationTask\.generationTps\.toFixed\(1\)/);
+  assert.match(federation, /task\.generationTps\.toFixed\(1\)/);
+  assert.match(state, /generationTps: task\.generationTps/);
+  assert.match(state, /promptTokens: task\.promptTokens/);
+});
+
 test('agent presents explicit connection states and accessible keyboard semantics', () => {
   const agent = readPage('AgentChat');
 

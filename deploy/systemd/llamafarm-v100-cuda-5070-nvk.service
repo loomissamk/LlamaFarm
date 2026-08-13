@@ -1,0 +1,17 @@
+[Unit]
+Description=Keep LlamaFarm V100 on CUDA and RTX 5070 Ti on Nouveau/NVK
+Documentation=file:/usr/local/libexec/llamafarm/v100-cuda-5070-nvk
+Wants=systemd-udev-settle.service gpu-manager.service
+After=local-fs.target systemd-modules-load.service systemd-udev-settle.service gpu-manager.service
+Before=display-manager.service graphical.target docker.service nvidia-persistenced.service nvidia-cdi-refresh.service
+ConditionPathExists=/etc/llamafarm/v100-cuda-5070-nvk.env
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/llamafarm/v100-cuda-5070-nvk apply /etc/llamafarm/v100-cuda-5070-nvk.env
+ExecStartPost=/usr/local/libexec/llamafarm/v100-cuda-5070-nvk verify /etc/llamafarm/v100-cuda-5070-nvk.env
+RemainAfterExit=yes
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target graphical.target

@@ -307,6 +307,23 @@ fn federation_event_from_delta(task_id: &str, delta: &str) -> Option<FederationT
         return None;
     }
 
+    if let Some(metrics) = crate::agent::loop_::parse_inference_metrics_delta(delta) {
+        return Some(FederationTaskEvent {
+            event_type: "metrics".to_string(),
+            task_id: task_id.to_string(),
+            timestamp: Utc::now().to_rfc3339(),
+            content: None,
+            full_response: None,
+            name: None,
+            args: None,
+            success: None,
+            duration_secs: None,
+            output: None,
+            message: None,
+            metrics: serde_json::to_value(metrics).ok(),
+        });
+    }
+
     if let Some(progress) = delta.strip_prefix(crate::agent::loop_::DRAFT_PROGRESS_SENTINEL) {
         let progress = progress.trim();
         if let Some(rest) = progress.strip_prefix("⏳ ") {
@@ -333,6 +350,7 @@ fn federation_event_from_delta(task_id: &str, delta: &str) -> Option<FederationT
                 duration_secs: None,
                 output: None,
                 message: None,
+                metrics: None,
             });
         }
 
@@ -351,6 +369,7 @@ fn federation_event_from_delta(task_id: &str, delta: &str) -> Option<FederationT
                     duration_secs,
                     output: Some(output.unwrap_or("(no output)").to_string()),
                     message: None,
+                    metrics: None,
                 });
             }
         }
@@ -370,6 +389,7 @@ fn federation_event_from_delta(task_id: &str, delta: &str) -> Option<FederationT
                     duration_secs,
                     output: Some(output.unwrap_or("(no output)").to_string()),
                     message: None,
+                    metrics: None,
                 });
             }
         }
@@ -389,6 +409,7 @@ fn federation_event_from_delta(task_id: &str, delta: &str) -> Option<FederationT
         duration_secs: None,
         output: None,
         message: None,
+        metrics: None,
     })
 }
 
@@ -4436,6 +4457,85 @@ pub async fn handle_api_ollama_model_residency(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ContextPromptBudget {
+    workspace_instruction_tokens_est: usize,
+    working_state_included: bool,
+    routed_baseline_tool_count: usize,
+    routed_baseline_schema_tokens_est: usize,
+    compact_catalogue_tokens_est: usize,
+    full_catalogue_tool_count: usize,
+    full_schema_tokens_upper_bound_est: usize,
+}
+
+fn conservative_prompt_token_estimate(bytes: usize) -> usize {
+    if bytes == 0 {
+        return 0;
+    }
+    let raw = bytes.saturating_add(1) / 2;
+    raw.saturating_add((raw / 4).max(1_024))
+}
+
+fn bounded_file_chars(path: &FsPath, max_chars: usize) -> usize {
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|content| content.trim().chars().count().min(max_chars))
+        .unwrap_or(0)
+}
+
+fn context_prompt_budget(
+    workspace_dir: &FsPath,
+    compact_context: bool,
+    tool_routing_enabled: bool,
+    tool_routing_top_k: usize,
+    tools: &[crate::tools::ToolSpec],
+) -> ContextPromptBudget {
+    let agents_max_chars = if compact_context { 6_000 } else { usize::MAX };
+    let agents_chars = bounded_file_chars(&workspace_dir.join("AGENTS.md"), agents_max_chars);
+    let working_state_path = workspace_dir.join("memory/WORKING_STATE.md");
+    let working_state_chars = bounded_file_chars(&working_state_path, 2_000);
+    let working_state_included = working_state_chars > 0;
+
+    let route = if tool_routing_enabled {
+        crate::agent::tool_router::route_tools(tools, "", tool_routing_top_k)
+    } else {
+        crate::agent::tool_router::full_selection(
+            tools,
+            crate::agent::tool_router::ToolRouteStrategy::Disabled,
+            "tool routing disabled",
+        )
+    };
+    let selected = route.selected_specs(tools);
+    let excluded = route
+        .excluded
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::HashSet<_>>();
+    let discoverable = tools
+        .iter()
+        .filter(|spec| excluded.contains(spec.name.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let routed_baseline = crate::agent::tool_router::with_tool_search(selected, &discoverable);
+    let compact_catalogue = crate::agent::tool_router::compact_catalogue(&discoverable);
+
+    let routed_schema_bytes =
+        serde_json::to_vec(&routed_baseline).map_or(0, |serialized| serialized.len());
+    let full_schema_bytes = serde_json::to_vec(tools).map_or(0, |serialized| serialized.len());
+
+    ContextPromptBudget {
+        workspace_instruction_tokens_est: conservative_prompt_token_estimate(
+            agents_chars.saturating_add(working_state_chars),
+        ),
+        working_state_included,
+        routed_baseline_tool_count: routed_baseline.len(),
+        routed_baseline_schema_tokens_est: conservative_prompt_token_estimate(routed_schema_bytes),
+        compact_catalogue_tokens_est: conservative_prompt_token_estimate(compact_catalogue.len()),
+        full_catalogue_tool_count: tools.len(),
+        full_schema_tokens_upper_bound_est: conservative_prompt_token_estimate(full_schema_bytes),
+    }
+}
+
 /// GET /api/context — current chat context window (num_ctx) + bounds.
 pub async fn handle_api_context_get(
     State(state): State<AppState>,
@@ -4444,13 +4544,22 @@ pub async fn handle_api_context_get(
     if let Err(e) = require_auth(&state, &headers) {
         return e.into_response();
     }
-    let (num_ctx, gpu_layers, workspace_dir, compact_context) = {
+    let (
+        num_ctx,
+        gpu_layers,
+        workspace_dir,
+        compact_context,
+        tool_routing_enabled,
+        tool_routing_top_k,
+    ) = {
         let c = state.config.lock();
         (
             c.provider.ollama_num_ctx,
             c.provider.ollama_gpu_layers,
             c.workspace_dir.clone(),
             c.agent.compact_context,
+            c.agent.tool_routing_enabled,
+            c.agent.tool_routing_top_k,
         )
     };
     let context_runtime = crate::providers::ollama::ollama_context_runtime_config(num_ctx);
@@ -4460,31 +4569,13 @@ pub async fn handle_api_context_get(
     // (more context / more GPU layers → more VRAM used). Best-effort.
     let (gpu_total_mb, gpu_used_mb, gpu_free_mb) = query_gpu_memory().unwrap_or((0, 0, 0));
 
-    // Conservative fixed-cost estimate aligned with the provider's
-    // tokenizer-free policy: two bytes/token plus a 25% safety margin.
-    let est_tokens = |bytes: usize| {
-        let raw = bytes.saturating_add(1) / 2;
-        raw.saturating_add((raw / 4).max(1_024))
-    };
-    let bootstrap_max_chars = if compact_context { 6_000 } else { usize::MAX };
-    let md_chars: usize = [
-        "AGENTS.md",
-        "TOOLS.md",
-        "USER.md",
-        "BOOTSTRAP.md",
-        "MEMORY.md",
-    ]
-    .iter()
-    .filter_map(|f| {
-        std::fs::metadata(workspace_dir.join(f))
-            .ok()
-            .map(|m| (m.len() as usize).min(bootstrap_max_chars))
-    })
-    .sum();
-    let tool_count = runtime.tools_registry.len();
-    let tool_chars = serde_json::to_vec(runtime.tools_registry.as_ref())
-        .map_or(0, |serialized| serialized.len());
-    let fixed_prompt_tokens = est_tokens(md_chars + tool_chars);
+    let prompt_budget = context_prompt_budget(
+        &workspace_dir,
+        compact_context,
+        tool_routing_enabled,
+        tool_routing_top_k,
+        runtime.tools_registry.as_ref(),
+    );
 
     Json(serde_json::json!({
         // null means no persisted/manual override. The effective default can
@@ -4494,7 +4585,7 @@ pub async fn handle_api_context_get(
         "source": context_runtime.source,
         "min": 2048,
         "max": crate::providers::ollama::MAX_OLLAMA_CONTEXT_TOKENS,
-        "note": "A manual value is exact. Without one, adaptive mode grows the environment baseline to the model-native limit when needed. The live gateway and local delegated providers inherit this policy; already-running external channel workers apply persisted changes after restart.",
+        "note": "num_ctx is capacity allocated for a request, not the number of prompt tokens already spent. Provider-reported prompt tokens in chat telemetry are authoritative. A manual value is an exact capacity override; automatic mode grows only when needed.",
         "adaptive": {
             "enabled": context_runtime.adaptive_enabled,
             "active": context_runtime.adaptive_active,
@@ -4523,11 +4614,22 @@ pub async fn handle_api_context_get(
             "free_mb": gpu_free_mb,
         },
         "budget": {
-            "persona_md_tokens": est_tokens(md_chars),
-            "tool_count": tool_count,
-            "tool_schema_tokens": est_tokens(tool_chars),
-            "fixed_prompt_tokens_est": fixed_prompt_tokens,
-            "hint": "Fixed prompt cost (persona + tools) is subtracted from num_ctx before your conversation. Trim AGENTS.md or disable unused tools if this is a large fraction of a small window."
+            "workspace_files": ["AGENTS.md"],
+            "soul_included": false,
+            "working_state_included": prompt_budget.working_state_included,
+            "workspace_instruction_tokens_est": prompt_budget.workspace_instruction_tokens_est,
+            "routed_baseline": {
+                "tool_count": prompt_budget.routed_baseline_tool_count,
+                "schema_tokens_est": prompt_budget.routed_baseline_schema_tokens_est,
+                "compact_catalogue_tokens_est": prompt_budget.compact_catalogue_tokens_est,
+                "note": "Ordinary turns begin with essential/relevant schemas plus one tool_search schema. The remaining catalogue is names and short purposes only; requested schemas activate on the next model iteration."
+            },
+            "full_catalogue_upper_bound": {
+                "tool_count": prompt_budget.full_catalogue_tool_count,
+                "schema_tokens_est": prompt_budget.full_schema_tokens_upper_bound_est,
+                "note": "This is not the ordinary-turn default. It applies when an explicit per-turn allowlist (such as Test All Tools) requests the full catalogue, or once as a policy-filtered recovery if on-demand discovery misses or still cannot make progress."
+            },
+            "actual_prompt_tokens_source": "provider-reported chat metrics"
         }
     }))
     .into_response()
@@ -5844,11 +5946,82 @@ mod tests {
     }
 
     #[test]
+    fn context_budget_reports_routed_baseline_separately_from_full_catalogue() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::write(workspace.path().join("AGENTS.md"), "agent rules").unwrap();
+        std::fs::write(workspace.path().join("SOUL.md"), "not in the hot prompt").unwrap();
+        let specs = [
+            ("task_plan", "Plan work"),
+            ("file_read", "Read files"),
+            ("docker", "Manage containers"),
+            ("packet_capture", "Capture network traffic"),
+        ]
+        .into_iter()
+        .map(|(name, description)| crate::tools::ToolSpec {
+            name: name.to_string(),
+            description: description.to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": { "value": { "type": "string" } }
+            }),
+        })
+        .collect::<Vec<_>>();
+
+        let budget = context_prompt_budget(workspace.path(), false, true, 1, &specs);
+
+        assert_eq!(budget.full_catalogue_tool_count, 4);
+        assert_eq!(budget.routed_baseline_tool_count, 3); // essentials + tool_search
+        assert!(budget.routed_baseline_schema_tokens_est > 0);
+        assert!(budget.compact_catalogue_tokens_est > 0);
+        assert!(budget.full_schema_tokens_upper_bound_est > 0);
+        assert_eq!(budget.workspace_instruction_tokens_est, 1_030);
+        assert!(!budget.working_state_included);
+    }
+
+    #[test]
+    fn context_budget_full_catalogue_is_used_when_routing_is_disabled() {
+        let workspace = tempfile::tempdir().unwrap();
+        let specs = vec![crate::tools::ToolSpec {
+            name: "fixture_tool".to_string(),
+            description: "Fixture".to_string(),
+            parameters: serde_json::json!({"type": "object"}),
+        }];
+
+        let budget = context_prompt_budget(workspace.path(), true, false, 12, &specs);
+
+        assert_eq!(budget.routed_baseline_tool_count, 1);
+        assert_eq!(budget.full_catalogue_tool_count, 1);
+        assert_eq!(budget.compact_catalogue_tokens_est, 0);
+    }
+
+    #[test]
     fn federation_iteration_policy_preserves_unlimited_sentinel() {
         assert_eq!(combine_tool_iteration_limits(0, 0), 0);
         assert_eq!(combine_tool_iteration_limits(0, 24), 0);
         assert_eq!(combine_tool_iteration_limits(24, 0), 0);
         assert_eq!(combine_tool_iteration_limits(12, 24), 24);
+    }
+
+    #[test]
+    fn federation_metrics_delta_stays_structured_instead_of_becoming_content() {
+        let delta = format!(
+            "{}{}",
+            crate::agent::loop_::DRAFT_METRICS_SENTINEL,
+            serde_json::json!({
+                "ttft_ms": 1250.0,
+                "generation_tps": 88.25,
+                "prefill_tps": 900.0,
+                "total_ms": 2500.0,
+                "prompt_tokens": 4096
+            })
+        );
+        let event =
+            federation_event_from_delta("task-metrics", &delta).expect("federation metrics event");
+
+        assert_eq!(event.event_type, "metrics");
+        assert!(event.content.is_none());
+        assert_eq!(event.metrics.as_ref().unwrap()["generation_tps"], 88.25);
+        assert_eq!(event.metrics.as_ref().unwrap()["prompt_tokens"], 4096);
     }
 
     #[test]

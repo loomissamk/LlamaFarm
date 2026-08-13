@@ -28,6 +28,8 @@ export interface SendChatMessageOptions {
   temporary?: boolean;
   historySeed?: SeedChatMessage[];
   federationPeerIds?: string[];
+  /** Exact server tool catalogue for deterministic acceptance/audit turns. */
+  allowedTools?: string[];
   /** "agent" (or omitted) is the unchanged default AGENTS.md-driven mode. */
   agentMode?: string;
 }
@@ -113,6 +115,7 @@ export class WebSocketClient {
         temporary: options.temporary,
         history_seed: options.historySeed,
         federation_peer_ids: options.federationPeerIds,
+        allowed_tools: options.allowedTools,
         agent_mode: options.agentMode,
       }),
     );

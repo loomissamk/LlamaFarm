@@ -1,12 +1,14 @@
 use super::traits::{Tool, ToolResult};
 use crate::agent::loop_::{
-    run_tool_call_loop, with_tool_loop_history_limit, DEFAULT_MAX_HISTORY_MESSAGES,
+    format_inference_metrics_summary, inference_metrics_from_response,
+    parse_inference_metrics_delta, run_tool_call_loop, with_tool_loop_history_limit,
+    DEFAULT_MAX_HISTORY_MESSAGES,
 };
 use crate::config::DelegateAgentConfig;
 use crate::coordination::{CoordinationEnvelope, CoordinationPayload, InMemoryMessageBus};
 use crate::federation::remote_subagent::FederationRemoteSubagentAdapter;
 use crate::observability::traits::{Observer, ObserverEvent, ObserverMetric};
-use crate::providers::{self, ChatMessage, Provider};
+use crate::providers::{self, ChatMessage, ChatRequest, Provider};
 use crate::security::policy::ToolOperation;
 use crate::security::SecurityPolicy;
 use async_trait::async_trait;
@@ -485,10 +487,17 @@ impl DelegateTool {
 
         // The parent turn's cancellation token remains the lifetime control.
         // Do not impose an arbitrary wall-clock deadline on model inference.
+        let mut messages = Vec::new();
+        if let Some(system_prompt) = agent_config.system_prompt.as_ref() {
+            messages.push(ChatMessage::system(system_prompt.clone()));
+        }
+        messages.push(ChatMessage::user(full_prompt));
         let result = provider
-            .chat_with_system(
-                agent_config.system_prompt.as_deref(),
-                &full_prompt,
+            .chat(
+                ChatRequest {
+                    messages: &messages,
+                    tools: None,
+                },
                 &agent_config.model,
                 temperature,
             )
@@ -496,12 +505,18 @@ impl DelegateTool {
 
         match result {
             Ok(response) => {
-                let mut rendered = response;
+                let metrics = inference_metrics_from_response(&response);
+                let mut rendered = response.text_or_empty().to_string();
                 if rendered.trim().is_empty() {
                     rendered = "[Empty response]".to_string();
                 }
+                let telemetry = metrics
+                    .as_ref()
+                    .and_then(format_inference_metrics_summary)
+                    .map(|summary| format!(" · {summary}"))
+                    .unwrap_or_default();
                 let output = format!(
-                    "[Agent '{agent_name}' ({provider}/{model})]\n{rendered}",
+                    "[Agent '{agent_name}' ({provider}/{model}){telemetry}]\n{rendered}",
                     provider = agent_config.provider,
                     model = agent_config.model
                 );
@@ -581,28 +596,53 @@ impl DelegateTool {
 
         let noop_observer = NoopObserver;
 
-        let result = with_tool_loop_history_limit(
-            self.max_history_messages,
-            run_tool_call_loop(
-                provider,
-                &mut history,
-                &sub_tools,
-                &noop_observer,
-                &agent_config.provider,
-                &agent_config.model,
-                temperature,
-                true,
-                None,
-                "delegate",
-                &self.multimodal_config,
-                agent_config.max_iterations,
-                None,
-                None,
-                None,
-                &[],
-            ),
-        )
-        .await;
+        let (result, measured_metrics) =
+            with_tool_loop_history_limit(self.max_history_messages, async {
+                let (delta_tx, mut delta_rx) = tokio::sync::mpsc::channel::<String>(128);
+                let mut loop_future = std::pin::pin!(run_tool_call_loop(
+                    provider,
+                    &mut history,
+                    &sub_tools,
+                    &noop_observer,
+                    &agent_config.provider,
+                    &agent_config.model,
+                    temperature,
+                    true,
+                    None,
+                    "delegate",
+                    &self.multimodal_config,
+                    agent_config.max_iterations,
+                    None,
+                    Some(delta_tx),
+                    None,
+                    &[],
+                ));
+                let mut measured_metrics = None;
+                let result = loop {
+                    tokio::select! {
+                        maybe_delta = delta_rx.recv() => {
+                            match maybe_delta {
+                                Some(delta) => {
+                                    if let Some(metrics) = parse_inference_metrics_delta(&delta) {
+                                        measured_metrics = Some(metrics);
+                                    }
+                                }
+                                None => break loop_future.await,
+                            }
+                        }
+                        response = &mut loop_future => {
+                            while let Ok(delta) = delta_rx.try_recv() {
+                                if let Some(metrics) = parse_inference_metrics_delta(&delta) {
+                                    measured_metrics = Some(metrics);
+                                }
+                            }
+                            break response;
+                        }
+                    }
+                };
+                (result, measured_metrics)
+            })
+            .await;
 
         match result {
             Ok(response) => {
@@ -612,10 +652,16 @@ impl DelegateTool {
                     response
                 };
 
+                let telemetry = measured_metrics
+                    .as_ref()
+                    .and_then(format_inference_metrics_summary)
+                    .map(|summary| format!(" · {summary}"))
+                    .unwrap_or_default();
+
                 Ok(ToolResult {
                     success: true,
                     output: format!(
-                        "[Agent '{agent_name}' ({provider}/{model}, agentic)]\n{rendered}",
+                        "[Agent '{agent_name}' ({provider}/{model}, agentic){telemetry}]\n{rendered}",
                         provider = agent_config.provider,
                         model = agent_config.model
                     ),
@@ -853,6 +899,7 @@ impl Observer for NoopObserver {
 mod tests {
     use super::*;
     use crate::coordination::CoordinationPayload;
+    use crate::providers::traits::{InferenceMetrics, TokenUsage};
     use crate::providers::{ChatRequest, ChatResponse, ToolCall};
     use crate::security::{AutonomyLevel, SecurityPolicy};
     use anyhow::anyhow;
@@ -956,8 +1003,17 @@ mod tests {
                 Ok(ChatResponse {
                     text: Some("done".to_string()),
                     tool_calls: Vec::new(),
-                    usage: None,
-                    metrics: None,
+                    usage: Some(TokenUsage {
+                        input_tokens: Some(2048),
+                        output_tokens: Some(64),
+                        output_truncated: false,
+                    }),
+                    metrics: Some(InferenceMetrics {
+                        ttft_ms: Some(500.0),
+                        generation_tps: Some(42.5),
+                        prefill_tps: Some(800.0),
+                        total_ms: Some(2_000.0),
+                    }),
                     reasoning_content: None,
                 })
             } else {
@@ -1402,6 +1458,8 @@ mod tests {
 
         assert!(result.success);
         assert!(result.output.contains("(openrouter/model-test, agentic)"));
+        assert!(result.output.contains("42.5 t/s"));
+        assert!(result.output.contains("2048 prompt tok"));
         assert!(result.output.contains("done"));
     }
 

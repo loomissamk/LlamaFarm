@@ -4,12 +4,14 @@
 //! boundary. The ranker is deliberately local and deterministic: it combines
 //! inverse-document-frequency weighted matches across tool names,
 //! descriptions, and parameter schemas with a small set of domain aliases.
-//! When the query carries no useful signal, it fails open instead of hiding a
-//! tool the model may need.
+//! When the query carries no useful signal, it keeps a compact essential set
+//! and lets the model discover additional registered tools by name.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::tools::ToolSpec;
+
+pub const TOOL_SEARCH_NAME: &str = "tool_search";
 
 /// Core tools that remain available when relevance routing succeeds. These
 /// cover planning, workspace inspection/mutation, local execution, and memory.
@@ -145,6 +147,134 @@ pub struct ToolRoute {
     pub reason: String,
 }
 
+/// Small internal discovery tool. It is deliberately not registered as an
+/// executable host tool: the agent loop handles it by activating only specs
+/// that the current turn's routing and persona policy declared discoverable.
+pub fn tool_search_spec() -> ToolSpec {
+    ToolSpec {
+        name: TOOL_SEARCH_NAME.to_string(),
+        description: "Find and activate additional runtime tools from the compact catalogue for this turn.".to_string(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "names": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Exact tool names to activate"
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Words describing the capability needed"
+                }
+            },
+            "additionalProperties": false
+        }),
+    }
+}
+
+/// Append the internal discovery schema only when real registered tools remain
+/// discoverable. An already-complete selection pays no prompt cost for it.
+pub fn with_tool_search(
+    mut selected: Vec<ToolSpec>,
+    discoverable: &[ToolSpec],
+) -> Vec<ToolSpec> {
+    if !discoverable.is_empty()
+        && !selected.iter().any(|spec| spec.name == TOOL_SEARCH_NAME)
+    {
+        selected.push(tool_search_spec());
+    }
+    selected
+}
+
+/// Names plus one-line purposes only: no parameter schemas are serialized into
+/// the baseline catalogue.
+pub fn compact_catalogue(discoverable: &[ToolSpec]) -> String {
+    if discoverable.is_empty() {
+        return String::new();
+    }
+    let mut output = String::from(
+        "\n## Additional Tool Catalogue\n\nOnly names and purposes are listed here. Call `tool_search` with exact `names` and/or a short `query` to activate full schemas on the next model iteration.\n",
+    );
+    for spec in unique_specs(discoverable) {
+        let purpose = spec.description.lines().next().unwrap_or("").trim();
+        output.push_str("- `");
+        output.push_str(&spec.name);
+        output.push_str("`: ");
+        output.push_str(purpose);
+        output.push('\n');
+    }
+    output
+}
+
+/// Resolve a discovery request against an already policy-filtered catalogue.
+/// Exact names win; a query adds deterministic lexical matches. Unknown names
+/// are reported separately and never become executable.
+pub fn search_catalogue(
+    discoverable: &[ToolSpec],
+    names: &[String],
+    query: Option<&str>,
+) -> (Vec<ToolSpec>, Vec<String>) {
+    let specs = unique_specs(discoverable);
+    let by_name: HashMap<&str, &ToolSpec> =
+        specs.iter().map(|spec| (spec.name.as_str(), *spec)).collect();
+    let mut activated = Vec::new();
+    let mut unknown = Vec::new();
+    let mut seen = HashSet::new();
+    for raw in names {
+        let name = raw.trim();
+        if name.is_empty() {
+            continue;
+        }
+        if let Some(spec) = by_name.get(name) {
+            if seen.insert(spec.name.as_str()) {
+                activated.push((*spec).clone());
+            }
+        } else if !unknown.iter().any(|item| item == name) {
+            unknown.push(name.to_string());
+        }
+    }
+
+    if let Some(query) = query.map(str::trim).filter(|query| !query.is_empty()) {
+        let query_tokens = expanded_query_tokens(query);
+        let documents: Vec<ToolDocument> = specs.iter().map(|spec| ToolDocument::new(spec)).collect();
+        let frequency = document_frequency(&documents);
+        let mut ranked = documents
+            .iter()
+            .filter_map(|doc| score_document(doc, &query_tokens, &frequency, documents.len() as f32))
+            .collect::<Vec<_>>();
+        ranked.sort_by(|left, right| {
+            right.score.total_cmp(&left.score).then_with(|| left.name.cmp(&right.name))
+        });
+        for score in ranked.into_iter().take(8) {
+            if let Some(spec) = by_name.get(score.name.as_str()) {
+                if seen.insert(spec.name.as_str()) {
+                    activated.push((*spec).clone());
+                }
+            }
+        }
+    }
+    let activated_names = activated
+        .iter()
+        .map(|spec| spec.name.clone())
+        .collect::<HashSet<_>>();
+    let registered = specs
+        .iter()
+        .map(|spec| spec.name.as_str())
+        .collect::<HashSet<_>>();
+    let mut closed = specs
+        .iter()
+        .filter(|spec| activated_names.contains(&spec.name))
+        .map(|spec| spec.name.as_str())
+        .collect::<HashSet<_>>();
+    close_dependencies(&mut closed, &registered);
+    for spec in &specs {
+        if closed.contains(spec.name.as_str()) && seen.insert(spec.name.as_str()) {
+            activated.push((*spec).clone());
+        }
+    }
+    (activated, unknown)
+}
+
 impl ToolRoute {
     pub fn selected_specs(&self, tools: &[ToolSpec]) -> Vec<ToolSpec> {
         let selected: HashSet<&str> = self.selected.iter().map(String::as_str).collect();
@@ -236,8 +366,9 @@ pub fn route_tools(tools: &[ToolSpec], query: &str, top_k: usize) -> ToolRoute {
 
     let query_tokens = expanded_query_tokens(query);
     if query_tokens.is_empty() {
-        return full_selection(
-            tools,
+        return discovery_selection(
+            &specs,
+            &[],
             ToolRouteStrategy::FailOpenNoQuery,
             "query contained no discriminating routing terms",
         );
@@ -260,10 +391,11 @@ pub fn route_tools(tools: &[ToolSpec], query: &str, top_k: usize) -> ToolRoute {
     });
 
     if ranked.is_empty() {
-        return full_selection(
-            tools,
+        return discovery_selection(
+            &specs,
+            &[],
             ToolRouteStrategy::FailOpenNoMatch,
-            "no tool had a name match or multi-term description match; preserving the full registry",
+            "no tool had a name match or multi-term description match; exposing essentials plus discovery",
         );
     }
 
@@ -272,11 +404,12 @@ pub fn route_tools(tools: &[ToolSpec], query: &str, top_k: usize) -> ToolRoute {
         let next = ranked[top_k].score;
         let minimum_margin = cutoff.abs().max(1.0) * 0.05;
         if cutoff - next <= minimum_margin {
-            return full_selection(
-                tools,
+            return discovery_selection(
+                &specs,
+                &ranked[..top_k],
                 ToolRouteStrategy::FailOpenAmbiguous,
                 format!(
-                    "ranking was ambiguous at the top_k={top_k} cutoff; preserving the full registry"
+                    "ranking was ambiguous at the top_k={top_k} cutoff; exposing relevant tools plus discovery"
                 ),
             );
         }
@@ -308,6 +441,39 @@ pub fn route_tools(tools: &[ToolSpec], query: &str, top_k: usize) -> ToolRoute {
         reason: format!(
             "selected up to {top_k} relevant non-essential tools plus essentials and dependencies"
         ),
+    }
+}
+
+fn discovery_selection(
+    specs: &[&ToolSpec],
+    relevant: &[ToolRouteScore],
+    strategy: ToolRouteStrategy,
+    reason: impl Into<String>,
+) -> ToolRoute {
+    let registered: HashSet<&str> = specs.iter().map(|spec| spec.name.as_str()).collect();
+    let mut selected: HashSet<&str> = ESSENTIAL_TOOLS
+        .iter()
+        .copied()
+        .filter(|name| registered.contains(name))
+        .collect();
+    for score in relevant {
+        selected.insert(score.name.as_str());
+    }
+    close_dependencies(&mut selected, &registered);
+    ToolRoute {
+        selected: specs
+            .iter()
+            .filter(|spec| selected.contains(spec.name.as_str()))
+            .map(|spec| spec.name.clone())
+            .collect(),
+        excluded: specs
+            .iter()
+            .filter(|spec| !selected.contains(spec.name.as_str()))
+            .map(|spec| spec.name.clone())
+            .collect(),
+        ranked: relevant.to_vec(),
+        strategy,
+        reason: reason.into(),
     }
 }
 
@@ -646,18 +812,20 @@ mod tests {
     }
 
     #[test]
-    fn no_signal_fails_open_instead_of_hiding_tools() {
+    fn no_signal_uses_compact_discovery_instead_of_full_schemas() {
         let route = route_tools(&registry(), "yes, do that too", 1);
         assert_eq!(route.strategy, ToolRouteStrategy::FailOpenNoQuery);
-        assert!(route.excluded.is_empty());
-        assert_eq!(route.selected.len(), registry().len());
+        assert!(!route.excluded.is_empty());
+        assert!(route.selected.contains(&"task_plan".to_string()));
+        assert!(route.selected.contains(&"shell".to_string()));
+        assert!(route.selected.len() < registry().len());
     }
 
     #[test]
     fn generic_schema_terms_fail_open_instead_of_selecting_arbitrarily() {
         let route = route_tools(&registry(), "what type is this", 1);
         assert_eq!(route.strategy, ToolRouteStrategy::FailOpenNoQuery);
-        assert!(route.excluded.is_empty());
+        assert!(!route.excluded.is_empty());
 
         let tools = vec![
             ToolSpec {
@@ -673,7 +841,8 @@ mod tests {
         ];
         let schema_only = route_tools(&tools, "widget", 1);
         assert_eq!(schema_only.strategy, ToolRouteStrategy::FailOpenNoMatch);
-        assert!(schema_only.excluded.is_empty());
+        assert_eq!(schema_only.selected, Vec::<String>::new());
+        assert_eq!(schema_only.excluded.len(), tools.len());
 
         let weak_description = vec![
             spec("alpha", "Inspect a widget"),
@@ -682,14 +851,15 @@ mod tests {
         ];
         let weak = route_tools(&weak_description, "widget", 1);
         assert_eq!(weak.strategy, ToolRouteStrategy::FailOpenNoMatch);
-        assert!(weak.excluded.is_empty());
+        assert_eq!(weak.selected, Vec::<String>::new());
+        assert_eq!(weak.excluded.len(), weak_description.len());
     }
 
     #[test]
-    fn unmatched_language_fails_open() {
+    fn unmatched_language_uses_discovery() {
         let route = route_tools(&registry(), "继续上一个任务", 1);
         assert_eq!(route.strategy, ToolRouteStrategy::FailOpenNoMatch);
-        assert!(route.excluded.is_empty());
+        assert!(!route.excluded.is_empty());
     }
 
     #[test]
@@ -717,7 +887,7 @@ mod tests {
     }
 
     #[test]
-    fn ambiguous_cutoff_fails_open_instead_of_hiding_an_equal_match() {
+    fn ambiguous_cutoff_keeps_one_relevant_schema_and_discovery() {
         let tools = vec![
             spec("zeta_tool", "inspect widget"),
             spec("alpha_tool", "inspect widget"),
@@ -727,8 +897,74 @@ mod tests {
         let second = route_tools(&tools, "inspect widget", 1);
         assert_eq!(first.ranked, second.ranked);
         assert_eq!(first.strategy, ToolRouteStrategy::FailOpenAmbiguous);
-        assert!(first.excluded.is_empty());
-        assert_eq!(first.selected.len(), tools.len());
+        assert_eq!(first.selected.len(), 1);
+        assert_eq!(first.excluded.len(), tools.len() - 1);
+    }
+
+    #[test]
+    fn compact_catalogue_has_names_and_purposes_but_no_parameter_schema() {
+        let tools = vec![ToolSpec {
+            name: "db_query".into(),
+            description: "Query the configured database\nwith more detail".into(),
+            parameters: json!({
+                "type": "object",
+                "properties": { "secret_parameter_name": { "type": "string" } }
+            }),
+        }];
+        let catalogue = compact_catalogue(&tools);
+        assert!(catalogue.contains("`db_query`: Query the configured database"));
+        assert!(!catalogue.contains("secret_parameter_name"));
+        assert!(!catalogue.contains("properties"));
+    }
+
+    #[test]
+    fn discovery_activates_exact_names_reports_unknown_and_searches_query() {
+        let tools = vec![
+            spec("packet_capture", "capture network packets and traffic"),
+            spec("db_query", "query a database"),
+            spec("pushover", "send a notification"),
+        ];
+        let (activated, unknown) = search_catalogue(
+            &tools,
+            &["db_query".into(), "not_registered".into()],
+            Some("network traffic"),
+        );
+        let names = activated.iter().map(|spec| spec.name.as_str()).collect::<Vec<_>>();
+        assert!(names.contains(&"db_query"));
+        assert!(names.contains(&"packet_capture"));
+        assert_eq!(unknown, ["not_registered"]);
+    }
+
+    #[test]
+    fn discovery_cannot_activate_a_policy_excluded_persona_tool() {
+        let policy_allowed_catalogue = vec![spec("file_read", "read files")];
+        let (activated, unknown) = search_catalogue(
+            &policy_allowed_catalogue,
+            &["shell".into()],
+            Some("execute a command"),
+        );
+        assert!(activated.iter().all(|spec| spec.name != "shell"));
+        assert_eq!(unknown, ["shell"]);
+    }
+
+    #[test]
+    fn discovery_schema_is_absent_when_nothing_is_excluded() {
+        let selected = vec![spec("file_read", "read files")];
+        let complete = with_tool_search(selected.clone(), &[]);
+        assert_eq!(complete.len(), selected.len());
+        assert_eq!(complete[0].name, selected[0].name);
+        assert!(complete.iter().all(|spec| spec.name != TOOL_SEARCH_NAME));
+    }
+
+    #[test]
+    fn explicit_full_allowlist_is_unchanged_and_needs_no_discovery_tool() {
+        let tools = registry();
+        let names = tools.iter().map(|spec| spec.name.as_str()).collect::<Vec<_>>();
+        let route = direct_selection(&tools, &names, "explicit test-all allowlist");
+        assert!(route.excluded.is_empty());
+        let selected = with_tool_search(route.selected_specs(&tools), &[]);
+        assert_eq!(selected.len(), tools.len());
+        assert!(selected.iter().all(|spec| spec.name != TOOL_SEARCH_NAME));
     }
 
     #[test]

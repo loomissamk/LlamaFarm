@@ -1,9 +1,50 @@
 # LlamaFarm platform backlog
 
-This is the durable implementation backlog for the two-node, local-first
-LlamaFarm deployment.  Keep this file current when an operator asks for a
+This is the durable implementation backlog for the local-first LlamaFarm
+fleet. Keep this file current when an operator asks for a
 feature; do not rely on an agent's transient chat context as the record of
 requested work.
+
+## Current deployment decision — RTX 5070 Ti inference and durable network runs (2026-08-13)
+
+This section is authoritative where older hardware or run-lifecycle notes
+below disagree with it.
+
+- [x] `.154` currently runs LlamaFarm and its bundled Ollama on the physically
+  installed RTX 5070 Ti through NVIDIA Open R580 and CUDA. The V100 has been
+  removed pending a dedicated cooled installation; do not enable a V100 or
+  mixed-GPU host service while it is absent.
+- [x] Ship reversible `cuda507.sh` and `cudav100.sh` operator commands. The
+  5070 command must select the live card by exact UUID, persist that private
+  choice, disable stale V100 services, preserve Docker volumes, and verify the
+  display plus container. The V100 command must fail without mutation when no
+  V100 is present and retain the guarded proprietary-CUDA/Nouveau transition
+  for a later physical reinstall.
+- [x] Keep model selection dashboard-persistent. Checked-in node profiles
+  supply an initial default only when persistent config is first created;
+  `LLAMAFARM_MODEL` must not overwrite a dashboard selection at restart.
+- [x] Browser or network disconnect detaches the viewer without cancelling the
+  server-owned run. Live runs remain discoverable and cancelable through the
+  Runs API/UI, terminal tool evidence is persisted, stale `Running` rows are
+  reconciled after a daemon restart, terminal history can be cleared manually,
+  and terminal run artifacts are removed after seven days.
+- [ ] Complete the network-run acceptance gate on both `.154` and the RTX 4070
+  laptop: submit a regular chat, detach its browser, find the live run from the
+  other computer, hydrate the saved conversation, let one run finish, cancel
+  another remotely, and verify persisted transcript plus run-ledger evidence.
+  A process/container restart still cannot resume in-flight compute; implement
+  checkpointed resume before claiming that stronger guarantee.
+- [ ] After the V100 receives dedicated cooling, benchmark it in its real CUDA
+  rig before buying a second card. Document the exact slot/lane, power, and
+  model-placement plan. The future target is one or two symmetric V100 CUDA
+  workers (GPU A, GPU B, or both), not an unmeasured Vulkan compromise.
+- [ ] Add bounded experience retrieval for difficult work: record up to three
+  verified successful examples and three instructive failures per task/tool
+  pattern, with provenance and recency, then retrieve them on demand only when
+  the current run is stuck or a matching failure recurs. Never inject the
+  library wholesale into ordinary prompts, and expire/dedupe stale examples.
+- [ ] Windows is not part of this deployment pass. Keep its profile available,
+  but do not block `.154` and laptop releases on that node.
 
 ## Non-negotiable operating constraints
 
@@ -12,8 +53,9 @@ requested work.
   advantage.
 - [x] Keep models and Qdrant data volumes intact across redeploys.
 - [x] Browser pairing is permanently disabled for this private LAN deployment.
-- [x] Support distinct hardware profiles: 8 GB RTX 4070 Laptop and 16 GB RTX
-  5070 Ti. Neither profile applies Compose CPU, memory, swap, or PID ceilings.
+- [x] Support distinct hardware profiles: 8 GB RTX 4070 Laptop, 16 GB RTX
+  5070 Ti, Windows WSL, and future 32 GB Tesla V100. No profile applies Compose
+  CPU, memory, swap, or PID ceilings.
 - [x] Document deployment, verification, recovery, and acceptance tests in
   the repository for the next redeploy/operator.
 
@@ -43,7 +85,7 @@ Delivered in this pass:
 - [x] Verify native tool calls for shell, web search, task planning, and
   database query across all four candidates.
 - [ ] Complete the final exact-build deployment and rendered browser acceptance
-  matrix on the laptop and RTX 5070 Ti node.
+  matrix on the laptop and RTX-5070-Ti-backed `.154` node.
 
 ### P0 — context and model acceptance
 
@@ -62,14 +104,11 @@ Delivered in this pass:
 - [ ] Build a repeatable role bakeoff (planner/coder/verifier/operator,
   patch-and-test, RAG citations, recovery, cold/warm TTFT/TPS, memory placement)
   and promote models only when measured thresholds pass.
-- [ ] When a 32 GB V100 is added beside the 16 GB RTX 5070 Ti, treat the
-  resulting 48 GB aggregate VRAM as a measured heterogeneous-GPU experiment,
-  not assumed additive performance. Benchmark the current 35B-A3B-MTP Q4
-  baseline first, then Qwen3.6 35B-A3B-MTP Q8 (~39 GB), Qwen3-Next
-  80B-A3B-Instruct Q4 (~50 GB, likely slight RAM spill), and Qwen3.5
-  122B-A10B Q4 (~81 GB, substantial RAM spill). Record per-GPU placement,
-  PCIe transfer pressure, 64K/128K/256K TTFT/TPS, tool-call correctness,
-  long-run completion, and explicit cancellation before changing defaults.
+- [ ] When the cooled V100 rig is available, benchmark its CUDA baseline across 9B, 27B dense,
+  35B-A3B-MTP, 80B-A3B, and 122B-A10B candidates. Record weight placement,
+  CPU spill, PCIe pressure, 64K/128K/256K TTFT/TPS, tool-call correctness,
+  long-run completion, and cancellation. Do not include the 5070 Ti in these
+  inference results.
 - [ ] Rewrite or remove older stale backlog entries for features now present,
   including specialist prompts, auto-extending plans, the run ledger, browser
   tooling, inference metrics, and the SQLite embedding cache.
@@ -79,9 +118,10 @@ Delivered in this pass:
 - [ ] Replace in-memory federation tasks with a durable queue: persisted task
   state, idempotency, leases/heartbeats, restart recovery, retry/failover,
   capacity-aware routing, and the unfinished `node.invoke` path.
-- [ ] Move chat/session JSON read-modify-write persistence to a transactional
-  store with message IDs, checkpoints, concurrent-update protection, and
-  active-turn restart recovery.
+- [ ] Finish transactional chat/session persistence. Immediate accepted-prompt
+  checkpoints, concurrent-update protection, and periodic cross-device
+  discovery are in the current deployment pass; message IDs and in-flight
+  process/container restart recovery still require a transactional store.
 - [ ] Add a content-addressed durable artifact store with hashes, retention,
   previews/downloads, and cleanup; stop treating `/tmp` excerpts as the durable
   output of large tool runs.
@@ -240,13 +280,14 @@ Next up this pass (in progress as of this writing):
   exists server-side yet, `POST /api/memory/clear` is category-only, so
   this one needs an Agent-type job with real judgment, tightly
   tool-scoped to `memory_recall`+`memory_forget` only).
-- [ ] Deploy all of the above identically on both the laptop and the 154
-  GPU box, per the established pattern this whole session.
+- [ ] Deploy all of the above identically on the laptop and the `.154` RTX
+  5070 Ti node, using their checked-in hardware profiles.
 
-## Delivered in the two-node foundation pass
+## Historical record — delivered in the original two-node foundation pass
 
-- [x] (dropped) "test all tools" was the operator's informal way of probing
-  the agent's capability, not a feature to build (confirmed 2026-07-17).
+- [x] Replace the old informal "test all tools" prompt with a first-class
+  persisted acceptance run that receives the exact live server catalogue,
+  remains discoverable after browser detach, and records per-tool evidence.
 - [x] Show live operational progress in the Agent UI, with an expanded by
   default, collapsible live-output panel.  Do not expose hidden reasoning;
   show useful execution state, tools, artifacts, and final answer instead.
@@ -258,9 +299,9 @@ Next up this pass (in progress as of this writing):
 
 ## In progress — evidence-gated run ledger pass (2026-07-16)
 
-State: full `cargo test --lib` suite passes (4187/4187, was 18 failing), web
-production build passes. Remaining: laptop redeploy + browser verify; gpu box
-redeploy queued until back on the LAN.
+Historical state at the time: full `cargo test --lib` suite passed (4187/4187,
+was 18 failing) and the web production build passed. Current deployment and
+acceptance state is tracked in the authoritative section at the top.
 
 Also fixed in this pass:
 
@@ -323,11 +364,9 @@ Remaining to finish this pass, in order:
   duration + excerpt + artifacts, status/attempts/retry reason, live badge,
   5s auto-refresh).
 - [x] `npm run build` in `web/` passes.
-- [ ] Redeploy THIS laptop via `scripts/docker/up-node.sh rtx4070-laptop up -d
-  --build`; verify `/api/health` and `/api/runs` locally, then E2E: create a
-  plan via chat, watch evidence attach in the Runs page. The gpu box
-  (192.168.1.154) is unreachable off-WLAN — redeploy it next time the laptop
-  is back on the LAN (`git pull` + same script with `rtx5070ti-16gb`).
+- [ ] Redeploy the laptop with `rtx4070-laptop` and `.154` with
+  `rtx5070ti-16gb`; verify `/health`, `/api/runs`, durable chat discovery,
+  NVIDIA Open/CUDA visibility, and exact 5070-only container selection.
 - [ ] Then continue the backlog below (context capsules + final acceptance
   pass are partially covered by the evidence gate; run inspector resume
   controls, token-budget allocator, federation durable queue, workspace RAG,
@@ -382,19 +421,18 @@ and tool selection.** Direct implications:
   node profiles. Highest-leverage speed win after keep_alive.
 - [x] **Multi-model routing** — ALREADY IN LlamaFarm: `[[model_routes]]`
   config (hint→model) + capability registry + a `model_routing_config`
-  tool the agent can call to set routes. Recommendation: route a fast
-  Qwen3 tool-router on the 4070 and the big model on the 5070 Ti (Qwen3 is
-  the most reliable local tool-caller per 2026 benchmarks). Just needs
-  config; surface it in the UI next.
+  tool the agent can call to set routes. The runtime-preference UI now exposes
+  primary and configured external workers. Current topology keeps the 4070
+  laptop responsive and routes the larger local model to `.154`'s 5070 Ti.
 - [ ] **Graph/queryable memory** (Cognee/Mem0/Zep/Letta pattern): upgrade
   the flat memory store toward a queryable knowledge graph with provenance
   so recall scales past keyword/vector. Big but high-value.
 - [ ] **Hierarchical orchestration** (MDPI survey) — planner → parallel
   worker-subagents → verifier as a typed state graph. LlamaFarm already has
   the pieces (run ledger, subagent_spawn, delegate). **GATED ON HARDWARE**:
-  operator's target rig is 4× V100 (~128GB VRAM, high bandwidth) — real
-  parallel multi-subagent orchestration lands when that's available; keep it
-  single/low-fanout on the current 8GB/16GB nodes to avoid VRAM thrash.
+  validate a cooled V100 CUDA rig after reinstall, then consider a second
+  symmetric V100 worker with explicit GPU-A/GPU-B/both placement. Keep fanout
+  measured until that worker topology is installed and accepted.
 
 ## Next-gen "dangerously good" batch (operator request, 2026-07-17)
 
@@ -420,7 +458,8 @@ My honest thoughts on each idea, with a plan:
   in-UI auth-key entry + live tailnet-IP display (needs host-level action the
   gateway container can't take directly).
 - [ ] **DroneDetect one-click**: now that authenticated `git clone` works, a
-  "workspace project" flow that clones loomissamk/DroneDetect, sets up its
+  "workspace project" flow that clones the operator's private DroneDetect
+  repo, sets up its
   venv (code_run/python), and runs inference on a sample. Verdict: GREAT
   showcase of the whole platform (git + code_run + RAG + run ledger) on your
   own real repo. Generalize to "bootstrap any of my repos as a project."
@@ -434,15 +473,17 @@ My honest thoughts on each idea, with a plan:
 - [x] Keep Agent Chat alive across normal SPA navigation (2026-07-19). The
   stable layout lazily mounts one AgentChat instance and hides it off-route, so
   `/agent` → another page → `/agent` preserves the WebSocket stream, active
-  task, temporary thread, draft, tool timeline, and federation state. Genuine
-  tab/network disconnects retain the gateway's cancellation behavior.
+  task, temporary thread, draft, tool timeline, and federation state. A genuine
+  tab/network disconnect now detaches only the viewer: the server-owned run
+  continues, remains visible in Runs, and can be cancelled by a replacement
+  browser or another network computer.
 
 - [x] Add first-class **follow-ups**.  A user message can attach to, amend,
   reprioritize, or cancel an active run without losing its verified steps,
   artifacts, or context. The initial implementation queues the message against
   the active session, checkpoints/cancels the current segment, and starts the
-  follow-up immediately. Durable reconnect/restart resume remains part of the
-  run-inspector work below.
+  follow-up immediately. Browser/network reconnect is durable; resuming actual
+  in-flight compute after a gateway/container restart remains open.
 - [x] Add a real **Stop** control to the Agent UI.  `cancel` is scoped to the
   active chat session, interrupts the cancellation-aware model/tool loop,
   forwards cancellation to accepted federation tasks, reports a clean terminal
@@ -462,9 +503,9 @@ My honest thoughts on each idea, with a plan:
   cancel, and resume controls.
 - [ ] Make federation a durable queue with idempotency keys, leases,
   cancellation propagation, reconnection/resume, and resource-aware routing.
-- [ ] Schedule whole subproblems, not one inference split across unequal GPUs:
-  4070 for responsive chat/light tools and 5070 Ti for deeper coding,
-  long-context, RAG, and batch evaluation.
+- [ ] Schedule whole subproblems across nodes: use the 4070 laptop for
+  responsive chat/light tools and the `.154` 5070 Ti for deeper coding,
+  long-context, RAG, and batch evaluation until the V100 rig returns.
 - [ ] Add a token-budget allocator and layered memory/project evidence ledger.
   Reserve context for instructions, tools, current task, retrieved evidence,
   and response; summarize old tool output into cited artifact references.
@@ -474,7 +515,7 @@ My honest thoughts on each idea, with a plan:
   checkpoint/continuation only as compatibility for an explicitly configured
   positive limit or a natural context-window boundary.
 
-## Deploy status (2026-07-16)
+## Historical deploy status (2026-07-16)
 
 Pushed to `v2` and code-complete, DEPLOYED & E2E-verified on the laptop:
 run ledger + inspector, cross-session memory, playbooks, workspace RAG inbox,
@@ -490,8 +531,9 @@ outage): the **MMR reranker** (63a4abf8). It will land on the next successful
 The deploy script now reports this cleanly (exit 3 = container not swapped,
 previous image still healthy) instead of failing silently.
 
-gpu box (192.168.1.154): catch up with `git pull` + `up-node.sh
-rtx5070ti-16gb up -d --build` next time on the LAN — it inherits everything.
+Current deployment instructions supersede this snapshot: `.154` now uses the
+`rtx5070ti-16gb` profile and `cuda507.sh`; the guarded V100 profile remains a
+future, reversible option after the card receives dedicated cooling.
 
 ## Operator directive — UI consolidation + cutting-edge focus (2026-07-16)
 
@@ -576,10 +618,9 @@ hook and refuses public bind without one, so this fits the existing design.
   `TS_STATE_DIR` on a persistent volume, `--advertise-tags`), with the
   LlamaFarm container joining it via `network_mode: service:tailscale`.
   Gated behind a compose profile so it stays strictly opt-in.
-- [ ] Both nodes then get stable `100.x` tailnet IPs reachable worldwide:
-  federation peers use tailnet IPs instead of `192.168.1.x`, so the two-node
-  setup keeps working off-LAN (this also unblocks the gpu box redeploy from
-  anywhere).
+- [ ] Keep stable tailnet discovery for every active node so federation and
+  cross-device run inspection work off-LAN without hardcoding addresses in
+  tracked files.
 - [ ] Enable Tailscale Serve/Funnel optionally for HTTPS access from a phone
   without exposing the LAN; keep `allow_public_bind = false`.
 - [ ] Alternative documented for reference: a self-hosted WireGuard
@@ -689,7 +730,7 @@ extra always-on service with no capability the current stack lacks.
 - [ ] **Cross-node knowledge sync.** Replicate `rag/inbox` documents,
   playbook memories, and long-term facts between the two nodes over the
   existing federation channel (idempotency-keyed, newest-wins), so a fact
-  taught to the laptop is recallable on the 5070 Ti box and vice versa.
+  taught to the laptop is recallable on the `.154` coordinator and vice versa.
   Highest-value two-node feature on this list.
 - [ ] **Local SRE watch mode.** A cron-driven watcher tails journald/docker
   events for crashloops, OOM kills, and disk pressure, and opens an agent
@@ -718,13 +759,12 @@ extra always-on service with no capability the current stack lacks.
   code changes plus tests, recovery, web citations, RAG grounding, memory
   resume, federation retry, and long-run completion.  Promote models/prompts
   only when they beat the deployed baseline.
-- [ ] Benchmark an optional llama.cpp server lane for models too large for one
-  GPU.  Prefer it for explicit unequal-VRAM tensor splitting; only benchmark
-  vLLM/SGLang on the 5070 Ti when throughput/prefix-cache measurements justify
-  their additional complexity.
+- [ ] Defer optional llama.cpp/vLLM/SGLang lanes until the current 5070 Ti
+  Ollama baseline and a future cooled V100 topology are measured. Do not mix
+  the 5070 Ti into later V100 inference benchmarks.
 - [ ] Evaluate local model roles with the test suite: small fast tool router on
-  the 4070, Qwen 9B main agent on the 5070 Ti, and optional larger coding or
-  reasoning models only when they leave practical KV-cache headroom.
+  the 4070 laptop, dense or MoE alternatives on the `.154` 5070 Ti, and later
+  V100 candidates only when they leave practical KV-cache headroom.
 
 ## Operator experience and safety boundaries
 

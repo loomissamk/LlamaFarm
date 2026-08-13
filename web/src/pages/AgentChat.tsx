@@ -21,7 +21,7 @@ import {
   Wrench,
   X,
 } from 'lucide-react';
-import { getChatSession, getChatSessions, getAgentModes, type AgentModeOption } from '@/lib/api';
+import { getChatSession, getChatSessions, getAgentModes, getTools, type AgentModeOption } from '@/lib/api';
 import { getFederationPeers } from '@/lib/api';
 import {
   loadFederationPeerSelections,
@@ -132,6 +132,7 @@ const IDE_DEFAULT_WIDTH = 560;
 const CHAT_FEDERATION_COLLAPSED_STORAGE_KEY = 'llamafarm.agent_chat.federation_collapsed.v1';
 const CHAT_CONTROLS_COLLAPSED_STORAGE_KEY = 'llamafarm.agent_chat.controls_collapsed.v1';
 const MAX_PERSISTED_MESSAGES = 500;
+const REMOTE_SESSION_REFRESH_MS = 7500;
 // Kicks off a self-contained acceptance run: the model must enumerate every
 // registered tool via task_plan (not just guess a few) and chain through
 // them one at a time so each gets a real, verified call before the plan can
@@ -823,6 +824,7 @@ export default function AgentChat() {
   const runWsRefs = useRef<Record<string, WebSocketClient>>({});
   const runWsQueuesRef = useRef<Record<string, SendChatMessageOptions[]>>({});
   const wsMessageHandlerRef = useRef<((message: WsMessage) => void) | null>(null);
+  const sessionsRef = useRef(sessions);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const confirmDeleteCancelRef = useRef<HTMLButtonElement>(null);
@@ -837,6 +839,7 @@ export default function AgentChat() {
   const activeSessionIdRef = useRef(activeSessionId);
   const hasConnectedRef = useRef(false);
   const connected = connectionState === 'connected';
+  sessionsRef.current = sessions;
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) ?? sessions[0],
@@ -923,48 +926,91 @@ export default function AgentChat() {
   // only (title + timestamp); the transcript itself loads on first open.
   useEffect(() => {
     let cancelled = false;
+    let refreshInFlight = false;
 
     const discoverRemoteSessions = async () => {
+      if (cancelled || refreshInFlight) return;
+      refreshInFlight = true;
       try {
         const { sessions: remote } = await getChatSessions();
         if (cancelled || remote.length === 0) return;
+        const localById = new Map(sessionsRef.current.map((session) => [session.id, session]));
+        const staleIds = remote
+          .filter((summary) => {
+            const local = localById.get(summary.session_id);
+            return local !== undefined && summary.message_count > local.messages.length;
+          })
+          .map((summary) => summary.session_id);
+        const staleIdSet = new Set(staleIds);
+        const remoteById = new Map(remote.map((summary) => [summary.session_id, summary]));
 
         setSessions((prev) => {
-          const knownIds = new Set(prev.map((s) => s.id));
-          const localById = new Map(prev.map((session) => [session.id, session]));
-          const staleIds = remote
-            .filter((summary) => {
-              const local = localById.get(summary.session_id);
-              return local !== undefined && summary.message_count > local.messages.length;
-            })
-            .map((summary) => summary.session_id);
+          const knownIds = new Set(prev.map((session) => session.id));
+          const updated = prev.map((session) => {
+            const summary = remoteById.get(session.id);
+            if (!summary || !staleIdSet.has(session.id)) return session;
+            return {
+              ...session,
+              title: summary.title,
+              updatedAt: new Date(summary.updated_at_unix * 1000),
+            };
+          });
           const additions: ChatSession[] = remote
-            .filter((r) => !knownIds.has(r.session_id))
-            .map((r) => ({
-              id: r.session_id,
-              title: r.title,
+            .filter((summary) => !knownIds.has(summary.session_id))
+            .map((summary) => ({
+              id: summary.session_id,
+              title: summary.title,
               temporary: false,
-              createdAt: new Date(r.updated_at_unix * 1000),
-              updatedAt: new Date(r.updated_at_unix * 1000),
+              createdAt: new Date(summary.updated_at_unix * 1000),
+              updatedAt: new Date(summary.updated_at_unix * 1000),
               messages: [],
             }));
-          if (additions.length === 0 && staleIds.length === 0) return prev;
+          return additions.length > 0 || staleIds.length > 0
+            ? sortSessions([...updated, ...additions])
+            : prev;
+        });
+        setRemoteOnlySessionIds((prevIds) => {
+          const next = new Set(prevIds);
+          for (const summary of remote) {
+            if (!localById.has(summary.session_id)) next.add(summary.session_id);
+          }
+          for (const sessionId of staleIds) next.add(sessionId);
+          return next;
+        });
+
+        // If another device is currently viewing a transcript that changed on
+        // the server, refresh it in place. A browser that owns the live run
+        // keeps its richer streaming/tool-event transcript until completion.
+        const selectedId = activeSessionIdRef.current;
+        if (selectedId && staleIdSet.has(selectedId) && !runWsRefs.current[selectedId]) {
+          const detail = await getChatSession(selectedId);
+          if (cancelled) return;
+          const messages = reconstructFromStoredMessages(detail.messages);
+          setSessions((prev) =>
+            prev.map((session) =>
+              session.id === selectedId ? { ...session, messages } : session,
+            ),
+          );
           setRemoteOnlySessionIds((prevIds) => {
             const next = new Set(prevIds);
-            for (const a of additions) next.add(a.id);
-            for (const sessionId of staleIds) next.add(sessionId);
+            next.delete(selectedId);
             return next;
           });
-          return sortSessions([...prev, ...additions]);
-        });
+        }
       } catch {
         // Best-effort discovery; local sessions still work without it.
+      } finally {
+        refreshInFlight = false;
       }
     };
 
     void discoverRemoteSessions();
+    const interval = globalThis.setInterval(() => {
+      void discoverRemoteSessions();
+    }, REMOTE_SESSION_REFRESH_MS);
     return () => {
       cancelled = true;
+      globalThis.clearInterval(interval);
     };
   }, []);
 
@@ -1178,17 +1224,19 @@ export default function AgentChat() {
           // Real per-segment inference timing from the provider (Ollama):
           // decode TPS and time-to-first-token, replacing wall-clock guesses.
           const m = msg.metrics ?? {};
-          if (
-            typeof m.generation_tps === 'number' &&
-            sessionId === activeSessionIdRef.current
-          ) {
+          if (typeof m.generation_tps === 'number') {
             const metrics = {
               generationTps: m.generation_tps,
               ttftMs: typeof m.ttft_ms === 'number' ? m.ttft_ms : null,
               promptTokens: typeof m.prompt_tokens === 'number' ? m.prompt_tokens : null,
             };
+            // A server-owned run may finish while another chat is selected.
+            // Retain its measured metrics for that session's final message;
+            // only the live header is conditional on the active selection.
             realMetricsBySessionRef.current[sessionId] = metrics;
-            setRealMetrics(metrics);
+            if (sessionId === activeSessionIdRef.current) {
+              setRealMetrics(metrics);
+            }
           }
           break;
         }
@@ -1351,6 +1399,7 @@ export default function AgentChat() {
         case 'federation_chunk':
         case 'federation_tool_call':
         case 'federation_tool_result':
+        case 'federation_metrics':
         case 'federation_done':
         case 'federation_error': {
           if (!msg.task_id || !msg.peer_id || !msg.peer_name || !msg.delegate_agent) {
@@ -1410,6 +1459,25 @@ export default function AgentChat() {
                     : `Tool result from ${msg.peer_name}`,
                   updatedAt: now,
                 };
+              case 'federation_metrics': {
+                const metrics = msg.metrics ?? {};
+                return {
+                  ...base,
+                  status: base.status === 'done' ? 'done' : 'streaming',
+                  generationTps:
+                    typeof metrics.generation_tps === 'number'
+                      ? metrics.generation_tps
+                      : base.generationTps,
+                  ttftMs:
+                    typeof metrics.ttft_ms === 'number' ? metrics.ttft_ms : base.ttftMs,
+                  promptTokens:
+                    typeof metrics.prompt_tokens === 'number'
+                      ? metrics.prompt_tokens
+                      : base.promptTokens,
+                  message: `Inference on ${msg.peer_name}`,
+                  updatedAt: now,
+                };
+              }
               case 'federation_done':
                 return {
                   ...base,
@@ -1806,7 +1874,11 @@ export default function AgentChat() {
   // been created in the same event handler — so it takes `session` and
   // `content` explicitly rather than reading `activeSession`/`input` state,
   // which would not have settled yet in that same-tick scenario.
-  const dispatchUserMessage = (session: ChatSession, content: string): boolean => {
+  const dispatchUserMessage = (
+    session: ChatSession,
+    content: string,
+    allowedTools?: string[],
+  ): boolean => {
     const trimmed = content.trim();
     if (!trimmed) {
       return false;
@@ -1841,6 +1913,7 @@ export default function AgentChat() {
         temporary: session.temporary,
         historySeed: buildHistorySeed(updatedSession.messages),
         federationPeerIds: federationEnabled ? selectedFederationPeerIds : [],
+        allowedTools,
         agentMode,
       });
       if (!sent) {
@@ -1888,15 +1961,29 @@ export default function AgentChat() {
     }
   };
 
-  const handleTestAllTools = () => {
+  const handleTestAllTools = async () => {
     if (!wsRef.current?.connected) {
       return;
     }
-    const session = createChatSession(true);
-    setSessions((prev) => sortSessions([session, ...prev]));
-    setActiveSessionId(session.id);
-    setConfirmDeleteSessionId(null);
-    dispatchUserMessage(session, TEST_ALL_TOOLS_PROMPT);
+    try {
+      const registeredTools = await getTools();
+      const allowedTools = registeredTools
+        .map((tool) => tool.name.trim())
+        .filter((name) => name.length > 0);
+      if (allowedTools.length === 0) {
+        setError('The server returned an empty tool catalogue; the acceptance run was not started.');
+        return;
+      }
+      // Acceptance runs are regular persisted sessions so another browser can
+      // discover, inspect, and stop the autonomous work while it is running.
+      const session = createChatSession(false);
+      setSessions((prev) => sortSessions([session, ...prev]));
+      setActiveSessionId(session.id);
+      setConfirmDeleteSessionId(null);
+      dispatchUserMessage(session, TEST_ALL_TOOLS_PROMPT, allowedTools);
+    } catch {
+      setError('Could not load the authoritative tool catalogue; the acceptance run was not started.');
+    }
   };
 
   const handleStop = () => {
@@ -1984,9 +2071,9 @@ export default function AgentChat() {
                 Regular chats persist locally. Temporary chats stay in memory only.
               </p>
               <button
-                onClick={handleTestAllTools}
+                onClick={() => void handleTestAllTools()}
                 disabled={!connected}
-                title="Start a temporary chat that has the agent enumerate and exercise every registered tool via a task plan"
+                title="Start a persisted chat with the exact server tool catalogue and exercise every registered tool via a task plan"
                 className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-sm font-medium text-gray-200 transition-colors hover:border-amber-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Wrench className="h-4 w-4" />
@@ -2258,7 +2345,13 @@ export default function AgentChat() {
               {latestFederationTask && (
                 <p className="mt-2 text-xs text-gray-500">
                   Latest remote task: {latestFederationTask.peerName} {latestFederationTask.status}{' '}
-                  at {latestFederationTask.updatedAt.toLocaleTimeString()}.
+                  at {latestFederationTask.updatedAt.toLocaleTimeString()}
+                  {typeof latestFederationTask.generationTps === 'number' && (
+                    <span className="font-mono text-emerald-400">
+                      {' '}· {latestFederationTask.generationTps.toFixed(1)} t/s
+                    </span>
+                  )}
+                  .
                 </p>
               )}
             </>

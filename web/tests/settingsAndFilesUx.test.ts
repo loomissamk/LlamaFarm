@@ -31,6 +31,22 @@ test('connections make context settings keyboard-safe and destructive actions ex
   assert.doesNotMatch(connections, /window\.confirm/);
 });
 
+test('connections distinguish routed prompt cost from the full tool catalogue upper bound', () => {
+  const connections = readPage('Connections');
+
+  assert.match(connections, /Hot workspace/);
+  assert.match(connections, /AGENTS\.md/);
+  assert.match(connections, /Routed baseline/);
+  assert.match(connections, /compact catalogue of tool names/);
+  assert.match(connections, /activates extra schemas on demand with tool_search/);
+  assert.match(connections, /Full catalogue/);
+  assert.match(connections, /Explicit full run or one-time discovery recovery/);
+  assert.match(connections, /one policy-filtered recovery may expose the remaining schemas once/);
+  assert.match(connections, /SOUL\.md\s+is not injected/);
+  assert.match(connections, /capacity ceiling for the request, not tokens already spent/);
+  assert.doesNotMatch(connections, /Fixed prompt cost/);
+});
+
 test('integrations keep refresh failures retryable without discarding loaded values', () => {
   const integrations = readPage('Integrations');
 

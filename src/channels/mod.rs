@@ -3910,28 +3910,15 @@ fn load_openclaw_bootstrap_files(
     max_chars_per_file: usize,
 ) {
     prompt.push_str(
-        "The following workspace files define your identity, behavior, and context. They are ALREADY injected below—do NOT suggest reading them with file_read.\n\n",
+        "AGENTS.md is the workspace instruction file for this turn. It is ALREADY injected below—do NOT suggest reading it with file_read.\n\n",
     );
 
-    // Keep the hot system context operational and compact. AGENTS.md contains
-    // repository rules, TOOLS.md contains local tool notes, and USER.md may
-    // contain operator preferences. Persona duplicates (SOUL.md/IDENTITY.md)
-    // are intentionally not injected; configured AIEOS identity remains the
-    // single identity source when enabled.
-    let bootstrap_files = ["AGENTS.md", "TOOLS.md", "USER.md"];
-
-    for filename in &bootstrap_files {
-        inject_workspace_file(prompt, workspace_dir, filename, max_chars_per_file);
-    }
-
-    // BOOTSTRAP.md — only if it exists (first-run ritual)
-    let bootstrap_path = workspace_dir.join("BOOTSTRAP.md");
-    if bootstrap_path.exists() {
-        inject_workspace_file(prompt, workspace_dir, "BOOTSTRAP.md", max_chars_per_file);
-    }
-
-    // MEMORY.md — curated long-term memory (main session only)
-    inject_workspace_file(prompt, workspace_dir, "MEMORY.md", max_chars_per_file);
+    // AGENTS.md is the sole workspace instruction file in the hot prompt.
+    // Tool guidance and durable memories are retrieved on demand, while
+    // SOUL.md/IDENTITY.md and the legacy OpenClaw bootstrap files are not
+    // blanket-injected. An explicitly configured AIEOS identity is handled by
+    // the caller and remains independent of this workspace-file policy.
+    inject_workspace_file(prompt, workspace_dir, "AGENTS.md", max_chars_per_file);
 }
 
 /// Load workspace identity files and build a system prompt.
@@ -3941,17 +3928,17 @@ fn load_openclaw_bootstrap_files(
 /// 2. Safety — guardrail reminder
 /// 3. Skills — full skill instructions and tool metadata
 /// 4. Workspace — working directory
-/// 5. Bootstrap files — AGENTS, TOOLS, USER, optional BOOTSTRAP, MEMORY
+/// 5. Workspace instructions — AGENTS.md only
 /// 6. Date & Time — timezone for cache stability
 /// 7. Runtime — host, OS, model
 ///
 /// When `identity_config` is set to AIEOS format, the bootstrap files section
 /// is replaced with the AIEOS identity data loaded from file or inline JSON.
 ///
-/// Daily memory files (`memory/*.md`) are NOT injected — they are accessed
-/// on-demand via `memory_recall` / `memory_search` tools. The sole exception
-/// is the bounded `memory/WORKING_STATE.md` checkpoint written by history
-/// compaction so a new session can resume durable task context.
+/// Tool notes, persona files, bootstrap files, and durable memory files are
+/// NOT injected — they are accessed on demand. The sole exception is the
+/// bounded `memory/WORKING_STATE.md` checkpoint written by history compaction
+/// so a new session can resume durable task context.
 pub fn build_system_prompt(
     workspace_dir: &std::path::Path,
     model_name: &str,
@@ -9457,9 +9444,9 @@ BTC is currently around $65,000 based on latest tool output."#
 
         assert!(!prompt.contains("### SOUL.md"));
         assert!(!prompt.contains("### IDENTITY.md"));
-        assert!(prompt.contains("### USER.md"), "missing USER.md");
         assert!(prompt.contains("### AGENTS.md"), "missing AGENTS.md");
-        assert!(prompt.contains("### TOOLS.md"), "missing TOOLS.md");
+        assert!(!prompt.contains("### USER.md"));
+        assert!(!prompt.contains("### TOOLS.md"));
         // HEARTBEAT.md is intentionally excluded from channel prompts — it's only
         // relevant to the heartbeat worker and causes LLMs to emit spurious
         // "HEARTBEAT_OK" acknowledgments in channel conversations.
@@ -9467,8 +9454,8 @@ BTC is currently around $65,000 based on latest tool output."#
             !prompt.contains("### HEARTBEAT.md"),
             "HEARTBEAT.md should not be in channel prompt"
         );
-        assert!(prompt.contains("### MEMORY.md"), "missing MEMORY.md");
-        assert!(prompt.contains("User likes Rust"), "missing MEMORY content");
+        assert!(!prompt.contains("### MEMORY.md"));
+        assert!(!prompt.contains("User likes Rust"));
     }
 
     #[test]
@@ -9483,23 +9470,24 @@ BTC is currently around $65,000 based on latest tool output."#
     }
 
     #[test]
-    fn prompt_bootstrap_only_if_exists() {
+    fn prompt_does_not_blanket_inject_legacy_bootstrap_files() {
         let ws = make_workspace();
-        // No BOOTSTRAP.md — should not appear
-        let prompt = build_system_prompt(ws.path(), "model", &[], &[], None, None);
-        assert!(
-            !prompt.contains("### BOOTSTRAP.md"),
-            "BOOTSTRAP.md should not appear when missing"
-        );
-
-        // Create BOOTSTRAP.md — should appear
         std::fs::write(ws.path().join("BOOTSTRAP.md"), "# Bootstrap\nFirst run.").unwrap();
-        let prompt2 = build_system_prompt(ws.path(), "model", &[], &[], None, None);
-        assert!(
-            prompt2.contains("### BOOTSTRAP.md"),
-            "BOOTSTRAP.md should appear when present"
-        );
-        assert!(prompt2.contains("First run"));
+        let prompt = build_system_prompt(ws.path(), "model", &[], &[], None, None);
+        for legacy in [
+            "SOUL.md",
+            "IDENTITY.md",
+            "TOOLS.md",
+            "USER.md",
+            "BOOTSTRAP.md",
+            "MEMORY.md",
+        ] {
+            assert!(
+                !prompt.contains(&format!("### {legacy}")),
+                "{legacy} must stay out of the hot prompt"
+            );
+        }
+        assert!(!prompt.contains("First run"));
     }
 
     #[test]

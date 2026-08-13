@@ -46,6 +46,12 @@ intentional. Then run the matching profile:
 ./scripts/docker/up-node.sh v100-32gb
 ```
 
+On a mixed V100 + RTX 5070 Ti host, complete the guarded host setup in
+[`deploy/host-profiles/README.md`](../host-profiles/README.md) first. The V100
+profile requires one exact V100 UUID and is CUDA compute-only; it will not
+fall back to `all`, expose the 5070 Ti's Nouveau/NVK render nodes, use Vulkan
+for inference, or combine the GPUs.
+
 The dashboard is direct-access: browser/gateway pairing and the `/pair`
 endpoint are removed from this deployment path. Federation worker calls still
 require the shared node token. Ollama (`11434`) and Qdrant (`6333`) stay on
@@ -60,6 +66,10 @@ After startup, verify both nodes:
 ./scripts/docker/check-node.sh rtx5070ti-16gb
 ./scripts/docker/check-node.sh v100-32gb
 ```
+
+For `v100-32gb`, this additionally requires the container's declared GPU
+visibility and the sole UUID reported by its `nvidia-smi` to match the
+root-owned host profile exactly.
 
 ## Browser acceptance
 

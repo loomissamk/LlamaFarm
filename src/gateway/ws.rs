@@ -69,6 +69,13 @@ struct WsChatSession {
 static WS_CHAT_SESSIONS: LazyLock<Mutex<HashMap<String, WsChatSession>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// Serializes the short persisted-session file transaction. The in-memory
+/// session map has its own synchronous lock, while this async lock is held only
+/// across disk read/modify/write (or delete) so concurrent chat turns cannot
+/// overwrite one another through the shared JSON file and temporary path.
+static WS_CHAT_STORE_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(()));
+
 #[derive(Clone)]
 struct ActiveWsChatRun {
     registration_id: Uuid,
@@ -544,6 +551,7 @@ async fn write_persisted_ws_chat_sessions(
 }
 
 async fn persist_ws_chat_session(store_path: &Path, session_id: &str, history: &[ChatMessage]) {
+    let _store_guard = WS_CHAT_STORE_LOCK.lock().await;
     let mut persisted = read_persisted_ws_chat_sessions(store_path).await;
     persisted.sessions.insert(
         session_id.to_string(),
@@ -575,6 +583,7 @@ async fn persist_ws_chat_session(store_path: &Path, session_id: &str, history: &
 }
 
 async fn delete_persisted_ws_chat_session(store_path: &Path, session_id: &str) {
+    let _store_guard = WS_CHAT_STORE_LOCK.lock().await;
     let mut persisted = read_persisted_ws_chat_sessions(store_path).await;
     if persisted.sessions.remove(session_id).is_none() {
         return;
@@ -757,6 +766,30 @@ async fn store_ws_chat_history(
     if !temporary {
         persist_ws_chat_session(store_path, session_id, &normalized).await;
     }
+}
+
+/// Make an accepted prompt durable before model prefetch, memory lookup, tool
+/// routing, or inference begins. This is the earliest point at which another
+/// browser can discover and hydrate an autonomous run, and it also preserves
+/// the user's request if the process exits during later work.
+async fn checkpoint_ws_chat_prompt(
+    session_id: &str,
+    content: &str,
+    temporary: bool,
+    history_seed: &[ChatMessage],
+    store_path: &Path,
+) -> Vec<ChatMessage> {
+    let mut history = load_ws_chat_history(session_id, temporary, history_seed, store_path).await;
+    let already_present = history
+        .iter()
+        .rev()
+        .find(|message| message.role != "system")
+        .is_some_and(|message| message.role == "user" && message.content == content);
+    if !already_present {
+        history.push(ChatMessage::user(content));
+    }
+    store_ws_chat_history(session_id, &history, temporary, store_path).await;
+    history
 }
 
 async fn delete_ws_chat_history(session_id: &str, store_path: &Path) {
@@ -1624,8 +1657,8 @@ fn parse_ws_delta_event(delta: &str) -> Option<WsDeltaEvent> {
         return None;
     }
 
-    if let Some(metrics) = delta.strip_prefix(crate::agent::loop_::DRAFT_METRICS_SENTINEL) {
-        return serde_json::from_str::<serde_json::Value>(metrics)
+    if let Some(metrics) = crate::agent::loop_::parse_inference_metrics_delta(delta) {
+        return serde_json::to_value(metrics)
             .ok()
             .map(WsDeltaEvent::Metrics);
     }
@@ -1741,6 +1774,7 @@ async fn emit_ws_federation_event(socket: &mut WsSink, event: FederationChatEven
         "duration_secs": event.duration_secs,
         "output": event.output,
         "message": event.message,
+        "metrics": event.metrics,
     });
 
     let _ = socket.send(Message::Text(payload.to_string().into())).await;
@@ -2323,25 +2357,6 @@ fn skills_supported_by_selected_tools(
         .collect()
 }
 
-fn has_undeclared_skill_dependencies(
-    skills: &[crate::skills::Skill],
-    selected_specs: &[crate::tools::ToolSpec],
-) -> bool {
-    if skills.is_empty() {
-        return false;
-    }
-    let has_unstructured_skill = skills.iter().any(|skill| {
-        skill
-            .location
-            .as_deref()
-            .and_then(Path::extension)
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
-    });
-    has_unstructured_skill
-        || skills_supported_by_selected_tools(skills.to_vec(), selected_specs).len() != skills.len()
-}
-
 /// How an `agent_mode` override should apply to the base system prompt.
 #[derive(Debug, PartialEq, Eq)]
 enum ModePromptEffect {
@@ -2585,7 +2600,6 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             event_tx: Some(federation_event_tx),
             cancellation: Some(turn_cancellation.clone()),
         });
-        let mut followup_message: Option<String> = None;
         let Some(active_run_registration) =
             ActiveWsChatRunRegistration::register(&session_id, turn_cancellation.clone())
         else {
@@ -2598,10 +2612,45 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             continue;
         };
 
+        let temporary = parsed["temporary"].as_bool().unwrap_or(false);
+        let history_seed = parse_seed_history(parsed.get("history_seed"));
+        let mut socket_disconnected_during_prefetch = false;
+        let mut followup_message: Option<String> = None;
+        let Some(mut history) = await_ws_setup_operation(
+            checkpoint_ws_chat_prompt(
+                &session_id,
+                &content,
+                temporary,
+                &history_seed,
+                &ws_chat_store_path,
+            ),
+            &mut socket_rx,
+            &session_id,
+            &turn_cancellation,
+            &active_run_registration,
+            &mut socket_disconnected_during_prefetch,
+            &mut followup_message,
+        )
+        .await
+        else {
+            finish_cancelled_ws_setup(
+                &mut socket,
+                &session_id,
+                &ws_chat_store_path,
+                &active_run_registration,
+                socket_disconnected_during_prefetch,
+            )
+            .await;
+            drop(active_run_registration);
+            if let Some(followup) = followup_message.take() {
+                queued_inbound = Some(followup);
+            }
+            continue;
+        };
+
         // Register before the first awaited setup operation, and keep reading
         // the submitting socket while capability discovery runs. Closing the
         // viewer merely detaches it; an explicit Stop races and drops prefetch.
-        let mut socket_disconnected_during_prefetch = false;
         let mut prefetch =
             std::pin::pin!(runtime.provider.prefetch_model_capabilities(&runtime.model));
         let prefetch_completed = loop {
@@ -2686,34 +2735,6 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             let max_history_messages = config.agent.max_history_messages;
 
             let direct_intent = classify_direct_intent(&content);
-            let temporary = parsed["temporary"].as_bool().unwrap_or(false);
-            let history_seed = parse_seed_history(parsed.get("history_seed"));
-            let Some(mut history) = await_ws_setup_operation(
-                load_ws_chat_history(
-                    &session_id,
-                    temporary,
-                    &history_seed,
-                    &ws_chat_store_path,
-                ),
-                &mut socket_rx,
-                &session_id,
-                &turn_cancellation,
-                &active_run_registration,
-                &mut socket_disconnected_during_prefetch,
-                &mut followup_message,
-            )
-            .await
-            else {
-                finish_cancelled_ws_setup(
-                    &mut socket,
-                    &session_id,
-                    &ws_chat_store_path,
-                    &active_run_registration,
-                    socket_disconnected_during_prefetch,
-                )
-                .await;
-                return;
-            };
             let forced_file_write = matches!(
                 direct_intent.as_ref(),
                 Some(DirectIntent::ForceTool(DirectForcedToolIntent::FileWrite(_)))
@@ -2723,7 +2744,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             } else {
                 crate::skills::load_skills_with_config(&config.workspace_dir, &config)
             };
-            let mut tool_route = if !turn_allowed_tools.is_empty() {
+            let tool_route = if !turn_allowed_tools.is_empty() {
                 let allowed: Vec<&str> = turn_allowed_tools.iter().map(String::as_str).collect();
                 crate::agent::tool_router::direct_selection(
                     runtime.tools_registry.as_ref(),
@@ -2757,27 +2778,56 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 ),
                 }
             };
-            let mut selected_specs = tool_route.selected_specs(runtime.tools_registry.as_ref());
-
-            // Compact skill summaries intentionally omit their tool carriers,
-            // so narrowing would make an on-demand SKILL.md read discover tools
-            // that cannot be added until the next turn. Likewise, a full skill
-            // whose declared carrier was not selected must keep that carrier
-            // reachable. Fail open rather than ship a partially usable skill.
-            if direct_intent.is_none() && !tool_route.excluded.is_empty() && !loaded_skills.is_empty()
+            let all_tool_names: Vec<String> = runtime
+                .tools_registry_exec
+                .iter()
+                .map(|tool| tool.name().to_string())
+                .collect();
+            let (mode_excluded, turn_temperature) = agent_mode
+                .as_deref()
+                .map(|mode| {
+                    resolve_mode_tools_and_temperature(
+                        mode,
+                        &config,
+                        &all_tool_names,
+                        runtime.temperature,
+                    )
+                })
+                .unwrap_or_else(|| (Vec::new(), runtime.temperature));
+            let mode_excluded_set = mode_excluded.iter().map(String::as_str).collect::<HashSet<_>>();
+            let mut selected_specs = tool_route
+                .selected_specs(runtime.tools_registry.as_ref())
+                .into_iter()
+                .filter(|spec| !mode_excluded_set.contains(spec.name.as_str()))
+                .collect::<Vec<_>>();
+            // Discovery is available only for ordinary relevance-routed chat.
+            // Explicit allowlists, direct intents, and persona exclusions remain
+            // hard boundaries and are never searchable/activatable.
+            let discoverable_specs = if turn_allowed_tools.is_empty()
+                && direct_intent.is_none()
+                && config.agent.tool_routing_enabled
             {
-                if has_undeclared_skill_dependencies(
-                    &loaded_skills,
-                    &selected_specs,
-                ) {
-                    tool_route = crate::agent::tool_router::full_selection(
-                        runtime.tools_registry.as_ref(),
-                        crate::agent::tool_router::ToolRouteStrategy::FailOpenUndeclaredDependencies,
-                        "skill tool dependencies are not fully declared in the selected set",
-                    );
-                    selected_specs = tool_route.selected_specs(runtime.tools_registry.as_ref());
-                }
-            }
+                let route_excluded = tool_route
+                    .excluded
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<HashSet<_>>();
+                runtime
+                    .tools_registry
+                    .iter()
+                    .filter(|spec| {
+                        route_excluded.contains(spec.name.as_str())
+                            && !mode_excluded_set.contains(spec.name.as_str())
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            selected_specs = crate::agent::tool_router::with_tool_search(
+                selected_specs,
+                &discoverable_specs,
+            );
 
             if forced_file_write && !selected_specs.iter().any(|spec| spec.name == "file_write")
             {
@@ -2797,6 +2847,9 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 &skills,
                 native_tools,
             );
+            system_prompt.push_str(&crate::agent::tool_router::compact_catalogue(
+                &discoverable_specs,
+            ));
 
             // Advertise optional integrations only when the same routed set
             // exposes the corresponding tool for this turn.
@@ -2946,15 +2999,6 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     .await;
                     return;
                 }
-            }
-
-            let already_present = history
-                .iter()
-                .rev()
-                .find(|m| m.role != "system")
-                .is_some_and(|m| m.role == "user" && m.content == content);
-            if !already_present {
-                history.push(ChatMessage::user(&content));
             }
 
             let _ = state.event_tx.send(serde_json::json!({
@@ -3162,21 +3206,10 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             }
 
             let mut excluded_tools = tool_route.excluded.clone();
-            let mut turn_temperature = runtime.temperature;
-            if let Some(mode) = agent_mode.as_deref() {
-                let all_tool_names: Vec<String> = runtime
-                    .tools_registry_exec
-                    .iter()
-                    .map(|tool| tool.name().to_string())
-                    .collect();
-                let (mut mode_excluded, temperature) =
-                    resolve_mode_tools_and_temperature(mode, &config, &all_tool_names, turn_temperature);
-                turn_temperature = temperature;
-                if !mode_excluded.is_empty() {
-                    excluded_tools.append(&mut mode_excluded);
-                    excluded_tools.sort();
-                    excluded_tools.dedup();
-                }
+            if !mode_excluded.is_empty() {
+                excluded_tools.extend(mode_excluded);
+                excluded_tools.sort();
+                excluded_tools.dedup();
             }
 
             // Durable run ledger for the inspector: one ledger per chat
@@ -3239,23 +3272,26 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                         let mut loop_future =
                             std::pin::pin!(crate::agent::run_ledger::RUN_LEDGER.scope(
                                 turn_run_ledger.clone(),
-                                run_tool_call_loop(
-                                    runtime.provider.as_ref(),
-                                    &mut history,
-                                    runtime.tools_registry_exec.as_ref(),
-                                    state.observer.as_ref(),
-                                    &provider_label,
-                                    &runtime.model,
-                                    turn_temperature,
-                                    true,
-                                    Some(&approval_manager),
-                                    "webchat",
-                                    &state.multimodal,
-                                    runtime.max_tool_iterations,
-                                    Some(cancellation_token.clone()),
-                                    Some(delta_tx),
-                                    None,
-                                    &excluded_tools,
+                                crate::agent::loop_::with_dynamic_tool_catalogue(
+                                    discoverable_specs.clone(),
+                                    run_tool_call_loop(
+                                        runtime.provider.as_ref(),
+                                        &mut history,
+                                        runtime.tools_registry_exec.as_ref(),
+                                        state.observer.as_ref(),
+                                        &provider_label,
+                                        &runtime.model,
+                                        turn_temperature,
+                                        true,
+                                        Some(&approval_manager),
+                                        "webchat",
+                                        &state.multimodal,
+                                        runtime.max_tool_iterations,
+                                        Some(cancellation_token.clone()),
+                                        Some(delta_tx),
+                                        None,
+                                        &excluded_tools,
+                                    ),
                                 )
                             ));
 
@@ -4112,6 +4148,58 @@ Reminder set successfully."#;
         assert!(!after_delete.sessions.contains_key("session-a"));
     }
 
+    #[tokio::test]
+    async fn accepted_prompt_is_checkpointed_before_agent_work() {
+        let dir = tempdir().unwrap();
+        let store_path = dir.path().join("state").join("web-chat-sessions.json");
+        let session_id = format!("checkpoint-{}", Uuid::new_v4());
+
+        let history = checkpoint_ws_chat_prompt(
+            &session_id,
+            "continue this autonomous task",
+            false,
+            &[],
+            &store_path,
+        )
+        .await;
+
+        assert_eq!(history.last().unwrap().role, "user");
+        assert_eq!(
+            history.last().unwrap().content,
+            "continue this autonomous task"
+        );
+        let persisted = read_persisted_ws_chat_sessions(&store_path).await;
+        let checkpoint = persisted.sessions.get(&session_id).unwrap();
+        assert_eq!(checkpoint.history.len(), 1);
+        assert_eq!(
+            checkpoint.history[0].content,
+            "continue this autonomous task"
+        );
+
+        delete_ws_chat_history(&session_id, &store_path).await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_session_checkpoints_do_not_overwrite_each_other() {
+        let dir = tempdir().unwrap();
+        let store_path = dir.path().join("state").join("web-chat-sessions.json");
+        let first = vec![ChatMessage::user("first concurrent prompt")];
+        let second = vec![ChatMessage::user("second concurrent prompt")];
+        let third = vec![ChatMessage::user("third concurrent prompt")];
+
+        tokio::join!(
+            persist_ws_chat_session(&store_path, "concurrent-a", &first),
+            persist_ws_chat_session(&store_path, "concurrent-b", &second),
+            persist_ws_chat_session(&store_path, "concurrent-c", &third),
+        );
+
+        let persisted = read_persisted_ws_chat_sessions(&store_path).await;
+        assert_eq!(persisted.sessions.len(), 3);
+        assert_eq!(persisted.sessions["concurrent-a"].history, first);
+        assert_eq!(persisted.sessions["concurrent-b"].history, second);
+        assert_eq!(persisted.sessions["concurrent-c"].history, third);
+    }
+
     #[test]
     fn session_title_uses_first_user_message_truncated() {
         let history = vec![
@@ -4483,18 +4571,6 @@ Bus 003 Device 004: ID 8087:0033 Intel Corp.";
             skills_supported_by_selected_tools(vec![skill.clone()], &shell).len(),
             1
         );
-        assert!(!has_undeclared_skill_dependencies(&[skill], &shell,));
-        let markdown_skill = crate::skills::Skill {
-            name: "markdown-helper".into(),
-            description: "Unstructured on-demand instructions".into(),
-            version: "1.0.0".into(),
-            author: None,
-            tags: Vec::new(),
-            tools: Vec::new(),
-            prompts: Vec::new(),
-            location: Some(std::path::PathBuf::from("skills/markdown-helper/SKILL.md")),
-        };
-        assert!(has_undeclared_skill_dependencies(&[markdown_skill], &shell,));
 
         let http_skill = crate::skills::Skill {
             name: "api-helper".into(),

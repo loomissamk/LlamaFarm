@@ -12,6 +12,9 @@ export interface FederationTaskState {
   lastToolOutput?: string;
   lastToolSuccess?: boolean;
   lastToolDurationSecs?: number;
+  generationTps?: number;
+  ttftMs?: number;
+  promptTokens?: number;
   updatedAt: Date;
 }
 
@@ -34,6 +37,9 @@ interface PersistedFederationTaskState {
   lastToolOutput?: string;
   lastToolSuccess?: boolean;
   lastToolDurationSecs?: number;
+  generationTps?: number;
+  ttftMs?: number;
+  promptTokens?: number;
   updatedAt: string;
 }
 
@@ -173,6 +179,18 @@ export function loadFederationTasksBySession(): Record<string, FederationTaskSta
                 Number.isFinite(task.lastToolDurationSecs)
                   ? task.lastToolDurationSecs
                   : undefined,
+              generationTps:
+                typeof task.generationTps === 'number' && Number.isFinite(task.generationTps)
+                  ? task.generationTps
+                  : undefined,
+              ttftMs:
+                typeof task.ttftMs === 'number' && Number.isFinite(task.ttftMs)
+                  ? task.ttftMs
+                  : undefined,
+              promptTokens:
+                typeof task.promptTokens === 'number' && Number.isFinite(task.promptTokens)
+                  ? task.promptTokens
+                  : undefined,
               updatedAt,
             };
           })
@@ -215,6 +233,9 @@ export function persistFederationTasksBySession(
           lastToolOutput: task.lastToolOutput,
           lastToolSuccess: task.lastToolSuccess,
           lastToolDurationSecs: task.lastToolDurationSecs,
+          generationTps: task.generationTps,
+          ttftMs: task.ttftMs,
+          promptTokens: task.promptTokens,
           updatedAt: task.updatedAt.toISOString(),
         }));
       return normalizedTasks.length > 0 ? [[sessionId, normalizedTasks]] : [];

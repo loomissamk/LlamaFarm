@@ -1,4 +1,5 @@
 use super::peer_registry::{FederationCapabilities, FederationPeerRegistry, FederationPeerTarget};
+use crate::agent::loop_::{format_inference_metrics_summary, InferenceMetricsDelta};
 use crate::tools::ToolResult;
 use chrono::Utc;
 use futures_util::StreamExt;
@@ -90,6 +91,9 @@ pub struct FederationTaskEvent {
     pub output: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// Provider-measured inference timing/token telemetry for this segment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<serde_json::Value>,
 }
 
 impl FederationTaskEvent {
@@ -106,6 +110,7 @@ impl FederationTaskEvent {
             duration_secs: None,
             output: None,
             message: Some(message.into()),
+            metrics: None,
         }
     }
 
@@ -122,6 +127,7 @@ impl FederationTaskEvent {
             duration_secs: None,
             output: None,
             message: None,
+            metrics: None,
         }
     }
 
@@ -138,6 +144,7 @@ impl FederationTaskEvent {
             duration_secs: None,
             output: None,
             message: Some(message.into()),
+            metrics: None,
         }
     }
 }
@@ -165,6 +172,8 @@ pub struct FederationChatEvent {
     pub output: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<serde_json::Value>,
 }
 
 #[derive(Clone)]
@@ -415,6 +424,7 @@ impl FederationRemoteSubagentAdapter {
         let stream_url = format!("{}/federation/tasks/{task_id}/stream", peer.base_url);
         let mut final_response = None;
         let mut failure_message = None;
+        let mut measured_metrics = None;
 
         let stream_future = self.stream_remote_task_events(&stream_url, |event| {
             self.emit_chat_event(peer, task_id, event.clone());
@@ -425,6 +435,11 @@ impl FederationRemoteSubagentAdapter {
                 }
                 "error" => {
                     failure_message = event.message.clone().or(event.output.clone());
+                }
+                "metrics" => {
+                    measured_metrics = event.metrics.clone().and_then(|value| {
+                        serde_json::from_value::<InferenceMetricsDelta>(value).ok()
+                    });
                 }
                 _ => {}
             }
@@ -465,11 +480,16 @@ impl FederationRemoteSubagentAdapter {
         }
 
         let rendered = final_response.unwrap_or_else(|| "[Empty response]".to_string());
+        let telemetry = measured_metrics
+            .as_ref()
+            .and_then(format_inference_metrics_summary)
+            .map(|summary| format!(" · {summary}"))
+            .unwrap_or_default();
         Ok(ToolResult {
             success: true,
             output: format!(
-                "[Remote worker '{}' ({})]\n{rendered}",
-                peer.display_name, peer.base_url
+                "[Remote worker '{}' ({}){telemetry}]\n{rendered}",
+                peer.display_name, peer.base_url,
             ),
             error: None,
         })
@@ -506,6 +526,7 @@ impl FederationRemoteSubagentAdapter {
                 .or(event.full_response)
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty()),
+            metrics: event.metrics,
         };
 
         let _ = tx.send(payload);

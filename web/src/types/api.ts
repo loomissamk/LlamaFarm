@@ -448,6 +448,7 @@ export interface WsMessage {
     | 'federation_chunk'
     | 'federation_tool_call'
     | 'federation_tool_result'
+    | 'federation_metrics'
     | 'federation_done'
     | 'federation_error';
   session_id?: string;

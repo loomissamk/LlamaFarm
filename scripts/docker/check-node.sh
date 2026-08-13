@@ -25,6 +25,33 @@ if [ -f "$NODE_ENV" ]; then
 fi
 set +a
 
+EXPECTED_V100_UUID=""
+if [ "$1" = v100-32gb ]; then
+  V100_HOST_CONFIG="${LLAMAFARM_V100_HOST_CONFIG:-/etc/llamafarm/v100-cuda-5070-nvk.env}"
+  if [ ! -r "$V100_HOST_CONFIG" ]; then
+    echo "V100 host configuration is not readable: $V100_HOST_CONFIG" >&2
+    exit 1
+  fi
+  # shellcheck disable=SC1090
+  source "$V100_HOST_CONFIG"
+  if [[ ! "${V100_GPU_UUID:-}" =~ ^GPU-[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]]; then
+    echo "V100_GPU_UUID in $V100_HOST_CONFIG is missing or invalid." >&2
+    exit 1
+  fi
+  case "${LLAMAFARM_NVIDIA_VISIBLE_DEVICES:-}" in
+    ""|all|ALL|*,*)
+      echo "v100-32gb requires exactly one configured V100 UUID; broad visibility is rejected." >&2
+      exit 1
+      ;;
+  esac
+  if [ "$LLAMAFARM_NVIDIA_VISIBLE_DEVICES" != "$V100_GPU_UUID" ]; then
+    echo "LLAMAFARM_NVIDIA_VISIBLE_DEVICES does not match the configured V100 UUID." >&2
+    exit 1
+  fi
+  EXPECTED_V100_UUID="$V100_GPU_UUID"
+  "$ROOT_DIR/scripts/host/v100-cuda-5070-nvk.sh" verify "$V100_HOST_CONFIG"
+fi
+
 echo "== GPU =="
 nvidia-smi --query-gpu=name,memory.total,memory.used,driver_version --format=csv,noheader
 echo
@@ -34,6 +61,28 @@ docker inspect --format 'Qdrant: {{.State.Status}} {{if .State.Health}}{{.State.
 echo
 echo "== GPU visible inside bundle =="
 docker exec LlamaFarm nvidia-smi --query-gpu=name,memory.total,memory.used --format=csv,noheader
+if [ -n "$EXPECTED_V100_UUID" ]; then
+  mapfile -t CONTAINER_GPU_UUIDS < <(
+    docker exec LlamaFarm nvidia-smi --query-gpu=uuid --format=csv,noheader,nounits
+  )
+  if [ "${#CONTAINER_GPU_UUIDS[@]}" -ne 1 ] \
+    || [ "${CONTAINER_GPU_UUIDS[0]//[[:space:]]/}" != "$EXPECTED_V100_UUID" ]; then
+    echo "Container does not expose exactly the configured V100 UUID." >&2
+    exit 1
+  fi
+  CONTAINER_VISIBLE="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' LlamaFarm \
+    | awk -F= '$1 == "NVIDIA_VISIBLE_DEVICES" {sub(/^[^=]*=/, ""); print; exit}')"
+  if [ "$CONTAINER_VISIBLE" != "$EXPECTED_V100_UUID" ]; then
+    echo "Container NVIDIA_VISIBLE_DEVICES is not pinned to the configured V100 UUID." >&2
+    exit 1
+  fi
+  if docker exec LlamaFarm sh -lc \
+    'for device in /dev/dri/*; do [ ! -e "$device" ] || exit 0; done; exit 1'; then
+    echo "V100 compute-only container unexpectedly exposes a /dev/dri device." >&2
+    exit 1
+  fi
+  echo "Container GPU pin verified: exactly one configured V100 UUID."
+fi
 echo
 echo "== Host Docker control from the agent runtime =="
 docker exec -u "${LLAMAFARM_RUNTIME_UID:-$(id -u)}:${LLAMAFARM_RUNTIME_GID:-$(id -g)}" LlamaFarm \

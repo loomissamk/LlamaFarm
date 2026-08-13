@@ -201,6 +201,19 @@ where
         .await
 }
 
+/// Scope a compact, policy-filtered discovery catalogue to one tool loop.
+/// Callers must exclude persona-denied and explicit-allowlist-denied tools
+/// before supplying this list.
+pub(crate) async fn with_dynamic_tool_catalogue<F>(
+    discoverable: Vec<crate::tools::ToolSpec>,
+    future: F,
+) -> F::Output
+where
+    F: std::future::Future,
+{
+    TOOL_LOOP_DISCOVERABLE_TOOLS.scope(discoverable, future).await
+}
+
 /// Default trigger for auto-compaction when non-system message count exceeds this threshold.
 /// Prefer passing the config-driven value via `run_tool_call_loop`; this constant is only
 /// used when callers omit the parameter.
@@ -214,17 +227,16 @@ fn plan_boundary_history_budget(history_budget: usize) -> Option<usize> {
     // A value above the compact default is an explicit long-context policy.
     // Preserve its raw messages so the provider can select 128K/256K from the
     // actual request instead of discarding them at each completed plan item.
-    (history_budget <= DEFAULT_MAX_HISTORY_MESSAGES)
-        .then(|| history_budget.min(12).max(6))
+    (history_budget <= DEFAULT_MAX_HISTORY_MESSAGES).then(|| history_budget.min(12).max(6))
 }
 
 fn context_pressure_history_budget(history: &[ChatMessage]) -> Option<usize> {
     const MIN_PRESSURE_HISTORY_MESSAGES: usize = 12;
 
-    let has_system = history.first().is_some_and(|message| message.role == "system");
-    let non_system_count = history
-        .len()
-        .saturating_sub(if has_system { 1 } else { 0 });
+    let has_system = history
+        .first()
+        .is_some_and(|message| message.role == "system");
+    let non_system_count = history.len().saturating_sub(if has_system { 1 } else { 0 });
     if non_system_count <= MIN_PRESSURE_HISTORY_MESSAGES {
         return None;
     }
@@ -251,6 +263,63 @@ pub(crate) const DRAFT_PROGRESS_SENTINEL: &str = "\x00PROGRESS\x00";
 /// channel as JSON (ttft_ms, generation_tps, prefill_tps, total_ms).
 pub(crate) const DRAFT_METRICS_SENTINEL: &str = "\x00METRICS\x00";
 
+/// Measured inference telemetry carried over the agent-loop delta channel.
+///
+/// This is deliberately a typed internal event rather than a UI estimate. A
+/// provider leaves fields empty when its API does not report them; Ollama
+/// populates them from its real nanosecond timing and token-count fields.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct InferenceMetricsDelta {
+    pub ttft_ms: Option<f64>,
+    pub generation_tps: Option<f64>,
+    pub prefill_tps: Option<f64>,
+    pub total_ms: Option<f64>,
+    pub prompt_tokens: Option<u64>,
+}
+
+/// Parse a measured-metrics delta without mistaking it for model text.
+pub(crate) fn parse_inference_metrics_delta(delta: &str) -> Option<InferenceMetricsDelta> {
+    let payload = delta.strip_prefix(DRAFT_METRICS_SENTINEL)?;
+    serde_json::from_str(payload).ok()
+}
+
+/// Copy provider-reported metrics and token counts into the same event shape
+/// used by streamed agent loops. This keeps direct delegate calls from losing
+/// Ollama telemetry merely because they do not have a browser delta channel.
+pub(crate) fn inference_metrics_from_response(
+    response: &crate::providers::ChatResponse,
+) -> Option<InferenceMetricsDelta> {
+    let metrics = response.metrics.as_ref()?;
+    Some(InferenceMetricsDelta {
+        ttft_ms: metrics.ttft_ms,
+        generation_tps: metrics.generation_tps,
+        prefill_tps: metrics.prefill_tps,
+        total_ms: metrics.total_ms,
+        prompt_tokens: response.usage.as_ref().and_then(|usage| usage.input_tokens),
+    })
+}
+
+/// Render only provider-measured inference telemetry for delegated-agent
+/// output. No estimate is synthesized when the runtime did not report TPS.
+pub(crate) fn format_inference_metrics_summary(metrics: &InferenceMetricsDelta) -> Option<String> {
+    let generation_tps = metrics
+        .generation_tps
+        .filter(|value| value.is_finite() && *value > 0.0)?;
+    let mut parts = vec![format!("{generation_tps:.1} t/s")];
+
+    if let Some(ttft_ms) = metrics
+        .ttft_ms
+        .filter(|value| value.is_finite() && *value >= 0.0)
+    {
+        parts.push(format!("ttft {:.2}s", ttft_ms / 1_000.0));
+    }
+    if let Some(prompt_tokens) = metrics.prompt_tokens {
+        parts.push(format!("{prompt_tokens} prompt tok"));
+    }
+
+    Some(parts.join(" · "))
+}
+
 tokio::task_local! {
     static TOOL_LOOP_REPLY_TARGET: Option<String>;
 }
@@ -265,6 +334,11 @@ tokio::task_local! {
 
 tokio::task_local! {
     static TOOL_LOOP_MAX_HISTORY_MESSAGES: Option<usize>;
+}
+
+tokio::task_local! {
+    /// Registered specs hidden by routing but still allowed by turn policy.
+    static TOOL_LOOP_DISCOVERABLE_TOOLS: Vec<crate::tools::ToolSpec>;
 }
 
 tokio::task_local! {
@@ -2962,6 +3036,80 @@ fn tool_loop_has_next_iteration(iteration: usize, limit: Option<usize>) -> bool 
     limit.is_none_or(|limit| iteration.saturating_add(1) < limit)
 }
 
+fn parse_tool_search_request(arguments: &serde_json::Value) -> (Vec<String>, Option<String>) {
+    let names = arguments
+        .get("names")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let query = arguments
+        .get("query")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|query| !query.is_empty())
+        .map(str::to_string);
+    (names, query)
+}
+
+fn tool_search_result_text(activated: &[crate::tools::ToolSpec], unknown: &[String]) -> String {
+    let mut parts = Vec::new();
+    if activated.is_empty() {
+        parts.push("No additional tools matched this request.".to_string());
+    } else {
+        parts.push(format!(
+            "Activated for the next iteration: {}.",
+            activated
+                .iter()
+                .map(|spec| spec.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !unknown.is_empty() {
+        parts.push(format!("Unknown or unavailable names: {}.", unknown.join(", ")));
+    }
+    parts.join(" ")
+}
+
+fn build_dynamic_schema_prompt(activated: &[crate::tools::ToolSpec]) -> String {
+    let mut prompt = String::from(
+        "Internal tool activation: the following full tool schemas are now available for this turn. Use them through real tool calls when needed.\n",
+    );
+    for spec in activated {
+        let _ = writeln!(
+            prompt,
+            "- `{}`: {}\n  Parameters: `{}`",
+            spec.name, spec.description, spec.parameters
+        );
+    }
+    prompt
+}
+
+fn activate_remaining_discoverable(
+    tool_specs: &mut Vec<crate::tools::ToolSpec>,
+    blocked_tools: &mut HashSet<String>,
+    discoverable: &[crate::tools::ToolSpec],
+) -> Vec<crate::tools::ToolSpec> {
+    let mut activated = Vec::new();
+    for spec in discoverable {
+        blocked_tools.remove(&spec.name);
+        if !tool_specs.iter().any(|current| current.name == spec.name) {
+            tool_specs.push(spec.clone());
+            activated.push(spec.clone());
+        }
+    }
+    tool_specs.retain(|spec| spec.name != crate::agent::tool_router::TOOL_SEARCH_NAME);
+    activated
+}
+
 /// Execute a single turn of the agent loop: send messages, parse tool calls,
 /// execute tools, and loop until the LLM produces a final text response.
 #[allow(clippy::too_many_arguments)]
@@ -3002,11 +3150,16 @@ pub(crate) async fn run_tool_call_loop(
         .try_with(|enabled| *enabled)
         .unwrap_or(true);
 
-    let tool_specs: Vec<crate::tools::ToolSpec> = tools_registry
+    let mut blocked_tools: HashSet<String> = excluded_tools.iter().cloned().collect();
+    let discoverable_tools = TOOL_LOOP_DISCOVERABLE_TOOLS
+        .try_with(Clone::clone)
+        .unwrap_or_default();
+    let mut tool_specs: Vec<crate::tools::ToolSpec> = tools_registry
         .iter()
-        .filter(|tool| !excluded_tools.iter().any(|ex| ex == tool.name()))
+        .filter(|tool| !blocked_tools.contains(tool.name()))
         .map(|tool| tool.spec())
         .collect();
+    tool_specs = crate::agent::tool_router::with_tool_search(tool_specs, &discoverable_tools);
     let web_fetch_available = tool_specs.iter().any(|spec| spec.name == "web_fetch");
     let mut use_native_tools = TOOL_LOOP_NATIVE_TOOLS_ENABLED
         .try_with(|enabled| *enabled)
@@ -3069,6 +3222,8 @@ pub(crate) async fn run_tool_call_loop(
     let mut last_failure_signature: Option<(String, String)> = None;
     let mut consecutive_same_failure_count: usize = 0;
     let mut prompt_tool_fallback_used = false;
+    let mut dynamic_discovery_attempted = false;
+    let mut dynamic_discovery_fail_open_used = false;
     // Counts consecutive iterations where ALL tool calls were duplicates (nothing new ran).
     // After the retry prompt fails to unstick the model several times, hard-exit to
     // avoid burning the entire context window on the same tool call forever.
@@ -3332,17 +3487,19 @@ pub(crate) async fn run_tool_call_loop(
                 // to the UI so its throughput display reflects decode TPS
                 // and time-to-first-token instead of wall-clock estimates.
                 if let (Some(metrics), Some(tx)) = (resp.metrics.as_ref(), on_delta.as_ref()) {
-                    let payload = serde_json::json!({
-                        "ttft_ms": metrics.ttft_ms,
-                        "generation_tps": metrics.generation_tps,
-                        "prefill_tps": metrics.prefill_tps,
-                        "total_ms": metrics.total_ms,
+                    let payload = InferenceMetricsDelta {
+                        ttft_ms: metrics.ttft_ms,
+                        generation_tps: metrics.generation_tps,
+                        prefill_tps: metrics.prefill_tps,
+                        total_ms: metrics.total_ms,
                         // Real prompt token count from the provider — the true
                         // "how big is my context" number (system prompt + tools
                         // + memory + history), so the UI budget reflects reality.
-                        "prompt_tokens": resp.usage.as_ref().and_then(|u| u.input_tokens),
-                    });
-                    let _ = tx.send(format!("{DRAFT_METRICS_SENTINEL}{payload}")).await;
+                        prompt_tokens: resp.usage.as_ref().and_then(|u| u.input_tokens),
+                    };
+                    if let Ok(payload) = serde_json::to_string(&payload) {
+                        let _ = tx.send(format!("{DRAFT_METRICS_SENTINEL}{payload}")).await;
+                    }
                 }
 
                 observer.record_event(&ObserverEvent::LlmResponse {
@@ -3684,9 +3841,8 @@ pub(crate) async fn run_tool_call_loop(
                     break;
                 }
 
-                missing_tool_call_retry_prompt = Some(build_output_budget_continuation_prompt(
-                    response_was_empty,
-                ));
+                missing_tool_call_retry_prompt =
+                    Some(build_output_budget_continuation_prompt(response_was_empty));
                 // A per-segment continuation must not consume an explicitly
                 // configured finite tool-iteration budget. Unlimited runs need
                 // no adjustment.
@@ -3756,6 +3912,68 @@ pub(crate) async fn run_tool_call_loop(
                         .await;
                 }
                 continue;
+            }
+
+            // If the model discovered tools but still claims they are missing
+            // or defers the action, use one bounded recovery step: expose all
+            // remaining catalogue schemas that this turn's policy already
+            // permits. Persona and explicit-allowlist exclusions were removed
+            // before this scoped catalogue was built, so this cannot broaden
+            // authorization.
+            let discovery_recovery_needed = dynamic_discovery_attempted
+                && !dynamic_discovery_fail_open_used
+                && !discoverable_tools.is_empty()
+                && latest_external_user_request(history).is_some_and(|request| {
+                    !is_planning_only_request(request)
+                        && !is_informational_agent_request(request)
+                })
+                && (looks_like_deferred_tool_action_without_call(&display_text)
+                    || looks_like_tool_unavailability_claim(&display_text, &tool_specs));
+            if discovery_recovery_needed {
+                dynamic_discovery_fail_open_used = true;
+                let activated = activate_remaining_discoverable(
+                    &mut tool_specs,
+                    &mut blocked_tools,
+                    &discoverable_tools,
+                );
+                if !activated.is_empty() {
+                    history.push(ChatMessage::assistant(display_text.clone()));
+                    missing_tool_call_retry_prompt = Some(format!(
+                        "{}\nContinue the original task now. This is a one-time recovery expansion, not task completion.",
+                        build_dynamic_schema_prompt(&activated)
+                    ));
+                    retry_count = retry_count.saturating_add(1);
+                    if let Some(ledger) = crate::agent::run_ledger::current() {
+                        ledger.record_tool_event(
+                            crate::agent::tool_router::TOOL_SEARCH_NAME,
+                            &serde_json::json!({ "recovery": "all_policy_allowed" }),
+                            true,
+                            0,
+                            "Activated all remaining policy-allowed catalogue tools after a failed discovery follow-through.",
+                        );
+                    }
+                    runtime_trace::record_event(
+                        "tool_catalogue_recovery_fail_open",
+                        Some(channel_name),
+                        Some(provider_name),
+                        Some(model),
+                        Some(&turn_id),
+                        Some(true),
+                        Some("model still deferred or claimed unavailable after dynamic discovery"),
+                        serde_json::json!({
+                            "iteration": iteration + 1,
+                            "activated": activated.iter().map(|spec| &spec.name).collect::<Vec<_>>(),
+                        }),
+                    );
+                    if let Some(ref tx) = on_delta {
+                        let _ = tx
+                            .send(format!(
+                                "{DRAFT_PROGRESS_SENTINEL}↪ Discovery recovery: activated the remaining policy-allowed catalogue once\n"
+                            ))
+                            .await;
+                    }
+                    continue;
+                }
             }
 
             // ── Repeated-intent guard ──────────────────────────────────────────────────
@@ -4241,6 +4459,7 @@ pub(crate) async fn run_tool_call_loop(
         let mut executable_indices: Vec<usize> = Vec::new();
         let mut executable_calls: Vec<ParsedToolCall> = Vec::new();
         let mut duplicate_tool_call_count = 0usize;
+        let mut dynamically_activated_specs = Vec::new();
 
         for (idx, call) in tool_calls.iter().enumerate() {
             // ── Hook: before_tool_call (modifying) ──────────
@@ -4294,7 +4513,92 @@ pub(crate) async fn run_tool_call_loop(
                 channel_reply_target.as_deref(),
             );
 
-            if excluded_tools.iter().any(|ex| ex == &tool_name) {
+            if tool_name == crate::agent::tool_router::TOOL_SEARCH_NAME {
+                dynamic_discovery_attempted = true;
+                let (names, query) = parse_tool_search_request(&tool_args);
+                let (mut activated, unknown) = crate::agent::tool_router::search_catalogue(
+                    &discoverable_tools,
+                    &names,
+                    query.as_deref(),
+                );
+                let recovery_fail_open = activated.is_empty()
+                    && !dynamic_discovery_fail_open_used
+                    && !discoverable_tools.is_empty();
+                if recovery_fail_open {
+                    dynamic_discovery_fail_open_used = true;
+                    activated = activate_remaining_discoverable(
+                        &mut tool_specs,
+                        &mut blocked_tools,
+                        &discoverable_tools,
+                    );
+                    dynamically_activated_specs.extend(activated.iter().cloned());
+                }
+                for spec in activated {
+                    blocked_tools.remove(&spec.name);
+                    if !tool_specs.iter().any(|current| current.name == spec.name) {
+                        tool_specs.push(spec.clone());
+                        dynamically_activated_specs.push(spec);
+                    }
+                }
+                if discoverable_tools
+                    .iter()
+                    .all(|spec| !blocked_tools.contains(&spec.name))
+                {
+                    tool_specs.retain(|spec| {
+                        spec.name != crate::agent::tool_router::TOOL_SEARCH_NAME
+                    });
+                }
+                let mut output = tool_search_result_text(&dynamically_activated_specs, &unknown);
+                if recovery_fail_open {
+                    output.push_str(" Discovery returned no match, so the one-time recovery fallback activated every remaining policy-allowed catalogue tool.");
+                    if let Some(ref tx) = on_delta {
+                        let _ = tx
+                            .send(format!(
+                                "{DRAFT_PROGRESS_SENTINEL}↪ Tool discovery missed; activated the remaining policy-allowed catalogue once\n"
+                            ))
+                            .await;
+                    }
+                }
+                if let Some(ledger) = crate::agent::run_ledger::current() {
+                    ledger.record_tool_event(
+                        crate::agent::tool_router::TOOL_SEARCH_NAME,
+                        &tool_args,
+                        true,
+                        0,
+                        &output,
+                    );
+                }
+                runtime_trace::record_event(
+                    "tool_catalogue_activation",
+                    Some(channel_name),
+                    Some(provider_name),
+                    Some(model),
+                    Some(&turn_id),
+                    Some(true),
+                    None,
+                    serde_json::json!({
+                        "iteration": iteration + 1,
+                        "requested_names": names,
+                        "query": query,
+                        "activated": dynamically_activated_specs.iter().map(|spec| &spec.name).collect::<Vec<_>>(),
+                        "unknown": unknown,
+                        "recovery_fail_open": recovery_fail_open,
+                    }),
+                );
+                ordered_results[idx] = Some((
+                    tool_name,
+                    call.tool_call_id.clone(),
+                    ToolExecutionOutcome {
+                        output,
+                        success: true,
+                        error_reason: None,
+                        duration: Duration::ZERO,
+                    },
+                ));
+                continue;
+            }
+
+            if blocked_tools.contains(&tool_name) {
                 let blocked = format!("Tool '{tool_name}' is not available for this turn.");
                 runtime_trace::record_event(
                     "tool_call_result",
@@ -4764,6 +5068,11 @@ pub(crate) async fn run_tool_call_loop(
                 });
                 history.push(ChatMessage::tool(tool_msg.to_string()));
             }
+        }
+        if !use_native_tools && !dynamically_activated_specs.is_empty() {
+            history.push(ChatMessage::user(build_dynamic_schema_prompt(
+                &dynamically_activated_specs,
+            )));
         }
 
         if !iteration_had_failed_tools
@@ -6173,6 +6482,81 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
+
+    #[test]
+    fn dynamic_recovery_broadens_only_to_policy_filtered_discoverables() {
+        let mut selected = vec![
+            crate::tools::ToolSpec {
+                name: crate::agent::tool_router::TOOL_SEARCH_NAME.into(),
+                description: "discover".into(),
+                parameters: serde_json::json!({}),
+            },
+            crate::tools::ToolSpec {
+                name: "file_read".into(),
+                description: "read".into(),
+                parameters: serde_json::json!({}),
+            },
+        ];
+        let discoverable = vec![crate::tools::ToolSpec {
+            name: "db_query".into(),
+            description: "query database".into(),
+            parameters: serde_json::json!({}),
+        }];
+        let mut blocked = ["db_query".to_string(), "shell".to_string()]
+            .into_iter()
+            .collect::<HashSet<_>>();
+
+        let activated = activate_remaining_discoverable(
+            &mut selected,
+            &mut blocked,
+            &discoverable,
+        );
+
+        assert_eq!(activated.iter().map(|spec| spec.name.as_str()).collect::<Vec<_>>(), ["db_query"]);
+        assert!(!blocked.contains("db_query"));
+        assert!(blocked.contains("shell"), "persona-denied tool must remain blocked");
+        assert!(selected.iter().any(|spec| spec.name == "db_query"));
+        assert!(selected.iter().all(|spec| spec.name != "shell"));
+        assert!(selected
+            .iter()
+            .all(|spec| spec.name != crate::agent::tool_router::TOOL_SEARCH_NAME));
+    }
+
+    #[test]
+    fn measured_inference_delta_round_trips_and_formats_without_estimates() {
+        let raw = format!(
+            "{DRAFT_METRICS_SENTINEL}{}",
+            serde_json::json!({
+                "ttft_ms": 2660.0,
+                "generation_tps": 97.7,
+                "prefill_tps": 1200.0,
+                "total_ms": 4200.0,
+                "prompt_tokens": 15078
+            })
+        );
+        let parsed = parse_inference_metrics_delta(&raw).expect("measured metrics delta");
+
+        assert_eq!(parsed.generation_tps, Some(97.7));
+        assert_eq!(parsed.prompt_tokens, Some(15_078));
+        assert_eq!(
+            format_inference_metrics_summary(&parsed).as_deref(),
+            Some("97.7 t/s · ttft 2.66s · 15078 prompt tok")
+        );
+        assert!(parse_inference_metrics_delta("ordinary model output").is_none());
+    }
+
+    #[test]
+    fn inference_summary_does_not_invent_missing_throughput() {
+        let metrics = InferenceMetricsDelta {
+            ttft_ms: Some(100.0),
+            generation_tps: None,
+            prefill_tps: Some(800.0),
+            total_ms: Some(200.0),
+            prompt_tokens: Some(42),
+        };
+
+        assert!(format_inference_metrics_summary(&metrics).is_none());
+    }
 
     #[test]
     fn test_scrub_credentials() {
@@ -8545,11 +8929,9 @@ mod tests {
         assert_eq!(provider_calls.load(Ordering::SeqCst), 3);
         assert_eq!(invocations.load(Ordering::SeqCst), 1);
         assert_eq!(provider.native_tool_requests(), vec![true, true, true]);
-        assert!(
-            history
-                .iter()
-                .all(|message| !message.content.contains("## Compatibility Fallback"))
-        );
+        assert!(history
+            .iter()
+            .all(|message| !message.content.contains("## Compatibility Fallback")));
     }
 
     #[tokio::test]
