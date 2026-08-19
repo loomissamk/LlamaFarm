@@ -24,6 +24,12 @@ import {
 import { getChatSession, getChatSessions, getAgentModes, getTools, type AgentModeOption } from '@/lib/api';
 import { getFederationPeers } from '@/lib/api';
 import {
+  chatSessionRevision,
+  chatSessionUpdatedAtMs,
+  missingStoredMessages,
+  shouldHydrateServerSession,
+} from '@/lib/chatSync';
+import {
   loadFederationPeerSelections,
   loadFederationTasksBySession,
   persistFederationPeerSelections,
@@ -39,6 +45,7 @@ import type {
   FederationPeerSummary,
   FederationPeersResponse,
   FederationRole,
+  ChatSessionDetailResponse,
   StoredChatMessage,
   WsMessage,
 } from '@/types/api';
@@ -80,6 +87,9 @@ interface ChatSession {
   createdAt: Date;
   updatedAt: Date;
   messages: ChatMessage[];
+  serverRevision?: number;
+  serverUpdatedAtMs?: number;
+  localCacheTruncated?: boolean;
 }
 
 interface PersistedChatMessage {
@@ -100,6 +110,9 @@ interface PersistedChatSession {
   createdAt: string;
   updatedAt: string;
   messages: PersistedChatMessage[];
+  serverRevision?: number;
+  serverUpdatedAtMs?: number;
+  transcriptTruncated?: boolean;
 }
 
 interface InitialChatState {
@@ -132,7 +145,7 @@ const IDE_DEFAULT_WIDTH = 560;
 const CHAT_FEDERATION_COLLAPSED_STORAGE_KEY = 'llamafarm.agent_chat.federation_collapsed.v1';
 const CHAT_CONTROLS_COLLAPSED_STORAGE_KEY = 'llamafarm.agent_chat.controls_collapsed.v1';
 const MAX_PERSISTED_MESSAGES = 500;
-const REMOTE_SESSION_REFRESH_MS = 7500;
+const REMOTE_SESSION_REFRESH_MS = 2000;
 // Kicks off a self-contained acceptance run: the model must enumerate every
 // registered tool via task_plan (not just guess a few) and chain through
 // them one at a time so each gets a real, verified call before the plan can
@@ -386,6 +399,19 @@ function loadPersistedSessions(): ChatSession[] {
           createdAt,
           updatedAt,
           messages,
+          serverRevision:
+            typeof session.serverRevision === 'number' &&
+            Number.isSafeInteger(session.serverRevision) &&
+            session.serverRevision > 0
+              ? session.serverRevision
+              : undefined,
+          serverUpdatedAtMs:
+            typeof session.serverUpdatedAtMs === 'number' &&
+            Number.isSafeInteger(session.serverUpdatedAtMs) &&
+            session.serverUpdatedAtMs > 0
+              ? session.serverUpdatedAtMs
+              : undefined,
+          localCacheTruncated: session.transcriptTruncated === true,
         });
       })
       .filter((session): session is ChatSession => session !== null && !session.temporary)
@@ -412,6 +438,11 @@ function persistSessions(sessions: ChatSession[]): void {
         temporary: session.temporary,
         createdAt: session.createdAt.toISOString(),
         updatedAt: session.updatedAt.toISOString(),
+        serverRevision: session.serverRevision,
+        serverUpdatedAtMs: session.serverUpdatedAtMs,
+        transcriptTruncated:
+          session.localCacheTruncated === true ||
+          session.messages.length > MAX_PERSISTED_MESSAGES,
         messages: session.messages.slice(-MAX_PERSISTED_MESSAGES).map((message) => ({
           id: message.id,
           role: message.role,
@@ -667,7 +698,10 @@ function buildHistorySeed(messages: ChatMessage[]): SeedChatMessage[] {
  * bubbles than it had live; nothing said or produced is missing, just the
  * blow-by-blow of *how* older turns got there.
  */
-function reconstructFromStoredMessages(stored: StoredChatMessage[]): ChatMessage[] {
+function reconstructFromStoredMessages(
+  stored: StoredChatMessage[],
+  timestamp = new Date(),
+): ChatMessage[] {
   const result: ChatMessage[] = [];
 
   for (const entry of stored) {
@@ -680,7 +714,7 @@ function reconstructFromStoredMessages(stored: StoredChatMessage[]): ChatMessage
         role: 'user',
         kind: 'message',
         content: trimmed,
-        timestamp: new Date(),
+        timestamp,
         seedRole: 'user',
         seedContent: entry.content,
       });
@@ -696,7 +730,7 @@ function reconstructFromStoredMessages(stored: StoredChatMessage[]): ChatMessage
         role: 'agent',
         kind: 'tool_result',
         content: `[Tool Result] ${toolName}\n${output}`,
-        timestamp: new Date(),
+        timestamp,
         seedRole: 'tool',
         seedContent: entry.content,
       });
@@ -715,7 +749,7 @@ function reconstructFromStoredMessages(stored: StoredChatMessage[]): ChatMessage
           role: 'agent',
           kind: 'tool_call',
           content: `[Tool Call] ${call.name}(${JSON.stringify(args)})`,
-          timestamp: new Date(),
+          timestamp,
           seedRole: 'assistant',
           seedContent: entry.content,
         });
@@ -728,13 +762,37 @@ function reconstructFromStoredMessages(stored: StoredChatMessage[]): ChatMessage
       role: 'agent',
       kind: 'message',
       content: trimmed,
-      timestamp: new Date(),
+      timestamp,
       seedRole: 'assistant',
       seedContent: entry.content,
     });
   }
 
   return result;
+}
+
+function mergeServerTranscript(
+  session: ChatSession,
+  detail: ChatSessionDetailResponse,
+): ChatSession {
+  const updatedAt = new Date(chatSessionUpdatedAtMs(detail));
+  const messages = session.localCacheTruncated
+    ? reconstructFromStoredMessages(detail.messages, updatedAt)
+    : [
+        ...session.messages,
+        ...reconstructFromStoredMessages(
+          missingStoredMessages(session.messages, detail.messages),
+          updatedAt,
+        ),
+      ];
+  return normalizeSession({
+    ...session,
+    messages,
+    updatedAt,
+    serverRevision: chatSessionRevision(detail),
+    serverUpdatedAtMs: chatSessionUpdatedAtMs(detail),
+    localCacheTruncated: false,
+  });
 }
 
 function safeJsonParse<T>(raw: string): T | null {
@@ -935,14 +993,39 @@ export default function AgentChat() {
         const { sessions: remote } = await getChatSessions();
         if (cancelled || remote.length === 0) return;
         const localById = new Map(sessionsRef.current.map((session) => [session.id, session]));
+        const browserOwnedSessionIds = new Set(Object.keys(runWsRefs.current));
         const staleIds = remote
           .filter((summary) => {
             const local = localById.get(summary.session_id);
-            return local !== undefined && summary.message_count > local.messages.length;
+            return (
+              local !== undefined &&
+              shouldHydrateServerSession(
+                summary,
+                local.serverRevision,
+                local.serverUpdatedAtMs,
+                local.localCacheTruncated === true,
+                browserOwnedSessionIds.has(summary.session_id),
+              )
+            );
           })
           .map((summary) => summary.session_id);
         const staleIdSet = new Set(staleIds);
         const remoteById = new Map(remote.map((summary) => [summary.session_id, summary]));
+
+        // A replacement browser has no streaming socket to tell it that a run
+        // is still alive. The lightweight poll supplies that state until the
+        // terminal revision arrives and is merged below.
+        setTypingSessionIds((prev) => {
+          const next = new Set(prev);
+          for (const summary of remote) {
+            if (summary.active) {
+              next.add(summary.session_id);
+            } else if (!browserOwnedSessionIds.has(summary.session_id)) {
+              next.delete(summary.session_id);
+            }
+          }
+          return [...next];
+        });
 
         setSessions((prev) => {
           const knownIds = new Set(prev.map((session) => session.id));
@@ -951,8 +1034,8 @@ export default function AgentChat() {
             if (!summary || !staleIdSet.has(session.id)) return session;
             return {
               ...session,
-              title: summary.title,
-              updatedAt: new Date(summary.updated_at_unix * 1000),
+              title:
+                summary.title === '(empty session)' ? session.title : summary.title,
             };
           });
           const additions: ChatSession[] = remote
@@ -961,8 +1044,8 @@ export default function AgentChat() {
               id: summary.session_id,
               title: summary.title,
               temporary: false,
-              createdAt: new Date(summary.updated_at_unix * 1000),
-              updatedAt: new Date(summary.updated_at_unix * 1000),
+              createdAt: new Date(chatSessionUpdatedAtMs(summary)),
+              updatedAt: new Date(chatSessionUpdatedAtMs(summary)),
               messages: [],
             }));
           return additions.length > 0 || staleIds.length > 0
@@ -985,10 +1068,9 @@ export default function AgentChat() {
         if (selectedId && staleIdSet.has(selectedId) && !runWsRefs.current[selectedId]) {
           const detail = await getChatSession(selectedId);
           if (cancelled) return;
-          const messages = reconstructFromStoredMessages(detail.messages);
           setSessions((prev) =>
             prev.map((session) =>
-              session.id === selectedId ? { ...session, messages } : session,
+              session.id === selectedId ? mergeServerTranscript(session, detail) : session,
             ),
           );
           setRemoteOnlySessionIds((prevIds) => {
@@ -1024,9 +1106,10 @@ export default function AgentChat() {
     setHydratingSessionId(sessionId);
     try {
       const detail = await getChatSession(sessionId);
-      const messages = reconstructFromStoredMessages(detail.messages);
       setSessions((prev) =>
-        prev.map((s) => (s.id === sessionId ? { ...s, messages } : s)),
+        prev.map((session) =>
+          session.id === sessionId ? mergeServerTranscript(session, detail) : session,
+        ),
       );
       setRemoteOnlySessionIds((prev) => {
         const next = new Set(prev);

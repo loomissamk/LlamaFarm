@@ -288,6 +288,10 @@ struct PersistedWsChatSession {
     history: Vec<ChatMessage>,
     #[serde(default)]
     updated_at_unix: u64,
+    #[serde(default)]
+    updated_at_unix_ms: u64,
+    #[serde(default)]
+    revision: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -404,11 +408,26 @@ pub(crate) fn resolve_ws_chat_store_path(config: &crate::config::Config) -> Path
         .join(WS_CHAT_STORE_REL_PATH)
 }
 
-fn current_unix_timestamp_secs() -> u64 {
+fn current_unix_timestamp_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
+        .map(|duration| duration.as_millis() as u64)
         .unwrap_or_default()
+}
+
+fn persisted_session_updated_at_ms(session: &PersistedWsChatSession) -> u64 {
+    if session.updated_at_unix_ms > 0 {
+        session.updated_at_unix_ms
+    } else {
+        session.updated_at_unix.saturating_mul(1000)
+    }
+}
+
+fn public_session_revision(session: &PersistedWsChatSession) -> u64 {
+    // Legacy records predate explicit revisions. Expose them as revision 1 so
+    // a browser with only localStorage still performs one authoritative
+    // hydration after upgrading instead of assuming the records are equal.
+    session.revision.max(1)
 }
 
 fn normalize_ws_history_for_storage(history: &[ChatMessage]) -> Vec<ChatMessage> {
@@ -483,8 +502,37 @@ fn parse_ws_persisted_message_limit(raw: Option<&str>) -> Option<usize> {
 }
 
 fn ws_persisted_message_limit() -> Option<usize> {
-    let configured = std::env::var("LLAMAFARM_AGENT_MAX_HISTORY_MESSAGES").ok();
+    // Model context may intentionally be tiny (for example four messages on a
+    // constrained GPU). Durable chat history must not inherit that limit or a
+    // long-running turn can trim away the prompt before reconnect hydration.
+    let configured = std::env::var("LLAMAFARM_WS_PERSISTED_MAX_MESSAGES").ok();
     parse_ws_persisted_message_limit(configured.as_deref())
+}
+
+fn merge_ws_histories_for_persistence(
+    existing: &[ChatMessage],
+    incoming: &[ChatMessage],
+) -> Vec<ChatMessage> {
+    let existing = normalize_ws_history_for_storage(existing);
+    let incoming = normalize_ws_history_for_storage(incoming);
+    if existing.is_empty() {
+        return incoming;
+    }
+    if incoming.is_empty() {
+        return existing;
+    }
+
+    // Agent context compaction mutates the in-flight history. A completion may
+    // therefore contain only the tail of the conversation. Preserve the
+    // durable checkpoint and append only the non-overlapping compacted tail.
+    let max_overlap = existing.len().min(incoming.len());
+    let overlap = (1..=max_overlap)
+        .rev()
+        .find(|size| existing[existing.len() - *size..] == incoming[..*size])
+        .unwrap_or(0);
+    let mut merged = existing;
+    merged.extend_from_slice(&incoming[overlap..]);
+    normalize_ws_history_for_storage(&merged)
 }
 
 fn ws_persisted_session_limit() -> Option<usize> {
@@ -553,11 +601,21 @@ async fn write_persisted_ws_chat_sessions(
 async fn persist_ws_chat_session(store_path: &Path, session_id: &str, history: &[ChatMessage]) {
     let _store_guard = WS_CHAT_STORE_LOCK.lock().await;
     let mut persisted = read_persisted_ws_chat_sessions(store_path).await;
+    let previous = persisted.sessions.get(session_id);
+    let merged_history = previous
+        .map(|session| merge_ws_histories_for_persistence(&session.history, history))
+        .unwrap_or_else(|| normalize_ws_history_for_storage(history));
+    let revision = previous
+        .map(|session| public_session_revision(session).saturating_add(1))
+        .unwrap_or(1);
+    let updated_at_unix_ms = current_unix_timestamp_millis();
     persisted.sessions.insert(
         session_id.to_string(),
         PersistedWsChatSession {
-            history: normalize_ws_history_for_storage(history),
-            updated_at_unix: current_unix_timestamp_secs(),
+            history: merged_history,
+            updated_at_unix: updated_at_unix_ms / 1000,
+            updated_at_unix_ms,
+            revision,
         },
     );
 
@@ -566,7 +624,9 @@ async fn persist_ws_chat_session(store_path: &Path, session_id: &str, history: &
             let mut ordered: Vec<(String, u64)> = persisted
                 .sessions
                 .iter()
-                .map(|(session_id, session)| (session_id.clone(), session.updated_at_unix))
+                .map(|(session_id, session)| {
+                    (session_id.clone(), persisted_session_updated_at_ms(session))
+                })
                 .collect();
             ordered.sort_by_key(|(_, updated_at_unix)| *updated_at_unix);
 
@@ -599,7 +659,10 @@ struct ChatSessionSummary {
     session_id: String,
     title: String,
     updated_at_unix: u64,
+    updated_at_unix_ms: u64,
+    revision: u64,
     message_count: usize,
+    active: bool,
 }
 
 /// GET /api/chat-sessions — list persisted chat sessions from *this node's*
@@ -620,7 +683,8 @@ pub(crate) async fn handle_api_chat_sessions_list(
         resolve_ws_chat_store_path(&config)
     };
     let persisted = read_persisted_ws_chat_sessions(&store_path).await;
-    let summaries = summarize_persisted_sessions(persisted);
+    let active_session_ids = active_ws_chat_session_ids();
+    let summaries = summarize_persisted_sessions(persisted, &active_session_ids);
 
     Json(serde_json::json!({ "sessions": summaries })).into_response()
 }
@@ -634,18 +698,28 @@ fn session_title(history: &[ChatMessage]) -> String {
         .unwrap_or_else(|| "(empty session)".to_string())
 }
 
-fn summarize_persisted_sessions(persisted: PersistedWsChatSessions) -> Vec<ChatSessionSummary> {
+fn active_ws_chat_session_ids() -> HashSet<String> {
+    ACTIVE_WS_CHAT_RUNS.lock().keys().cloned().collect()
+}
+
+fn summarize_persisted_sessions(
+    persisted: PersistedWsChatSessions,
+    active_session_ids: &HashSet<String>,
+) -> Vec<ChatSessionSummary> {
     let mut summaries: Vec<ChatSessionSummary> = persisted
         .sessions
         .into_iter()
         .map(|(session_id, session)| ChatSessionSummary {
+            active: active_session_ids.contains(&session_id),
             session_id,
             title: session_title(&session.history),
             updated_at_unix: session.updated_at_unix,
+            updated_at_unix_ms: persisted_session_updated_at_ms(&session),
+            revision: public_session_revision(&session),
             message_count: session.history.len(),
         })
         .collect();
-    summaries.sort_by(|a, b| b.updated_at_unix.cmp(&a.updated_at_unix));
+    summaries.sort_by(|a, b| b.updated_at_unix_ms.cmp(&a.updated_at_unix_ms));
     summaries
 }
 
@@ -680,6 +754,9 @@ pub(crate) async fn handle_api_chat_session_get(
     Json(serde_json::json!({
         "session_id": session_id,
         "updated_at_unix": session.updated_at_unix,
+        "updated_at_unix_ms": persisted_session_updated_at_ms(session),
+        "revision": public_session_revision(session),
+        "active": ACTIVE_WS_CHAT_RUNS.lock().contains_key(&session_id),
         "messages": session.history,
     }))
     .into_response()
@@ -808,6 +885,15 @@ fn sanitize_ws_response(response: &str, tools: &[Box<dyn crate::tools::Tool>]) -
             .to_string()
     } else {
         sanitized
+    }
+}
+
+fn append_final_assistant_response(history: &mut Vec<ChatMessage>, response: &str) {
+    let already_last = history
+        .last()
+        .is_some_and(|message| message.role == "assistant" && message.content == response);
+    if !already_last {
+        history.push(ChatMessage::assistant(response));
     }
 }
 
@@ -3466,7 +3552,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                         &history,
                         runtime.tools_registry_exec.as_ref(),
                     );
-                    history.push(ChatMessage::assistant(&safe_response));
+                    append_final_assistant_response(&mut history, &safe_response);
 
                     // Persist a compact exchange record so future sessions can
                     // recall what was asked and answered, not just the prompt.
@@ -4042,7 +4128,7 @@ Reminder set successfully."#;
     }
 
     #[test]
-    fn persisted_history_limit_follows_unlimited_agent_profile() {
+    fn persisted_history_limit_supports_durable_chat_profile() {
         assert_eq!(parse_ws_persisted_message_limit(Some("0")), None);
         assert_eq!(parse_ws_persisted_message_limit(Some("1250")), Some(1250));
         assert_eq!(
@@ -4230,6 +4316,7 @@ Reminder set successfully."#;
                     ChatMessage::assistant("done"),
                 ],
                 updated_at_unix: 100,
+                ..PersistedWsChatSession::default()
             },
         );
         sessions.insert(
@@ -4237,15 +4324,54 @@ Reminder set successfully."#;
             PersistedWsChatSession {
                 history: vec![ChatMessage::user("second task")],
                 updated_at_unix: 200,
+                ..PersistedWsChatSession::default()
             },
         );
 
-        let summaries = summarize_persisted_sessions(PersistedWsChatSessions { sessions });
+        let active = HashSet::from(["newer".to_string()]);
+        let summaries = summarize_persisted_sessions(PersistedWsChatSessions { sessions }, &active);
         assert_eq!(summaries.len(), 2);
         assert_eq!(summaries[0].session_id, "newer");
         assert_eq!(summaries[0].message_count, 1);
+        assert_eq!(summaries[0].updated_at_unix_ms, 200_000);
+        assert_eq!(summaries[0].revision, 1);
+        assert!(summaries[0].active);
         assert_eq!(summaries[1].session_id, "older");
         assert_eq!(summaries[1].message_count, 2);
+        assert!(!summaries[1].active);
+    }
+
+    #[test]
+    fn persistence_merge_keeps_checkpoint_when_runtime_history_was_compacted() {
+        let checkpoint = vec![
+            ChatMessage::user("build the durable feature"),
+            ChatMessage::assistant("I am starting the work."),
+        ];
+        let compacted_completion = vec![
+            ChatMessage::assistant("I am starting the work."),
+            ChatMessage::assistant("The durable feature is complete."),
+        ];
+
+        let merged = merge_ws_histories_for_persistence(&checkpoint, &compacted_completion);
+
+        assert_eq!(merged.len(), 3);
+        assert_eq!(merged[0], ChatMessage::user("build the durable feature"));
+        assert_eq!(
+            merged[2],
+            ChatMessage::assistant("The durable feature is complete.")
+        );
+    }
+
+    #[test]
+    fn final_assistant_response_is_not_duplicated_when_loop_already_stored_it() {
+        let mut history = vec![
+            ChatMessage::user("finish the task"),
+            ChatMessage::assistant("Finished."),
+        ];
+
+        append_final_assistant_response(&mut history, "Finished.");
+
+        assert_eq!(history.len(), 2);
     }
 
     #[test]

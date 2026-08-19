@@ -544,7 +544,10 @@ export interface ChatSessionSummary {
   session_id: string;
   title: string;
   updated_at_unix: number;
+  updated_at_unix_ms?: number;
+  revision?: number;
   message_count: number;
+  active?: boolean;
 }
 
 export interface ChatSessionsListResponse {
@@ -563,5 +566,8 @@ export interface StoredChatMessage {
 export interface ChatSessionDetailResponse {
   session_id: string;
   updated_at_unix: number;
+  updated_at_unix_ms?: number;
+  revision?: number;
+  active?: boolean;
   messages: StoredChatMessage[];
 }

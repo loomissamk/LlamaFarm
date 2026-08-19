@@ -27,12 +27,14 @@ test('agent continuously discovers remote chats and audits the authoritative too
     'utf8',
   );
 
-  assert.match(agent, /REMOTE_SESSION_REFRESH_MS = 7500/);
+  assert.match(agent, /REMOTE_SESSION_REFRESH_MS = 2000/);
   assert.match(agent, /globalThis\.setInterval\(\(\) => \{/);
   assert.match(agent, /if \(cancelled \|\| refreshInFlight\) return/);
   assert.match(agent, /void discoverRemoteSessions\(\)/);
   assert.match(agent, /globalThis\.clearInterval\(interval\)/);
   assert.match(agent, /const localById = new Map\(sessionsRef\.current/);
+  assert.match(agent, /shouldHydrateServerSession/);
+  assert.doesNotMatch(agent, /summary\.message_count > local\.messages\.length/);
   assert.match(agent, /const detail = await getChatSession\(selectedId\)/);
   assert.match(agent, /const registeredTools = await getTools\(\)/);
   assert.match(agent, /createChatSession\(false\)/);
