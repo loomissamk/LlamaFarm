@@ -276,7 +276,7 @@ RUN chmod 755 /usr/local/bin/bundle-entrypoint.sh /usr/bin/ollama /usr/local/bin
     rm -f /llamafarm-data/.llamafarm/config.toml
 
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --break-system-packages \
+    pip install --break-system-packages --ignore-installed \
     pymongo qdrant-client requests \
     numpy pandas scipy scikit-learn \
     httpx aiohttp websockets \
