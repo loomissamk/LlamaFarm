@@ -117,6 +117,7 @@ RUN apt-get update && apt-get install -y \
     python-is-python3 \
     python3 \
     python3-pip \
+    python3-poetry-core \
     python3-setuptools \
     python3-venv \
     ripgrep \
@@ -212,7 +213,8 @@ ARG WIFITE2_COMMIT=d88ed4a5a1764fab93c60b51c7d9baa186bc8757
 ARG EXPLOITDB_COMMIT=79ced5d7cb2d11826aae1ee1194d30114fb8ec58
 # Best-effort per package: a package missing from the base distro's repos
 # (e.g. nikto is not in Debian trixie) must NOT abort the whole image build.
-RUN if [ "$LLAMAFARM_LAB_TOOLS" = "1" ]; then \
+RUN set -eu; \
+    if [ "$LLAMAFARM_LAB_TOOLS" = "1" ]; then \
       apt-get update; \
       for p in nmap tshark tcpdump netcat-openbsd dnsutils whois traceroute \
                openssh-client sshpass hydra sqlmap john hashcat \
@@ -236,6 +238,7 @@ RUN if [ "$LLAMAFARM_LAB_TOOLS" = "1" ]; then \
       git -C /opt/wifite2 checkout --detach FETCH_HEAD; \
       test "$(git -C /opt/wifite2 rev-parse HEAD)" = "$WIFITE2_COMMIT"; \
       pip install --break-system-packages --no-build-isolation --no-deps /opt/wifite2; \
+      command -v wifite >/dev/null; \
       git init /opt/exploitdb; \
       git -C /opt/exploitdb remote add origin https://gitlab.com/exploit-database/exploitdb.git; \
       git -C /opt/exploitdb fetch --depth 1 origin "$EXPLOITDB_COMMIT"; \
