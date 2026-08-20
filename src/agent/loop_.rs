@@ -3036,7 +3036,7 @@ fn tool_loop_has_next_iteration(iteration: usize, limit: Option<usize>) -> bool 
     limit.is_none_or(|limit| iteration.saturating_add(1) < limit)
 }
 
-fn parse_tool_search_request(arguments: &serde_json::Value) -> (Vec<String>, Option<String>) {
+fn parse_tool_search_request(arguments: &serde_json::Value) -> (Vec<String>, Option<String>, bool) {
     let names = arguments
         .get("names")
         .and_then(serde_json::Value::as_array)
@@ -3056,7 +3056,11 @@ fn parse_tool_search_request(arguments: &serde_json::Value) -> (Vec<String>, Opt
         .map(str::trim)
         .filter(|query| !query.is_empty())
         .map(str::to_string);
-    (names, query)
+    let activate_all = arguments
+        .get("all")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    (names, query, activate_all)
 }
 
 fn tool_search_result_text(activated: &[crate::tools::ToolSpec], unknown: &[String]) -> String {
@@ -4515,12 +4519,16 @@ pub(crate) async fn run_tool_call_loop(
 
             if tool_name == crate::agent::tool_router::TOOL_SEARCH_NAME {
                 dynamic_discovery_attempted = true;
-                let (names, query) = parse_tool_search_request(&tool_args);
-                let (mut activated, unknown) = crate::agent::tool_router::search_catalogue(
-                    &discoverable_tools,
-                    &names,
-                    query.as_deref(),
-                );
+                let (names, query, activate_all) = parse_tool_search_request(&tool_args);
+                let (mut activated, unknown) = if activate_all {
+                    (discoverable_tools.clone(), Vec::new())
+                } else {
+                    crate::agent::tool_router::search_catalogue(
+                        &discoverable_tools,
+                        &names,
+                        query.as_deref(),
+                    )
+                };
                 let recovery_fail_open = activated.is_empty()
                     && !dynamic_discovery_fail_open_used
                     && !discoverable_tools.is_empty();
@@ -4580,6 +4588,7 @@ pub(crate) async fn run_tool_call_loop(
                         "iteration": iteration + 1,
                         "requested_names": names,
                         "query": query,
+                        "activate_all": activate_all,
                         "activated": dynamically_activated_specs.iter().map(|spec| &spec.name).collect::<Vec<_>>(),
                         "unknown": unknown,
                         "recovery_fail_open": recovery_fail_open,
@@ -4599,33 +4608,69 @@ pub(crate) async fn run_tool_call_loop(
             }
 
             if blocked_tools.contains(&tool_name) {
-                let blocked = format!("Tool '{tool_name}' is not available for this turn.");
-                runtime_trace::record_event(
-                    "tool_call_result",
-                    Some(channel_name),
-                    Some(provider_name),
-                    Some(model),
-                    Some(&turn_id),
-                    Some(false),
-                    Some(&blocked),
-                    serde_json::json!({
-                        "iteration": iteration + 1,
-                        "tool": tool_name.clone(),
-                        "arguments": scrub_credentials(&tool_args.to_string()),
-                        "blocked_by_tool_selection": true,
-                    }),
+                // A compact route is a prompt-size optimization, not a policy
+                // boundary. If the model directly requests an exact tool from
+                // the already policy-filtered discovery catalogue, activate
+                // its schema/dependencies and execute this same call. Persona
+                // and explicit-allowlist exclusions never enter this list and
+                // therefore remain hard blocks below.
+                let (activated, _) = crate::agent::tool_router::search_catalogue(
+                    &discoverable_tools,
+                    std::slice::from_ref(&tool_name),
+                    None,
                 );
-                ordered_results[idx] = Some((
-                    tool_name.clone(),
-                    call.tool_call_id.clone(),
-                    ToolExecutionOutcome {
-                        output: blocked.clone(),
-                        success: false,
-                        error_reason: Some(blocked),
-                        duration: Duration::ZERO,
-                    },
-                ));
-                continue;
+                if !activated.is_empty() {
+                    dynamic_discovery_attempted = true;
+                    for spec in activated {
+                        blocked_tools.remove(&spec.name);
+                        if !tool_specs.iter().any(|current| current.name == spec.name) {
+                            tool_specs.push(spec.clone());
+                            dynamically_activated_specs.push(spec);
+                        }
+                    }
+                    runtime_trace::record_event(
+                        "tool_catalogue_auto_activation",
+                        Some(channel_name),
+                        Some(provider_name),
+                        Some(model),
+                        Some(&turn_id),
+                        Some(true),
+                        None,
+                        serde_json::json!({
+                            "iteration": iteration + 1,
+                            "requested_tool": tool_name.clone(),
+                            "activated": dynamically_activated_specs.iter().map(|spec| &spec.name).collect::<Vec<_>>(),
+                        }),
+                    );
+                } else {
+                    let blocked = format!("Tool '{tool_name}' is not available for this turn.");
+                    runtime_trace::record_event(
+                        "tool_call_result",
+                        Some(channel_name),
+                        Some(provider_name),
+                        Some(model),
+                        Some(&turn_id),
+                        Some(false),
+                        Some(&blocked),
+                        serde_json::json!({
+                            "iteration": iteration + 1,
+                            "tool": tool_name.clone(),
+                            "arguments": scrub_credentials(&tool_args.to_string()),
+                            "blocked_by_tool_selection": true,
+                        }),
+                    );
+                    ordered_results[idx] = Some((
+                        tool_name.clone(),
+                        call.tool_call_id.clone(),
+                        ToolExecutionOutcome {
+                            output: blocked.clone(),
+                            success: false,
+                            error_reason: Some(blocked),
+                            duration: Duration::ZERO,
+                        },
+                    ));
+                    continue;
+                }
             }
 
             // ── Approval hook ────────────────────────────────
@@ -8008,6 +8053,59 @@ mod tests {
                 .content
                 .contains("not available for this turn"),
             "blocked reason should be visible to the model"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_tool_call_loop_auto_activates_policy_allowed_catalogue_tool() {
+        let provider = ScriptedProvider::from_text_responses(vec![
+            r#"<tool_call>
+{"name":"shell","arguments":{"command":"echo hi"}}
+</tool_call>"#,
+            "done",
+        ]);
+
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
+        let shell = DelayTool::new("shell", 10, Arc::clone(&active), Arc::clone(&max_active));
+        let discoverable = vec![shell.spec()];
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(shell)];
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("run shell"),
+        ];
+        let observer = NoopObserver;
+        let excluded_tools = vec!["shell".to_string()];
+
+        let result = with_dynamic_tool_catalogue(
+            discoverable,
+            run_tool_call_loop(
+                &provider,
+                &mut history,
+                &tools_registry,
+                &observer,
+                "mock-provider",
+                "mock-model",
+                0.0,
+                true,
+                None,
+                "telegram",
+                &crate::config::MultimodalConfig::default(),
+                4,
+                None,
+                None,
+                None,
+                &excluded_tools,
+            ),
+        )
+        .await
+        .expect("discoverable tool should activate and execute in the same iteration");
+
+        assert_eq!(result, "done");
+        assert_eq!(
+            max_active.load(Ordering::SeqCst),
+            1,
+            "policy-allowed discoverable tool should execute instead of being reported unavailable"
         );
     }
 

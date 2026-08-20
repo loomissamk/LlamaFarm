@@ -199,8 +199,8 @@ RUN apt-get update && apt-get install -y \
     xvfb \
     && rm -rf /var/lib/apt/lists/*
 
-# Optional authorized-lab toolkit (opt-in, off by default to keep the image
-# lean). Enable with:  --build-arg LLAMAFARM_LAB_TOOLS=1
+# Authorized-lab toolkit for the local bundle (enabled by default). Disable
+# with --build-arg LLAMAFARM_LAB_TOOLS=0 when a smaller image is preferred.
 # Standard network/security analysis tools for the operator's own authorized
 # testing on their disposable lab. Serves the chaos_lab / ethical-hacking
 # mission in TODO.md — not for use against systems you do not own or lack
@@ -211,7 +211,8 @@ ARG LLAMAFARM_LAB_TOOLS=1
 RUN if [ "$LLAMAFARM_LAB_TOOLS" = "1" ]; then \
       apt-get update; \
       for p in nmap tshark tcpdump netcat-openbsd dnsutils whois traceroute \
-               openssh-client sshpass hydra sqlmap john hashcat; do \
+               openssh-client sshpass hydra sqlmap john hashcat \
+               gobuster dirb aircrack-ng masscan; do \
         apt-get install -y --no-install-recommends "$p" \
           || echo "lab-tools: skipping unavailable package $p"; \
       done; \

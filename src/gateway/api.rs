@@ -3,6 +3,7 @@
 //! All `/api/*` routes require bearer token authentication (PairingGuard).
 
 use super::{build_gateway_runtime_snapshot_with_federation, client_key_from_request, AppState};
+use crate::channels::DiscordChannel;
 use crate::config::schema::{OllamaModelPlacementConfig, OllamaWorkerConfig};
 use crate::config::FederationRole;
 use crate::federation::peer_registry::{
@@ -32,7 +33,10 @@ use std::{
     convert::Infallible,
     net::SocketAddr,
     path::{Component, Path as FsPath, PathBuf},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 use tokio_util::sync::CancellationToken;
@@ -44,6 +48,7 @@ const GOD_CONFIG_PRESET_FILE: &str = "config.template.toml";
 const SAFE_CONFIG_PRESET_FILE: &str = "config.preset.safe.toml";
 const GOD_WORKSPACE_AGENTS_PRESET_FILE: &str = "workspace.preset.god.AGENTS.md";
 const SAFE_WORKSPACE_AGENTS_PRESET_FILE: &str = "workspace.preset.safe.AGENTS.md";
+static DISCORD_RESTART_REQUIRED: AtomicBool = AtomicBool::new(false);
 
 // ── Bearer token auth extractor ─────────────────────────────────
 
@@ -2604,6 +2609,8 @@ pub async fn handle_api_config_put(
                 .into_response();
         }
     };
+    let discord_config_changed = serde_json::to_value(&current_config.channels_config.discord).ok()
+        != serde_json::to_value(&new_config.channels_config.discord).ok();
 
     if let Err(e) = new_config.validate() {
         return (
@@ -2644,6 +2651,9 @@ pub async fn handle_api_config_put(
     // Update in-memory config
     *state.config.lock() = new_config;
     state.replace_runtime_snapshot(runtime_snapshot);
+    if discord_config_changed {
+        DISCORD_RESTART_REQUIRED.store(true, Ordering::Release);
+    }
 
     Json(serde_json::json!({"status": "ok"})).into_response()
 }
@@ -3961,6 +3971,392 @@ fn host_tailscale_status() -> serde_json::Value {
     parse_host_tailscale_status(&status)
 }
 
+#[derive(Debug, Deserialize)]
+pub struct DiscordConnectionPutBody {
+    #[serde(default)]
+    bot_token: Option<String>,
+    #[serde(default)]
+    guild_id: Option<String>,
+    #[serde(default)]
+    allowed_users: Vec<String>,
+    #[serde(default)]
+    revision: Option<String>,
+}
+
+fn normalize_discord_snowflake(
+    value: &str,
+    field_name: &str,
+    allow_wildcard: bool,
+) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(format!("{field_name} cannot be empty"));
+    }
+    if allow_wildcard && value == "*" {
+        return Ok(value.to_string());
+    }
+    if !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(format!("{field_name} must be a numeric Discord ID"));
+    }
+    Ok(value.to_string())
+}
+
+fn build_discord_connection_config(
+    current: Option<&crate::config::DiscordConfig>,
+    body: &DiscordConnectionPutBody,
+) -> Result<crate::config::DiscordConfig, String> {
+    let bot_token = body
+        .bot_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(str::to_string)
+        .or_else(|| current.map(|config| config.bot_token.clone()))
+        .ok_or_else(|| "Discord bot token is required".to_string())?;
+
+    let guild_id = body
+        .guild_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|guild_id| !guild_id.is_empty())
+        .map(|guild_id| normalize_discord_snowflake(guild_id, "Guild ID", false))
+        .transpose()?;
+
+    let mut allowed_users = Vec::new();
+    for raw in &body.allowed_users {
+        let user_id = normalize_discord_snowflake(raw, "Allowed user ID", true)?;
+        if !allowed_users.contains(&user_id) {
+            allowed_users.push(user_id);
+        }
+    }
+    if allowed_users.is_empty() {
+        return Err(
+            "At least one allowed Discord user ID is required; use '*' only for deliberate open testing"
+                .to_string(),
+        );
+    }
+
+    Ok(crate::config::DiscordConfig {
+        bot_token,
+        guild_id,
+        allowed_users,
+        listen_to_bots: current.is_some_and(|config| config.listen_to_bots),
+        mention_only: current.is_some_and(|config| config.mention_only),
+        group_reply: current.and_then(|config| config.group_reply.clone()),
+    })
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct DiscordBotIdentity {
+    id: String,
+    username: String,
+    #[serde(default)]
+    global_name: Option<String>,
+}
+
+async fn verify_discord_bot(token: &str) -> Result<DiscordBotIdentity, String> {
+    crate::config::build_runtime_proxy_client("gateway.discord_connection")
+        .get("https://discord.com/api/v10/users/@me")
+        .header("Authorization", format!("Bot {token}"))
+        .send()
+        .await
+        .map_err(|_| "Discord could not be reached from this node".to_string())?
+        .error_for_status()
+        .map_err(|_| "Discord rejected the bot token".to_string())?
+        .json::<DiscordBotIdentity>()
+        .await
+        .map_err(|_| "Discord returned an unreadable bot identity".to_string())
+}
+
+fn discord_install_url(bot_id: &str, guild_id: Option<&str>) -> String {
+    // LlamaFarm currently needs only normal bot permissions: view channels,
+    // add reactions, send messages, embed links, attach files, and read
+    // message history. It does not request administrator access.
+    const PERMISSIONS: u64 = 117_824;
+    let mut url = format!(
+        "https://discord.com/oauth2/authorize?client_id={bot_id}&scope=bot&permissions={PERMISSIONS}"
+    );
+    if let Some(guild_id) = guild_id {
+        url.push_str("&guild_id=");
+        url.push_str(guild_id);
+        url.push_str("&disable_guild_select=true");
+    }
+    url
+}
+
+async fn discord_connection_payload(
+    discord: Option<&crate::config::DiscordConfig>,
+) -> serde_json::Value {
+    let restart_required = DISCORD_RESTART_REQUIRED.load(Ordering::Acquire);
+    let Some(discord) = discord else {
+        return serde_json::json!({
+            "status": if restart_required { "disconnect_restart_required" } else { "not_configured" },
+            "configured": false,
+            "restart_required": restart_required,
+        });
+    };
+
+    let component_status = crate::health::snapshot()
+        .components
+        .get("channel:discord")
+        .map(|component| component.status.as_str().to_string());
+    let (status, needs_restart) = if restart_required || component_status.is_none() {
+        ("restart_required", true)
+    } else {
+        match component_status.as_deref() {
+            Some("ok") => ("connected", false),
+            Some("error") => ("error", false),
+            _ => ("starting", false),
+        }
+    };
+
+    let identity = tokio::time::timeout(
+        Duration::from_secs(3),
+        verify_discord_bot(&discord.bot_token),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok);
+    let bot_id = identity
+        .as_ref()
+        .map(|bot| bot.id.clone())
+        .or_else(|| DiscordChannel::bot_user_id_from_token(&discord.bot_token));
+    let install_url = bot_id
+        .as_deref()
+        .map(|id| discord_install_url(id, discord.guild_id.as_deref()));
+
+    serde_json::json!({
+        "status": status,
+        "configured": true,
+        "restart_required": needs_restart,
+        "guild_id": discord.guild_id.as_deref(),
+        "allowed_users": &discord.allowed_users,
+        "bot": identity,
+        "bot_id": bot_id,
+        "install_url": install_url,
+    })
+}
+
+/// PUT /api/connections/discord — verify and persist Discord bot settings.
+/// The daemon owns long-lived channel listeners, so a process restart is
+/// required after a successful update. Secrets are never returned.
+pub async fn handle_api_discord_connection_put(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<DiscordConnectionPutBody>,
+) -> impl IntoResponse {
+    if let Err(error) = require_auth(&state, &headers) {
+        return error.into_response();
+    }
+
+    let current = state.config.lock().clone();
+    let current_revision = config_revision(&current);
+    if body
+        .revision
+        .as_deref()
+        .is_some_and(|revision| revision != current_revision)
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "Discord settings are out of date. Refresh and retry.",
+                "revision": current_revision,
+            })),
+        )
+            .into_response();
+    }
+
+    let discord =
+        match build_discord_connection_config(current.channels_config.discord.as_ref(), &body) {
+            Ok(discord) => discord,
+            Err(error) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": error})),
+                )
+                    .into_response();
+            }
+        };
+
+    let identity = match tokio::time::timeout(
+        Duration::from_secs(10),
+        verify_discord_bot(&discord.bot_token),
+    )
+    .await
+    {
+        Ok(Ok(identity)) => identity,
+        Ok(Err(error)) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": error})),
+            )
+                .into_response();
+        }
+        Err(_) => {
+            return (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(serde_json::json!({
+                    "error": "Discord verification timed out. Check this node's network and retry."
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    // Re-check after the network verification so a concurrent config save is
+    // never overwritten by this narrow editor.
+    let latest = state.config.lock().clone();
+    if config_revision(&latest) != current_revision {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "Configuration changed while Discord was being verified. Refresh and retry.",
+                "revision": config_revision(&latest),
+            })),
+        )
+            .into_response();
+    }
+
+    let install_guild_id = discord.guild_id.clone();
+    let mut updated = latest;
+    updated.channels_config.discord = Some(discord);
+    if let Err(error) = updated.validate() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": format!("Invalid Discord config: {error}")})),
+        )
+            .into_response();
+    }
+    let runtime_snapshot = match build_gateway_runtime_snapshot_with_federation(
+        &updated,
+        state
+            .federation
+            .as_ref()
+            .map(|federation| federation.remote_adapter()),
+    ) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": format!("Discord config cannot be applied: {error}")
+                })),
+            )
+                .into_response();
+        }
+    };
+    if let Err(error) = updated.save().await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Failed to save Discord config: {error}")
+            })),
+        )
+            .into_response();
+    }
+
+    let revision = config_revision(&updated);
+    *state.config.lock() = updated;
+    state.replace_runtime_snapshot(runtime_snapshot);
+    DISCORD_RESTART_REQUIRED.store(true, Ordering::Release);
+    let install_url = discord_install_url(&identity.id, install_guild_id.as_deref());
+    Json(serde_json::json!({
+        "status": "ok",
+        "revision": revision,
+        "restart_required": true,
+        "bot": identity,
+        "install_url": install_url,
+    }))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+pub struct DiscordDisconnectBody {
+    #[serde(default)]
+    revision: Option<String>,
+}
+
+/// POST /api/connections/discord/disconnect — remove the stored Discord
+/// credential and channel configuration. The existing listener is daemon-owned
+/// and stops on the required process restart.
+pub async fn handle_api_discord_disconnect(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<DiscordDisconnectBody>,
+) -> impl IntoResponse {
+    if let Err(error) = require_auth(&state, &headers) {
+        return error.into_response();
+    }
+
+    let current = state.config.lock().clone();
+    let current_revision = config_revision(&current);
+    if body
+        .revision
+        .as_deref()
+        .is_some_and(|revision| revision != current_revision)
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "Discord settings are out of date. Refresh and retry.",
+                "revision": current_revision,
+            })),
+        )
+            .into_response();
+    }
+
+    if current.channels_config.discord.is_none() {
+        return Json(serde_json::json!({
+            "status": "ok",
+            "disconnected": false,
+            "restart_required": DISCORD_RESTART_REQUIRED.load(Ordering::Acquire),
+        }))
+        .into_response();
+    }
+
+    let mut updated = current;
+    updated.channels_config.discord = None;
+    let runtime_snapshot = match build_gateway_runtime_snapshot_with_federation(
+        &updated,
+        state
+            .federation
+            .as_ref()
+            .map(|federation| federation.remote_adapter()),
+    ) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": format!("Discord config cannot be removed: {error}")
+                })),
+            )
+                .into_response();
+        }
+    };
+    if let Err(error) = updated.save().await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Failed to disconnect Discord: {error}")
+            })),
+        )
+            .into_response();
+    }
+
+    let revision = config_revision(&updated);
+    *state.config.lock() = updated;
+    state.replace_runtime_snapshot(runtime_snapshot);
+    DISCORD_RESTART_REQUIRED.store(true, Ordering::Release);
+    Json(serde_json::json!({
+        "status": "ok",
+        "disconnected": true,
+        "revision": revision,
+        "restart_required": true,
+    }))
+    .into_response()
+}
+
 /// GET /api/connections — friendly settings state for the Connections UI.
 /// Reports live status per integration; never returns secrets.
 pub async fn handle_api_connections(
@@ -3972,22 +4368,17 @@ pub async fn handle_api_connections(
     }
     let config_dir = node_config_dir(&state);
     let github = crate::auth::github_device::connection_status(&config_dir);
-    let (model, provider, memory_backend) = {
+    let (model, provider, memory_backend, revision, discord_config) = {
         let config = state.config.lock();
         (
             config.default_model.clone().unwrap_or_default(),
             config.default_provider.clone().unwrap_or_default(),
             config.memory.backend.clone(),
+            config_revision(&config),
+            config.channels_config.discord.clone(),
         )
     };
-    let discord_connected = {
-        let config = state.config.lock();
-        config
-            .channels_config
-            .discord
-            .as_ref()
-            .is_some_and(|d| !d.bot_token.trim().is_empty())
-    };
+    let discord = discord_connection_payload(discord_config.as_ref()).await;
     let tailscale = host_tailscale_status();
 
     Json(serde_json::json!({
@@ -4002,7 +4393,8 @@ pub async fn handle_api_connections(
         },
         "ollama": {"status": "configured", "model": model, "provider": provider},
         "memory": {"status": "configured", "backend": memory_backend},
-        "discord": {"status": if discord_connected { "connected" } else { "not_connected" }},
+        "revision": revision,
+        "discord": discord,
         "tailscale": tailscale,
     }))
     .into_response()
@@ -5935,6 +6327,84 @@ mod tests {
             Some("AGENTS.md")
         );
         assert_eq!(normalize_workspace_editor_name("SOUL.md"), None);
+    }
+
+    #[test]
+    fn discord_connection_config_is_normalized_and_deduplicated() {
+        let body = DiscordConnectionPutBody {
+            bot_token: Some("  bot-token  ".to_string()),
+            guild_id: Some(" 123456789 ".to_string()),
+            allowed_users: vec![" 987654321 ".to_string(), "987654321".to_string()],
+            revision: None,
+        };
+
+        let config = build_discord_connection_config(None, &body)
+            .expect("valid Discord settings should normalize");
+
+        assert_eq!(config.bot_token, "bot-token");
+        assert_eq!(config.guild_id.as_deref(), Some("123456789"));
+        assert_eq!(config.allowed_users, ["987654321"]);
+        assert!(!config.listen_to_bots);
+    }
+
+    #[test]
+    fn discord_connection_update_preserves_existing_token_and_advanced_policy() {
+        let current = crate::config::DiscordConfig {
+            bot_token: "existing-token".to_string(),
+            guild_id: None,
+            allowed_users: vec!["111".to_string()],
+            listen_to_bots: true,
+            mention_only: true,
+            group_reply: None,
+        };
+        let body = DiscordConnectionPutBody {
+            bot_token: Some(" ".to_string()),
+            guild_id: None,
+            allowed_users: vec!["222".to_string()],
+            revision: None,
+        };
+
+        let config = build_discord_connection_config(Some(&current), &body)
+            .expect("blank replacement token should preserve configured secret");
+
+        assert_eq!(config.bot_token, "existing-token");
+        assert_eq!(config.allowed_users, ["222"]);
+        assert!(config.listen_to_bots);
+        assert!(config.mention_only);
+    }
+
+    #[test]
+    fn discord_connection_config_rejects_unusable_allowlist() {
+        let missing = DiscordConnectionPutBody {
+            bot_token: Some("bot-token".to_string()),
+            guild_id: None,
+            allowed_users: Vec::new(),
+            revision: None,
+        };
+        assert!(build_discord_connection_config(None, &missing)
+            .unwrap_err()
+            .contains("At least one allowed"));
+
+        let invalid = DiscordConnectionPutBody {
+            bot_token: Some("bot-token".to_string()),
+            guild_id: None,
+            allowed_users: vec!["not-a-discord-id".to_string()],
+            revision: None,
+        };
+        assert!(build_discord_connection_config(None, &invalid)
+            .unwrap_err()
+            .contains("numeric Discord ID"));
+    }
+
+    #[test]
+    fn discord_install_link_is_scoped_to_expected_bot_permissions() {
+        let url = discord_install_url("123456", Some("987654"));
+
+        assert_eq!(
+            url,
+            "https://discord.com/oauth2/authorize?client_id=123456&scope=bot&permissions=117824&guild_id=987654&disable_guild_select=true"
+        );
+        assert!(!url.contains("administrator"));
     }
 
     #[test]

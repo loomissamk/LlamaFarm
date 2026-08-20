@@ -31,6 +31,23 @@ test('connections make context settings keyboard-safe and destructive actions ex
   assert.doesNotMatch(connections, /window\.confirm/);
 });
 
+test('connections provide a secret-safe Discord setup flow', () => {
+  const connections = readPage('Connections');
+
+  assert.match(connections, /\/api\/connections\/discord/);
+  assert.match(connections, /type="password"/);
+  assert.match(connections, /required=\{!data\?\.discord\.configured\}/);
+  assert.match(connections, /allowed_users: allowedUsers/);
+  assert.match(connections, /Open Discord Developer Portal/);
+  assert.match(connections, /Message Content Intent/);
+  assert.match(connections, /Verify and pair/);
+  assert.match(connections, /Add to server/);
+  assert.ok(connections.includes('/api/connections/discord/disconnect'));
+  assert.match(connections, /aria-labelledby="disconnect-discord-title"/);
+  assert.match(connections, /restart this LlamaFarm node once to start the listener/i);
+  assert.doesNotMatch(connections, /bot_token.*data\?\.discord/);
+});
+
 test('connections distinguish routed prompt cost from the full tool catalogue upper bound', () => {
   const connections = readPage('Connections');
 

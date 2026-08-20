@@ -16,3 +16,13 @@ Source anglaise:
 
 - Les identifiants de canaux, API paths et config keys restent en anglais.
 - La définition finale est la source anglaise.
+
+## Configuration Discord dans le dashboard
+
+Ouvrez **Connections -> Discord -> Connect Discord**, puis saisissez le bot token,
+un guild ID facultatif et au moins un user ID numérique autorisé. LlamaFarm
+vérifie et affiche le bot appairé, puis enregistre `[channels_config.discord]`
+sans renvoyer le secret au navigateur. **Add to server** ouvre l'installation
+OAuth officielle de Discord ; Update et Disconnect fonctionnent ensuite comme
+pour GitHub. Activez **Message Content Intent** dans le portail Discord, puis
+redémarrez le nœud une fois pour démarrer, mettre à jour ou arrêter le listener.

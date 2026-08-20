@@ -85,7 +85,7 @@ impl DiscordChannel {
             .any(|entry| entry == "*" || entry == sender_id)
     }
 
-    fn bot_user_id_from_token(token: &str) -> Option<String> {
+    pub(crate) fn bot_user_id_from_token(token: &str) -> Option<String> {
         // Discord bot tokens are base64(bot_user_id).timestamp.hmac
         let part = token.split('.').next()?;
         base64_decode(part)

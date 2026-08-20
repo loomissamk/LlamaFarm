@@ -943,6 +943,14 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .route("/api/history/clear", post(api::handle_api_history_clear))
         .route("/api/connections", get(api::handle_api_connections))
         .route(
+            "/api/connections/discord",
+            put(api::handle_api_discord_connection_put),
+        )
+        .route(
+            "/api/connections/discord/disconnect",
+            post(api::handle_api_discord_disconnect),
+        )
+        .route(
             "/api/context",
             get(api::handle_api_context_get).put(api::handle_api_context_put),
         )

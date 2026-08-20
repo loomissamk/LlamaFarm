@@ -157,6 +157,14 @@ Lưu ý về Telegram:
 
 ### 4.2 Discord
 
+Ghép nối trên dashboard: mở **Connections -> Discord -> Connect Discord**. Dán bot
+token, guild ID tùy chọn và ít nhất một user ID dạng số trong allowlist. LlamaFarm
+xác minh và hiển thị danh tính bot đã ghép nối, rồi lưu `[channels_config.discord]`
+mà không trả secret về trình duyệt. **Add to server** mở màn hình cài đặt OAuth
+chính thức của Discord; sau đó có thể Update hoặc Disconnect giống GitHub. Bật
+**Message Content Intent** trong Discord Developer Portal, rồi khởi động lại node
+một lần để chạy, cập nhật hoặc dừng listener dài hạn.
+
 ```toml
 [channels_config.discord]
 bot_token = "discord-bot-token"

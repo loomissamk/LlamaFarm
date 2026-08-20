@@ -16,3 +16,12 @@
 
 - チャネル識別子、設定キー、API パスは英語のまま保持します。
 - 仕様の最終判断は英語版原文に従います。
+
+## ダッシュボードからの Discord 設定
+
+**Connections -> Discord -> Connect Discord** を開き、bot token、任意の guild ID、
+許可する数値 user ID を 1 つ以上入力します。LlamaFarm は bot の ID を検証して表示し、
+secret をブラウザへ返さずに `[channels_config.discord]` を保存します。**Add to server**
+から Discord 公式 OAuth インストール画面を開けます。その後は GitHub connection と同様に
+Update または Disconnect できます。Discord Developer Portal で **Message Content Intent**
+を有効にし、listener の開始、更新、停止のため node を一度再起動してください。
