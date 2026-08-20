@@ -116,8 +116,8 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     python-is-python3 \
     python3 \
+    python3-chardet \
     python3-pip \
-    python3-poetry-core \
     python3-setuptools \
     python3-venv \
     ripgrep \
@@ -237,7 +237,7 @@ RUN set -eu; \
       git -C /opt/wifite2 fetch --depth 1 origin "$WIFITE2_COMMIT"; \
       git -C /opt/wifite2 checkout --detach FETCH_HEAD; \
       test "$(git -C /opt/wifite2 rev-parse HEAD)" = "$WIFITE2_COMMIT"; \
-      pip install --break-system-packages --no-build-isolation --no-deps /opt/wifite2; \
+      (cd /opt/wifite2 && python3 setup.py install); \
       command -v wifite >/dev/null; \
       git init /opt/exploitdb; \
       git -C /opt/exploitdb remote add origin https://gitlab.com/exploit-database/exploitdb.git; \
