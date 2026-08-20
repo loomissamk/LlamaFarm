@@ -116,7 +116,6 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     python-is-python3 \
     python3 \
-    python3-chardet \
     python3-pip \
     python3-setuptools \
     python3-venv \
@@ -187,7 +186,9 @@ RUN apt-get update && apt-get install -y \
     procps \
     python-is-python3 \
     python3 \
+    python3-chardet \
     python3-pip \
+    python3-setuptools \
     python3-venv \
     ripgrep \
     rsync \
