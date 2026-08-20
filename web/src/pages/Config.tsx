@@ -33,6 +33,50 @@ import { useDirtyDraftGuard } from '@/hooks/useDirtyDraftGuard';
 
 type PresetMode = 'safe' | 'god';
 
+function readAgentInteger(config: string, key: string, fallback: number): number {
+  const lines = config.split('\n');
+  const sectionStart = lines.findIndex((line) => line.trim() === '[agent]');
+  const settingPattern = new RegExp(`^\\s*${key}\\s*=\\s*(\\d+)\\s*$`);
+  let parsed = fallback;
+  for (let index = sectionStart + 1; sectionStart >= 0 && index < lines.length; index += 1) {
+    if (/^\s*\[.+\]\s*$/.test(lines[index]!)) break;
+    const match = lines[index]!.match(settingPattern);
+    if (match) {
+      parsed = Number.parseInt(match[1]!, 10);
+      break;
+    }
+  }
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function writeAgentInteger(config: string, key: string, value: number): string {
+  const normalized = Math.max(1, Math.trunc(value));
+  const lines = config.split('\n');
+  const sectionStart = lines.findIndex((line) => line.trim() === '[agent]');
+  if (sectionStart < 0) {
+    const separator = config.endsWith('\n') ? '' : '\n';
+    return `${config}${separator}\n[agent]\n${key} = ${normalized}\n`;
+  }
+
+  let sectionEnd = lines.length;
+  for (let index = sectionStart + 1; index < lines.length; index += 1) {
+    if (/^\s*\[.+\]\s*$/.test(lines[index]!)) {
+      sectionEnd = index;
+      break;
+    }
+  }
+  const settingPattern = new RegExp(`^\\s*${key}\\s*=`);
+  const settingIndex = lines.findIndex(
+    (line, index) => index > sectionStart && index < sectionEnd && settingPattern.test(line),
+  );
+  if (settingIndex >= 0) {
+    lines[settingIndex] = `${key} = ${normalized}`;
+  } else {
+    lines.splice(sectionEnd, 0, `${key} = ${normalized}`);
+  }
+  return lines.join('\n');
+}
+
 export default function Config() {
   const [liveConfig, setLiveConfig] = useState('');
   const [config, setConfig] = useState('');
@@ -56,6 +100,14 @@ export default function Config() {
   const presetConfigSummary = useMemo(
     () => summarizeTextChange(liveConfig, selectedPreset?.content ?? liveConfig),
     [liveConfig, selectedPreset],
+  );
+  const reasoningSegmentBudget = useMemo(
+    () => readAgentInteger(config, 'max_output_tokens_per_turn', 16_384),
+    [config],
+  );
+  const maxNoProgressSpins = useMemo(
+    () => readAgentInteger(config, 'max_no_progress_spins', 6),
+    [config],
   );
 
   useDirtyDraftGuard(
@@ -318,6 +370,64 @@ export default function Config() {
             <Save className="h-4 w-4" />
             {saving ? 'Saving...' : 'Save'}
           </button>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-gray-800 bg-gray-900/80 p-5">
+        <div className="mb-4">
+          <h3 className="text-sm font-semibold text-white">Agent reasoning controls</h3>
+          <p className="mt-1 text-xs text-gray-400">
+            These values update the <code className="text-gray-300">[agent]</code> TOML draft.
+            Save once to rebuild the live runtime. Larger remote models can use a higher segment
+            budget without changing the stall policy.
+          </p>
+        </div>
+        <div className="grid gap-4 md:grid-cols-2">
+          <label className="rounded-xl border border-gray-800 bg-gray-950/70 p-4">
+            <span className="text-sm font-medium text-gray-200">Reasoning/output tokens per segment</span>
+            <input
+              aria-label="Reasoning output tokens per segment"
+              type="number"
+              min={1024}
+              step={1024}
+              value={reasoningSegmentBudget}
+              onChange={(event) => {
+                const value = Number.parseInt(event.target.value, 10);
+                if (Number.isSafeInteger(value) && value >= 1024) {
+                  setConfig((current) =>
+                    writeAgentInteger(current, 'max_output_tokens_per_turn', value),
+                  );
+                }
+              }}
+              className="mt-3 w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 font-mono text-sm text-white focus:border-blue-500 focus:outline-none"
+            />
+            <span className="mt-2 block text-xs text-gray-500">
+              Default 16,384. A checkpoint continues the same run; this is not a whole-task cap.
+            </span>
+          </label>
+          <label className="rounded-xl border border-gray-800 bg-gray-950/70 p-4">
+            <span className="text-sm font-medium text-gray-200">No-progress spin limit</span>
+            <input
+              aria-label="No progress spin limit"
+              type="number"
+              min={1}
+              step={1}
+              value={maxNoProgressSpins}
+              onChange={(event) => {
+                const value = Number.parseInt(event.target.value, 10);
+                if (Number.isSafeInteger(value) && value >= 1) {
+                  setConfig((current) =>
+                    writeAgentInteger(current, 'max_no_progress_spins', value),
+                  );
+                }
+              }}
+              className="mt-3 w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 font-mono text-sm text-white focus:border-blue-500 focus:outline-none"
+            />
+            <span className="mt-2 block text-xs text-gray-500">
+              Default 6. Counts consecutive empty reasoning segments or duplicate-tool spins and
+              resets immediately when real progress occurs.
+            </span>
+          </label>
         </div>
       </div>
 

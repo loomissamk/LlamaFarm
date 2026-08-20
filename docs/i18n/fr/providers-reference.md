@@ -24,10 +24,9 @@ Source anglaise:
 ## Contexte adaptatif Ollama
 
 - `provider.ollama_num_ctx` est une valeur manuelle exacte.
-- Sans cette valeur, `OLLAMA_NUM_CTX` fournit la valeur d'environnement par
-  défaut ; avec `LLAMAFARM_ADAPTIVE_CONTEXT=true`, elle devient la base rapide.
-- Le profil RTX 5070 Ti commence à 65 536 et ne choisit 131 072 ou 262 144 que
-  lorsque l'estimation de la requête exige le palier supérieur. La croissance
+- Sans cette valeur, Auto utilise le maximum natif déclaré par le modèle.
+- `OLLAMA_NUM_CTX` ne devient une base rapide que lorsque
+  `LLAMAFARM_ADAPTIVE_CONTEXT=true`; il ne limite pas le mode Auto ordinaire. La croissance
   est limitée par le minimum entre la longueur native du modèle et
   `LLAMAFARM_ADAPTIVE_CONTEXT_MAX`.
 - Vérifiez le contexte réellement alloué par Ollama avec

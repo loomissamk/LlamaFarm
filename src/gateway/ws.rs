@@ -2686,6 +2686,10 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     .collect()
             })
             .unwrap_or_default();
+        let tool_audit = parsed
+            .get("tool_audit")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
         let selected_federation_peer_ids =
             parse_selected_federation_peer_ids(parsed.get("federation_peer_ids"));
         let (federation_event_tx, mut federation_event_rx) =
@@ -2841,7 +2845,29 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             } else {
                 crate::skills::load_skills_with_config(&config.workspace_dir, &config)
             };
-            let tool_route = if !turn_allowed_tools.is_empty() {
+            let audit_tool_names = if tool_audit {
+                runtime
+                    .tools_registry
+                    .iter()
+                    .map(|spec| spec.name.clone())
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            let tool_route = if tool_audit {
+                let mut initial = vec!["task_plan"];
+                if let Some(first) = audit_tool_names
+                    .iter()
+                    .find(|name| name.as_str() != "task_plan")
+                {
+                    initial.push(first.as_str());
+                }
+                crate::agent::tool_router::direct_selection(
+                    runtime.tools_registry.as_ref(),
+                    &initial,
+                    "server-enforced exact tool audit",
+                )
+            } else if !turn_allowed_tools.is_empty() {
                 let allowed: Vec<&str> = turn_allowed_tools.iter().map(String::as_str).collect();
                 crate::agent::tool_router::direct_selection(
                     runtime.tools_registry.as_ref(),
@@ -2900,7 +2926,8 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             // Discovery is available only for ordinary relevance-routed chat.
             // Explicit allowlists, direct intents, and persona exclusions remain
             // hard boundaries and are never searchable/activatable.
-            let discoverable_specs = if turn_allowed_tools.is_empty()
+            let discoverable_specs = if !tool_audit
+                && turn_allowed_tools.is_empty()
                 && direct_intent.is_none()
                 && config.agent.tool_routing_enabled
             {
@@ -3302,6 +3329,10 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 return;
             }
 
+            let required_audit_tools = audit_tool_names
+                .into_iter()
+                .filter(|name| !mode_excluded_set.contains(name.as_str()))
+                .collect::<Vec<_>>();
             let mut excluded_tools = tool_route.excluded.clone();
             if !mode_excluded.is_empty() {
                 excluded_tools.extend(mode_excluded);
@@ -3342,7 +3373,9 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 native_tools,
                 crate::agent::loop_::with_tool_loop_history_limit(
                     max_history_messages,
-                    async {
+                    crate::agent::loop_::with_tool_loop_no_progress_limit(
+                        config.agent.max_no_progress_spins,
+                        async {
                         // A fresh token is scoped to this browser turn. The read
                         // half of the WebSocket remains live below, so a `cancel`
                         // frame can interrupt provider streaming, tool execution,
@@ -3371,23 +3404,26 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                 turn_run_ledger.clone(),
                                 crate::agent::loop_::with_dynamic_tool_catalogue(
                                     discoverable_specs.clone(),
-                                    run_tool_call_loop(
-                                        runtime.provider.as_ref(),
-                                        &mut history,
-                                        runtime.tools_registry_exec.as_ref(),
-                                        state.observer.as_ref(),
-                                        &provider_label,
-                                        &runtime.model,
-                                        turn_temperature,
-                                        true,
-                                        Some(&approval_manager),
-                                        "webchat",
-                                        &state.multimodal,
-                                        runtime.max_tool_iterations,
-                                        Some(cancellation_token.clone()),
-                                        Some(delta_tx),
-                                        None,
-                                        &excluded_tools,
+                                    crate::agent::loop_::with_required_tool_audit(
+                                        required_audit_tools.clone(),
+                                        run_tool_call_loop(
+                                            runtime.provider.as_ref(),
+                                            &mut history,
+                                            runtime.tools_registry_exec.as_ref(),
+                                            state.observer.as_ref(),
+                                            &provider_label,
+                                            &runtime.model,
+                                            turn_temperature,
+                                            true,
+                                            Some(&approval_manager),
+                                            "webchat",
+                                            &state.multimodal,
+                                            runtime.max_tool_iterations,
+                                            Some(cancellation_token.clone()),
+                                            Some(delta_tx),
+                                            None,
+                                            &excluded_tools,
+                                        ),
                                     ),
                                 )
                             ));
@@ -3512,7 +3548,8 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                 }
                             }
                         }
-                    },
+                        },
+                    ),
                 ),
             )
             .await;

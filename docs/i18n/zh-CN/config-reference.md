@@ -20,6 +20,8 @@
 ## 更新说明
 
 - `agent.max_tool_iterations` 的默认值为 `0`（无限制）；任务会运行到完成、真实停滞/错误或操作者明确取消。正整数仍可设置每轮显式上限。
+- `agent.max_output_tokens_per_turn` 默认为 `16384`，只限制单个推理/输出分段；达到上限后，同一任务会从 checkpoint 继续。
+- `agent.max_no_progress_spins` 默认为 `6`；仅在连续空推理分段或重复工具调用时停止，任何真实进展都会立即重置计数器。
 - `research.max_iterations` 的默认值为 `0`（无限制）；有效研究会持续到完成、provider/tool 错误或相同调用/结果停滞检测器触发。正整数设置显式研究轮次上限。
 - `host_runner.max_exec_timeout_secs` 的默认值为 `0`（无最大值）；缺省或为零的 `timeout_secs` 不设置墙钟截止时间，正整数仍可设置显式截止时间。
 - `scheduler.max_concurrent` 默认为 `4`，表示所有轮询之间同时运行的计划任务总数；`0` 表示不限制并发。可用 `LLAMAFARM_SCHEDULER_MAX_CONCURRENT` 覆盖。
@@ -27,8 +29,8 @@
 - 新增 `model_routes[].api_url`，可仅为某个路由覆盖顶层 `api_url`。
 - 适用于将不同 hint 指向同一种 provider 的多个本地推理端点。
 - `provider.ollama_num_ctx` 是精确的手动上下文覆盖值，控制面板支持
-  2,048–262,144。未设置时，`OLLAMA_NUM_CTX` 提供运行时默认值。
-- 设置 `LLAMAFARM_ADAPTIVE_CONTEXT=true` 后，环境默认值会成为快速基线；
+  2,048–262,144。未设置时，Auto 使用模型原生最大值。
+- 设置 `LLAMAFARM_ADAPTIVE_CONTEXT=true` 后，`OLLAMA_NUM_CTX` 会成为快速基线；
   LlamaFarm 根据请求需要按 2 倍档位增长，最高不超过模型原生上下文和
   `LLAMAFARM_ADAPTIVE_CONTEXT_MAX`（默认 262,144）中的较小值。
 - `provider.ollama_workers` 定义绑定到单个 GPU 或 GPU 集合的 Ollama worker；

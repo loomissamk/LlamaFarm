@@ -20,9 +20,8 @@
 ## Ollama 自适应上下文
 
 - `provider.ollama_num_ctx` 是精确的手动覆盖值。
-- 未设置时，`OLLAMA_NUM_CTX` 提供环境默认值；启用
-  `LLAMAFARM_ADAPTIVE_CONTEXT=true` 后，它会成为快速基线。
-- RTX 5070 Ti 配置从 65,536 开始，仅在请求估算需要时选择 131,072 或
-  262,144；增长上限是模型原生长度与
+- 未设置时，Auto 使用所选模型报告的原生最大值。
+- 只有启用 `LLAMAFARM_ADAPTIVE_CONTEXT=true` 时，`OLLAMA_NUM_CTX` 才会成为
+  快速基线；它不会限制普通 Auto。增长上限是模型原生长度与
   `LLAMAFARM_ADAPTIVE_CONTEXT_MAX` 中的较小值。
 - 使用 `docker exec LlamaFarm ollama ps` 核实 Ollama 实际加载的上下文。

@@ -481,8 +481,10 @@ pub struct ProviderConfig {
     /// windows 2x larger in the same VRAM — the same effect as turboquant's
     /// KV cache compression but using Ollama's built-in capability.
     ///
-    /// Example: set to `32768` or `65536` for long agentic task runs.
-    /// The env var `OLLAMA_NUM_CTX` is also read as a fallback.
+    /// Example: set to `32768` or `65536` for long agentic task runs. When this
+    /// is absent, Auto uses the selected model's native maximum. The env var
+    /// `OLLAMA_NUM_CTX` is used only as a baseline when
+    /// `LLAMAFARM_ADAPTIVE_CONTEXT=true`.
     #[serde(default)]
     pub ollama_num_ctx: Option<u32>,
 
@@ -902,8 +904,12 @@ pub struct AgentConfig {
     /// thinking tokens as well as visible output. `None` sends
     /// `options.num_predict = -1` to Ollama so generation ends naturally or by
     /// explicit cancellation.
-    #[serde(default)]
+    #[serde(default = "default_agent_max_output_tokens_per_turn")]
     pub max_output_tokens_per_turn: Option<u32>,
+    /// Consecutive inference/tool-loop iterations allowed to produce no new
+    /// observable progress before the turn exits as stalled. Default: `6`.
+    #[serde(default = "default_agent_max_no_progress_spins")]
+    pub max_no_progress_spins: usize,
     /// Enable parallel tool execution within a single iteration. Default: `false`.
     #[serde(default)]
     pub parallel_tools: bool,
@@ -924,6 +930,14 @@ fn default_agent_max_history_messages() -> usize {
     50
 }
 
+fn default_agent_max_output_tokens_per_turn() -> Option<u32> {
+    Some(16_384)
+}
+
+fn default_agent_max_no_progress_spins() -> usize {
+    6
+}
+
 fn default_agent_tool_dispatcher() -> String {
     "auto".into()
 }
@@ -936,7 +950,8 @@ impl Default for AgentConfig {
             tool_routing_top_k: default_tool_routing_top_k(),
             max_tool_iterations: default_agent_max_tool_iterations(),
             max_history_messages: default_agent_max_history_messages(),
-            max_output_tokens_per_turn: None,
+            max_output_tokens_per_turn: default_agent_max_output_tokens_per_turn(),
+            max_no_progress_spins: default_agent_max_no_progress_spins(),
             parallel_tools: false,
             tool_dispatcher: default_agent_tool_dispatcher(),
         }
@@ -6674,6 +6689,9 @@ impl Config {
         if self.agent.max_output_tokens_per_turn == Some(0) {
             anyhow::bail!("agent.max_output_tokens_per_turn must be greater than 0 when set");
         }
+        if self.agent.max_no_progress_spins == 0 {
+            anyhow::bail!("agent.max_no_progress_spins must be greater than 0");
+        }
 
         // Ollama GPU worker placement. Worker ids become container/DNS labels,
         // so keep them portable and make every model route unambiguous.
@@ -7364,6 +7382,17 @@ impl Config {
                         "Ignoring invalid LLAMAFARM_AGENT_MAX_OUTPUT_TOKENS (use a positive integer or unlimited)"
                     ),
                 },
+            }
+        }
+
+        if let Ok(max_no_progress_spins) =
+            std::env::var("LLAMAFARM_AGENT_MAX_NO_PROGRESS_SPINS")
+        {
+            match max_no_progress_spins.trim().parse::<usize>() {
+                Ok(value) if value > 0 => self.agent.max_no_progress_spins = value,
+                _ => tracing::warn!(
+                    "Ignoring invalid LLAMAFARM_AGENT_MAX_NO_PROGRESS_SPINS (must be a positive integer)"
+                ),
             }
         }
 
@@ -8667,7 +8696,8 @@ reasoning_level = "high"
         assert_eq!(cfg.tool_routing_top_k, 12);
         assert_eq!(cfg.max_tool_iterations, 0);
         assert_eq!(cfg.max_history_messages, 50);
-        assert_eq!(cfg.max_output_tokens_per_turn, None);
+        assert_eq!(cfg.max_output_tokens_per_turn, Some(16_384));
+        assert_eq!(cfg.max_no_progress_spins, 6);
         assert!(!cfg.parallel_tools);
         assert_eq!(cfg.tool_dispatcher, "auto");
     }
@@ -8683,6 +8713,7 @@ tool_routing_top_k = 7
 max_tool_iterations = 20
 max_history_messages = 80
 max_output_tokens_per_turn = 2048
+max_no_progress_spins = 9
 parallel_tools = true
 tool_dispatcher = "xml"
 "#;
@@ -8693,6 +8724,7 @@ tool_dispatcher = "xml"
         assert_eq!(parsed.agent.max_tool_iterations, 20);
         assert_eq!(parsed.agent.max_history_messages, 80);
         assert_eq!(parsed.agent.max_output_tokens_per_turn, Some(2048));
+        assert_eq!(parsed.agent.max_no_progress_spins, 9);
         assert!(parsed.agent.parallel_tools);
         assert_eq!(parsed.agent.tool_dispatcher, "xml");
     }
@@ -11158,6 +11190,7 @@ default_model = "legacy-model"
         std::env::set_var("LLAMAFARM_AGENT_MAX_HISTORY_MESSAGES", "48");
         std::env::set_var("LLAMAFARM_AGENT_MAX_TOOL_ITERATIONS", "96");
         std::env::set_var("LLAMAFARM_AGENT_MAX_OUTPUT_TOKENS", "2048");
+        std::env::set_var("LLAMAFARM_AGENT_MAX_NO_PROGRESS_SPINS", "11");
         std::env::set_var("LLAMAFARM_AGENT_PARALLEL_TOOLS", "true");
         config.apply_env_overrides();
 
@@ -11167,6 +11200,7 @@ default_model = "legacy-model"
         assert_eq!(config.agent.max_history_messages, 48);
         assert_eq!(config.agent.max_tool_iterations, 96);
         assert_eq!(config.agent.max_output_tokens_per_turn, Some(2048));
+        assert_eq!(config.agent.max_no_progress_spins, 11);
         assert!(config.agent.parallel_tools);
 
         std::env::set_var("LLAMAFARM_AGENT_MAX_TOOL_ITERATIONS", "0");
@@ -11181,6 +11215,7 @@ default_model = "legacy-model"
         std::env::remove_var("LLAMAFARM_AGENT_MAX_HISTORY_MESSAGES");
         std::env::remove_var("LLAMAFARM_AGENT_MAX_TOOL_ITERATIONS");
         std::env::remove_var("LLAMAFARM_AGENT_MAX_OUTPUT_TOKENS");
+        std::env::remove_var("LLAMAFARM_AGENT_MAX_NO_PROGRESS_SPINS");
         std::env::remove_var("LLAMAFARM_AGENT_PARALLEL_TOOLS");
     }
 

@@ -201,6 +201,18 @@ where
         .await
 }
 
+pub(crate) async fn with_tool_loop_no_progress_limit<F>(
+    max_no_progress_spins: usize,
+    future: F,
+) -> F::Output
+where
+    F: std::future::Future,
+{
+    TOOL_LOOP_MAX_NO_PROGRESS_SPINS
+        .scope(max_no_progress_spins.max(1), future)
+        .await
+}
+
 /// Scope a compact, policy-filtered discovery catalogue to one tool loop.
 /// Callers must exclude persona-denied and explicit-allowlist-denied tools
 /// before supplying this list.
@@ -212,6 +224,51 @@ where
     F: std::future::Future,
 {
     TOOL_LOOP_DISCOVERABLE_TOOLS.scope(discoverable, future).await
+}
+
+/// Scope an exact-name acceptance contract to one tool loop. Ordinary turns
+/// leave this empty and retain their existing routing behavior.
+pub(crate) async fn with_required_tool_audit<F>(required: Vec<String>, future: F) -> F::Output
+where
+    F: std::future::Future,
+{
+    TOOL_LOOP_REQUIRED_AUDIT_TOOLS.scope(required, future).await
+}
+
+fn append_tool_audit_ledger(
+    mut final_text: String,
+    required: &[String],
+    results: &BTreeMap<String, (bool, String)>,
+) -> String {
+    if required.is_empty() {
+        return final_text;
+    }
+
+    let passed = required
+        .iter()
+        .filter(|name| results.get(*name).is_some_and(|(success, _)| *success))
+        .count();
+    let attempted = required
+        .iter()
+        .filter(|name| results.contains_key(*name))
+        .count();
+    let failed = attempted.saturating_sub(passed);
+    let unattempted = required.len().saturating_sub(attempted);
+    let _ = write!(
+        final_text,
+        "\n\n### Server-verified tool audit\n\n{passed} passed; {failed} failed or blocked; {unattempted} unattempted; {attempted}/{} exact tools attempted.\n",
+        required.len(),
+    );
+    for name in required {
+        let (success, output) = results
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| (false, "No recorded result".to_string()));
+        let status = if success { "PASS" } else { "FAIL/BLOCKED" };
+        let summary = truncate_with_ellipsis(&scrub_credentials(output.trim()), 180);
+        let _ = writeln!(final_text, "- `{name}` — {status}: {summary}");
+    }
+    final_text
 }
 
 /// Default trigger for auto-compaction when non-system message count exceeds this threshold.
@@ -337,8 +394,17 @@ tokio::task_local! {
 }
 
 tokio::task_local! {
+    static TOOL_LOOP_MAX_NO_PROGRESS_SPINS: usize;
+}
+
+tokio::task_local! {
     /// Registered specs hidden by routing but still allowed by turn policy.
     static TOOL_LOOP_DISCOVERABLE_TOOLS: Vec<crate::tools::ToolSpec>;
+}
+
+tokio::task_local! {
+    /// Exact registered tools a server-enforced catalogue audit must attempt.
+    static TOOL_LOOP_REQUIRED_AUDIT_TOOLS: Vec<String>;
 }
 
 tokio::task_local! {
@@ -357,12 +423,11 @@ const AUTO_PLAN_RETRY_LIMIT: usize = 4;
 const RETROSPECTIVE_PLAN_THRESHOLD: usize = 3;
 const WEB_SEARCH_WITHOUT_FETCH_STREAK_LIMIT: usize = 3;
 const DUPLICATE_TOOL_CALL_STREAK_PER_NUDGE: usize = 2;
-const DUPLICATE_TOOL_CALL_MAX_NUDGES: usize = 3;
 // A thinking model that keeps exhausting its per-segment output budget on
 // reasoning tokens alone, never emitting any visible text or tool call, is
 // not making bounded progress like a normal multi-segment continuation —
 // it's stuck. Hard-exit rather than checkpointing forever.
-const MAX_CONSECUTIVE_EMPTY_OUTPUT_BUDGET_CHECKPOINTS: usize = 6;
+const DEFAULT_MAX_NO_PROGRESS_SPINS: usize = 6;
 const COORDINATION_STATUS_POLL_STREAK_LIMIT: usize = 2;
 const MISSING_TOOL_CALL_RETRY_PROMPT: &str = "Internal correction: stay on the current user task. Your last reply implied follow-up action, but no valid tool call was emitted. If another tool step is still required, emit that tool call now and nothing else. For shell actions, prefer a single real command or the runtime's canonical shell tool syntax; do not wrap it in markdown, do not describe what you would run, and do not switch topics. If file creation or editing is needed, prefer the dedicated file tools. If shell-level file creation is still required, use a direct command and, for heredocs, use a quoted delimiter like << 'EOF'. If no tool is needed, provide the complete final answer now and do not defer action.";
 const DUPLICATE_TOOL_CALL_NUDGE_PROMPTS: &[&str] = &[
@@ -3158,6 +3223,13 @@ pub(crate) async fn run_tool_call_loop(
     let discoverable_tools = TOOL_LOOP_DISCOVERABLE_TOOLS
         .try_with(Clone::clone)
         .unwrap_or_default();
+    let required_audit_tools = TOOL_LOOP_REQUIRED_AUDIT_TOOLS
+        .try_with(Clone::clone)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|required| tools_registry.iter().any(|tool| tool.name() == required))
+        .collect::<Vec<_>>();
+    let mut audit_results: BTreeMap<String, (bool, String)> = BTreeMap::new();
     let mut tool_specs: Vec<crate::tools::ToolSpec> = tools_registry
         .iter()
         .filter(|tool| !blocked_tools.contains(tool.name()))
@@ -3229,15 +3301,20 @@ pub(crate) async fn run_tool_call_loop(
     let mut dynamic_discovery_attempted = false;
     let mut dynamic_discovery_fail_open_used = false;
     // Counts consecutive iterations where ALL tool calls were duplicates (nothing new ran).
-    // After the retry prompt fails to unstick the model several times, hard-exit to
-    // avoid burning the entire context window on the same tool call forever.
+    // The configurable no-progress limit hard-exits before a model can burn the
+    // entire context window on the same tool call forever.
     let mut consecutive_all_duplicate_iterations: usize = 0;
+    let mut duplicate_no_progress_spins: usize = 0;
     let mut early_exit_reason: Option<(&'static str, String)> = None;
     let history_budget = TOOL_LOOP_MAX_HISTORY_MESSAGES
         .try_with(|max_history| *max_history)
         .ok()
         .flatten()
         .unwrap_or(DEFAULT_MAX_HISTORY_MESSAGES);
+    let max_no_progress_spins = TOOL_LOOP_MAX_NO_PROGRESS_SPINS
+        .try_with(|limit| *limit)
+        .unwrap_or(DEFAULT_MAX_NO_PROGRESS_SPINS)
+        .max(1);
     let bypass_non_cli_approval_for_turn =
         approval.is_some_and(|mgr| channel_name != "cli" && mgr.consume_non_cli_allow_all_once());
     if bypass_non_cli_approval_for_turn {
@@ -3270,6 +3347,37 @@ pub(crate) async fn run_tool_call_loop(
             .is_some_and(CancellationToken::is_cancelled)
         {
             return Err(ToolLoopCancelled.into());
+        }
+
+        // Catalogue audits expose only task_plan plus the next exact untested
+        // schema. This keeps a 50+ tool audit inside smaller local-model
+        // contexts while making shell/CLI substitutions impossible to count as
+        // another tool's result.
+        if let Some(next_audit_tool) = required_audit_tools
+            .iter()
+            .find(|name| !audit_results.contains_key(*name))
+        {
+            tool_specs.retain(|spec| {
+                spec.name == "task_plan" || spec.name.as_str() == next_audit_tool.as_str()
+            });
+            blocked_tools.remove(next_audit_tool);
+            blocked_tools.remove("task_plan");
+            if !tool_specs
+                .iter()
+                .any(|spec| spec.name.as_str() == next_audit_tool.as_str())
+            {
+                if let Some(tool) = tools_registry
+                    .iter()
+                    .find(|tool| tool.name() == next_audit_tool.as_str())
+                {
+                    tool_specs.push(tool.spec());
+                }
+            }
+            if !tool_specs.iter().any(|spec| spec.name == "task_plan") {
+                if let Some(tool) = tools_registry.iter().find(|tool| tool.name() == "task_plan") {
+                    tool_specs.push(tool.spec());
+                }
+            }
         }
 
         if let Some(retry_prompt) = missing_tool_call_retry_prompt.take() {
@@ -3821,7 +3929,7 @@ pub(crate) async fn run_tool_call_loop(
                 // does — it's stuck. Without this, the loop above (which has no
                 // overall iteration cap by design) would checkpoint forever.
                 if consecutive_empty_output_budget_checkpoints
-                    >= MAX_CONSECUTIVE_EMPTY_OUTPUT_BUDGET_CHECKPOINTS
+                    >= max_no_progress_spins
                 {
                     runtime_trace::record_event(
                         "llm_output_budget_stall_hard_exit",
@@ -3912,6 +4020,43 @@ pub(crate) async fn run_tool_call_loop(
                     let _ = tx
                         .send(format!(
                             "{DRAFT_PROGRESS_SENTINEL}↪ Empty inference segment — continuing automatically\n"
+                        ))
+                        .await;
+                }
+                continue;
+            }
+
+            if let Some(next_audit_tool) = required_audit_tools
+                .iter()
+                .find(|name| !audit_results.contains_key(*name))
+            {
+                retry_count = retry_count.saturating_add(1);
+                let remaining = required_audit_tools
+                    .iter()
+                    .filter(|name| !audit_results.contains_key(*name))
+                    .count();
+                missing_tool_call_retry_prompt = Some(format!(
+                    "Internal catalogue-audit enforcement: {remaining} exact registered tools remain untested. Shell commands, CLI equivalents, and prose claims do not count. Call the `{next_audit_tool}` tool itself now with a safe minimal input using the schema supplied for this iteration. After its real result, update the active task plan and continue to the next exact tool."
+                ));
+                runtime_trace::record_event(
+                    "tool_audit_exact_call_required",
+                    Some(channel_name),
+                    Some(provider_name),
+                    Some(model),
+                    Some(&turn_id),
+                    Some(false),
+                    Some("model attempted to finish before every exact catalogue tool was called"),
+                    serde_json::json!({
+                        "iteration": iteration + 1,
+                        "next_required_tool": next_audit_tool,
+                        "remaining": remaining,
+                        "attempted": audit_results.len(),
+                    }),
+                );
+                if let Some(ref tx) = on_delta {
+                    let _ = tx
+                        .send(format!(
+                            "{DRAFT_PROGRESS_SENTINEL}↪ Audit enforcement: calling exact tool `{next_audit_tool}` next ({remaining} remaining)\n"
                         ))
                         .await;
                 }
@@ -4023,7 +4168,11 @@ pub(crate) async fn run_tool_call_loop(
                 {
                     return return_final_response(
                         history,
-                        final_text,
+                        append_tool_audit_ledger(
+                            final_text,
+                            &required_audit_tools,
+                            &audit_results,
+                        ),
                         on_delta.as_ref(),
                         cancellation_token.as_ref(),
                         None,
@@ -4126,7 +4275,11 @@ pub(crate) async fn run_tool_call_loop(
                         );
                         return return_final_response(
                             history,
-                            final_text,
+                            append_tool_audit_ledger(
+                                final_text,
+                                &required_audit_tools,
+                                &audit_results,
+                            ),
                             on_delta.as_ref(),
                             cancellation_token.as_ref(),
                             None,
@@ -4153,7 +4306,11 @@ pub(crate) async fn run_tool_call_loop(
                         );
                         return return_final_response(
                             history,
-                            display_text.clone(),
+                            append_tool_audit_ledger(
+                                display_text.clone(),
+                                &required_audit_tools,
+                                &audit_results,
+                            ),
                             on_delta.as_ref(),
                             cancellation_token.as_ref(),
                             None,
@@ -4430,7 +4587,7 @@ pub(crate) async fn run_tool_call_loop(
             // so the channel can progressively update the draft message.
             return return_final_response(
                 history,
-                final_text,
+                append_tool_audit_ledger(final_text, &required_audit_tools, &audit_results),
                 on_delta.as_ref(),
                 cancellation_token.as_ref(),
                 Some(&response_text),
@@ -5072,6 +5229,14 @@ pub(crate) async fn run_tool_call_loop(
             consecutive_same_failure_count = 0;
         }
 
+        for (tool_name, _, outcome) in ordered_results.iter().flatten() {
+            if required_audit_tools.iter().any(|required| required == tool_name) {
+                audit_results.entry(tool_name.clone()).or_insert_with(|| {
+                    (outcome.success, outcome.output.clone())
+                });
+            }
+        }
+
         for (tool_name, tool_call_id, outcome) in ordered_results.into_iter().flatten() {
             individual_results.push((tool_call_id, outcome.output.clone()));
             let _ = writeln!(
@@ -5120,7 +5285,8 @@ pub(crate) async fn run_tool_call_loop(
             )));
         }
 
-        if !iteration_had_failed_tools
+        if required_audit_tools.is_empty()
+            && !iteration_had_failed_tools
             && !task_plan_progress_snapshot(&recent_successful_tool_records)
                 .is_some_and(|progress| progress.total > 0 && progress.resolved == progress.total)
             && should_short_circuit_after_tool_execution(history, &recent_successful_tool_records)
@@ -5336,14 +5502,14 @@ pub(crate) async fn run_tool_call_loop(
         if all_tool_calls_were_duplicates {
             consecutive_all_duplicate_iterations =
                 consecutive_all_duplicate_iterations.saturating_add(1);
+            duplicate_no_progress_spins = duplicate_no_progress_spins.saturating_add(1);
         } else {
             consecutive_all_duplicate_iterations = 0;
+            duplicate_no_progress_spins = 0;
+            duplicate_nudge_count = 0;
         }
 
-        // After exhausting all nudges, hard-exit if still stuck on duplicates.
-        if duplicate_nudge_count >= DUPLICATE_TOOL_CALL_MAX_NUDGES
-            && consecutive_all_duplicate_iterations >= DUPLICATE_TOOL_CALL_STREAK_PER_NUDGE
-        {
+        if duplicate_no_progress_spins >= max_no_progress_spins {
             runtime_trace::record_event(
                 "tool_call_duplicate_hard_exit",
                 Some(channel_name),
@@ -5356,22 +5522,23 @@ pub(crate) async fn run_tool_call_loop(
                     "iteration": iteration + 1,
                     "duplicate_nudge_count": duplicate_nudge_count,
                     "consecutive_all_duplicate_iterations": consecutive_all_duplicate_iterations,
+                    "no_progress_spins": duplicate_no_progress_spins,
+                    "max_no_progress_spins": max_no_progress_spins,
                 }),
             );
             early_exit_reason = Some((
                 "duplicate_tool_call_loop",
                 format!(
-                    "Agent exited after {} nudges with no progress",
-                    duplicate_nudge_count
+                    "Agent exited after {duplicate_no_progress_spins} duplicate iterations with no progress"
                 ),
             ));
             break;
         }
 
-        // Send an escalating nudge whenever the model has repeated itself enough times
-        // without making progress, up to MAX_NUDGES times before hard-exiting.
+        // Send an escalating nudge whenever the model has repeated itself
+        // enough times without progress. The configured spin limit controls
+        // the eventual hard exit; later nudges reuse the strongest prompt.
         let should_nudge = all_tool_calls_were_duplicates
-            && duplicate_nudge_count < DUPLICATE_TOOL_CALL_MAX_NUDGES
             && consecutive_all_duplicate_iterations >= DUPLICATE_TOOL_CALL_STREAK_PER_NUDGE
             && tool_loop_has_next_iteration(iteration, effective_limit);
         if should_nudge {
@@ -5398,7 +5565,7 @@ pub(crate) async fn run_tool_call_loop(
                 let _ = tx
                     .send(format!(
                         "{DRAFT_PROGRESS_SENTINEL}\u{21bb} Redirecting: model repeated a tool call (nudge {duplicate_nudge_count}/{})\n",
-                        DUPLICATE_TOOL_CALL_MAX_NUDGES
+                        max_no_progress_spins
                     ))
                     .await;
             }
@@ -5429,6 +5596,22 @@ pub(crate) async fn run_tool_call_loop(
             "stop_reason": stop_reason,
         }),
     );
+    if !required_audit_tools.is_empty() {
+        let summary = append_tool_audit_ledger(
+            format!("Tool audit stopped before completion: {error_message}."),
+            &required_audit_tools,
+            &audit_results,
+        );
+        return return_final_response(
+            history,
+            summary,
+            on_delta.as_ref(),
+            cancellation_token.as_ref(),
+            None,
+            false,
+        )
+        .await;
+    }
     anyhow::bail!(error_message)
 }
 
@@ -6527,6 +6710,31 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
+
+    #[test]
+    fn tool_audit_ledger_uses_only_server_recorded_exact_results() {
+        let required = vec!["shell".to_string(), "file_read".to_string()];
+        let results = BTreeMap::from([
+            ("shell".to_string(), (true, "command completed".to_string())),
+            (
+                "file_read".to_string(),
+                (false, "Denied by policy".to_string()),
+            ),
+            (
+                "shell-substitute".to_string(),
+                (true, "must not count".to_string()),
+            ),
+        ]);
+
+        let ledger = append_tool_audit_ledger("Model summary".to_string(), &required, &results);
+
+        assert!(ledger.contains(
+            "1 passed; 1 failed or blocked; 0 unattempted; 2/2 exact tools attempted"
+        ));
+        assert!(ledger.contains("`shell` — PASS: command completed"));
+        assert!(ledger.contains("`file_read` — FAIL/BLOCKED: Denied by policy"));
+        assert!(!ledger.contains("shell-substitute"));
+    }
 
     #[test]
     fn dynamic_recovery_broadens_only_to_policy_filtered_discoverables() {

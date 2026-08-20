@@ -74,6 +74,7 @@ interface ContextInfo extends ContextPolicyInfo {
   min: number;
   max: number;
   gpu_layers: number | null;
+  effective_gpu_layers?: number | null;
   server: {
     max_loaded_models: string | null;
     keep_alive: string | null;
@@ -931,7 +932,13 @@ export function ConnectionsPanel() {
             <div className="flex items-center justify-between">
               <span className="text-sm text-gray-300">GPU layer offload</span>
               <span className="font-mono text-xs text-blue-300">
-                {ctx.gpu_layers === null ? 'auto' : ctx.gpu_layers === 999 ? 'all on GPU' : ctx.gpu_layers}
+                {ctx.gpu_layers === null
+                  ? ctx.effective_gpu_layers === 999
+                    ? 'auto · maximum fit'
+                    : 'auto'
+                  : ctx.gpu_layers === 999
+                    ? 'all on GPU'
+                    : ctx.gpu_layers}
               </span>
             </div>
             <div className="mt-2 flex gap-2">
@@ -947,8 +954,8 @@ export function ConnectionsPanel() {
               ))}
             </div>
             <p className="mt-1 text-[11px] text-gray-600">
-              "All GPU" (999) fills VRAM before spilling to CPU. You're only using part of the card —
-              raise context or keep more models resident to use it.
+              Auto defaults to maximum-fit on the bundled runtime. Ollama fills VRAM with model
+              layers first and spills only the layers that cannot fit to system RAM.
             </p>
           </div>
 

@@ -108,6 +108,8 @@ Operational note for container users:
 | `tool_routing_top_k` | `12` | Maximum relevant non-essential tools to select before adding core tools and required workflow dependencies; `0` disables routing |
 | `max_tool_iterations` | `0` | Tool-call loop turns per user message; `0` is unlimited, while dedicated stall detectors stop repeated non-progress |
 | `max_history_messages` | `50` | Maximum conversation history messages retained per session; `0` preserves raw history until actual provider context pressure requires compaction |
+| `max_output_tokens_per_turn` | `16384` | Per-inference reasoning/output segment budget; a reached budget checkpoints and continues the same task |
+| `max_no_progress_spins` | `6` | Consecutive empty-reasoning or duplicate-tool iterations allowed before a stalled turn exits; resets on real progress |
 | `parallel_tools` | `false` | Enable parallel tool execution within a single iteration |
 | `tool_dispatcher` | `auto` | Tool dispatch strategy |
 
@@ -116,6 +118,12 @@ Notes:
 - `max_tool_iterations = 0` runs until completion, a real stall/error, or
   explicit operator cancellation. A positive value enables an explicit
   per-turn iteration cap.
+- `max_output_tokens_per_turn` is a segment budget, not a whole-run budget.
+  Increase it for larger models or long-form reasoning; the run continues from
+  a checkpoint when a segment reaches the value.
+- `max_no_progress_spins` controls both hidden-reasoning segments that emit
+  nothing and repeated identical tool-call iterations. Productive tool calls
+  and visible output reset the counter immediately.
 - Tool routing is currently applied to WebSocket Agent Chat turns. The selected
   set is used consistently for prompt descriptions, XML/native schemas,
   compatibility fallback, and execution filtering. Empty, context-free,
@@ -392,16 +400,16 @@ Notes:
 - When set, overrides `LLAMAFARM_CODEX_REASONING_EFFORT` for OpenAI Codex requests.
 - Unset falls back to `LLAMAFARM_CODEX_REASONING_EFFORT` if present, otherwise defaults to `xhigh`.
 - If both `provider.reasoning_level` and deprecated `runtime.reasoning_level` are set, provider-level value wins.
-- `provider.ollama_num_ctx` is an exact manual value. When it is unset,
-  `OLLAMA_NUM_CTX` supplies the runtime default.
+- `provider.ollama_num_ctx` is an exact manual value. When it is unset, Auto
+  uses the selected model's Ollama-reported native maximum.
 - With `LLAMAFARM_ADAPTIVE_CONTEXT=true`, an environment-provided
-  `OLLAMA_NUM_CTX` becomes the fast baseline rather than a fixed ceiling.
+  `OLLAMA_NUM_CTX` deliberately replaces model-native Auto with a fast baseline.
   LlamaFarm estimates the messages, tool schemas, images, output reserve, and a
   safety margin, then grows the request in 2x tiers up to the lower of the
   model-native context and `LLAMAFARM_ADAPTIVE_CONTEXT_MAX` (default and
   supported maximum: `262144`).
-- Auto mode with no manual override or environment baseline uses the
-  Ollama-reported native context, up to 262,144 tokens.
+- When adaptive mode is off, `OLLAMA_NUM_CTX` does not silently cap dashboard
+  Auto; it remains available as the direct-Ollama server baseline.
 - Exact GPU placement is implemented with separate Ollama worker processes.
   A managed worker exposes only its selected GPU UUIDs; selecting multiple GPUs
   with `spread = true` lets Ollama distribute a model across that pool. Separate

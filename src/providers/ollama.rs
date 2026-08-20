@@ -247,12 +247,23 @@ fn normalized_adaptive_baseline(
     adaptive_enabled: bool,
     adaptive_max: u32,
 ) -> Option<u32> {
-    environment_default.map(|baseline| {
-        if adaptive_enabled {
-            baseline.min(adaptive_max)
-        } else {
-            baseline
-        }
+    if adaptive_enabled {
+        environment_default.map(|baseline| baseline.min(adaptive_max))
+    } else {
+        None
+    }
+}
+
+/// Resolve the effective per-request GPU-layer preference. Auto mode is
+/// deliberately max-fit on the bundled local runtime: `999` asks Ollama to
+/// place every layer that fits in VRAM and spill only the remainder to RAM.
+pub fn ollama_gpu_layers_runtime_config(configured: Option<i32>) -> Option<i32> {
+    configured.map(|value| value.clamp(0, 999)).or_else(|| {
+        std::env::var("OLLAMA_GPU_LAYERS")
+            .or_else(|_| std::env::var("OLLAMA_NUM_GPU"))
+            .ok()
+            .and_then(|value| value.trim().parse::<i32>().ok())
+            .map(|value| value.clamp(0, 999))
     })
 }
 
@@ -274,7 +285,7 @@ pub fn ollama_context_runtime_config(
         normalized_adaptive_baseline(environment_default, adaptive_enabled, adaptive_max);
     let source = if configured_override.is_some() {
         "config"
-    } else if environment_default.is_some() {
+    } else if adaptive_baseline.is_some() {
         "environment"
     } else {
         "model-native"
@@ -371,16 +382,10 @@ impl OllamaProvider {
             (!trimmed.is_empty()).then(|| trimmed.to_string())
         });
 
-        // If caller didn't specify, check environment variables.
-        // Ollama itself also reads OLLAMA_NUM_GPU but we mirror it here so the
-        // per-request options field is populated even when the server default
-        // differs from what the user configured in LlamaFarm.
-        let gpu_layers = gpu_layers.or_else(|| {
-            std::env::var("OLLAMA_GPU_LAYERS")
-                .or_else(|_| std::env::var("OLLAMA_NUM_GPU"))
-                .ok()
-                .and_then(|v| v.trim().parse::<i32>().ok())
-        });
+        // Mirror the server/environment preference into every request so Auto
+        // keeps the GPU full instead of depending on a deployment-specific
+        // Ollama heuristic.
+        let gpu_layers = ollama_gpu_layers_runtime_config(gpu_layers);
 
         // Persisted/provider config is an exact override. An environment value
         // can instead be an adaptive floor when LLAMAFARM_ADAPTIVE_CONTEXT is on.
@@ -1821,7 +1826,7 @@ mod tests {
         );
         assert_eq!(
             normalized_adaptive_baseline(Some(65_536), false, 32_768),
-            Some(65_536)
+            None
         );
     }
 

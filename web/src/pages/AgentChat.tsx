@@ -146,12 +146,13 @@ const CHAT_FEDERATION_COLLAPSED_STORAGE_KEY = 'llamafarm.agent_chat.federation_c
 const CHAT_CONTROLS_COLLAPSED_STORAGE_KEY = 'llamafarm.agent_chat.controls_collapsed.v1';
 const MAX_PERSISTED_MESSAGES = 500;
 const REMOTE_SESSION_REFRESH_MS = 2000;
-// Kicks off a self-contained acceptance run: the model must enumerate every
-// registered tool via task_plan (not just guess a few) and chain through
-// them one at a time so each gets a real, verified call before the plan can
-// reach a terminal state.
-const TEST_ALL_TOOLS_PROMPT =
-  'Look at the entire tool catalogue available to you right now. Create a task_plan with one pending step per tool in that catalogue — do not group tools together or skip any. Then execute the plan step by step: call each tool once with a safe, minimal, non-destructive test input, mark the step completed or blocked based on the real result, and immediately continue to the next pending step without stopping to ask me anything. When every step has reached a terminal state, report a pass/fail summary for the whole catalogue.';
+function buildTestAllToolsPrompt(toolNames: string[]): string {
+  return [
+    `Run the server-enforced acceptance audit for these ${toolNames.length} exact registered tools:`,
+    toolNames.join(', '),
+    'Create a task_plan with one pending step per exact tool name. Call each tool itself once with a safe, minimal, non-destructive input; shell or CLI substitutes do not count. Mark each step completed or blocked from its real result and continue without asking questions. The server will reject an early final answer until every exact tool has been attempted and will attach the authoritative result ledger.',
+  ].join('\n\n');
+}
 const MAX_PERSISTED_SESSIONS = 40;
 
 type AgentConnectionState = 'connecting' | 'connected' | 'reconnecting';
@@ -1961,6 +1962,7 @@ export default function AgentChat() {
     session: ChatSession,
     content: string,
     allowedTools?: string[],
+    toolAudit = false,
   ): boolean => {
     const trimmed = content.trim();
     if (!trimmed) {
@@ -1997,6 +1999,7 @@ export default function AgentChat() {
         historySeed: buildHistorySeed(updatedSession.messages),
         federationPeerIds: federationEnabled ? selectedFederationPeerIds : [],
         allowedTools,
+        toolAudit,
         agentMode,
       });
       if (!sent) {
@@ -2063,7 +2066,12 @@ export default function AgentChat() {
       setSessions((prev) => sortSessions([session, ...prev]));
       setActiveSessionId(session.id);
       setConfirmDeleteSessionId(null);
-      dispatchUserMessage(session, TEST_ALL_TOOLS_PROMPT, allowedTools);
+      dispatchUserMessage(
+        session,
+        buildTestAllToolsPrompt(allowedTools),
+        undefined,
+        true,
+      );
     } catch {
       setError('Could not load the authoritative tool catalogue; the acceptance run was not started.');
     }

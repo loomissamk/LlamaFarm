@@ -64,6 +64,17 @@ test('connections distinguish routed prompt cost from the full tool catalogue up
   assert.doesNotMatch(connections, /Fixed prompt cost/);
 });
 
+test('configuration exposes dynamic reasoning and no-progress controls', () => {
+  const config = readPage('Config');
+
+  assert.match(config, /Reasoning\/output tokens per segment/);
+  assert.match(config, /No-progress spin limit/);
+  assert.match(config, /max_output_tokens_per_turn/);
+  assert.match(config, /max_no_progress_spins/);
+  assert.match(config, /Default 16,384/);
+  assert.match(config, /resets immediately when real progress occurs/);
+});
+
 test('integrations keep refresh failures retryable without discarding loaded values', () => {
   const integrations = readPage('Integrations');
 

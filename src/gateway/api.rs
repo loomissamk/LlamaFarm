@@ -4955,6 +4955,8 @@ pub async fn handle_api_context_get(
         )
     };
     let context_runtime = crate::providers::ollama::ollama_context_runtime_config(num_ctx);
+    let effective_gpu_layers =
+        crate::providers::ollama::ollama_gpu_layers_runtime_config(gpu_layers);
     let runtime = state.runtime_snapshot();
 
     // Live GPU memory so the UI can show the VRAM tradeoff dynamically
@@ -4977,7 +4979,7 @@ pub async fn handle_api_context_get(
         "source": context_runtime.source,
         "min": 2048,
         "max": crate::providers::ollama::MAX_OLLAMA_CONTEXT_TOKENS,
-        "note": "num_ctx is capacity allocated for a request, not the number of prompt tokens already spent. Provider-reported prompt tokens in chat telemetry are authoritative. A manual value is an exact capacity override; automatic mode grows only when needed.",
+        "note": "num_ctx is capacity allocated for a request, not the number of prompt tokens already spent. Provider-reported prompt tokens in chat telemetry are authoritative. A manual value is exact; Auto uses the selected model's native maximum unless an explicit adaptive policy is enabled.",
         "adaptive": {
             "enabled": context_runtime.adaptive_enabled,
             "active": context_runtime.adaptive_active,
@@ -4988,6 +4990,7 @@ pub async fn handle_api_context_get(
         // CPU-only, null = let Ollama auto-decide. This is the "use the whole
         // GPU" knob the operator asked for.
         "gpu_layers": gpu_layers,
+        "effective_gpu_layers": effective_gpu_layers,
         // Ollama server-level knobs (read-only here; set in the node profile
         // env and applied on redeploy). Concurrency and model residency remain
         // auto-managed when their overrides are unset.
