@@ -558,11 +558,14 @@ fn select_resume_history(
     let seeded = normalize_ws_history_for_storage(history_seed);
     let persisted = normalize_ws_history_for_storage(persisted_history);
 
-    match seeded.len().cmp(&persisted.len()) {
-        std::cmp::Ordering::Greater => seeded,
-        std::cmp::Ordering::Less => persisted,
-        std::cmp::Ordering::Equal if !seeded.is_empty() => seeded,
-        std::cmp::Ordering::Equal => persisted,
+    // A browser seed is only a bootstrap fallback for a session the server has
+    // never seen. Once server history exists it is authoritative. Choosing the
+    // longer side lets a stale or already-duplicated localStorage transcript
+    // overwrite the durable checkpoint and then permanently re-persist itself.
+    if persisted.is_empty() {
+        seeded
+    } else {
+        persisted
     }
 }
 
@@ -769,16 +772,34 @@ async fn load_ws_chat_history(
     store_path: &Path,
 ) -> Vec<ChatMessage> {
     let seeded_history = normalize_ws_history_for_storage(history_seed);
+    let persisted_history = if temporary {
+        Vec::new()
+    } else {
+        let persisted = read_persisted_ws_chat_sessions(store_path).await;
+        persisted
+            .sessions
+            .get(session_id)
+            .map(|session| session.history.clone())
+            .unwrap_or_default()
+    };
     let existing = {
         let mut sessions = WS_CHAT_SESSIONS.lock();
         if let Some(entry) = sessions.get_mut(session_id) {
             entry.temporary = temporary;
-            let merged = select_resume_history(&seeded_history, &entry.history);
+            let server_history = if persisted_history.is_empty() {
+                &entry.history
+            } else {
+                &persisted_history
+            };
+            let merged = select_resume_history(&seeded_history, server_history);
             let changed = merged != entry.history;
             if changed {
                 entry.history = merged.clone();
             }
-            Some((entry.history.clone(), changed && !temporary))
+            Some((
+                entry.history.clone(),
+                !temporary && persisted_history.is_empty() && changed,
+            ))
         } else {
             None
         }
@@ -791,16 +812,6 @@ async fn load_ws_chat_history(
         return history;
     }
 
-    let persisted_history = if temporary {
-        Vec::new()
-    } else {
-        let mut persisted = read_persisted_ws_chat_sessions(store_path).await;
-        persisted
-            .sessions
-            .remove(session_id)
-            .map(|session| session.history)
-            .unwrap_or_default()
-    };
     let initial_history = if seeded_history.is_empty() && !persisted_history.is_empty() {
         build_restored_ws_chat_history(&persisted_history)
     } else {
@@ -4193,11 +4204,28 @@ Reminder set successfully."#;
     }
 
     #[test]
-    fn select_resume_history_prefers_seed_when_lengths_match() {
-        let seed = vec![ChatMessage::user("latest seed prompt")];
-        let persisted = vec![ChatMessage::user("older persisted prompt")];
+    fn select_resume_history_prefers_authoritative_server_history() {
+        let seed = vec![
+            ChatMessage::user("persisted prompt"),
+            ChatMessage::assistant("persisted reply"),
+            ChatMessage::user("persisted prompt"),
+            ChatMessage::assistant("persisted reply"),
+        ];
+        let persisted = vec![
+            ChatMessage::user("persisted prompt"),
+            ChatMessage::assistant("persisted reply"),
+        ];
 
         let selected = select_resume_history(&seed, &persisted);
+        assert_eq!(selected, persisted);
+    }
+
+    #[test]
+    fn select_resume_history_uses_seed_only_for_unknown_server_session() {
+        let seed = vec![ChatMessage::user("first local prompt")];
+
+        let selected = select_resume_history(&seed, &[]);
+
         assert_eq!(selected, seed);
     }
 
@@ -4261,6 +4289,57 @@ Reminder set successfully."#;
             checkpoint.history[0].content,
             "continue this autonomous task"
         );
+
+        delete_ws_chat_history(&session_id, &store_path).await;
+    }
+
+    #[tokio::test]
+    async fn persisted_history_rejects_duplicated_browser_seed_after_compaction() {
+        let dir = tempdir().unwrap();
+        let store_path = dir.path().join("state").join("web-chat-sessions.json");
+        let session_id = format!("authoritative-{}", Uuid::new_v4());
+        let persisted_history = vec![
+            ChatMessage::user("audit the tools"),
+            ChatMessage::assistant("Audit complete."),
+        ];
+        persist_ws_chat_session(&store_path, &session_id, &persisted_history).await;
+
+        // Simulate a compacted in-memory tail. The old length-based selection
+        // accepted the longer duplicated browser seed and re-persisted it.
+        WS_CHAT_SESSIONS.lock().insert(
+            session_id.clone(),
+            WsChatSession {
+                history: vec![ChatMessage::assistant("Audit complete.")],
+                temporary: false,
+            },
+        );
+        let duplicated_seed = vec![
+            ChatMessage::user("audit the tools"),
+            ChatMessage::assistant("Audit complete."),
+            ChatMessage::user("audit the tools"),
+            ChatMessage::assistant("Audit complete."),
+            ChatMessage::user("run another audit"),
+        ];
+
+        let history = checkpoint_ws_chat_prompt(
+            &session_id,
+            "run another audit",
+            false,
+            &duplicated_seed,
+            &store_path,
+        )
+        .await;
+
+        assert_eq!(
+            history,
+            vec![
+                ChatMessage::user("audit the tools"),
+                ChatMessage::assistant("Audit complete."),
+                ChatMessage::user("run another audit"),
+            ]
+        );
+        let persisted = read_persisted_ws_chat_sessions(&store_path).await;
+        assert_eq!(persisted.sessions[&session_id].history, history);
 
         delete_ws_chat_history(&session_id, &store_path).await;
     }
