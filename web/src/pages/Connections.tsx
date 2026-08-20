@@ -776,8 +776,8 @@ export function ConnectionsPanel() {
                 />
               </div>
               <p className="mt-1 text-[11px] text-gray-600">
-                Bigger context and "All GPU" layers use more VRAM. Keep some headroom for the embed
-                model so both stay resident (avoids the reload penalty).
+                Bigger context uses more VRAM. Auto fits the maximum safe layer count for the live
+                capacity; an exact forced count can exceed it.
               </p>
             </div>
           )}
@@ -933,11 +933,11 @@ export function ConnectionsPanel() {
               <span className="text-sm text-gray-300">GPU layer offload</span>
               <span className="font-mono text-xs text-blue-300">
                 {ctx.gpu_layers === null
-                  ? ctx.effective_gpu_layers === 999
-                    ? 'auto · maximum fit'
-                    : 'auto'
+                  ? ctx.effective_gpu_layers === null || ctx.effective_gpu_layers === undefined
+                    ? 'auto · maximum safe fit'
+                    : `deployment override · ${ctx.effective_gpu_layers}`
                   : ctx.gpu_layers === 999
-                    ? 'all on GPU'
+                    ? 'forced all layers'
                     : ctx.gpu_layers}
               </span>
             </div>
@@ -954,8 +954,8 @@ export function ConnectionsPanel() {
               ))}
             </div>
             <p className="mt-1 text-[11px] text-gray-600">
-              Auto defaults to maximum-fit on the bundled runtime. Ollama fills VRAM with model
-              layers first and spills only the layers that cannot fit to system RAM.
+              Auto lets Ollama measure the selected model, context, and live free VRAM, then uses
+              the maximum layer count that safely fits. Forced counts can fail with CUDA OOM.
             </p>
           </div>
 

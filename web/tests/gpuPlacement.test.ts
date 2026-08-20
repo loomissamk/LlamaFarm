@@ -15,8 +15,8 @@ test('GPU layer Auto serializes as null rather than a CPU-only sentinel', () => 
   assert.deepEqual(
     GPU_LAYER_PRESETS.map(({ label, value }) => [label, value]),
     [
-      ['All GPU', 999],
-      ['Auto', null],
+      ['Force all (may OOM)', 999],
+      ['Auto (max safe)', null],
       ['CPU only', 0],
     ],
   );

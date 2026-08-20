@@ -128,9 +128,9 @@ services:
       - OLLAMA_NUM_CTX=${OLLAMA_NUM_CTX:-32768}
       - LLAMAFARM_ADAPTIVE_CONTEXT=${LLAMAFARM_ADAPTIVE_CONTEXT:-false}
       - LLAMAFARM_ADAPTIVE_CONTEXT_MAX=${LLAMAFARM_ADAPTIVE_CONTEXT_MAX:-262144}
-      # LlamaFarm mirrors this into each request as num_gpu. 999 means use
-      # every layer that fits in VRAM and spill only the remainder to RAM.
-      - OLLAMA_GPU_LAYERS=${OLLAMA_GPU_LAYERS:-999}
+      # Leave unset for Ollama's live VRAM-aware maximum safe fit. A positive
+      # value is an exact forced layer count and can OOM at large contexts.
+      - OLLAMA_GPU_LAYERS
       - OLLAMA_FLASH_ATTENTION=${OLLAMA_FLASH_ATTENTION:-1}
       # No idle unload timer: a loaded model stays hot until Ollama needs the
       # memory for another model or the operator explicitly unloads it.

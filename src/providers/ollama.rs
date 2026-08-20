@@ -130,7 +130,7 @@ struct OutgoingFunction {
 #[derive(Debug, Serialize)]
 struct Options {
     temperature: f64,
-    /// GPU layer count: 0 = CPU-only, 999 = fill GPU then spill to CPU.
+    /// GPU layer count: 0 = CPU-only; positive values are exact requests.
     /// Omitted if None so the Ollama server uses its own default.
     #[serde(skip_serializing_if = "Option::is_none")]
     num_gpu: Option<i32>,
@@ -254,9 +254,9 @@ fn normalized_adaptive_baseline(
     }
 }
 
-/// Resolve the effective per-request GPU-layer preference. Auto mode is
-/// deliberately max-fit on the bundled local runtime: `999` asks Ollama to
-/// place every layer that fits in VRAM and spill only the remainder to RAM.
+/// Resolve an explicit per-request GPU-layer preference. `None` deliberately
+/// omits `num_gpu` so Ollama can measure live VRAM and choose its maximum safe
+/// fit for the requested model and context.
 pub fn ollama_gpu_layers_runtime_config(configured: Option<i32>) -> Option<i32> {
     configured.map(|value| value.clamp(0, 999)).or_else(|| {
         std::env::var("OLLAMA_GPU_LAYERS")
@@ -333,11 +333,10 @@ impl OllamaProvider {
     /// Full constructor.
     ///
     /// `gpu_layers`:
-    /// - `None`     → defer to Ollama server / `OLLAMA_NUM_GPU` env var.
+    /// - `None`     → defer to Ollama's live VRAM-aware placement.
     /// - `Some(0)`  → CPU-only inference.
-    /// - `Some(999)` → fill every available GPU layer slot; layers that don't fit
-    ///   automatically overflow to CPU RAM. This is the recommended setting for
-    ///   "max GPU, fallback CPU" behaviour on a local box.
+    /// - Positive values force that layer count and can exceed VRAM at large
+    ///   context sizes. They are expert overrides, not automatic placement.
     ///
     /// If `gpu_layers` is `None` *and* the `OLLAMA_GPU_LAYERS` env var is set,
     /// its value is used so callers don't need to thread it through manually.
@@ -361,7 +360,7 @@ impl OllamaProvider {
 
     /// Full constructor with all inference options.
     ///
-    /// - `gpu_layers`: GPU layer offload count (999 = fill GPU, spill rest to CPU).
+    /// - `gpu_layers`: exact GPU layer offload count; None uses safe auto-placement.
     /// - `main_gpu`: GPU index for largest tensors.
     /// - `num_ctx`: Context window override. Pair with `OLLAMA_KV_CACHE_TYPE=q8_0`
     ///   to fit larger contexts in the same VRAM (turboquant-style KV compression).
@@ -382,9 +381,8 @@ impl OllamaProvider {
             (!trimmed.is_empty()).then(|| trimmed.to_string())
         });
 
-        // Mirror the server/environment preference into every request so Auto
-        // keeps the GPU full instead of depending on a deployment-specific
-        // Ollama heuristic.
+        // Only mirror an explicit operator preference. Omitting num_gpu is
+        // Ollama's VRAM-aware maximum-fit mode and avoids forced-layer OOMs.
         let gpu_layers = ollama_gpu_layers_runtime_config(gpu_layers);
 
         // Persisted/provider config is an exact override. An environment value

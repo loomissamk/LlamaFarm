@@ -41,10 +41,11 @@ else
   failures=$((failures + 1))
 fi
 
-if command -v john >/dev/null 2>&1 && john --list=build-info 2>&1 | grep -qi 'version'; then
-  printf 'PASS %-16s build-info probe succeeded\n' 'john-runtime'
+if command -v john >/dev/null 2>&1 \
+  && john 2>&1 | grep -q 'John the Ripper password cracker'; then
+  printf 'PASS %-16s runtime banner probe succeeded\n' 'john-runtime'
 else
-  printf 'FAIL %-16s build-info probe failed\n' 'john-runtime'
+  printf 'FAIL %-16s runtime banner probe failed\n' 'john-runtime'
   failures=$((failures + 1))
 fi
 

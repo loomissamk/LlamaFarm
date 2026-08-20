@@ -4986,9 +4986,8 @@ pub async fn handle_api_context_get(
             "baseline": context_runtime.adaptive_baseline,
             "max": context_runtime.adaptive_max,
         },
-        // GPU layer offload: 999 = put all layers on GPU (use all VRAM), 0 =
-        // CPU-only, null = let Ollama auto-decide. This is the "use the whole
-        // GPU" knob the operator asked for.
+        // GPU layer offload: 0 = CPU-only, positive = exact forced count,
+        // null = Ollama's live VRAM-aware maximum safe fit.
         "gpu_layers": gpu_layers,
         "effective_gpu_layers": effective_gpu_layers,
         // Ollama server-level knobs (read-only here; set in the node profile
@@ -5035,8 +5034,8 @@ pub struct ContextPutBody {
     /// null or 0 clears the fixed override and restores the automatic policy.
     #[serde(default)]
     pub num_ctx: Option<u32>,
-    /// GPU layer offload: 999 = all layers on GPU, 0 = CPU-only, absent = leave
-    /// unchanged. Sent as a field only when the operator changes it.
+    /// GPU layer offload: positive = exact forced count, 0 = CPU-only, absent
+    /// = leave unchanged. Sent as a field only when the operator changes it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpu_layers: Option<i32>,
     /// When true, also apply gpu_layers even if it's None (reset to auto).
