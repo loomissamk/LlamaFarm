@@ -12232,7 +12232,7 @@ Tail"#;
 
         assert!(prompt.contains("Do NOT emit `task_plan` create"));
         assert!(prompt.contains("update that existing step to completed, failed, or blocked"));
-        assert!(prompt.contains("Continue directly with the next incomplete step"));
+        assert!(prompt.contains("continue directly with the next incomplete step"));
     }
 
     #[test]
