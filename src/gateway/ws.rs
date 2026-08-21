@@ -3560,6 +3560,12 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
 
             if let Some(ref ledger) = turn_run_ledger {
                 let status = match &result {
+                    Ok(_)
+                        if !crate::agent::loop_::is_planning_only_request(&content)
+                            && ledger.unverified_plan_summary().is_some() =>
+                    {
+                        crate::agent::run_ledger::RunStatus::CompletedUnverified
+                    }
                     Ok(_) => crate::agent::run_ledger::RunStatus::Completed,
                     Err(e) if crate::agent::loop_::is_tool_loop_cancelled(e) => {
                         crate::agent::run_ledger::RunStatus::Cancelled

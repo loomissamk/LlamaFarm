@@ -1215,7 +1215,7 @@ fn actionable_request_step_count(text: &str) -> usize {
     }
 }
 
-fn is_planning_only_request(text: &str) -> bool {
+pub(crate) fn is_planning_only_request(text: &str) -> bool {
     let lowered = text.to_ascii_lowercase();
     let asks_for_plan = lowered.contains("task plan")
         || lowered.contains("implementation plan")
@@ -1226,6 +1226,7 @@ fn is_planning_only_request(text: &str) -> bool {
         || lowered.contains("make the plan")
         || lowered.contains("give me a plan");
     let asks_for_execution = lowered.contains("execute")
+        || lowered.contains("invoke ")
         || lowered.contains("run it")
         || lowered.contains("do it")
         || lowered.contains("carry out")
@@ -1243,13 +1244,27 @@ fn is_planning_only_request(text: &str) -> bool {
         || lowered.contains("don't stop after planning");
 
     lowered.contains("only create the plan")
+        || lowered.contains("only create the task plan")
         || lowered.contains("only make a plan")
         || lowered.contains("plan only")
+        || lowered.contains("do not execute it yet")
+        || lowered.contains("do not execute the plan")
         || lowered.contains("before any tool actions")
         || lowered.contains("what is next")
         || lowered.contains("next task")
         || lowered.contains("implementation plan before any tool actions")
         || (asks_for_plan && !asks_for_execution)
+}
+
+fn unresolved_task_plan_requires_execution(
+    history: &[ChatMessage],
+    records: &[SuccessfulToolRecord],
+) -> bool {
+    let has_unresolved_steps = task_plan_progress_snapshot(records)
+        .is_some_and(|progress| progress.total > 0 && progress.resolved < progress.total);
+    has_unresolved_steps
+        && latest_external_user_request(history)
+            .is_some_and(|request| !is_planning_only_request(request))
 }
 
 /// Returns true when the user is asking for information about the agent rather
@@ -3305,6 +3320,10 @@ pub(crate) async fn run_tool_call_loop(
     // entire context window on the same tool call forever.
     let mut consecutive_all_duplicate_iterations: usize = 0;
     let mut duplicate_no_progress_spins: usize = 0;
+    // A model may create a useful task plan and then try to stop in prose while
+    // steps are still pending. Count those text-only stalls against the same
+    // operator-configurable no-progress budget as duplicate tool calls.
+    let mut plan_no_progress_spins: usize = 0;
     let mut early_exit_reason: Option<(&'static str, String)> = None;
     let history_budget = TOOL_LOOP_MAX_HISTORY_MESSAGES
         .try_with(|max_history| *max_history)
@@ -4125,6 +4144,63 @@ pub(crate) async fn run_tool_call_loop(
                 }
             }
 
+            if unresolved_task_plan_requires_execution(history, &recent_successful_tool_records) {
+                plan_no_progress_spins = plan_no_progress_spins.saturating_add(1);
+                if plan_no_progress_spins >= max_no_progress_spins {
+                    runtime_trace::record_event(
+                        "task_plan_no_progress_hard_exit",
+                        Some(channel_name),
+                        Some(provider_name),
+                        Some(model),
+                        Some(&turn_id),
+                        Some(false),
+                        Some("model stopped in prose while action-plan steps remained unresolved"),
+                        serde_json::json!({
+                            "iteration": iteration + 1,
+                            "no_progress_spins": plan_no_progress_spins,
+                            "max_no_progress_spins": max_no_progress_spins,
+                        }),
+                    );
+                    early_exit_reason = Some((
+                        "task_plan_no_progress",
+                        format!(
+                            "Agent exited after {plan_no_progress_spins} text-only iterations with unresolved task-plan steps"
+                        ),
+                    ));
+                    break;
+                }
+
+                retry_count = retry_count.saturating_add(1);
+                missing_tool_call_retry_prompt =
+                    build_task_plan_execution_followup_prompt(&recent_successful_tool_records)
+                        .or_else(|| {
+                            build_post_plan_create_start_prompt(&recent_successful_tool_records)
+                        })
+                        .or_else(|| Some(build_missing_tool_call_retry_prompt(history)));
+                runtime_trace::record_event(
+                    "task_plan_no_progress_retry",
+                    Some(channel_name),
+                    Some(provider_name),
+                    Some(model),
+                    Some(&turn_id),
+                    Some(false),
+                    Some("unresolved action plan requires another real tool call"),
+                    serde_json::json!({
+                        "iteration": iteration + 1,
+                        "no_progress_spins": plan_no_progress_spins,
+                        "max_no_progress_spins": max_no_progress_spins,
+                    }),
+                );
+                if let Some(ref tx) = on_delta {
+                    let _ = tx
+                        .send(format!(
+                            "{DRAFT_PROGRESS_SENTINEL}↻ Continuing unresolved task plan ({plan_no_progress_spins}/{max_no_progress_spins})\n"
+                        ))
+                        .await;
+                }
+                continue;
+            }
+
             // ── Repeated-intent guard ──────────────────────────────────────────────────
             // If the model keeps emitting the same no-tool-call text after a retry, stop
             // spending tokens: return a grounded answer (when available) or bail fast.
@@ -4599,6 +4675,7 @@ pub(crate) async fn run_tool_call_loop(
         // A real tool call is genuine progress, not a stall — reset the
         // empty-reasoning-checkpoint streak.
         consecutive_empty_output_budget_checkpoints = 0;
+        plan_no_progress_spins = 0;
 
         // Print any text the LLM produced alongside tool calls (unless silent)
         if !silent && !display_text.is_empty() {
@@ -5287,6 +5364,7 @@ pub(crate) async fn run_tool_call_loop(
 
         if required_audit_tools.is_empty()
             && !iteration_had_failed_tools
+            && !unresolved_task_plan_requires_execution(history, &recent_successful_tool_records)
             && !task_plan_progress_snapshot(&recent_successful_tool_records)
                 .is_some_and(|progress| progress.total > 0 && progress.resolved == progress.total)
             && should_short_circuit_after_tool_execution(history, &recent_successful_tool_records)
@@ -11955,6 +12033,46 @@ Tail"#;
             should_auto_plan_current_request(&history),
             "plan-first prompts that explicitly require execution must not be treated as planning-only"
         );
+    }
+
+    #[test]
+    fn planning_only_classifier_treats_explicit_tool_invocation_as_execution() {
+        assert!(!is_planning_only_request(
+            "Create two task plan steps, then invoke shell exactly once with `echo verified`."
+        ));
+        assert!(is_planning_only_request(
+            "Only create the task plan; do not execute it yet."
+        ));
+    }
+
+    #[test]
+    fn unresolved_action_plan_requires_execution_followthrough() {
+        let records = vec![SuccessfulToolRecord {
+            name: "task_plan".into(),
+            arguments: serde_json::json!({
+                "action": "create",
+                "tasks": [
+                    {"title": "Record acceptance"},
+                    {"title": "Invoke shell"},
+                ]
+            }),
+            output: "Created 2 task(s).\nTasks (0/2 completed; 0/2 resolved):\n- [1] [pending] Record acceptance\n- [2] [pending] Invoke shell".into(),
+        }];
+        let action_history = vec![ChatMessage::user(
+            "Create two task plan steps, then invoke shell exactly once with `echo verified`.",
+        )];
+        let planning_history = vec![ChatMessage::user(
+            "Only create the task plan; do not execute it yet.",
+        )];
+
+        assert!(unresolved_task_plan_requires_execution(
+            &action_history,
+            &records
+        ));
+        assert!(!unresolved_task_plan_requires_execution(
+            &planning_history,
+            &records
+        ));
     }
 
     #[test]
