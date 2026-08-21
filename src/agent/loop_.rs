@@ -1963,6 +1963,13 @@ fn task_plan_execution_started(records: &[SuccessfulToolRecord]) -> bool {
     })
 }
 
+fn task_plan_call_recreates_plan(arguments: &serde_json::Value) -> bool {
+    arguments
+        .get("action")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|action| action.eq_ignore_ascii_case("create"))
+}
+
 fn build_task_plan_execution_followup_prompt(records: &[SuccessfulToolRecord]) -> Option<String> {
     let snapshot = task_plan_snapshot(records)?;
     let progress = task_plan_progress_snapshot(records)?;
@@ -2002,7 +2009,7 @@ fn build_task_plan_execution_followup_prompt(records: &[SuccessfulToolRecord]) -
 
     if task_plan_execution_started(records) {
         prompt.push_str(
-            "\nExecution has already started in this turn. Do NOT emit `task_plan` create/update calls now, and do NOT recreate the plan. Continue directly with the next incomplete step using real tools. Do not ask the user what to do next unless blocked.",
+            "\nExecution has already started in this turn. Do NOT emit `task_plan` create or recreate the plan. If the current step now has concrete evidence, update that existing step to completed, failed, or blocked as appropriate, then continue directly with the next incomplete step using real tools. Do not ask the user what to do next unless blocked.",
         );
     } else {
         prompt.push_str(
@@ -4986,18 +4993,14 @@ pub(crate) async fn run_tool_call_loop(
             }
 
             // ── Planner-churn suppression (TODO #9) ─────────────────────────────────
-            // Suppress opportunistic task_plan calls that arrive after real execution
-            // tools have already run. A direct "write, run, delete" prompt should not
-            // reopen planning once execution has started.
+            // Once real execution starts, suppress attempts to replace the active plan.
+            // Lifecycle updates on existing steps remain mandatory so completed work is
+            // reflected truthfully in the durable run ledger.
             if tool_name == "task_plan" && successful_tool_execution_seen {
-                let execution_started = recent_successful_tool_records.iter().any(|r| {
-                    !matches!(
-                        r.name.as_str(),
-                        "task_plan" | "memory_store" | "memory_recall"
-                    )
-                });
-                if execution_started {
-                    let suppressed = "Skipped task_plan call: execution has already started this turn. Use the existing plan and continue executing.".to_string();
+                if task_plan_execution_started(&recent_successful_tool_records)
+                    && task_plan_call_recreates_plan(&tool_args)
+                {
+                    let suppressed = "Skipped task_plan create: execution has already started this turn. Update the existing plan instead of recreating it.".to_string();
                     runtime_trace::record_event(
                         "planner_churn_suppressed",
                         Some(channel_name),
@@ -12202,7 +12205,7 @@ Tail"#;
     }
 
     #[test]
-    fn build_task_plan_execution_followup_prompt_forbids_plan_updates_after_execution_starts() {
+    fn build_task_plan_execution_followup_prompt_allows_lifecycle_updates_after_execution() {
         let records = vec![
             SuccessfulToolRecord {
                 name: "task_plan".into(),
@@ -12227,8 +12230,22 @@ Tail"#;
         let prompt =
             build_task_plan_execution_followup_prompt(&records).expect("task plan should exist");
 
-        assert!(prompt.contains("Do NOT emit `task_plan` create/update calls now"));
+        assert!(prompt.contains("Do NOT emit `task_plan` create"));
+        assert!(prompt.contains("update that existing step to completed, failed, or blocked"));
         assert!(prompt.contains("Continue directly with the next incomplete step"));
+    }
+
+    #[test]
+    fn planner_churn_guard_suppresses_recreation_but_allows_step_updates() {
+        assert!(task_plan_call_recreates_plan(
+            &serde_json::json!({"action": "create", "tasks": [{"title": "New plan"}]})
+        ));
+        assert!(!task_plan_call_recreates_plan(
+            &serde_json::json!({"action": "update", "id": 1, "status": "completed"})
+        ));
+        assert!(!task_plan_call_recreates_plan(
+            &serde_json::json!({"action": "list"})
+        ));
     }
 
     #[test]
