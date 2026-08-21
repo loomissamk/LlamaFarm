@@ -201,6 +201,18 @@ where
         .await
 }
 
+pub(crate) async fn with_tool_loop_no_progress_limit<F>(
+    max_no_progress_spins: usize,
+    future: F,
+) -> F::Output
+where
+    F: std::future::Future,
+{
+    TOOL_LOOP_MAX_NO_PROGRESS_SPINS
+        .scope(max_no_progress_spins.max(1), future)
+        .await
+}
+
 /// Scope a compact, policy-filtered discovery catalogue to one tool loop.
 /// Callers must exclude persona-denied and explicit-allowlist-denied tools
 /// before supplying this list.
@@ -212,6 +224,51 @@ where
     F: std::future::Future,
 {
     TOOL_LOOP_DISCOVERABLE_TOOLS.scope(discoverable, future).await
+}
+
+/// Scope an exact-name acceptance contract to one tool loop. Ordinary turns
+/// leave this empty and retain their existing routing behavior.
+pub(crate) async fn with_required_tool_audit<F>(required: Vec<String>, future: F) -> F::Output
+where
+    F: std::future::Future,
+{
+    TOOL_LOOP_REQUIRED_AUDIT_TOOLS.scope(required, future).await
+}
+
+fn append_tool_audit_ledger(
+    mut final_text: String,
+    required: &[String],
+    results: &BTreeMap<String, (bool, String)>,
+) -> String {
+    if required.is_empty() {
+        return final_text;
+    }
+
+    let passed = required
+        .iter()
+        .filter(|name| results.get(*name).is_some_and(|(success, _)| *success))
+        .count();
+    let attempted = required
+        .iter()
+        .filter(|name| results.contains_key(*name))
+        .count();
+    let failed = attempted.saturating_sub(passed);
+    let unattempted = required.len().saturating_sub(attempted);
+    let _ = write!(
+        final_text,
+        "\n\n### Server-verified tool audit\n\n{passed} passed; {failed} failed or blocked; {unattempted} unattempted; {attempted}/{} exact tools attempted.\n",
+        required.len(),
+    );
+    for name in required {
+        let (success, output) = results
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| (false, "No recorded result".to_string()));
+        let status = if success { "PASS" } else { "FAIL/BLOCKED" };
+        let summary = truncate_with_ellipsis(&scrub_credentials(output.trim()), 180);
+        let _ = writeln!(final_text, "- `{name}` — {status}: {summary}");
+    }
+    final_text
 }
 
 /// Default trigger for auto-compaction when non-system message count exceeds this threshold.
@@ -337,8 +394,17 @@ tokio::task_local! {
 }
 
 tokio::task_local! {
+    static TOOL_LOOP_MAX_NO_PROGRESS_SPINS: usize;
+}
+
+tokio::task_local! {
     /// Registered specs hidden by routing but still allowed by turn policy.
     static TOOL_LOOP_DISCOVERABLE_TOOLS: Vec<crate::tools::ToolSpec>;
+}
+
+tokio::task_local! {
+    /// Exact registered tools a server-enforced catalogue audit must attempt.
+    static TOOL_LOOP_REQUIRED_AUDIT_TOOLS: Vec<String>;
 }
 
 tokio::task_local! {
@@ -357,12 +423,11 @@ const AUTO_PLAN_RETRY_LIMIT: usize = 4;
 const RETROSPECTIVE_PLAN_THRESHOLD: usize = 3;
 const WEB_SEARCH_WITHOUT_FETCH_STREAK_LIMIT: usize = 3;
 const DUPLICATE_TOOL_CALL_STREAK_PER_NUDGE: usize = 2;
-const DUPLICATE_TOOL_CALL_MAX_NUDGES: usize = 3;
 // A thinking model that keeps exhausting its per-segment output budget on
 // reasoning tokens alone, never emitting any visible text or tool call, is
 // not making bounded progress like a normal multi-segment continuation —
 // it's stuck. Hard-exit rather than checkpointing forever.
-const MAX_CONSECUTIVE_EMPTY_OUTPUT_BUDGET_CHECKPOINTS: usize = 6;
+const DEFAULT_MAX_NO_PROGRESS_SPINS: usize = 6;
 const COORDINATION_STATUS_POLL_STREAK_LIMIT: usize = 2;
 const MISSING_TOOL_CALL_RETRY_PROMPT: &str = "Internal correction: stay on the current user task. Your last reply implied follow-up action, but no valid tool call was emitted. If another tool step is still required, emit that tool call now and nothing else. For shell actions, prefer a single real command or the runtime's canonical shell tool syntax; do not wrap it in markdown, do not describe what you would run, and do not switch topics. If file creation or editing is needed, prefer the dedicated file tools. If shell-level file creation is still required, use a direct command and, for heredocs, use a quoted delimiter like << 'EOF'. If no tool is needed, provide the complete final answer now and do not defer action.";
 const DUPLICATE_TOOL_CALL_NUDGE_PROMPTS: &[&str] = &[
@@ -1150,7 +1215,7 @@ fn actionable_request_step_count(text: &str) -> usize {
     }
 }
 
-fn is_planning_only_request(text: &str) -> bool {
+pub(crate) fn is_planning_only_request(text: &str) -> bool {
     let lowered = text.to_ascii_lowercase();
     let asks_for_plan = lowered.contains("task plan")
         || lowered.contains("implementation plan")
@@ -1161,6 +1226,7 @@ fn is_planning_only_request(text: &str) -> bool {
         || lowered.contains("make the plan")
         || lowered.contains("give me a plan");
     let asks_for_execution = lowered.contains("execute")
+        || lowered.contains("invoke")
         || lowered.contains("run it")
         || lowered.contains("do it")
         || lowered.contains("carry out")
@@ -1178,13 +1244,27 @@ fn is_planning_only_request(text: &str) -> bool {
         || lowered.contains("don't stop after planning");
 
     lowered.contains("only create the plan")
+        || lowered.contains("only create the task plan")
         || lowered.contains("only make a plan")
-        || lowered.contains("plan only")
+        || lowered.trim_start().starts_with("plan only")
+        || lowered.contains("do not execute it yet")
+        || lowered.contains("do not execute the plan")
         || lowered.contains("before any tool actions")
         || lowered.contains("what is next")
         || lowered.contains("next task")
         || lowered.contains("implementation plan before any tool actions")
         || (asks_for_plan && !asks_for_execution)
+}
+
+fn unresolved_task_plan_requires_execution(
+    history: &[ChatMessage],
+    records: &[SuccessfulToolRecord],
+) -> bool {
+    let has_unresolved_steps = task_plan_progress_snapshot(records)
+        .is_some_and(|progress| progress.total > 0 && progress.resolved < progress.total);
+    has_unresolved_steps
+        && latest_external_user_request(history)
+            .is_some_and(|request| !is_planning_only_request(request))
 }
 
 /// Returns true when the user is asking for information about the agent rather
@@ -1883,6 +1963,13 @@ fn task_plan_execution_started(records: &[SuccessfulToolRecord]) -> bool {
     })
 }
 
+fn task_plan_call_recreates_plan(arguments: &serde_json::Value) -> bool {
+    arguments
+        .get("action")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|action| action.eq_ignore_ascii_case("create"))
+}
+
 fn build_task_plan_execution_followup_prompt(records: &[SuccessfulToolRecord]) -> Option<String> {
     let snapshot = task_plan_snapshot(records)?;
     let progress = task_plan_progress_snapshot(records)?;
@@ -1922,7 +2009,7 @@ fn build_task_plan_execution_followup_prompt(records: &[SuccessfulToolRecord]) -
 
     if task_plan_execution_started(records) {
         prompt.push_str(
-            "\nExecution has already started in this turn. Do NOT emit `task_plan` create/update calls now, and do NOT recreate the plan. Continue directly with the next incomplete step using real tools. Do not ask the user what to do next unless blocked.",
+            "\nExecution has already started in this turn. Do NOT emit `task_plan` create or recreate the plan. If the current step now has concrete evidence, update that existing step to completed, failed, or blocked as appropriate, then continue directly with the next incomplete step using real tools. Do not ask the user what to do next unless blocked.",
         );
     } else {
         prompt.push_str(
@@ -3036,7 +3123,7 @@ fn tool_loop_has_next_iteration(iteration: usize, limit: Option<usize>) -> bool 
     limit.is_none_or(|limit| iteration.saturating_add(1) < limit)
 }
 
-fn parse_tool_search_request(arguments: &serde_json::Value) -> (Vec<String>, Option<String>) {
+fn parse_tool_search_request(arguments: &serde_json::Value) -> (Vec<String>, Option<String>, bool) {
     let names = arguments
         .get("names")
         .and_then(serde_json::Value::as_array)
@@ -3056,7 +3143,11 @@ fn parse_tool_search_request(arguments: &serde_json::Value) -> (Vec<String>, Opt
         .map(str::trim)
         .filter(|query| !query.is_empty())
         .map(str::to_string);
-    (names, query)
+    let activate_all = arguments
+        .get("all")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    (names, query, activate_all)
 }
 
 fn tool_search_result_text(activated: &[crate::tools::ToolSpec], unknown: &[String]) -> String {
@@ -3154,6 +3245,13 @@ pub(crate) async fn run_tool_call_loop(
     let discoverable_tools = TOOL_LOOP_DISCOVERABLE_TOOLS
         .try_with(Clone::clone)
         .unwrap_or_default();
+    let required_audit_tools = TOOL_LOOP_REQUIRED_AUDIT_TOOLS
+        .try_with(Clone::clone)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|required| tools_registry.iter().any(|tool| tool.name() == required))
+        .collect::<Vec<_>>();
+    let mut audit_results: BTreeMap<String, (bool, String)> = BTreeMap::new();
     let mut tool_specs: Vec<crate::tools::ToolSpec> = tools_registry
         .iter()
         .filter(|tool| !blocked_tools.contains(tool.name()))
@@ -3225,15 +3323,24 @@ pub(crate) async fn run_tool_call_loop(
     let mut dynamic_discovery_attempted = false;
     let mut dynamic_discovery_fail_open_used = false;
     // Counts consecutive iterations where ALL tool calls were duplicates (nothing new ran).
-    // After the retry prompt fails to unstick the model several times, hard-exit to
-    // avoid burning the entire context window on the same tool call forever.
+    // The configurable no-progress limit hard-exits before a model can burn the
+    // entire context window on the same tool call forever.
     let mut consecutive_all_duplicate_iterations: usize = 0;
+    let mut duplicate_no_progress_spins: usize = 0;
+    // A model may create a useful task plan and then try to stop in prose while
+    // steps are still pending. Count those text-only stalls against the same
+    // operator-configurable no-progress budget as duplicate tool calls.
+    let mut plan_no_progress_spins: usize = 0;
     let mut early_exit_reason: Option<(&'static str, String)> = None;
     let history_budget = TOOL_LOOP_MAX_HISTORY_MESSAGES
         .try_with(|max_history| *max_history)
         .ok()
         .flatten()
         .unwrap_or(DEFAULT_MAX_HISTORY_MESSAGES);
+    let max_no_progress_spins = TOOL_LOOP_MAX_NO_PROGRESS_SPINS
+        .try_with(|limit| *limit)
+        .unwrap_or(DEFAULT_MAX_NO_PROGRESS_SPINS)
+        .max(1);
     let bypass_non_cli_approval_for_turn =
         approval.is_some_and(|mgr| channel_name != "cli" && mgr.consume_non_cli_allow_all_once());
     if bypass_non_cli_approval_for_turn {
@@ -3266,6 +3373,37 @@ pub(crate) async fn run_tool_call_loop(
             .is_some_and(CancellationToken::is_cancelled)
         {
             return Err(ToolLoopCancelled.into());
+        }
+
+        // Catalogue audits expose only task_plan plus the next exact untested
+        // schema. This keeps a 50+ tool audit inside smaller local-model
+        // contexts while making shell/CLI substitutions impossible to count as
+        // another tool's result.
+        if let Some(next_audit_tool) = required_audit_tools
+            .iter()
+            .find(|name| !audit_results.contains_key(*name))
+        {
+            tool_specs.retain(|spec| {
+                spec.name == "task_plan" || spec.name.as_str() == next_audit_tool.as_str()
+            });
+            blocked_tools.remove(next_audit_tool);
+            blocked_tools.remove("task_plan");
+            if !tool_specs
+                .iter()
+                .any(|spec| spec.name.as_str() == next_audit_tool.as_str())
+            {
+                if let Some(tool) = tools_registry
+                    .iter()
+                    .find(|tool| tool.name() == next_audit_tool.as_str())
+                {
+                    tool_specs.push(tool.spec());
+                }
+            }
+            if !tool_specs.iter().any(|spec| spec.name == "task_plan") {
+                if let Some(tool) = tools_registry.iter().find(|tool| tool.name() == "task_plan") {
+                    tool_specs.push(tool.spec());
+                }
+            }
         }
 
         if let Some(retry_prompt) = missing_tool_call_retry_prompt.take() {
@@ -3817,7 +3955,7 @@ pub(crate) async fn run_tool_call_loop(
                 // does — it's stuck. Without this, the loop above (which has no
                 // overall iteration cap by design) would checkpoint forever.
                 if consecutive_empty_output_budget_checkpoints
-                    >= MAX_CONSECUTIVE_EMPTY_OUTPUT_BUDGET_CHECKPOINTS
+                    >= max_no_progress_spins
                 {
                     runtime_trace::record_event(
                         "llm_output_budget_stall_hard_exit",
@@ -3914,6 +4052,43 @@ pub(crate) async fn run_tool_call_loop(
                 continue;
             }
 
+            if let Some(next_audit_tool) = required_audit_tools
+                .iter()
+                .find(|name| !audit_results.contains_key(*name))
+            {
+                retry_count = retry_count.saturating_add(1);
+                let remaining = required_audit_tools
+                    .iter()
+                    .filter(|name| !audit_results.contains_key(*name))
+                    .count();
+                missing_tool_call_retry_prompt = Some(format!(
+                    "Internal catalogue-audit enforcement: {remaining} exact registered tools remain untested. Shell commands, CLI equivalents, and prose claims do not count. Call the `{next_audit_tool}` tool itself now with a safe minimal input using the schema supplied for this iteration. After its real result, update the active task plan and continue to the next exact tool."
+                ));
+                runtime_trace::record_event(
+                    "tool_audit_exact_call_required",
+                    Some(channel_name),
+                    Some(provider_name),
+                    Some(model),
+                    Some(&turn_id),
+                    Some(false),
+                    Some("model attempted to finish before every exact catalogue tool was called"),
+                    serde_json::json!({
+                        "iteration": iteration + 1,
+                        "next_required_tool": next_audit_tool,
+                        "remaining": remaining,
+                        "attempted": audit_results.len(),
+                    }),
+                );
+                if let Some(ref tx) = on_delta {
+                    let _ = tx
+                        .send(format!(
+                            "{DRAFT_PROGRESS_SENTINEL}↪ Audit enforcement: calling exact tool `{next_audit_tool}` next ({remaining} remaining)\n"
+                        ))
+                        .await;
+                }
+                continue;
+            }
+
             // If the model discovered tools but still claims they are missing
             // or defers the action, use one bounded recovery step: expose all
             // remaining catalogue schemas that this turn's policy already
@@ -3976,6 +4151,63 @@ pub(crate) async fn run_tool_call_loop(
                 }
             }
 
+            if unresolved_task_plan_requires_execution(history, &recent_successful_tool_records) {
+                plan_no_progress_spins = plan_no_progress_spins.saturating_add(1);
+                if plan_no_progress_spins >= max_no_progress_spins {
+                    runtime_trace::record_event(
+                        "task_plan_no_progress_hard_exit",
+                        Some(channel_name),
+                        Some(provider_name),
+                        Some(model),
+                        Some(&turn_id),
+                        Some(false),
+                        Some("model stopped in prose while action-plan steps remained unresolved"),
+                        serde_json::json!({
+                            "iteration": iteration + 1,
+                            "no_progress_spins": plan_no_progress_spins,
+                            "max_no_progress_spins": max_no_progress_spins,
+                        }),
+                    );
+                    early_exit_reason = Some((
+                        "task_plan_no_progress",
+                        format!(
+                            "Agent exited after {plan_no_progress_spins} text-only iterations with unresolved task-plan steps"
+                        ),
+                    ));
+                    break;
+                }
+
+                retry_count = retry_count.saturating_add(1);
+                missing_tool_call_retry_prompt =
+                    build_task_plan_execution_followup_prompt(&recent_successful_tool_records)
+                        .or_else(|| {
+                            build_post_plan_create_start_prompt(&recent_successful_tool_records)
+                        })
+                        .or_else(|| Some(build_missing_tool_call_retry_prompt(history)));
+                runtime_trace::record_event(
+                    "task_plan_no_progress_retry",
+                    Some(channel_name),
+                    Some(provider_name),
+                    Some(model),
+                    Some(&turn_id),
+                    Some(false),
+                    Some("unresolved action plan requires another real tool call"),
+                    serde_json::json!({
+                        "iteration": iteration + 1,
+                        "no_progress_spins": plan_no_progress_spins,
+                        "max_no_progress_spins": max_no_progress_spins,
+                    }),
+                );
+                if let Some(ref tx) = on_delta {
+                    let _ = tx
+                        .send(format!(
+                            "{DRAFT_PROGRESS_SENTINEL}↻ Continuing unresolved task plan ({plan_no_progress_spins}/{max_no_progress_spins})\n"
+                        ))
+                        .await;
+                }
+                continue;
+            }
+
             // ── Repeated-intent guard ──────────────────────────────────────────────────
             // If the model keeps emitting the same no-tool-call text after a retry, stop
             // spending tokens: return a grounded answer (when available) or bail fast.
@@ -4019,7 +4251,11 @@ pub(crate) async fn run_tool_call_loop(
                 {
                     return return_final_response(
                         history,
-                        final_text,
+                        append_tool_audit_ledger(
+                            final_text,
+                            &required_audit_tools,
+                            &audit_results,
+                        ),
                         on_delta.as_ref(),
                         cancellation_token.as_ref(),
                         None,
@@ -4122,7 +4358,11 @@ pub(crate) async fn run_tool_call_loop(
                         );
                         return return_final_response(
                             history,
-                            final_text,
+                            append_tool_audit_ledger(
+                                final_text,
+                                &required_audit_tools,
+                                &audit_results,
+                            ),
                             on_delta.as_ref(),
                             cancellation_token.as_ref(),
                             None,
@@ -4149,7 +4389,11 @@ pub(crate) async fn run_tool_call_loop(
                         );
                         return return_final_response(
                             history,
-                            display_text.clone(),
+                            append_tool_audit_ledger(
+                                display_text.clone(),
+                                &required_audit_tools,
+                                &audit_results,
+                            ),
                             on_delta.as_ref(),
                             cancellation_token.as_ref(),
                             None,
@@ -4426,7 +4670,7 @@ pub(crate) async fn run_tool_call_loop(
             // so the channel can progressively update the draft message.
             return return_final_response(
                 history,
-                final_text,
+                append_tool_audit_ledger(final_text, &required_audit_tools, &audit_results),
                 on_delta.as_ref(),
                 cancellation_token.as_ref(),
                 Some(&response_text),
@@ -4438,6 +4682,7 @@ pub(crate) async fn run_tool_call_loop(
         // A real tool call is genuine progress, not a stall — reset the
         // empty-reasoning-checkpoint streak.
         consecutive_empty_output_budget_checkpoints = 0;
+        plan_no_progress_spins = 0;
 
         // Print any text the LLM produced alongside tool calls (unless silent)
         if !silent && !display_text.is_empty() {
@@ -4515,12 +4760,16 @@ pub(crate) async fn run_tool_call_loop(
 
             if tool_name == crate::agent::tool_router::TOOL_SEARCH_NAME {
                 dynamic_discovery_attempted = true;
-                let (names, query) = parse_tool_search_request(&tool_args);
-                let (mut activated, unknown) = crate::agent::tool_router::search_catalogue(
-                    &discoverable_tools,
-                    &names,
-                    query.as_deref(),
-                );
+                let (names, query, activate_all) = parse_tool_search_request(&tool_args);
+                let (mut activated, unknown) = if activate_all {
+                    (discoverable_tools.clone(), Vec::new())
+                } else {
+                    crate::agent::tool_router::search_catalogue(
+                        &discoverable_tools,
+                        &names,
+                        query.as_deref(),
+                    )
+                };
                 let recovery_fail_open = activated.is_empty()
                     && !dynamic_discovery_fail_open_used
                     && !discoverable_tools.is_empty();
@@ -4580,6 +4829,7 @@ pub(crate) async fn run_tool_call_loop(
                         "iteration": iteration + 1,
                         "requested_names": names,
                         "query": query,
+                        "activate_all": activate_all,
                         "activated": dynamically_activated_specs.iter().map(|spec| &spec.name).collect::<Vec<_>>(),
                         "unknown": unknown,
                         "recovery_fail_open": recovery_fail_open,
@@ -4599,33 +4849,69 @@ pub(crate) async fn run_tool_call_loop(
             }
 
             if blocked_tools.contains(&tool_name) {
-                let blocked = format!("Tool '{tool_name}' is not available for this turn.");
-                runtime_trace::record_event(
-                    "tool_call_result",
-                    Some(channel_name),
-                    Some(provider_name),
-                    Some(model),
-                    Some(&turn_id),
-                    Some(false),
-                    Some(&blocked),
-                    serde_json::json!({
-                        "iteration": iteration + 1,
-                        "tool": tool_name.clone(),
-                        "arguments": scrub_credentials(&tool_args.to_string()),
-                        "blocked_by_tool_selection": true,
-                    }),
+                // A compact route is a prompt-size optimization, not a policy
+                // boundary. If the model directly requests an exact tool from
+                // the already policy-filtered discovery catalogue, activate
+                // its schema/dependencies and execute this same call. Persona
+                // and explicit-allowlist exclusions never enter this list and
+                // therefore remain hard blocks below.
+                let (activated, _) = crate::agent::tool_router::search_catalogue(
+                    &discoverable_tools,
+                    std::slice::from_ref(&tool_name),
+                    None,
                 );
-                ordered_results[idx] = Some((
-                    tool_name.clone(),
-                    call.tool_call_id.clone(),
-                    ToolExecutionOutcome {
-                        output: blocked.clone(),
-                        success: false,
-                        error_reason: Some(blocked),
-                        duration: Duration::ZERO,
-                    },
-                ));
-                continue;
+                if !activated.is_empty() {
+                    dynamic_discovery_attempted = true;
+                    for spec in activated {
+                        blocked_tools.remove(&spec.name);
+                        if !tool_specs.iter().any(|current| current.name == spec.name) {
+                            tool_specs.push(spec.clone());
+                            dynamically_activated_specs.push(spec);
+                        }
+                    }
+                    runtime_trace::record_event(
+                        "tool_catalogue_auto_activation",
+                        Some(channel_name),
+                        Some(provider_name),
+                        Some(model),
+                        Some(&turn_id),
+                        Some(true),
+                        None,
+                        serde_json::json!({
+                            "iteration": iteration + 1,
+                            "requested_tool": tool_name.clone(),
+                            "activated": dynamically_activated_specs.iter().map(|spec| &spec.name).collect::<Vec<_>>(),
+                        }),
+                    );
+                } else {
+                    let blocked = format!("Tool '{tool_name}' is not available for this turn.");
+                    runtime_trace::record_event(
+                        "tool_call_result",
+                        Some(channel_name),
+                        Some(provider_name),
+                        Some(model),
+                        Some(&turn_id),
+                        Some(false),
+                        Some(&blocked),
+                        serde_json::json!({
+                            "iteration": iteration + 1,
+                            "tool": tool_name.clone(),
+                            "arguments": scrub_credentials(&tool_args.to_string()),
+                            "blocked_by_tool_selection": true,
+                        }),
+                    );
+                    ordered_results[idx] = Some((
+                        tool_name.clone(),
+                        call.tool_call_id.clone(),
+                        ToolExecutionOutcome {
+                            output: blocked.clone(),
+                            success: false,
+                            error_reason: Some(blocked),
+                            duration: Duration::ZERO,
+                        },
+                    ));
+                    continue;
+                }
             }
 
             // ── Approval hook ────────────────────────────────
@@ -4707,18 +4993,14 @@ pub(crate) async fn run_tool_call_loop(
             }
 
             // ── Planner-churn suppression (TODO #9) ─────────────────────────────────
-            // Suppress opportunistic task_plan calls that arrive after real execution
-            // tools have already run. A direct "write, run, delete" prompt should not
-            // reopen planning once execution has started.
+            // Once real execution starts, suppress attempts to replace the active plan.
+            // Lifecycle updates on existing steps remain mandatory so completed work is
+            // reflected truthfully in the durable run ledger.
             if tool_name == "task_plan" && successful_tool_execution_seen {
-                let execution_started = recent_successful_tool_records.iter().any(|r| {
-                    !matches!(
-                        r.name.as_str(),
-                        "task_plan" | "memory_store" | "memory_recall"
-                    )
-                });
-                if execution_started {
-                    let suppressed = "Skipped task_plan call: execution has already started this turn. Use the existing plan and continue executing.".to_string();
+                if task_plan_execution_started(&recent_successful_tool_records)
+                    && task_plan_call_recreates_plan(&tool_args)
+                {
+                    let suppressed = "Skipped task_plan create: execution has already started this turn. Update the existing plan instead of recreating it.".to_string();
                     runtime_trace::record_event(
                         "planner_churn_suppressed",
                         Some(channel_name),
@@ -5027,6 +5309,14 @@ pub(crate) async fn run_tool_call_loop(
             consecutive_same_failure_count = 0;
         }
 
+        for (tool_name, _, outcome) in ordered_results.iter().flatten() {
+            if required_audit_tools.iter().any(|required| required == tool_name) {
+                audit_results.entry(tool_name.clone()).or_insert_with(|| {
+                    (outcome.success, outcome.output.clone())
+                });
+            }
+        }
+
         for (tool_name, tool_call_id, outcome) in ordered_results.into_iter().flatten() {
             individual_results.push((tool_call_id, outcome.output.clone()));
             let _ = writeln!(
@@ -5075,7 +5365,9 @@ pub(crate) async fn run_tool_call_loop(
             )));
         }
 
-        if !iteration_had_failed_tools
+        if required_audit_tools.is_empty()
+            && !iteration_had_failed_tools
+            && !unresolved_task_plan_requires_execution(history, &recent_successful_tool_records)
             && !task_plan_progress_snapshot(&recent_successful_tool_records)
                 .is_some_and(|progress| progress.total > 0 && progress.resolved == progress.total)
             && should_short_circuit_after_tool_execution(history, &recent_successful_tool_records)
@@ -5291,14 +5583,14 @@ pub(crate) async fn run_tool_call_loop(
         if all_tool_calls_were_duplicates {
             consecutive_all_duplicate_iterations =
                 consecutive_all_duplicate_iterations.saturating_add(1);
+            duplicate_no_progress_spins = duplicate_no_progress_spins.saturating_add(1);
         } else {
             consecutive_all_duplicate_iterations = 0;
+            duplicate_no_progress_spins = 0;
+            duplicate_nudge_count = 0;
         }
 
-        // After exhausting all nudges, hard-exit if still stuck on duplicates.
-        if duplicate_nudge_count >= DUPLICATE_TOOL_CALL_MAX_NUDGES
-            && consecutive_all_duplicate_iterations >= DUPLICATE_TOOL_CALL_STREAK_PER_NUDGE
-        {
+        if duplicate_no_progress_spins >= max_no_progress_spins {
             runtime_trace::record_event(
                 "tool_call_duplicate_hard_exit",
                 Some(channel_name),
@@ -5311,22 +5603,23 @@ pub(crate) async fn run_tool_call_loop(
                     "iteration": iteration + 1,
                     "duplicate_nudge_count": duplicate_nudge_count,
                     "consecutive_all_duplicate_iterations": consecutive_all_duplicate_iterations,
+                    "no_progress_spins": duplicate_no_progress_spins,
+                    "max_no_progress_spins": max_no_progress_spins,
                 }),
             );
             early_exit_reason = Some((
                 "duplicate_tool_call_loop",
                 format!(
-                    "Agent exited after {} nudges with no progress",
-                    duplicate_nudge_count
+                    "Agent exited after {duplicate_no_progress_spins} duplicate iterations with no progress"
                 ),
             ));
             break;
         }
 
-        // Send an escalating nudge whenever the model has repeated itself enough times
-        // without making progress, up to MAX_NUDGES times before hard-exiting.
+        // Send an escalating nudge whenever the model has repeated itself
+        // enough times without progress. The configured spin limit controls
+        // the eventual hard exit; later nudges reuse the strongest prompt.
         let should_nudge = all_tool_calls_were_duplicates
-            && duplicate_nudge_count < DUPLICATE_TOOL_CALL_MAX_NUDGES
             && consecutive_all_duplicate_iterations >= DUPLICATE_TOOL_CALL_STREAK_PER_NUDGE
             && tool_loop_has_next_iteration(iteration, effective_limit);
         if should_nudge {
@@ -5353,7 +5646,7 @@ pub(crate) async fn run_tool_call_loop(
                 let _ = tx
                     .send(format!(
                         "{DRAFT_PROGRESS_SENTINEL}\u{21bb} Redirecting: model repeated a tool call (nudge {duplicate_nudge_count}/{})\n",
-                        DUPLICATE_TOOL_CALL_MAX_NUDGES
+                        max_no_progress_spins
                     ))
                     .await;
             }
@@ -5384,6 +5677,22 @@ pub(crate) async fn run_tool_call_loop(
             "stop_reason": stop_reason,
         }),
     );
+    if !required_audit_tools.is_empty() {
+        let summary = append_tool_audit_ledger(
+            format!("Tool audit stopped before completion: {error_message}."),
+            &required_audit_tools,
+            &audit_results,
+        );
+        return return_final_response(
+            history,
+            summary,
+            on_delta.as_ref(),
+            cancellation_token.as_ref(),
+            None,
+            false,
+        )
+        .await;
+    }
     anyhow::bail!(error_message)
 }
 
@@ -6482,6 +6791,31 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
+
+    #[test]
+    fn tool_audit_ledger_uses_only_server_recorded_exact_results() {
+        let required = vec!["shell".to_string(), "file_read".to_string()];
+        let results = BTreeMap::from([
+            ("shell".to_string(), (true, "command completed".to_string())),
+            (
+                "file_read".to_string(),
+                (false, "Denied by policy".to_string()),
+            ),
+            (
+                "shell-substitute".to_string(),
+                (true, "must not count".to_string()),
+            ),
+        ]);
+
+        let ledger = append_tool_audit_ledger("Model summary".to_string(), &required, &results);
+
+        assert!(ledger.contains(
+            "1 passed; 1 failed or blocked; 0 unattempted; 2/2 exact tools attempted"
+        ));
+        assert!(ledger.contains("`shell` — PASS: command completed"));
+        assert!(ledger.contains("`file_read` — FAIL/BLOCKED: Denied by policy"));
+        assert!(!ledger.contains("shell-substitute"));
+    }
 
     #[test]
     fn dynamic_recovery_broadens_only_to_policy_filtered_discoverables() {
@@ -8008,6 +8342,59 @@ mod tests {
                 .content
                 .contains("not available for this turn"),
             "blocked reason should be visible to the model"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_tool_call_loop_auto_activates_policy_allowed_catalogue_tool() {
+        let provider = ScriptedProvider::from_text_responses(vec![
+            r#"<tool_call>
+{"name":"shell","arguments":{"command":"echo hi"}}
+</tool_call>"#,
+            "done",
+        ]);
+
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
+        let shell = DelayTool::new("shell", 10, Arc::clone(&active), Arc::clone(&max_active));
+        let discoverable = vec![shell.spec()];
+        let tools_registry: Vec<Box<dyn Tool>> = vec![Box::new(shell)];
+        let mut history = vec![
+            ChatMessage::system("test-system"),
+            ChatMessage::user("run shell"),
+        ];
+        let observer = NoopObserver;
+        let excluded_tools = vec!["shell".to_string()];
+
+        let result = with_dynamic_tool_catalogue(
+            discoverable,
+            run_tool_call_loop(
+                &provider,
+                &mut history,
+                &tools_registry,
+                &observer,
+                "mock-provider",
+                "mock-model",
+                0.0,
+                true,
+                None,
+                "telegram",
+                &crate::config::MultimodalConfig::default(),
+                4,
+                None,
+                None,
+                None,
+                &excluded_tools,
+            ),
+        )
+        .await
+        .expect("discoverable tool should activate and execute in the same iteration");
+
+        assert_eq!(result, "done");
+        assert_eq!(
+            max_active.load(Ordering::SeqCst),
+            1,
+            "policy-allowed discoverable tool should execute instead of being reported unavailable"
         );
     }
 
@@ -11652,6 +12039,55 @@ Tail"#;
     }
 
     #[test]
+    fn planning_only_classifier_treats_explicit_tool_invocation_as_execution() {
+        assert!(!is_planning_only_request(
+            "Create two task plan steps, then invoke shell exactly once with `echo verified`."
+        ));
+        assert!(!is_planning_only_request(
+            "Create two task plan steps, then invoke\nshell exactly once with `echo verified`."
+        ));
+        assert!(!is_planning_only_request(
+            "Use only the task_plan and shell tools. Complete the first step with task_plan only. Then invoke\nshell exactly once."
+        ));
+        assert!(is_planning_only_request(
+            "Only create the task plan; do not execute it yet."
+        ));
+        assert!(is_planning_only_request(
+            "Plan only; implementation comes later."
+        ));
+    }
+
+    #[test]
+    fn unresolved_action_plan_requires_execution_followthrough() {
+        let records = vec![SuccessfulToolRecord {
+            name: "task_plan".into(),
+            arguments: serde_json::json!({
+                "action": "create",
+                "tasks": [
+                    {"title": "Record acceptance"},
+                    {"title": "Invoke shell"},
+                ]
+            }),
+            output: "Created 2 task(s).\nTasks (0/2 completed; 0/2 resolved):\n- [1] [pending] Record acceptance\n- [2] [pending] Invoke shell".into(),
+        }];
+        let action_history = vec![ChatMessage::user(
+            "Create two task plan steps, then invoke shell exactly once with `echo verified`.",
+        )];
+        let planning_history = vec![ChatMessage::user(
+            "Only create the task plan; do not execute it yet.",
+        )];
+
+        assert!(unresolved_task_plan_requires_execution(
+            &action_history,
+            &records
+        ));
+        assert!(!unresolved_task_plan_requires_execution(
+            &planning_history,
+            &records
+        ));
+    }
+
+    #[test]
     fn looks_like_task_plan_followup_question_detects_plan_id_requests() {
         let records = vec![SuccessfulToolRecord {
             name: "task_plan".into(),
@@ -11778,7 +12214,7 @@ Tail"#;
     }
 
     #[test]
-    fn build_task_plan_execution_followup_prompt_forbids_plan_updates_after_execution_starts() {
+    fn build_task_plan_execution_followup_prompt_allows_lifecycle_updates_after_execution() {
         let records = vec![
             SuccessfulToolRecord {
                 name: "task_plan".into(),
@@ -11803,8 +12239,22 @@ Tail"#;
         let prompt =
             build_task_plan_execution_followup_prompt(&records).expect("task plan should exist");
 
-        assert!(prompt.contains("Do NOT emit `task_plan` create/update calls now"));
-        assert!(prompt.contains("Continue directly with the next incomplete step"));
+        assert!(prompt.contains("Do NOT emit `task_plan` create"));
+        assert!(prompt.contains("update that existing step to completed, failed, or blocked"));
+        assert!(prompt.contains("continue directly with the next incomplete step"));
+    }
+
+    #[test]
+    fn planner_churn_guard_suppresses_recreation_but_allows_step_updates() {
+        assert!(task_plan_call_recreates_plan(
+            &serde_json::json!({"action": "create", "tasks": [{"title": "New plan"}]})
+        ));
+        assert!(!task_plan_call_recreates_plan(
+            &serde_json::json!({"action": "update", "id": 1, "status": "completed"})
+        ));
+        assert!(!task_plan_call_recreates_plan(
+            &serde_json::json!({"action": "list"})
+        ));
     }
 
     #[test]

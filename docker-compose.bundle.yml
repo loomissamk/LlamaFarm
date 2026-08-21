@@ -68,6 +68,7 @@ services:
       # Forward only an explicit operator value; there is deliberately no
       # bundled generated-token ceiling.
       - LLAMAFARM_AGENT_MAX_OUTPUT_TOKENS
+      - LLAMAFARM_AGENT_MAX_NO_PROGRESS_SPINS
       - LLAMAFARM_WS_PERSISTED_MAX_SESSIONS=${LLAMAFARM_WS_PERSISTED_MAX_SESSIONS:-64}
       - LLAMAFARM_SCHEDULER_MAX_CONCURRENT=${LLAMAFARM_SCHEDULER_MAX_CONCURRENT:-4}
       - LLAMAFARM_SCHEDULER_MAX_TASKS=${LLAMAFARM_SCHEDULER_MAX_TASKS:-64}
@@ -120,13 +121,16 @@ services:
       # KV cache quantization: halves KV cache VRAM usage, allowing ~2x larger
       # context windows in the same VRAM budget (turboquant-style compression).
       - OLLAMA_KV_CACHE_TYPE=${OLLAMA_KV_CACHE_TYPE:-q8_0}
-      # Keep direct Ollama calls and LlamaFarm's explicit per-request num_ctx
-      # in agreement. Adaptive mode treats OLLAMA_NUM_CTX as a fast baseline
-      # and grows per request; direct Ollama calls retain the baseline.
+      # Direct Ollama calls retain a conservative baseline. LlamaFarm Auto
+      # ignores OLLAMA_NUM_CTX unless adaptive mode is explicitly enabled and
+      # otherwise uses the selected model's native maximum.
       - OLLAMA_CONTEXT_LENGTH=${OLLAMA_CONTEXT_LENGTH:-32768}
       - OLLAMA_NUM_CTX=${OLLAMA_NUM_CTX:-32768}
       - LLAMAFARM_ADAPTIVE_CONTEXT=${LLAMAFARM_ADAPTIVE_CONTEXT:-false}
       - LLAMAFARM_ADAPTIVE_CONTEXT_MAX=${LLAMAFARM_ADAPTIVE_CONTEXT_MAX:-262144}
+      # Leave unset for Ollama's live VRAM-aware maximum safe fit. A positive
+      # value is an exact forced layer count and can OOM at large contexts.
+      - OLLAMA_GPU_LAYERS
       - OLLAMA_FLASH_ATTENTION=${OLLAMA_FLASH_ATTENTION:-1}
       # No idle unload timer: a loaded model stays hot until Ollama needs the
       # memory for another model or the operator explicitly unloads it.

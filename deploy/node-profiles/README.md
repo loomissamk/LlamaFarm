@@ -4,14 +4,14 @@ These profiles turn the three NVIDIA hosts into an asymmetric local agent cluste
 
 | Node | Role | Inference profile |
 | --- | --- | --- |
-| Windows WSL2 RTX 3050 Ti Laptop, 4 GB + 64 GB RAM | additional worker | adaptive 32K → 128K → 256K, Ollama-managed concurrency |
-| RTX 4070 Laptop, 8 GB + 32 GB RAM | fast IDE / fallback worker | adaptive 32K → 128K → 256K, Ollama-managed concurrency |
-| RTX 5070 Ti, 16 GB + 128 GB installed RAM (~123 GiB usable) | coordinator / RAG / quality worker | adaptive 64K → 128K → 256K, Ollama-managed concurrency |
-| Tesla V100 PCIe, 32 GB + 128 GB installed RAM | Volta CUDA coordinator / quality worker | adaptive 64K → 128K → 256K, Ollama-managed concurrency |
+| Windows WSL2 RTX 3050 Ti Laptop, 4 GB + 64 GB RAM | additional worker | model-native Auto, exact manual presets, Ollama-managed concurrency |
+| RTX 4070 Laptop, 8 GB + 32 GB RAM | fast IDE / fallback worker | model-native Auto, exact manual presets, Ollama-managed concurrency |
+| RTX 5070 Ti, 16 GB + 128 GB installed RAM (~123 GiB usable) | coordinator / RAG / quality worker | model-native Auto, exact manual presets, max-fit GPU offload |
+| Tesla V100 PCIe, 32 GB + 128 GB installed RAM | Volta CUDA coordinator / quality worker | model-native Auto, exact manual presets, max-fit GPU offload |
 
-The profiles do not allocate 262K for every turn. They keep a 32K or 64K fast
-lane, then grow an individual request to 128K or 256K when the actual prompt
-needs the larger tier. No profile caps generated tokens, tool iterations,
+LlamaFarm Auto allocates the selected model's native context maximum. The
+dashboard's 64K, 128K, and 256K choices remain exact manual overrides; the
+32K/64K environment values only govern direct Ollama calls. No profile caps generated tokens, tool iterations,
 research iterations, delegate iterations, scheduled-job concurrency, CPU, RAM,
 swap, PIDs, or GPU access.
 The profiles do not override Ollama's parallel-request, loaded-model, or GPU
@@ -101,15 +101,13 @@ inspect the matching persisted artifact before considering the node accepted.
 while normally retaining reliable long-context behavior. `q4_0` is a benchmark
 fallback only; it should not be enabled merely to advertise a larger number.
 
-LlamaFarm normally sends `OLLAMA_NUM_CTX` with each model request.
-`OLLAMA_CONTEXT_LENGTH` is set to the same value so direct Ollama calls use the
-fast baseline. On every node, `LLAMAFARM_ADAPTIVE_CONTEXT=true` changes that
-environment value from a fixed limit into a baseline: requests grow to 131,072
-or 262,144 when the estimated prompt needs the larger tier.
-`LLAMAFARM_ADAPTIVE_CONTEXT_MAX` caps that growth, and the model's native
-context length is always an additional ceiling. A persisted
-`provider.ollama_num_ctx` remains an exact manual override and disables adaptive
-selection until reset to auto.
+LlamaFarm Auto queries Ollama for the selected model's native context and uses
+that capacity up to 262,144 tokens. `OLLAMA_CONTEXT_LENGTH` keeps a smaller
+baseline for direct Ollama calls, but it does not silently cap dashboard Auto.
+A persisted `provider.ollama_num_ctx` remains an exact manual override until
+reset to Auto. Operators who deliberately want tiered adaptive allocation may
+enable `LLAMAFARM_ADAPTIVE_CONTEXT=true`; only then does `OLLAMA_NUM_CTX` become
+the starting tier and `LLAMAFARM_ADAPTIVE_CONTEXT_MAX` its ceiling.
 
 Every node profile sets the message-count history budget to `0` (unlimited) and
 avoids the compact bootstrap mode. Raw evidence is therefore retained until an

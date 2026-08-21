@@ -90,6 +90,8 @@ Lưu ý cho người dùng container:
 | `tool_routing_top_k` | `12` | Số tool không thiết yếu liên quan tối đa trước khi thêm tool lõi và các phụ thuộc bắt buộc; `0` tắt định tuyến |
 | `max_tool_iterations` | `0` | Số vòng lặp tool-call cho mỗi tin nhắn; `0` nghĩa là không giới hạn, còn bộ phát hiện đình trệ chuyên dụng sẽ dừng tình trạng lặp lại không có tiến triển |
 | `max_history_messages` | `50` | Số tin nhắn lịch sử tối đa giữ lại mỗi phiên; `0` giữ nguyên toàn bộ lịch sử cho đến khi áp lực ngữ cảnh thực tế của nhà cung cấp buộc phải cô đọng |
+| `max_output_tokens_per_turn` | `16384` | Ngân sách token suy luận/đầu ra cho mỗi phân đoạn; khi đạt giới hạn, tác vụ tạo checkpoint rồi tiếp tục |
+| `max_no_progress_spins` | `6` | Số phân đoạn suy luận rỗng hoặc vòng lặp tool trùng lặp liên tiếp trước khi thoát vì đình trệ; được đặt lại khi có tiến triển thực |
 | `parallel_tools` | `false` | Bật thực thi tool song song trong một lượt |
 | `tool_dispatcher` | `auto` | Chiến lược dispatch tool |
 
@@ -210,8 +212,8 @@ Lưu ý:
 - Khi đặt, ghi đè `LLAMAFARM_CODEX_REASONING_EFFORT` cho OpenAI Codex.
 - Để trống sẽ dùng `LLAMAFARM_CODEX_REASONING_EFFORT` nếu có, nếu không mặc định `xhigh`.
 - `provider.ollama_num_ctx` luôn là giá trị thủ công chính xác. Khi để trống,
-  `OLLAMA_NUM_CTX` cung cấp mặc định runtime.
-- Với `LLAMAFARM_ADAPTIVE_CONTEXT=true`, mặc định môi trường trở thành mức cơ sở
+  Auto dùng mức tối đa gốc của model.
+- Với `LLAMAFARM_ADAPTIVE_CONTEXT=true`, `OLLAMA_NUM_CTX` trở thành mức cơ sở
   nhanh. LlamaFarm tăng cửa sổ theo bậc ×2 khi yêu cầu cần thêm ngữ cảnh, tối đa
   bằng giá trị nhỏ hơn giữa ngữ cảnh gốc của model và
   `LLAMAFARM_ADAPTIVE_CONTEXT_MAX` (mặc định 262.144).

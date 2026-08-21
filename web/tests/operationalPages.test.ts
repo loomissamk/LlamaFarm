@@ -38,8 +38,10 @@ test('agent continuously discovers remote chats and audits the authoritative too
   assert.match(agent, /const detail = await getChatSession\(selectedId\)/);
   assert.match(agent, /const registeredTools = await getTools\(\)/);
   assert.match(agent, /createChatSession\(false\)/);
-  assert.match(agent, /dispatchUserMessage\(session, TEST_ALL_TOOLS_PROMPT, allowedTools\)/);
+  assert.match(agent, /buildTestAllToolsPrompt\(allowedTools\)/);
+  assert.match(agent, /Shell commands, CLI equivalents, and prose claims do not count|shell or CLI substitutes do not count/);
   assert.match(ws, /allowed_tools: options\.allowedTools/);
+  assert.match(ws, /tool_audit: options\.toolAudit/);
 });
 
 test('agent retains measured throughput for background chats and federated workers', () => {

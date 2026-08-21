@@ -214,6 +214,15 @@ Telegram notes:
 
 ### 4.2 Discord
 
+Dashboard pairing: open **Connections -> Discord -> Connect Discord**. Paste the
+bot token, an optional guild ID, and at least one numeric allowed user ID.
+LlamaFarm verifies the bot identity and saves `[channels_config.discord]` without
+returning the secret to the browser. Use **Add to server** for Discord's official
+OAuth bot-install screen. The card then shows the paired bot and offers Update or
+Disconnect actions like the GitHub connection. Enable **Message Content Intent**
+in the Discord Developer Portal, then restart the node once to start, update, or
+stop the daemon-owned listener.
+
 ```toml
 [channels_config.discord]
 bot_token = "discord-bot-token"

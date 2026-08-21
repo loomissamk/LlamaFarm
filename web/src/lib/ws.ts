@@ -30,6 +30,8 @@ export interface SendChatMessageOptions {
   federationPeerIds?: string[];
   /** Exact server tool catalogue for deterministic acceptance/audit turns. */
   allowedTools?: string[];
+  /** Ask the server to enforce one real call to every registered tool. */
+  toolAudit?: boolean;
   /** "agent" (or omitted) is the unchanged default AGENTS.md-driven mode. */
   agentMode?: string;
 }
@@ -116,6 +118,7 @@ export class WebSocketClient {
         history_seed: options.historySeed,
         federation_peer_ids: options.federationPeerIds,
         allowed_tools: options.allowedTools,
+        tool_audit: options.toolAudit,
         agent_mode: options.agentMode,
       }),
     );

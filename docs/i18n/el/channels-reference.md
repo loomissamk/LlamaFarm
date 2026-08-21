@@ -18,6 +18,17 @@ cli = true # Ενεργοποίηση διεπαφής τερματικού (CLI
 
 Για την προσθήκη νέου καναλιού (π.χ. Telegram), δημιουργήστε την αντίστοιχη υποενότητα: `[channels_config.telegram]`.
 
+### Ρύθμιση Discord από το dashboard
+
+Ανοίξτε **Connections -> Discord -> Connect Discord** και εισαγάγετε το bot token,
+προαιρετικό guild ID και τουλάχιστον ένα αριθμητικό user ID στο allowlist. Το
+LlamaFarm επαληθεύει και εμφανίζει την ταυτότητα του paired bot και αποθηκεύει το
+`[channels_config.discord]` χωρίς να επιστρέφει το μυστικό στον browser. Το
+**Add to server** ανοίγει την επίσημη εγκατάσταση Discord OAuth· μετά διατίθενται
+Update και Disconnect όπως στο GitHub. Ενεργοποιήστε το **Message Content Intent**
+στο Discord Developer Portal και επανεκκινήστε το node μία φορά για εκκίνηση,
+ενημέρωση ή διακοπή του listener.
+
 ## 2. Διαχείριση Μοντέλων μέσω Συνομιλίας
 
 Σε πλατφόρμες όπως το Telegram και το Discord, μπορείτε να ελέγχετε το LlamaFarm με εντολές:

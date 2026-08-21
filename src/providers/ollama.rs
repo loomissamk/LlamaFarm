@@ -130,7 +130,7 @@ struct OutgoingFunction {
 #[derive(Debug, Serialize)]
 struct Options {
     temperature: f64,
-    /// GPU layer count: 0 = CPU-only, 999 = fill GPU then spill to CPU.
+    /// GPU layer count: 0 = CPU-only; positive values are exact requests.
     /// Omitted if None so the Ollama server uses its own default.
     #[serde(skip_serializing_if = "Option::is_none")]
     num_gpu: Option<i32>,
@@ -247,12 +247,23 @@ fn normalized_adaptive_baseline(
     adaptive_enabled: bool,
     adaptive_max: u32,
 ) -> Option<u32> {
-    environment_default.map(|baseline| {
-        if adaptive_enabled {
-            baseline.min(adaptive_max)
-        } else {
-            baseline
-        }
+    if adaptive_enabled {
+        environment_default.map(|baseline| baseline.min(adaptive_max))
+    } else {
+        None
+    }
+}
+
+/// Resolve an explicit per-request GPU-layer preference. `None` deliberately
+/// omits `num_gpu` so Ollama can measure live VRAM and choose its maximum safe
+/// fit for the requested model and context.
+pub fn ollama_gpu_layers_runtime_config(configured: Option<i32>) -> Option<i32> {
+    configured.map(|value| value.clamp(0, 999)).or_else(|| {
+        std::env::var("OLLAMA_GPU_LAYERS")
+            .or_else(|_| std::env::var("OLLAMA_NUM_GPU"))
+            .ok()
+            .and_then(|value| value.trim().parse::<i32>().ok())
+            .map(|value| value.clamp(0, 999))
     })
 }
 
@@ -274,7 +285,7 @@ pub fn ollama_context_runtime_config(
         normalized_adaptive_baseline(environment_default, adaptive_enabled, adaptive_max);
     let source = if configured_override.is_some() {
         "config"
-    } else if environment_default.is_some() {
+    } else if adaptive_baseline.is_some() {
         "environment"
     } else {
         "model-native"
@@ -322,11 +333,10 @@ impl OllamaProvider {
     /// Full constructor.
     ///
     /// `gpu_layers`:
-    /// - `None`     → defer to Ollama server / `OLLAMA_NUM_GPU` env var.
+    /// - `None`     → defer to Ollama's live VRAM-aware placement.
     /// - `Some(0)`  → CPU-only inference.
-    /// - `Some(999)` → fill every available GPU layer slot; layers that don't fit
-    ///   automatically overflow to CPU RAM. This is the recommended setting for
-    ///   "max GPU, fallback CPU" behaviour on a local box.
+    /// - Positive values force that layer count and can exceed VRAM at large
+    ///   context sizes. They are expert overrides, not automatic placement.
     ///
     /// If `gpu_layers` is `None` *and* the `OLLAMA_GPU_LAYERS` env var is set,
     /// its value is used so callers don't need to thread it through manually.
@@ -350,7 +360,7 @@ impl OllamaProvider {
 
     /// Full constructor with all inference options.
     ///
-    /// - `gpu_layers`: GPU layer offload count (999 = fill GPU, spill rest to CPU).
+    /// - `gpu_layers`: exact GPU layer offload count; None uses safe auto-placement.
     /// - `main_gpu`: GPU index for largest tensors.
     /// - `num_ctx`: Context window override. Pair with `OLLAMA_KV_CACHE_TYPE=q8_0`
     ///   to fit larger contexts in the same VRAM (turboquant-style KV compression).
@@ -371,16 +381,9 @@ impl OllamaProvider {
             (!trimmed.is_empty()).then(|| trimmed.to_string())
         });
 
-        // If caller didn't specify, check environment variables.
-        // Ollama itself also reads OLLAMA_NUM_GPU but we mirror it here so the
-        // per-request options field is populated even when the server default
-        // differs from what the user configured in LlamaFarm.
-        let gpu_layers = gpu_layers.or_else(|| {
-            std::env::var("OLLAMA_GPU_LAYERS")
-                .or_else(|_| std::env::var("OLLAMA_NUM_GPU"))
-                .ok()
-                .and_then(|v| v.trim().parse::<i32>().ok())
-        });
+        // Only mirror an explicit operator preference. Omitting num_gpu is
+        // Ollama's VRAM-aware maximum-fit mode and avoids forced-layer OOMs.
+        let gpu_layers = ollama_gpu_layers_runtime_config(gpu_layers);
 
         // Persisted/provider config is an exact override. An environment value
         // can instead be an adaptive floor when LLAMAFARM_ADAPTIVE_CONTEXT is on.
@@ -1821,7 +1824,7 @@ mod tests {
         );
         assert_eq!(
             normalized_adaptive_baseline(Some(65_536), false, 32_768),
-            Some(65_536)
+            None
         );
     }
 

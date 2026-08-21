@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -7,9 +7,11 @@ import {
   ExternalLink,
   Github,
   Loader2,
+  MessageCircle,
   Plug,
   RefreshCw,
   Unplug,
+  X,
 } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import {
@@ -25,12 +27,32 @@ import {
 import { GPU_LAYER_PRESETS } from '@/lib/gpuPlacement';
 
 interface ConnectionsResponse {
+  revision: string;
   github:
     | { status: 'connected'; login: string; scopes: string; connected_at: string }
     | { status: 'not_connected' };
   ollama: { status: string; model: string; provider: string };
   memory: { status: string; backend: string };
-  discord?: { status: string };
+  discord: {
+    status:
+      | 'connected'
+      | 'starting'
+      | 'error'
+      | 'restart_required'
+      | 'disconnect_restart_required'
+      | 'not_configured';
+    configured: boolean;
+    restart_required: boolean;
+    guild_id?: string;
+    allowed_users?: string[];
+    bot?: {
+      id: string;
+      username: string;
+      global_name?: string;
+    };
+    bot_id?: string;
+    install_url?: string;
+  };
   tailscale?: {
     status: 'up' | 'down' | 'unavailable';
     ipv4?: string;
@@ -52,6 +74,7 @@ interface ContextInfo extends ContextPolicyInfo {
   min: number;
   max: number;
   gpu_layers: number | null;
+  effective_gpu_layers?: number | null;
   server: {
     max_loaded_models: string | null;
     keep_alive: string | null;
@@ -92,6 +115,16 @@ type PollResult =
   | { status: 'connected'; connection: { login: string } }
   | { status: 'failed'; error: string };
 
+interface DiscordPairResult {
+  restart_required: boolean;
+  bot: {
+    id: string;
+    username: string;
+    global_name?: string;
+  };
+  install_url: string;
+}
+
 function StatusDot({ connected }: { connected: boolean }) {
   return connected ? (
     <CheckCircle2 className="h-4 w-4 text-green-400" />
@@ -104,6 +137,7 @@ export function ConnectionsPanel() {
   const [data, setData] = useState<ConnectionsResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionStatus, setActionStatus] = useState<string | null>(null);
   const [contextError, setContextError] = useState<string | null>(null);
   const [contextStatus, setContextStatus] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -111,12 +145,19 @@ export function ConnectionsPanel() {
   const [device, setDevice] = useState<DeviceStart | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  const [confirmDiscordDisconnect, setConfirmDiscordDisconnect] = useState(false);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const disconnectCancelRef = useRef<HTMLButtonElement | null>(null);
+  const discordDisconnectCancelRef = useRef<HTMLButtonElement | null>(null);
   const contextSaveInFlightRef = useRef<number | null>(null);
   const [ctx, setCtx] = useState<ContextInfo | null>(null);
   const [ctxDraft, setCtxDraft] = useState<number>(0);
   const [ctxSaving, setCtxSaving] = useState(false);
+  const [discordEditorOpen, setDiscordEditorOpen] = useState(false);
+  const [discordToken, setDiscordToken] = useState('');
+  const [discordGuildId, setDiscordGuildId] = useState('');
+  const [discordAllowedUsers, setDiscordAllowedUsers] = useState('');
+  const [discordSaving, setDiscordSaving] = useState(false);
 
   const loadContext = useCallback(async () => {
     try {
@@ -270,6 +311,73 @@ export function ConnectionsPanel() {
     }
   };
 
+  const openDiscordEditor = () => {
+    setActionError(null);
+    setActionStatus(null);
+    setDiscordToken('');
+    setDiscordGuildId(data?.discord.guild_id ?? '');
+    setDiscordAllowedUsers((data?.discord.allowed_users ?? []).join(', '));
+    setDiscordEditorOpen(true);
+  };
+
+  const saveDiscord = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const allowedUsers = discordAllowedUsers
+      .split(/[\s,]+/)
+      .map((value) => value.trim())
+      .filter(Boolean);
+    if (allowedUsers.length === 0) {
+      setActionError(
+        "Add your numeric Discord user ID. Use '*' only if you deliberately want every user allowed.",
+      );
+      return;
+    }
+
+    setDiscordSaving(true);
+    setActionError(null);
+    setActionStatus(null);
+    try {
+      const result = await apiFetch<DiscordPairResult>('/api/connections/discord', {
+        method: 'PUT',
+        body: JSON.stringify({
+          bot_token: discordToken || null,
+          guild_id: discordGuildId || null,
+          allowed_users: allowedUsers,
+          revision: data?.revision,
+        }),
+      });
+      setDiscordEditorOpen(false);
+      setDiscordToken('');
+      const botName = result.bot.global_name || result.bot.username;
+      setActionStatus(
+        `Discord bot ${botName} paired and saved. Add it to your server, then restart this LlamaFarm node once to start the listener.`,
+      );
+      await refresh();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Could not save Discord settings');
+    } finally {
+      setDiscordSaving(false);
+    }
+  };
+
+  const disconnectDiscord = async () => {
+    setConfirmDiscordDisconnect(false);
+    setActionError(null);
+    setActionStatus(null);
+    try {
+      await apiFetch('/api/connections/discord/disconnect', {
+        method: 'POST',
+        body: JSON.stringify({ revision: data?.revision }),
+      });
+      setActionStatus(
+        'Discord was disconnected. Restart this LlamaFarm node once to stop the existing listener.',
+      );
+      await refresh();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Could not disconnect Discord');
+    }
+  };
+
   useEffect(() => {
     if (!confirmDisconnect) return;
     disconnectCancelRef.current?.focus();
@@ -279,6 +387,16 @@ export function ConnectionsPanel() {
     document.addEventListener('keydown', closeOnEscape);
     return () => document.removeEventListener('keydown', closeOnEscape);
   }, [confirmDisconnect]);
+
+  useEffect(() => {
+    if (!confirmDiscordDisconnect) return;
+    discordDisconnectCancelRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setConfirmDiscordDisconnect(false);
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [confirmDiscordDisconnect]);
 
   const githubConnected = data?.github.status === 'connected';
   const contextDirty = ctxDraft !== (ctx?.num_ctx ?? 0);
@@ -345,6 +463,12 @@ export function ConnectionsPanel() {
         </div>
       ))}
 
+      {actionStatus && (
+        <div role="status" className="rounded-md border border-green-700/40 bg-green-900/10 px-3 py-2 text-sm text-green-300">
+          {actionStatus}
+        </div>
+      )}
+
       {contextStatus && (
         <div role="status" className="rounded-md border border-green-700/40 bg-green-900/10 px-3 py-2 text-sm text-green-300">
           {contextStatus}
@@ -389,6 +513,158 @@ export function ConnectionsPanel() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {confirmDiscordDisconnect && (
+        <div
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="disconnect-discord-title"
+          aria-describedby="disconnect-discord-description"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+        >
+          <div className="w-full max-w-md rounded-xl border border-gray-700 bg-gray-900 p-5 shadow-xl">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="mt-0.5 h-5 w-5 text-yellow-400" aria-hidden="true" />
+              <div>
+                <h3 id="disconnect-discord-title" className="font-semibold text-white">
+                  Disconnect Discord?
+                </h3>
+                <p id="disconnect-discord-description" className="mt-1 text-sm text-gray-400">
+                  Discord messages will stop reaching this node after its required restart.
+                </p>
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                ref={discordDisconnectCancelRef}
+                type="button"
+                onClick={() => setConfirmDiscordDisconnect(false)}
+                className="rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-300 hover:bg-gray-800"
+              >
+                Keep paired
+              </button>
+              <button
+                type="button"
+                onClick={() => void disconnectDiscord()}
+                className="rounded-lg bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-700"
+              >
+                Disconnect
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {discordEditorOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="discord-editor-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+        >
+          <form
+            onSubmit={(event) => void saveDiscord(event)}
+            className="w-full max-w-lg rounded-xl border border-gray-700 bg-gray-900 p-5 shadow-xl"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 id="discord-editor-title" className="font-semibold text-white">
+                  {data?.discord.configured ? 'Update paired Discord bot' : 'Pair Discord bot'}
+                </h3>
+                <p className="mt-1 text-sm text-gray-400">
+                  Create a bot in the Discord Developer Portal, enable Message Content Intent, and
+                  paste its token here. LlamaFarm verifies the bot before storing the token.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDiscordEditorOpen(false)}
+                aria-label="Close Discord editor"
+                className="rounded-md p-1 text-gray-500 hover:bg-gray-800 hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <a
+              href="https://discord.com/developers/applications"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-3 inline-flex items-center gap-1.5 text-sm text-blue-300 hover:text-blue-200"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              Open Discord Developer Portal
+            </a>
+
+            {actionError && (
+              <div role="alert" className="mt-3 rounded-md border border-red-700/40 bg-red-900/10 px-3 py-2 text-sm text-red-300">
+                {actionError}
+              </div>
+            )}
+
+            <div className="mt-4 space-y-4">
+              <label className="block text-sm text-gray-300">
+                Bot token
+                <input
+                  type="password"
+                  value={discordToken}
+                  onChange={(event) => setDiscordToken(event.target.value)}
+                  required={!data?.discord.configured}
+                  autoComplete="off"
+                  placeholder={
+                    data?.discord.configured
+                      ? 'Leave blank to keep the current token'
+                      : 'Paste the bot token'
+                  }
+                  className="mt-1 w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-white outline-none focus:border-blue-500"
+                />
+              </label>
+              <label className="block text-sm text-gray-300">
+                Server (guild) ID <span className="text-gray-600">optional</span>
+                <input
+                  value={discordGuildId}
+                  onChange={(event) => setDiscordGuildId(event.target.value)}
+                  inputMode="numeric"
+                  placeholder="123456789012345678"
+                  className="mt-1 w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-white outline-none focus:border-blue-500"
+                />
+              </label>
+              <label className="block text-sm text-gray-300">
+                Allowed user IDs
+                <input
+                  value={discordAllowedUsers}
+                  onChange={(event) => setDiscordAllowedUsers(event.target.value)}
+                  placeholder="Your numeric Discord user ID"
+                  className="mt-1 w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-white outline-none focus:border-blue-500"
+                />
+                <span className="mt-1 block text-xs text-gray-500">
+                  Separate multiple IDs with commas. Turn on Developer Mode in Discord, then copy
+                  your user ID. An asterisk allows everyone and is not recommended.
+                </span>
+              </label>
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setDiscordEditorOpen(false)}
+                disabled={discordSaving}
+                className="rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-300 hover:bg-gray-800 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={discordSaving}
+                className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {discordSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+                Verify and pair
+              </button>
+            </div>
+          </form>
         </div>
       )}
 
@@ -500,8 +776,8 @@ export function ConnectionsPanel() {
                 />
               </div>
               <p className="mt-1 text-[11px] text-gray-600">
-                Bigger context and "All GPU" layers use more VRAM. Keep some headroom for the embed
-                model so both stay resident (avoids the reload penalty).
+                Bigger context uses more VRAM. Auto fits the maximum safe layer count for the live
+                capacity; an exact forced count can exceed it.
               </p>
             </div>
           )}
@@ -656,7 +932,13 @@ export function ConnectionsPanel() {
             <div className="flex items-center justify-between">
               <span className="text-sm text-gray-300">GPU layer offload</span>
               <span className="font-mono text-xs text-blue-300">
-                {ctx.gpu_layers === null ? 'auto' : ctx.gpu_layers === 999 ? 'all on GPU' : ctx.gpu_layers}
+                {ctx.gpu_layers === null
+                  ? ctx.effective_gpu_layers === null || ctx.effective_gpu_layers === undefined
+                    ? 'auto · maximum safe fit'
+                    : `deployment override · ${ctx.effective_gpu_layers}`
+                  : ctx.gpu_layers === 999
+                    ? 'forced all layers'
+                    : ctx.gpu_layers}
               </span>
             </div>
             <div className="mt-2 flex gap-2">
@@ -672,8 +954,8 @@ export function ConnectionsPanel() {
               ))}
             </div>
             <p className="mt-1 text-[11px] text-gray-600">
-              "All GPU" (999) fills VRAM before spilling to CPU. You're only using part of the card —
-              raise context or keep more models resident to use it.
+              Auto lets Ollama measure the selected model, context, and live free VRAM, then uses
+              the maximum layer count that safely fits. Forced counts can fail with CUDA OOM.
             </p>
           </div>
 
@@ -726,15 +1008,59 @@ export function ConnectionsPanel() {
           <p className="mt-1 text-sm text-gray-400 capitalize">{data?.memory.backend || '—'}</p>
         </div>
         <div className="rounded-xl border border-gray-800 bg-gray-900 p-5">
-          <div className="flex items-center gap-2">
-            <span className="font-medium text-white">Discord</span>
-            <StatusDot connected={data?.discord?.status === 'connected'} />
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-2">
+              <MessageCircle className="mt-0.5 h-5 w-5 text-indigo-300" />
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-white">Discord</span>
+                  <StatusDot connected={!!data?.discord.configured} />
+                </div>
+                <p className="mt-1 text-sm text-gray-500">
+                  {data?.discord.status === 'connected'
+                    ? `Paired${data.discord.bot ? ` as ${data.discord.bot.global_name || data.discord.bot.username}` : ''} · listener running.`
+                    : data?.discord.status === 'restart_required'
+                      ? `Paired${data.discord.bot ? ` as ${data.discord.bot.global_name || data.discord.bot.username}` : ''}. Restart this node once to start the listener.`
+                      : data?.discord.status === 'error'
+                        ? 'The bot listener hit an error. Check the token, intents, and container logs.'
+                        : data?.discord.status === 'starting'
+                          ? 'Bot listener is starting.'
+                          : data?.discord.status === 'disconnect_restart_required'
+                            ? 'Discord was removed from config. Restart this node once to stop the old listener.'
+                          : 'Not paired — connect a Discord bot without editing TOML.'}
+                </p>
+              </div>
+            </div>
+            <div className="flex shrink-0 flex-wrap justify-end gap-2">
+              {data?.discord.install_url && (
+                <a
+                  href={data.discord.install_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  Add to server
+                </a>
+              )}
+              <button
+                type="button"
+                onClick={openDiscordEditor}
+                className="rounded-lg border border-indigo-700/60 px-3 py-1.5 text-sm text-indigo-200 hover:bg-indigo-950/40"
+              >
+                {data?.discord.configured ? 'Update' : 'Connect Discord'}
+              </button>
+              {data?.discord.configured && (
+                <button
+                  type="button"
+                  onClick={() => setConfirmDiscordDisconnect(true)}
+                  className="rounded-lg border border-gray-700 px-3 py-1.5 text-sm text-gray-300 hover:border-red-700 hover:text-red-300"
+                >
+                  Disconnect
+                </button>
+              )}
+            </div>
           </div>
-          <p className="mt-1 text-sm text-gray-500">
-            {data?.discord?.status === 'connected'
-              ? 'Bot connected — drive the node from Discord.'
-              : 'Add a bot token under [channels.discord] in config to enable.'}
-          </p>
         </div>
         {data?.tailscale?.status === 'up' && (
           <div className="rounded-xl border border-gray-800 bg-gray-900 p-5">

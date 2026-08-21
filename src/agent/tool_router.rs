@@ -153,7 +153,7 @@ pub struct ToolRoute {
 pub fn tool_search_spec() -> ToolSpec {
     ToolSpec {
         name: TOOL_SEARCH_NAME.to_string(),
-        description: "Find and activate additional runtime tools from the compact catalogue for this turn.".to_string(),
+        description: "Find and activate additional runtime tools from the compact catalogue for this turn. Use all=true only when the user explicitly requests a full-catalogue audit.".to_string(),
         parameters: serde_json::json!({
             "type": "object",
             "properties": {
@@ -164,7 +164,12 @@ pub fn tool_search_spec() -> ToolSpec {
                 },
                 "query": {
                     "type": "string",
-                    "description": "Words describing the capability needed"
+                    "description": "Words describing the capability needed; query discovery returns at most eight lexical matches"
+                },
+                "all": {
+                    "type": "boolean",
+                    "description": "Activate every policy-allowed catalogue tool for an explicit full-catalogue audit",
+                    "default": false
                 }
             },
             "additionalProperties": false
@@ -193,7 +198,7 @@ pub fn compact_catalogue(discoverable: &[ToolSpec]) -> String {
         return String::new();
     }
     let mut output = String::from(
-        "\n## Additional Tool Catalogue\n\nOnly names and purposes are listed here. Call `tool_search` with exact `names` and/or a short `query` to activate full schemas on the next model iteration.\n",
+        "\n## Additional Tool Catalogue\n\nOnly names and purposes are listed here. Call `tool_search` with exact `names` and/or a short `query` to activate full schemas on the next model iteration. Query discovery returns at most eight matches. If and only if the user explicitly requests an audit of the entire catalogue, call `tool_search` with `all=true`.\n",
     );
     for spec in unique_specs(discoverable) {
         let purpose = spec.description.lines().next().unwrap_or("").trim();
@@ -954,6 +959,15 @@ mod tests {
         assert_eq!(complete.len(), selected.len());
         assert_eq!(complete[0].name, selected[0].name);
         assert!(complete.iter().all(|spec| spec.name != TOOL_SEARCH_NAME));
+    }
+
+    #[test]
+    fn discovery_schema_supports_explicit_full_catalogue_audits() {
+        let schema = tool_search_spec();
+        assert_eq!(schema.parameters["properties"]["all"]["type"], "boolean");
+        assert_eq!(schema.parameters["properties"]["all"]["default"], false);
+        assert!(compact_catalogue(&[spec("file_read", "read files")])
+            .contains("explicitly requests an audit of the entire catalogue"));
     }
 
     #[test]

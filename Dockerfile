@@ -117,6 +117,7 @@ RUN apt-get update && apt-get install -y \
     python-is-python3 \
     python3 \
     python3-pip \
+    python3-setuptools \
     python3-venv \
     ripgrep \
     rsync \
@@ -185,7 +186,9 @@ RUN apt-get update && apt-get install -y \
     procps \
     python-is-python3 \
     python3 \
+    python3-chardet \
     python3-pip \
+    python3-setuptools \
     python3-venv \
     ripgrep \
     rsync \
@@ -199,22 +202,53 @@ RUN apt-get update && apt-get install -y \
     xvfb \
     && rm -rf /var/lib/apt/lists/*
 
-# Optional authorized-lab toolkit (opt-in, off by default to keep the image
-# lean). Enable with:  --build-arg LLAMAFARM_LAB_TOOLS=1
+# Authorized-lab toolkit for the local bundle (enabled by default). Disable
+# with --build-arg LLAMAFARM_LAB_TOOLS=0 when a smaller image is preferred.
 # Standard network/security analysis tools for the operator's own authorized
 # testing on their disposable lab. Serves the chaos_lab / ethical-hacking
 # mission in TODO.md — not for use against systems you do not own or lack
 # permission to test.
 ARG LLAMAFARM_LAB_TOOLS=1
+ARG NIKTO_COMMIT=69681e2e4213c15b85a90c53b2169ecb2a88fb01
+ARG WIFITE2_COMMIT=d88ed4a5a1764fab93c60b51c7d9baa186bc8757
+ARG EXPLOITDB_COMMIT=79ced5d7cb2d11826aae1ee1194d30114fb8ec58
 # Best-effort per package: a package missing from the base distro's repos
 # (e.g. nikto is not in Debian trixie) must NOT abort the whole image build.
-RUN if [ "$LLAMAFARM_LAB_TOOLS" = "1" ]; then \
+RUN set -eu; \
+    if [ "$LLAMAFARM_LAB_TOOLS" = "1" ]; then \
       apt-get update; \
       for p in nmap tshark tcpdump netcat-openbsd dnsutils whois traceroute \
-               openssh-client sshpass hydra sqlmap john hashcat; do \
+               openssh-client sshpass hydra sqlmap john hashcat \
+               gobuster dirb aircrack-ng masscan iw wireless-tools macchanger \
+               hcxdumptool hcxtools reaver bully pixiewps cowpatty \
+               perl libnet-ssleay-perl libio-socket-ssl-perl libjson-perl \
+               libxml-writer-perl libxml-libxml-perl libxml2-utils; do \
         apt-get install -y --no-install-recommends "$p" \
           || echo "lab-tools: skipping unavailable package $p"; \
       done; \
+      git init /opt/nikto; \
+      git -C /opt/nikto remote add origin https://github.com/sullo/nikto.git; \
+      git -C /opt/nikto fetch --depth 1 origin "$NIKTO_COMMIT"; \
+      git -C /opt/nikto checkout --detach FETCH_HEAD; \
+      test "$(git -C /opt/nikto rev-parse HEAD)" = "$NIKTO_COMMIT"; \
+      chmod 755 /opt/nikto/program/nikto.pl; \
+      ln -s /opt/nikto/program/nikto.pl /usr/local/bin/nikto; \
+      git init /opt/wifite2; \
+      git -C /opt/wifite2 remote add origin https://github.com/kimocoder/wifite2.git; \
+      git -C /opt/wifite2 fetch --depth 1 origin "$WIFITE2_COMMIT"; \
+      git -C /opt/wifite2 checkout --detach FETCH_HEAD; \
+      test "$(git -C /opt/wifite2 rev-parse HEAD)" = "$WIFITE2_COMMIT"; \
+      (cd /opt/wifite2 && python3 setup.py install); \
+      command -v wifite >/dev/null; \
+      git init /opt/exploitdb; \
+      git -C /opt/exploitdb remote add origin https://gitlab.com/exploit-database/exploitdb.git; \
+      git -C /opt/exploitdb fetch --depth 1 origin "$EXPLOITDB_COMMIT"; \
+      git -C /opt/exploitdb checkout --detach FETCH_HEAD; \
+      test "$(git -C /opt/exploitdb rev-parse HEAD)" = "$EXPLOITDB_COMMIT"; \
+      chmod 755 /opt/exploitdb/searchsploit; \
+      ln -s /opt/exploitdb/searchsploit /usr/local/bin/searchsploit; \
+      mkdir -p /etc/OpenCL/vendors; \
+      printf '%s\n' 'libnvidia-opencl.so.1' > /etc/OpenCL/vendors/nvidia.icd; \
       rm -rf /var/lib/apt/lists/*; \
     fi
 
@@ -228,7 +262,8 @@ COPY dev/workspace.preset.god.AGENTS.md /usr/share/llamafarm/workspace.preset.go
 COPY dev/workspace.preset.safe.AGENTS.md /usr/share/llamafarm/workspace.preset.safe.AGENTS.md
 COPY scripts/docker/bundle-entrypoint.sh /usr/local/bin/bundle-entrypoint.sh
 COPY scripts/docker/merge_builtin_agents.py /usr/local/lib/llamafarm/merge_builtin_agents.py
-RUN chmod 755 /usr/local/bin/bundle-entrypoint.sh /usr/bin/ollama /usr/local/lib/llamafarm/merge_builtin_agents.py && \
+COPY scripts/docker/ceh-tool-doctor.sh /usr/local/bin/llamafarm-ceh-doctor
+RUN chmod 755 /usr/local/bin/bundle-entrypoint.sh /usr/bin/ollama /usr/local/bin/llamafarm-ceh-doctor /usr/local/lib/llamafarm/merge_builtin_agents.py && \
     ln -sf /usr/bin/ollama /usr/local/bin/ollama && \
     chmod 644 /usr/share/llamafarm/config.template.toml /usr/share/llamafarm/config.preset.safe.toml && \
     sed -i \
@@ -241,7 +276,7 @@ RUN chmod 755 /usr/local/bin/bundle-entrypoint.sh /usr/bin/ollama /usr/local/lib
     rm -f /llamafarm-data/.llamafarm/config.toml
 
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --break-system-packages \
+    pip install --break-system-packages --ignore-installed \
     pymongo qdrant-client requests \
     numpy pandas scipy scikit-learn \
     httpx aiohttp websockets \

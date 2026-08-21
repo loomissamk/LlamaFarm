@@ -4,8 +4,8 @@ export const GPU_LAYER_PRESETS: ReadonlyArray<{
   label: string;
   value: number | null;
 }> = [
-  { label: 'All GPU', value: 999 },
-  { label: 'Auto', value: null },
+  { label: 'Force all (may OOM)', value: 999 },
+  { label: 'Auto (max safe)', value: null },
   { label: 'CPU only', value: 0 },
 ];
 

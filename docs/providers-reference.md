@@ -127,8 +127,9 @@ default_model = "qwen2.5-coder:7b"
 ### Ollama Adaptive Context
 
 - `provider.ollama_num_ctx` is an exact manual override.
-- When that override is unset, `OLLAMA_NUM_CTX` supplies the environment default; with `LLAMAFARM_ADAPTIVE_CONTEXT=true`, it becomes the fast baseline.
-- The RTX 5070 Ti profile starts at 65,536 and selects 131,072 or 262,144 only when the request estimate needs the larger tier.
+- When that override is unset, Auto uses the selected model's native maximum.
+- `OLLAMA_NUM_CTX` becomes a tiered fast baseline only when
+  `LLAMAFARM_ADAPTIVE_CONTEXT=true`; it does not cap ordinary Auto mode.
 - Adaptive growth is capped by both the model-native length and `LLAMAFARM_ADAPTIVE_CONTEXT_MAX`. Verify the allocation actually loaded by Ollama with `docker exec LlamaFarm ollama ps`.
 
 ### Ollama Cloud Routing Notes

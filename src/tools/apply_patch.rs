@@ -101,6 +101,17 @@ impl Tool for ApplyPatchTool {
             });
         }
 
+        if patch.trim().is_empty() {
+            return Ok(ToolResult {
+                success: true,
+                output: format!(
+                    "Mode: {}\nNo patch content supplied; nothing to check or apply.\n",
+                    if dry_run { "dry-run" } else { "apply" }
+                ),
+                error: None,
+            });
+        }
+
         let repo_root = git_repo_root(&self.workspace_dir).await?;
         let mut log = String::new();
         let _ = writeln!(log, "Repo root: {}", repo_root.display());
@@ -332,6 +343,19 @@ mod tests {
         assert_eq!(s["type"], "object");
         assert!(s["properties"].is_object());
         assert!(s["properties"]["patch"].is_object());
+    }
+
+    #[tokio::test]
+    async fn empty_patch_is_a_successful_no_op() {
+        let tool = ApplyPatchTool::new("/path/does/not/need/to/exist");
+        let result = tool
+            .execute(json!({"dry_run": true, "patch": "  \n"}))
+            .await
+            .expect("empty patch should not invoke git");
+
+        assert!(result.success);
+        assert!(result.output.contains("nothing to check or apply"));
+        assert!(result.error.is_none());
     }
 
     #[tokio::test]
