@@ -1226,7 +1226,7 @@ pub(crate) fn is_planning_only_request(text: &str) -> bool {
         || lowered.contains("make the plan")
         || lowered.contains("give me a plan");
     let asks_for_execution = lowered.contains("execute")
-        || lowered.contains("invoke ")
+        || lowered.contains("invoke")
         || lowered.contains("run it")
         || lowered.contains("do it")
         || lowered.contains("carry out")
@@ -12042,6 +12042,9 @@ Tail"#;
     fn planning_only_classifier_treats_explicit_tool_invocation_as_execution() {
         assert!(!is_planning_only_request(
             "Create two task plan steps, then invoke shell exactly once with `echo verified`."
+        ));
+        assert!(!is_planning_only_request(
+            "Create two task plan steps, then invoke\nshell exactly once with `echo verified`."
         ));
         assert!(is_planning_only_request(
             "Only create the task plan; do not execute it yet."
