@@ -1246,7 +1246,7 @@ pub(crate) fn is_planning_only_request(text: &str) -> bool {
     lowered.contains("only create the plan")
         || lowered.contains("only create the task plan")
         || lowered.contains("only make a plan")
-        || lowered.contains("plan only")
+        || lowered.trim_start().starts_with("plan only")
         || lowered.contains("do not execute it yet")
         || lowered.contains("do not execute the plan")
         || lowered.contains("before any tool actions")
@@ -12046,8 +12046,14 @@ Tail"#;
         assert!(!is_planning_only_request(
             "Create two task plan steps, then invoke\nshell exactly once with `echo verified`."
         ));
+        assert!(!is_planning_only_request(
+            "Use only the task_plan and shell tools. Complete the first step with task_plan only. Then invoke\nshell exactly once."
+        ));
         assert!(is_planning_only_request(
             "Only create the task plan; do not execute it yet."
+        ));
+        assert!(is_planning_only_request(
+            "Plan only; implementation comes later."
         ));
     }
 
