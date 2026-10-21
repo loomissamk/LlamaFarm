@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   AlertCircle,
   Bot,
@@ -506,14 +506,16 @@ function ideGridTemplate(
 }
 
 function loadFederationBarCollapsed(): boolean {
+  // Collapsed by default — an explicit stored '0' means the user chose to expand it.
   if (typeof globalThis.window === 'undefined') {
-    return false;
+    return true;
   }
 
   try {
-    return localStorage.getItem(CHAT_FEDERATION_COLLAPSED_STORAGE_KEY) === '1';
+    const stored = localStorage.getItem(CHAT_FEDERATION_COLLAPSED_STORAGE_KEY);
+    return stored === null ? true : stored === '1';
   } catch {
-    return false;
+    return true;
   }
 }
 
@@ -1715,12 +1717,22 @@ export default function AgentChat() {
 
   return (
     <div
-      className="grid h-[calc(100vh-3.5rem)] min-h-0 grid-cols-1"
-      style={{ gridTemplateColumns: ideGridTemplate(sidebarCollapsed, ideOpen, ideMaximized, ideWidth) }}
+      className="grid h-[calc(100vh-3.5rem)] min-h-0 grid-cols-1 md:[grid-template-columns:var(--lf-grid-cols)]"
+      style={{ '--lf-grid-cols': ideGridTemplate(sidebarCollapsed, ideOpen, ideMaximized, ideWidth) } as CSSProperties}
     >
+      {!sidebarCollapsed && !(ideOpen && ideMaximized) && (
+        <div
+          onClick={() => setSidebarCollapsed(true)}
+          className="fixed inset-x-0 top-14 bottom-0 z-40 bg-black/50 md:hidden"
+          aria-hidden="true"
+        />
+      )}
+
       <aside
-        className={`min-h-0 flex-col border-b border-gray-800 bg-gray-950 md:border-b-0 md:border-r ${
-          sidebarCollapsed || (ideOpen && ideMaximized) ? 'hidden' : 'flex'
+        className={`min-h-0 flex-col border-b border-gray-800 bg-gray-950 md:static md:z-auto md:w-auto md:border-b-0 md:border-r ${
+          sidebarCollapsed || (ideOpen && ideMaximized)
+            ? 'hidden'
+            : 'fixed left-0 top-14 bottom-0 z-50 flex w-[85vw] max-w-xs shadow-2xl md:flex md:shadow-none'
         }`}
       >
         <div className="border-b border-gray-800 p-4">
@@ -1737,6 +1749,14 @@ export default function AgentChat() {
               ) : (
                 <ChevronUp className="h-4 w-4" />
               )}
+            </button>
+            <button
+              onClick={() => setSidebarCollapsed(true)}
+              className="rounded-md p-1 text-gray-400 transition-colors hover:bg-gray-800 hover:text-white md:hidden"
+              title="Hide chat history"
+              aria-label="Hide chat history"
+            >
+              <PanelLeftClose className="h-5 w-5" />
             </button>
           </div>
           {!chatControlsCollapsed && (
