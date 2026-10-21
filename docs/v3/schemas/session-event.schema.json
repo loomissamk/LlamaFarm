@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/llamafarm/v3/session-event.schema.json",
+  "title": "LlamaFarm V3 conversation event envelope (draft)",
+  "description": "Proposed contract only; V2 does not emit this schema. Change $id before publication.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "event_id",
+    "conversation_id",
+    "sequence",
+    "timestamp",
+    "type",
+    "data"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "conversation_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "turn_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 128
+    },
+    "run_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 128
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "message.accepted",
+        "assistant.delta",
+        "assistant.completed",
+        "run.created",
+        "run.status",
+        "step.status",
+        "tool.started",
+        "tool.completed",
+        "artifact.created",
+        "approval.requested",
+        "approval.resolved",
+        "model.metrics",
+        "worker.status",
+        "error",
+        "session.snapshot"
+      ]
+    },
+    "data": {
+      "type": "object",
+      "maxProperties": 40
+    },
+    "trace_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 128
+    },
+    "source_node": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 128
+    }
+  }
+}

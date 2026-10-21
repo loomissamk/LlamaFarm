@@ -47,6 +47,8 @@ pub mod capability;
 pub(crate) mod auth;
 pub mod channels;
 pub mod config;
+pub mod conversation_events;
+pub mod conversation_store;
 pub mod coordination;
 pub(crate) mod cost;
 pub(crate) mod cron;
