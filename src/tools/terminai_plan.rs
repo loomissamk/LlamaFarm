@@ -175,22 +175,85 @@ impl Tool for TerminAiPlanTool {
             .find(|line| line.trim_start().starts_with('{'))
             .unwrap_or(stdout.trim());
 
-        let pretty = serde_json::from_str::<serde_json::Value>(plan_line)
-            .ok()
-            .and_then(|v| serde_json::to_string_pretty(&v).ok())
+        let parsed = serde_json::from_str::<serde_json::Value>(plan_line).ok();
+        let pretty = parsed
+            .as_ref()
+            .and_then(|v| serde_json::to_string_pretty(v).ok())
             .unwrap_or_else(|| plan_line.to_string());
+
+        // This 90M-parameter model is reliable at risk/intent classification but weak at
+        // composing correct arguments for anything beyond a single simple criterion —
+        // confirmed empirically: it has produced `rm -rf --` with the path silently
+        // dropped, and bare `grep` with no pattern, both syntactically valid JSON that
+        // *looks* complete. Catch the unambiguous case (an empty-string argv element,
+        // meaning a parameter the model knew it needed but never filled in) so the
+        // caller doesn't mistake an incomplete compiled command for a validated one.
+        let output = if parsed.as_ref().is_some_and(plan_has_empty_argv) {
+            format!(
+                "⚠ This compiled command has a missing argument (an empty string in argv) \
+                 — it is very likely incomplete or wrong. Do not run it as-is; re-derive the \
+                 command yourself from plan.request and plan.steps, or ask the user for the \
+                 missing detail.\n\n{pretty}"
+            )
+        } else {
+            pretty
+        };
 
         Ok(ToolResult {
             success: true,
-            output: pretty,
+            output,
             error: None,
         })
     }
 }
 
+/// True if any compiled pipeline step has an empty-string element in its argv — the
+/// clearest, lowest-false-positive signal that this planner silently dropped a parameter
+/// it knew it needed (e.g. `rm -rf --` with the target path missing).
+fn plan_has_empty_argv(value: &serde_json::Value) -> bool {
+    let Some(pipelines) = value["compiled"]["pipelines"].as_array() else {
+        return false;
+    };
+    pipelines.iter().any(|pipeline| {
+        pipeline.as_array().is_some_and(|steps| {
+            steps.iter().any(|step| {
+                step["argv"]
+                    .as_array()
+                    .is_some_and(|argv| argv.iter().any(|a| a.as_str() == Some("")))
+            })
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detects_empty_argv_element() {
+        // The real, observed case: "delete files in /tmp older than 7 days" compiled to
+        // `rm -rf --` with the path silently dropped.
+        let broken = json!({
+            "compiled": {"pipelines": [[{"executable": "rm", "argv": ["-rf", "--", ""]}]]}
+        });
+        assert!(plan_has_empty_argv(&broken));
+    }
+
+    #[test]
+    fn complete_plan_is_not_flagged() {
+        let complete = json!({
+            "compiled": {"pipelines": [[{"executable": "find", "argv": [".", "-type", "f"]}]]}
+        });
+        assert!(!plan_has_empty_argv(&complete));
+    }
+
+    #[test]
+    fn empty_pipelines_is_not_flagged() {
+        // meta.clarify legitimately has no pipeline at all — that's a correct "ask the
+        // user" outcome, not an incomplete command, so it must not trip this check.
+        let clarify = json!({"compiled": {"pipelines": [[]]}});
+        assert!(!plan_has_empty_argv(&clarify));
+    }
 
     #[test]
     fn tool_name_and_schema() {
