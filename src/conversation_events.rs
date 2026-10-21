@@ -273,6 +273,14 @@ pub fn from_v2_ws_frame(
             EventType::RunStatus,
             serde_json::json!({"status":"cancelled","message":frame.get("message").cloned().unwrap_or(Value::Null)}),
         ),
+        "cancelling" => (
+            EventType::RunStatus,
+            serde_json::json!({"status":"cancelling","message":frame.get("message").cloned().unwrap_or(Value::Null)}),
+        ),
+        "followup_queued" => (
+            EventType::RunStatus,
+            serde_json::json!({"status":"followup_queued","message":frame.get("message").cloned().unwrap_or(Value::Null)}),
+        ),
         "metrics" => (
             EventType::ModelMetrics,
             serde_json::json!({"metrics":frame.get("metrics").cloned().unwrap_or(Value::Null)}),
@@ -395,6 +403,62 @@ mod tests {
             .unwrap()
             .windows(14)
             .any(|w| w == b"never-log-this"));
+    }
+
+    #[test]
+    fn cancelling_and_followup_queued_map_to_run_status() {
+        // Exact shapes emitted by src/gateway/ws.rs for these two kinds,
+        // verified against the live V2 handlers (not guessed).
+        let cancelling = json!({
+            "type": "cancelling",
+            "session_id": "chat-1",
+            "message": "Stopping the active run…",
+        });
+        let e = from_v2_ws_frame(&cancelling, "event", "conv", 1, Utc::now()).unwrap();
+        assert_eq!(e.event_type, EventType::RunStatus);
+        assert_eq!(e.data["status"], "cancelling");
+        assert_eq!(e.data["message"], "Stopping the active run…");
+
+        let followup = json!({
+            "type": "followup_queued",
+            "session_id": "chat-1",
+            "message": "Got it — finishing the current step, then starting your follow-up.",
+        });
+        let e = from_v2_ws_frame(&followup, "event", "conv", 2, Utc::now()).unwrap();
+        assert_eq!(e.event_type, EventType::RunStatus);
+        assert_eq!(e.data["status"], "followup_queued");
+    }
+
+    #[test]
+    fn real_v2_frame_shapes_from_gateway_ws_round_trip() {
+        // These mirror the literal json! payloads in emit_ws_delta_event and
+        // the "done"/tool_call sites in src/gateway/ws.rs, field-for-field.
+        let chunk = json!({"type": "chunk", "session_id": "s", "content": "Hi! "});
+        let e = from_v2_ws_frame(&chunk, "e1", "conv", 1, Utc::now()).unwrap();
+        assert_eq!(e.event_type, EventType::AssistantDelta);
+        assert_eq!(e.data["content"], "Hi! ");
+
+        let done = json!({"type": "done", "session_id": "s", "full_response": "ok"});
+        let e = from_v2_ws_frame(&done, "e2", "conv", 2, Utc::now()).unwrap();
+        assert_eq!(e.event_type, EventType::AssistantCompleted);
+        assert_eq!(e.data["content"], "ok");
+
+        let tool_call = json!({
+            "type": "tool_call", "session_id": "s", "name": "shell",
+            "args": {"hint": "listing files"},
+        });
+        let e = from_v2_ws_frame(&tool_call, "e3", "conv", 3, Utc::now()).unwrap();
+        assert_eq!(e.event_type, EventType::ToolStarted);
+        assert_eq!(e.data["tool_name"], "shell");
+        assert_eq!(e.data["arguments"]["hint"], "listing files");
+
+        let tool_result = json!({
+            "type": "tool_result", "session_id": "s", "name": "shell",
+            "success": true, "duration_secs": 0.5, "output": "done",
+        });
+        let e = from_v2_ws_frame(&tool_result, "e4", "conv", 4, Utc::now()).unwrap();
+        assert_eq!(e.event_type, EventType::ToolCompleted);
+        assert_eq!(e.data["success"], true);
     }
 
     #[test]
