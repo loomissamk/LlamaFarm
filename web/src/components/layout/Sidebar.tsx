@@ -29,58 +29,79 @@ const navItems = [
 interface SidebarProps {
   collapsed: boolean;
   onToggle: () => void;
+  mobileOpen: boolean;
+  onMobileClose: () => void;
 }
 
-export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
+export default function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose }: SidebarProps) {
   return (
-    <aside
-      className={`fixed top-0 left-0 h-screen bg-gray-900 flex flex-col border-r border-gray-800 transition-[width] duration-200 z-30 ${
-        collapsed ? 'w-14' : 'w-60'
-      }`}
-    >
-      {/* Logo / Title */}
-      <div className="px-3 py-4 border-b border-gray-800 flex items-center justify-between min-h-[60px]">
-        {!collapsed && (
-          <span className="text-lg font-semibold text-white tracking-wide truncate">
-            LlamaFarm
-          </span>
-        )}
-        <button
-          onClick={onToggle}
-          className={`flex-shrink-0 rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-800 hover:text-white ${collapsed ? 'mx-auto' : ''}`}
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        >
-          {collapsed ? (
-            <PanelLeftOpen className="h-4 w-4" />
-          ) : (
-            <PanelLeftClose className="h-4 w-4" />
-          )}
-        </button>
-      </div>
+    <>
+      {mobileOpen && (
+        <div
+          onClick={onMobileClose}
+          className="fixed inset-0 z-40 bg-black/50 md:hidden"
+          aria-hidden="true"
+        />
+      )}
 
-      {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto py-4 px-2 space-y-1">
-        {navItems.map(({ to, icon: Icon, labelKey }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end
-            title={collapsed ? t(labelKey) : undefined}
-            className={({ isActive }) =>
-              [
-                'flex items-center rounded-lg text-sm font-medium transition-colors',
-                collapsed ? 'justify-center px-2 py-2.5' : 'gap-3 px-3 py-2.5',
-                isActive
-                  ? 'bg-blue-600 text-white'
-                  : 'text-gray-300 hover:bg-gray-800 hover:text-white',
-              ].join(' ')
-            }
+      <aside
+        className={`fixed top-0 left-0 z-50 h-screen w-60 bg-gray-900 flex flex-col border-r border-gray-800 transition-transform duration-200 md:z-30 md:w-auto md:transition-[width] ${
+          mobileOpen ? 'translate-x-0' : '-translate-x-full'
+        } md:translate-x-0 ${collapsed ? 'md:w-14' : 'md:w-60'}`}
+      >
+        {/* Logo / Title */}
+        <div className="px-3 py-4 border-b border-gray-800 flex items-center justify-between min-h-[60px]">
+          {!collapsed && (
+            <span className="text-lg font-semibold text-white tracking-wide truncate">
+              LlamaFarm
+            </span>
+          )}
+          <button
+            onClick={onToggle}
+            className={`hidden flex-shrink-0 rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-800 hover:text-white md:block ${collapsed ? 'mx-auto' : ''}`}
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           >
-            <Icon className="h-5 w-5 flex-shrink-0" />
-            {!collapsed && <span>{t(labelKey)}</span>}
-          </NavLink>
-        ))}
-      </nav>
-    </aside>
+            {collapsed ? (
+              <PanelLeftOpen className="h-4 w-4" />
+            ) : (
+              <PanelLeftClose className="h-4 w-4" />
+            )}
+          </button>
+          <button
+            onClick={onMobileClose}
+            className="flex-shrink-0 rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-800 hover:text-white md:hidden"
+            title="Close menu"
+            aria-label="Close menu"
+          >
+            <PanelLeftClose className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Navigation */}
+        <nav className="flex-1 overflow-y-auto py-4 px-2 space-y-1">
+          {navItems.map(({ to, icon: Icon, labelKey }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end
+              onClick={onMobileClose}
+              title={collapsed ? t(labelKey) : undefined}
+              className={({ isActive }) =>
+                [
+                  'flex items-center rounded-lg text-sm font-medium transition-colors',
+                  collapsed ? 'md:justify-center md:px-2 md:py-2.5 gap-3 px-3 py-2.5' : 'gap-3 px-3 py-2.5',
+                  isActive
+                    ? 'bg-blue-600 text-white'
+                    : 'text-gray-300 hover:bg-gray-800 hover:text-white',
+                ].join(' ')
+              }
+            >
+              <Icon className="h-5 w-5 flex-shrink-0" />
+              <span className={collapsed ? 'md:hidden' : ''}>{t(labelKey)}</span>
+            </NavLink>
+          ))}
+        </nav>
+      </aside>
+    </>
   );
 }

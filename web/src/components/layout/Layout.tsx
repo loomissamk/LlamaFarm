@@ -16,6 +16,7 @@ function loadSidebarCollapsed(): boolean {
 
 export default function Layout() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => loadSidebarCollapsed());
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const isAgentRoute = useMatch({ path: '/agent', end: true }) !== null;
   const [agentMounted, setAgentMounted] = useState(isAgentRoute);
 
@@ -39,10 +40,19 @@ export default function Layout() {
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
-      <Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
+      <Sidebar
+        collapsed={sidebarCollapsed}
+        onToggle={toggleSidebar}
+        mobileOpen={mobileNavOpen}
+        onMobileClose={() => setMobileNavOpen(false)}
+      />
 
-      <div className={`flex flex-col min-h-screen transition-[margin] duration-200 ${sidebarCollapsed ? 'ml-14' : 'ml-60'}`}>
-        <Header />
+      <div
+        className={`flex flex-col min-h-screen transition-[margin] duration-200 ${
+          sidebarCollapsed ? 'md:ml-14' : 'md:ml-60'
+        }`}
+      >
+        <Header onMenuClick={() => setMobileNavOpen(true)} />
 
         <main className="flex-1 overflow-y-auto">
           {(agentMounted || isAgentRoute) && (

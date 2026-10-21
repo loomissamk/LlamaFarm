@@ -446,7 +446,11 @@ function loadSidebarCollapsed(): boolean {
   }
 
   try {
-    return localStorage.getItem(CHAT_SIDEBAR_COLLAPSED_STORAGE_KEY) === '1';
+    const stored = localStorage.getItem(CHAT_SIDEBAR_COLLAPSED_STORAGE_KEY);
+    if (stored !== null) return stored === '1';
+    // No explicit preference yet: start collapsed on phone-sized screens so the
+    // chat is visible first, matching the overlay drawer behavior below md.
+    return globalThis.window.matchMedia?.('(max-width: 767px)').matches ?? false;
   } catch {
     return false;
   }
@@ -1753,8 +1757,8 @@ export default function AgentChat() {
             <button
               onClick={() => setSidebarCollapsed(true)}
               className="rounded-md p-1 text-gray-400 transition-colors hover:bg-gray-800 hover:text-white md:hidden"
-              title="Hide chat history"
-              aria-label="Hide chat history"
+              title="Close chat history panel"
+              aria-label="Close chat history panel"
             >
               <PanelLeftClose className="h-5 w-5" />
             </button>
