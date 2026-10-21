@@ -6,15 +6,17 @@ const routeTitles: Record<string, string> = {
   '/': 'nav.dashboard',
   '/agent': 'nav.agent',
   '/federation': 'nav.federation',
+  '/memory': 'nav.memory',
   '/tools': 'nav.tools',
   '/cron': 'nav.cron',
-  '/integrations': 'nav.integrations',
-  '/memory': 'nav.memory',
+  '/runs': 'nav.runs',
+  '/database': 'nav.database',
   '/workspace': 'nav.workspace',
+  '/workspace/files': 'nav.workspace',
   '/workspace/prompts': 'nav.prompts',
-  '/config': 'nav.config',
   '/logs': 'nav.logs',
   '/doctor': 'nav.doctor',
+  '/config': 'nav.config',
 };
 
 interface HeaderProps {

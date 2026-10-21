@@ -43,7 +43,7 @@ function severityBg(severity: DiagResult['severity']): string {
   }
 }
 
-export function DiagnosticsPanel() {
+export function DiagnosticsPanel({ embedded = false }: { embedded?: boolean } = {}) {
   const [results, setResults] = useState<DiagResult[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -77,7 +77,7 @@ export function DiagnosticsPanel() {
     }, {}) ?? {};
 
   return (
-    <div className="p-6 space-y-6">
+    <div className={embedded ? 'space-y-6' : 'p-6 space-y-6'}>
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">

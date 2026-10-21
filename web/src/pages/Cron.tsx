@@ -61,7 +61,7 @@ export default function Cron() {
   const [formSchedule, setFormSchedule] = useState('0 * * * *');
   const [formRunAt, setFormRunAt] = useState('');
   const [formEveryMs, setFormEveryMs] = useState('60000');
-  const [formCommand, setFormCommand] = useState('/home/bat/test.sh');
+  const [formCommand, setFormCommand] = useState('');
   const [formEnabled, setFormEnabled] = useState(true);
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -74,7 +74,7 @@ export default function Cron() {
     setFormEveryMs(
       job?.schedule.every_ms ? String(job.schedule.every_ms) : '60000',
     );
-    setFormCommand(job?.command ?? '/home/bat/test.sh');
+    setFormCommand(job?.command ?? '');
     setFormEnabled(job?.enabled ?? true);
     setFormError(null);
   };
@@ -244,8 +244,7 @@ export default function Cron() {
             </h2>
           </div>
           <p className="mt-2 text-sm text-gray-400">
-            Create cron, one-time, or interval jobs. The starter command defaults to
-            <span className="ml-1 font-mono text-gray-300">/home/bat/test.sh</span>.
+            Create cron, one-time, or interval jobs that run a shell command on schedule.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -271,30 +270,6 @@ export default function Cron() {
           {success}
         </div>
       )}
-
-      <div className="rounded-xl border border-gray-800 bg-gray-900 p-4">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <p className="text-sm font-medium text-white">Starter Template</p>
-            <p className="mt-1 text-sm text-gray-400">
-              Use the local test script as a simple smoke job before scheduling anything more
-              complex.
-            </p>
-          </div>
-          <button
-            onClick={() => {
-              setFormCommand('/home/bat/test.sh');
-              setFormName('Run local test script');
-              setFormScheduleKind('at');
-              setShowForm(true);
-              setEditingJob(null);
-            }}
-            className="rounded-lg border border-blue-700/70 bg-blue-900/30 px-4 py-2 text-sm font-medium text-blue-300 transition-colors hover:bg-blue-900/50"
-          >
-            Use /home/bat/test.sh
-          </button>
-        </div>
-      </div>
 
       {showForm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
@@ -392,27 +367,14 @@ export default function Cron() {
               )}
 
               <div>
-                <div className="mb-1 flex items-center justify-between gap-2">
-                  <label className="block text-sm font-medium text-gray-300">
-                    Command
-                  </label>
-                  <button
-                    onClick={() => {
-                      setFormCommand('/home/bat/test.sh');
-                      if (!formName.trim()) {
-                        setFormName('Run local test script');
-                      }
-                    }}
-                    className="text-xs font-medium text-blue-300 transition-colors hover:text-blue-200"
-                  >
-                    Insert template
-                  </button>
-                </div>
+                <label className="mb-1 block text-sm font-medium text-gray-300">
+                  Command
+                </label>
                 <input
                   type="text"
                   value={formCommand}
                   onChange={(e) => setFormCommand(e.target.value)}
-                  placeholder="/home/bat/test.sh"
+                  placeholder="/path/to/script.sh --args"
                   className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>

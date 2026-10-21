@@ -286,10 +286,7 @@ export default function WorkspaceFiles() {
             <h2 className="text-base font-semibold text-white">Workspace Files</h2>
           </div>
           <p className="mt-2 max-w-3xl text-sm text-gray-400">
-            Browse the live workspace, upload files into it, and download files or folders back
-            out. This makes it possible to grab directories like <code>rust_kernel</code> directly
-            from the dashboard without finding the Docker volume path first. Prompt files now live
-            on their own page so this browser stays focused on file management.
+            Browse, upload, and download files and folders in the live workspace.
           </p>
         </div>
       </div>
@@ -383,9 +380,9 @@ export default function WorkspaceFiles() {
             <thead className="bg-gray-950/60 text-left text-xs uppercase tracking-wide text-gray-500">
               <tr>
                 <th className="px-4 py-3">Name</th>
-                <th className="px-4 py-3">Path</th>
+                <th className="hidden px-4 py-3 md:table-cell">Path</th>
                 <th className="px-4 py-3">Size</th>
-                <th className="px-4 py-3">Modified</th>
+                <th className="hidden px-4 py-3 md:table-cell">Modified</th>
                 <th className="px-4 py-3 text-right">Actions</th>
               </tr>
             </thead>
@@ -401,9 +398,9 @@ export default function WorkspaceFiles() {
                       ..
                     </button>
                   </td>
-                  <td className="px-4 py-3 text-gray-500">{browser.parent_path || '.'}</td>
+                  <td className="hidden px-4 py-3 text-gray-500 md:table-cell">{browser.parent_path || '.'}</td>
                   <td className="px-4 py-3 text-gray-500">Directory</td>
-                  <td className="px-4 py-3 text-gray-500">-</td>
+                  <td className="hidden px-4 py-3 text-gray-500 md:table-cell">-</td>
                   <td className="px-4 py-3 text-right">
                     <button
                       onClick={() => void handleDownload(browser.parent_path || '')}
@@ -437,9 +434,9 @@ export default function WorkspaceFiles() {
                         </div>
                       )}
                     </td>
-                    <td className="px-4 py-3 font-mono text-xs text-gray-500">{entry.path}</td>
+                    <td className="hidden px-4 py-3 font-mono text-xs text-gray-500 md:table-cell">{entry.path}</td>
                     <td className="px-4 py-3 text-gray-400">{formatBytes(entry.size_bytes)}</td>
-                    <td className="px-4 py-3 text-gray-400">
+                    <td className="hidden px-4 py-3 text-gray-400 md:table-cell">
                       {formatTimestamp(entry.modified_at)}
                     </td>
                     <td className="px-4 py-3">

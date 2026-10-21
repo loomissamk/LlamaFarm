@@ -4,7 +4,6 @@ import Dashboard from './pages/Dashboard';
 import FederationPage from './pages/Federation';
 import Tools from './pages/Tools';
 import Cron from './pages/Cron';
-import Integrations from './pages/Integrations';
 import Memory from './pages/Memory';
 import Config from './pages/Config';
 import Logs from './pages/Logs';
@@ -24,15 +23,17 @@ export default function App() {
         <Route path="/federation" element={<FederationPage />} />
         <Route path="/tools" element={<Tools />} />
         <Route path="/cron" element={<Cron />} />
-        <Route path="/integrations" element={<Integrations />} />
+        {/* Integrations content now lives inline on /config (IntegrationsPanel) — this
+            standalone page was an orphaned duplicate, reachable only by typing the URL. */}
+        <Route path="/integrations" element={<Navigate to="/config" replace />} />
         <Route path="/memory" element={<Memory />} />
         <Route path="/workspace" element={<WorkspaceIde />} />
         <Route path="/workspace/files" element={<WorkspaceFiles />} />
         <Route path="/workspace/prompts" element={<WorkspacePrompts />} />
         <Route path="/database" element={<DatabasePage />} />
         <Route path="/config" element={<Config />} />
-        <Route path="/models" element={<Navigate to="/integrations" replace />} />
-        <Route path="/cost" element={<Navigate to="/integrations" replace />} />
+        <Route path="/models" element={<Navigate to="/config" replace />} />
+        <Route path="/cost" element={<Navigate to="/config" replace />} />
         <Route path="/runs" element={<Runs />} />
         <Route path="/logs" element={<Logs />} />
         <Route path="/doctor" element={<Doctor />} />

@@ -10,10 +10,11 @@ export default function WorkspaceIde() {
       <div className="flex flex-shrink-0 items-center gap-2 border-b border-gray-800 bg-gray-950 px-4 py-2">
         <Code2 className="h-4 w-4 text-purple-400" />
         <h2 className="text-sm font-semibold text-white">Workspace IDE</h2>
-        <p className="ml-2 hidden text-xs text-gray-500 sm:block">
-          Full CRUD file tree, Monaco editor, and a live terminal running in the workspace
-          (.venv on PATH). The agent's file edits and shell commands show up here in real time
-          on the Agent page.
+        <p
+          className="ml-2 hidden truncate text-xs text-gray-500 sm:block"
+          title="Full CRUD file tree, Monaco editor, and a live terminal running in the workspace (.venv on PATH). The agent's file edits and shell commands show up here in real time on the Agent page."
+        >
+          File tree · editor · terminal — synced live with the Agent page
         </p>
       </div>
       <div className="min-h-0 flex-1">

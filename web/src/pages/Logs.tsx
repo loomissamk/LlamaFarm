@@ -72,7 +72,7 @@ const LEVEL_ACTIVE_COLORS: Record<LevelFilter, string> = {
   trace: 'bg-indigo-900/60 text-indigo-200 border-indigo-700',
 };
 
-export function LogsPanel() {
+export function LogsPanel({ heightClassName = 'h-[calc(100vh-3.5rem)]' }: { heightClassName?: string } = {}) {
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const [paused, setPaused] = useState(false);
   const [connected, setConnected] = useState(false);
@@ -196,7 +196,7 @@ export function LogsPanel() {
   }, {});
 
   return (
-    <div className="flex flex-col h-[calc(100vh-3.5rem)]">
+    <div className={`flex flex-col ${heightClassName}`}>
       {/* Toolbar */}
       <div className="border-b border-gray-800 bg-gray-900 px-6 py-3">
         <div className="flex items-center justify-between gap-3">

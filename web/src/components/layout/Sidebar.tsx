@@ -9,6 +9,10 @@ import {
   Clock,
   Settings,
   Database,
+  Brain,
+  ListChecks,
+  ScrollText,
+  Stethoscope,
   PanelLeftClose,
   PanelLeftOpen,
 } from 'lucide-react';
@@ -18,11 +22,15 @@ const navItems = [
   { to: '/', icon: LayoutDashboard, labelKey: 'nav.dashboard' },
   { to: '/agent', icon: MessageSquare, labelKey: 'nav.agent' },
   { to: '/federation', icon: Network, labelKey: 'nav.federation' },
+  { to: '/memory', icon: Brain, labelKey: 'nav.memory' },
   { to: '/tools', icon: Wrench, labelKey: 'nav.tools' },
   { to: '/cron', icon: Clock, labelKey: 'nav.cron' },
+  { to: '/runs', icon: ListChecks, labelKey: 'nav.runs' },
   { to: '/database', icon: Database, labelKey: 'nav.database' },
   { to: '/workspace', icon: FolderOpen, labelKey: 'nav.workspace' },
   { to: '/workspace/prompts', icon: BookText, labelKey: 'nav.prompts' },
+  { to: '/logs', icon: ScrollText, labelKey: 'nav.logs' },
+  { to: '/doctor', icon: Stethoscope, labelKey: 'nav.doctor' },
   { to: '/config', icon: Settings, labelKey: 'nav.config' },
 ];
 

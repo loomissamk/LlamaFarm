@@ -29,6 +29,7 @@ export function MemoryPanel() {
   const [categoryFilter, setCategoryFilter] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [confirmClear, setConfirmClear] = useState<'conversation' | 'all' | null>(null);
   const [clearingScope, setClearingScope] = useState<'conversation' | 'all' | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -100,15 +101,7 @@ export function MemoryPanel() {
   };
 
   const handleClear = async (scope: 'conversation' | 'all') => {
-    const confirmed = window.confirm(
-      scope === 'conversation'
-        ? 'Clear conversation history from memory?'
-        : 'Clear all memory entries? This cannot be undone.',
-    );
-    if (!confirmed) {
-      return;
-    }
-
+    setConfirmClear(null);
     setClearingScope(scope);
     setError(null);
     try {
@@ -139,34 +132,53 @@ export function MemoryPanel() {
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-2">
           <Brain className="h-5 w-5 text-blue-400" />
           <h2 className="text-base font-semibold text-white">
             Memory ({entries.length})
           </h2>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => void handleClear('conversation')}
-            disabled={clearingScope !== null}
-            className="inline-flex items-center gap-2 rounded-lg border border-amber-700/60 bg-amber-900/20 px-4 py-2 text-sm font-medium text-amber-300 transition-colors hover:bg-amber-900/30 disabled:opacity-50"
-          >
-            <Eraser className="h-4 w-4" />
-            {clearingScope === 'conversation' ? 'Clearing...' : 'Clear Conversation Memory'}
-          </button>
-          <button
-            onClick={() => void handleClear('all')}
-            disabled={clearingScope !== null}
-            className="inline-flex items-center gap-2 rounded-lg border border-red-700/60 bg-red-900/20 px-4 py-2 text-sm font-medium text-red-300 transition-colors hover:bg-red-900/30 disabled:opacity-50"
-            title="Deletes ALL memory entries permanently"
-          >
-            <Trash2 className="h-4 w-4" />
-            {clearingScope === 'all' ? 'Clearing...' : 'Clear All Memory'}
-          </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {confirmClear === 'conversation' ? (
+            <span className="inline-flex items-center gap-2 rounded-lg border border-amber-700/60 bg-amber-900/20 px-3 py-2 text-sm text-amber-200">
+              Clear this conversation's memory?
+              <button onClick={() => void handleClear('conversation')} className="font-medium text-amber-300 hover:text-amber-100">Yes</button>
+              <button onClick={() => setConfirmClear(null)} className="font-medium text-gray-400 hover:text-white">No</button>
+            </span>
+          ) : (
+            <button
+              onClick={() => setConfirmClear('conversation')}
+              disabled={clearingScope !== null}
+              title="Clear memory entries scoped to the current conversation"
+              className="inline-flex items-center gap-2 rounded-lg border border-amber-700/60 bg-amber-900/20 px-3 py-2 text-sm font-medium text-amber-300 transition-colors hover:bg-amber-900/30 disabled:opacity-50"
+            >
+              <Eraser className="h-4 w-4" />
+              {clearingScope === 'conversation' ? 'Clearing…' : 'Clear Conversation'}
+            </button>
+          )}
+
+          {confirmClear === 'all' ? (
+            <span className="inline-flex items-center gap-2 rounded-lg border border-red-700/60 bg-red-900/20 px-3 py-2 text-sm text-red-200">
+              Delete ALL memory permanently?
+              <button onClick={() => void handleClear('all')} className="font-medium text-red-300 hover:text-red-100">Yes</button>
+              <button onClick={() => setConfirmClear(null)} className="font-medium text-gray-400 hover:text-white">No</button>
+            </span>
+          ) : (
+            <button
+              onClick={() => setConfirmClear('all')}
+              disabled={clearingScope !== null}
+              className="inline-flex items-center gap-2 rounded-lg border border-red-700/60 bg-red-900/20 px-3 py-2 text-sm font-medium text-red-300 transition-colors hover:bg-red-900/30 disabled:opacity-50"
+              title="Deletes ALL memory entries permanently"
+            >
+              <Trash2 className="h-4 w-4" />
+              {clearingScope === 'all' ? 'Clearing…' : 'Clear All'}
+            </button>
+          )}
+
           <button
             onClick={() => setShowForm(true)}
-            className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+            className="flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
           >
             <Plus className="h-4 w-4" />
             Add Memory
@@ -318,6 +330,9 @@ export function MemoryPanel() {
         </div>
       ) : (
         <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-x-auto">
+          <p className="px-4 pt-3 text-[11px] uppercase tracking-wide text-gray-600 sm:hidden">
+            Scroll sideways for more columns →
+          </p>
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-800">

@@ -1,14 +1,18 @@
 import { DiagnosticsPanel } from './Doctor';
 import { LogsPanel } from './Logs';
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Activity,
   CheckCircle2,
-  Cpu,
+  ChevronDown,
+  ChevronUp,
+  ClipboardList,
   Database,
   Radio,
   RefreshCw,
   Server,
+  Stethoscope,
 } from 'lucide-react';
 import type { StatusResponse } from '@/types/api';
 import { getStatus, putIntegrationCredentials } from '@/lib/api';
@@ -64,6 +68,8 @@ export default function Dashboard() {
   const [selectedModel, setSelectedModel] = useState('');
   const [switchingModel, setSwitchingModel] = useState(false);
   const [switchError, setSwitchError] = useState<string | null>(null);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [logsOpen, setLogsOpen] = useState(false);
   const [switchSuccess, setSwitchSuccess] = useState<string | null>(null);
 
   const fetchStatus = () => {
@@ -140,145 +146,102 @@ export default function Dashboard() {
 
   return (
     <div className="p-6 space-y-6">
-      <div className="mb-4 flex flex-wrap gap-2 text-xs">
-        {[['/runs','Runs']].map(([to,label]) => (
-          <a key={to} href={to} className="rounded-full border border-gray-800 px-3 py-1 text-gray-400 hover:text-white hover:border-gray-600">{label}</a>
-        ))}
-      </div>
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <h2 className="text-base font-semibold text-white">Dashboard</h2>
-        <button
-          onClick={fetchStatus}
-          disabled={refreshing}
-          className="flex items-center gap-1.5 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-300 transition-colors hover:bg-gray-800 hover:text-white disabled:opacity-50"
-        >
-          <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <Link
+            to="/runs"
+            className="flex items-center gap-1.5 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-300 transition-colors hover:bg-gray-800 hover:text-white"
+          >
+            <ClipboardList className="h-4 w-4" />
+            <span className="hidden sm:inline">Run inspector</span>
+          </Link>
+          <button
+            onClick={fetchStatus}
+            disabled={refreshing}
+            className="flex items-center gap-1.5 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-300 transition-colors hover:bg-gray-800 hover:text-white disabled:opacity-50"
+          >
+            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">Refresh</span>
+          </button>
+        </div>
       </div>
 
       <section className="rounded-xl border border-blue-800/60 bg-gray-900 p-5">
-        <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <Server className="h-5 w-5 text-blue-400" />
-              <h2 className="text-base font-semibold text-white">Ollama Model Control</h2>
-              <span
-                className={`rounded-full px-2.5 py-1 text-xs font-medium ${
-                  status.ollama.reachable
-                    ? 'bg-emerald-900/40 text-emerald-300'
-                    : 'bg-red-900/40 text-red-300'
-                }`}
-              >
-                {status.ollama.reachable ? 'Ollama reachable' : 'Ollama unavailable'}
-              </span>
-            </div>
-            <p className="mt-2 text-sm text-gray-400">
-              Choose an installed model for subsequent chat turns. Switching updates the live
-              gateway and atomically persists the default; it does not pull, delete, or unload
-              Ollama models.
-            </p>
-
-            <div className="mt-4 flex flex-col gap-3 sm:flex-row">
-              <select
-                aria-label="Installed Ollama model"
-                value={selectedModel}
-                onChange={(event) => {
-                  setSelectedModel(event.target.value);
-                  setSwitchError(null);
-                  setSwitchSuccess(null);
-                }}
-                disabled={switchingModel || installedModels.length === 0}
-                className="min-w-0 flex-1 rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
-              >
-                {installedModels.length === 0 && (
-                  <option value="">No installed models reported</option>
-                )}
-                {installedModels.map((model) => (
-                  <option key={model} value={model}>
-                    {model}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                onClick={() => void switchDefaultModel()}
-                disabled={switchingModel || !modelSelectionChanged}
-                className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <RefreshCw className={`h-4 w-4 ${switchingModel ? 'animate-spin' : ''}`} />
-                {switchingModel ? 'Switching…' : 'Use for New Chats'}
-              </button>
-            </div>
-
-            {switchSuccess && (
-              <div className="mt-3 flex items-start gap-2 rounded-lg border border-emerald-800 bg-emerald-950/30 p-3 text-sm text-emerald-300">
-                <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0" />
-                <span>{switchSuccess}</span>
-              </div>
-            )}
-            {switchError && (
-              <div className="mt-3 rounded-lg border border-red-800 bg-red-950/30 p-3 text-sm text-red-300">
-                {switchError}
-              </div>
-            )}
-            {status.ollama.model_environment_override && (
-              <div className="mt-3 rounded-lg border border-amber-800 bg-amber-950/30 p-3 text-sm text-amber-200">
-                {status.ollama.model_environment_override} currently overrides the saved model on
-                process restart. Remove that environment override to make dashboard selections
-                restart-persistent.
-              </div>
-            )}
-          </div>
-
-          <div className="grid min-w-0 gap-3 sm:grid-cols-2 xl:w-[38rem]">
-            <div className="rounded-lg border border-gray-800 bg-gray-950/60 p-4">
-              <p className="text-xs font-medium uppercase tracking-[0.16em] text-gray-500">
-                Configured default
-              </p>
-              <p className="mt-2 break-all text-sm font-semibold text-white">{configuredModel}</p>
-              <p className="mt-2 text-xs text-gray-500">Used by the next dashboard chat turn</p>
-            </div>
-            <div className="rounded-lg border border-gray-800 bg-gray-950/60 p-4">
-              <p className="text-xs font-medium uppercase tracking-[0.16em] text-gray-500">
-                Resident now
-              </p>
-              {loadedModels.length === 0 ? (
-                <p className="mt-2 text-sm text-gray-500">None reported</p>
-              ) : (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {loadedModels.map((model) => (
-                    <span
-                      key={model}
-                      className="max-w-full break-all rounded-full bg-emerald-900/40 px-2.5 py-1 text-xs text-emerald-300"
-                    >
-                      {model}
-                    </span>
-                  ))}
-                </div>
-              )}
-              <p className="mt-2 text-xs text-gray-500">
-                Ollama loads the configured model on first use
-              </p>
-            </div>
-          </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Server className="h-5 w-5 text-blue-400" />
+          <h2 className="text-base font-semibold text-white">Ollama Model Control</h2>
+          <span
+            className={`rounded-full px-2.5 py-1 text-xs font-medium ${
+              status.ollama.reachable
+                ? 'bg-emerald-900/40 text-emerald-300'
+                : 'bg-red-900/40 text-red-300'
+            }`}
+          >
+            {status.ollama.reachable ? 'Ollama reachable' : 'Ollama unavailable'}
+          </span>
+          <span className="ml-auto truncate text-xs text-gray-500" title="Current default model for new chat turns">
+            default: <span className="text-gray-300">{configuredModel}</span>
+          </span>
         </div>
+        <p className="mt-2 text-sm text-gray-400">
+          Choose an installed model for subsequent chat turns. Switching updates the live gateway
+          and does not pull, delete, or unload Ollama models.
+        </p>
+
+        <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+          <select
+            aria-label="Installed Ollama model"
+            value={selectedModel}
+            onChange={(event) => {
+              setSelectedModel(event.target.value);
+              setSwitchError(null);
+              setSwitchSuccess(null);
+            }}
+            disabled={switchingModel || installedModels.length === 0}
+            className="min-w-0 flex-1 rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+          >
+            {installedModels.length === 0 && (
+              <option value="">No installed models reported</option>
+            )}
+            {installedModels.map((model) => (
+              <option key={model} value={model}>
+                {model}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => void switchDefaultModel()}
+            disabled={switchingModel || !modelSelectionChanged}
+            className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <RefreshCw className={`h-4 w-4 ${switchingModel ? 'animate-spin' : ''}`} />
+            {switchingModel ? 'Switching…' : 'Use for New Chats'}
+          </button>
+        </div>
+
+        {switchSuccess && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-emerald-800 bg-emerald-950/30 p-3 text-sm text-emerald-300">
+            <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0" />
+            <span>{switchSuccess}</span>
+          </div>
+        )}
+        {switchError && (
+          <div className="mt-3 rounded-lg border border-red-800 bg-red-950/30 p-3 text-sm text-red-300">
+            {switchError}
+          </div>
+        )}
+        {status.ollama.model_environment_override && (
+          <div className="mt-3 rounded-lg border border-amber-800 bg-amber-950/30 p-3 text-sm text-amber-200">
+            {status.ollama.model_environment_override} currently overrides the saved model on
+            process restart. Remove that environment override to make dashboard selections
+            restart-persistent.
+          </div>
+        )}
       </section>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-gray-900 rounded-xl p-5 border border-gray-800">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="p-2 bg-blue-600/20 rounded-lg">
-              <Cpu className="h-5 w-5 text-blue-400" />
-            </div>
-            <span className="text-sm text-gray-400">Current Model</span>
-          </div>
-          <p className="text-lg font-semibold text-white truncate">{configuredModel}</p>
-          <p className="text-sm text-gray-400">
-            {status.ollama.active_model_loaded ? 'Loaded in Ollama' : 'Configured, not loaded'}
-          </p>
-        </div>
-
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="bg-gray-900 rounded-xl p-5 border border-gray-800">
           <div className="flex items-center gap-3 mb-3">
             <div className="p-2 bg-emerald-600/20 rounded-lg">
@@ -315,32 +278,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="bg-gray-900 rounded-xl p-5 border border-gray-800">
-          <div className="flex items-center gap-2 mb-4">
-            <Server className="h-5 w-5 text-blue-400" />
-            <h2 className="text-base font-semibold text-white">Installed Models</h2>
-          </div>
-          <div className="space-y-2 max-h-80 overflow-y-auto">
-            {installedModels.length === 0 ? (
-              <p className="text-sm text-gray-500">No installed models reported by Ollama.</p>
-            ) : (
-              installedModels.map((model) => (
-                <div
-                  key={model}
-                  className={`rounded-lg border px-3 py-2 text-sm ${
-                    model === status.model
-                      ? 'border-emerald-700/70 bg-emerald-950/30 text-emerald-200'
-                      : 'border-gray-800 bg-gray-800/50 text-gray-200'
-                  }`}
-                >
-                  {model}
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-gray-900 rounded-xl p-5 border border-gray-800">
           <div className="flex items-center gap-2 mb-4">
             <Radio className="h-5 w-5 text-blue-400" />
@@ -389,11 +327,42 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
-      <div className="mt-6">
-        <DiagnosticsPanel />
+      <div className="rounded-xl border border-gray-800 bg-gray-900">
+        <button
+          type="button"
+          onClick={() => setDiagnosticsOpen((prev) => !prev)}
+          className="flex w-full items-center gap-2 p-4 text-left"
+        >
+          <Stethoscope className="h-5 w-5 text-blue-400" />
+          <h2 className="text-base font-semibold text-white">Diagnostics</h2>
+          <span className="ml-auto text-gray-500">
+            {diagnosticsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </span>
+        </button>
+        {diagnosticsOpen && (
+          <div className="border-t border-gray-800 p-4 pt-0">
+            <DiagnosticsPanel embedded />
+          </div>
+        )}
       </div>
-      <div className="mt-6 overflow-hidden rounded-lg border border-gray-800 [&>div]:!h-[28rem]">
-        <LogsPanel />
+
+      <div className="rounded-xl border border-gray-800 bg-gray-900">
+        <button
+          type="button"
+          onClick={() => setLogsOpen((prev) => !prev)}
+          className="flex w-full items-center gap-2 p-4 text-left"
+        >
+          <Activity className="h-5 w-5 text-blue-400" />
+          <h2 className="text-base font-semibold text-white">Runtime Logs</h2>
+          <span className="ml-auto text-gray-500">
+            {logsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </span>
+        </button>
+        {logsOpen && (
+          <div className="overflow-hidden rounded-b-xl border-t border-gray-800">
+            <LogsPanel heightClassName="h-[28rem]" />
+          </div>
+        )}
       </div>
     </div>
   );
