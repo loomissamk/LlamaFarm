@@ -67,7 +67,15 @@ function StatusDot({ connected }: { connected: boolean }) {
   );
 }
 
-export function ConnectionsPanel() {
+interface ConnectionsPanelProps {
+  // Called after a live settings write (context window, GPU layers) succeeds,
+  // so a host page showing the same config as raw TOML (e.g. Config.tsx) can
+  // reload it instead of silently going stale and overwriting this change on
+  // its next Save.
+  onLiveConfigChange?: () => void;
+}
+
+export function ConnectionsPanel({ onLiveConfigChange }: ConnectionsPanelProps = {}) {
   const [data, setData] = useState<ConnectionsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [device, setDevice] = useState<DeviceStart | null>(null);
@@ -95,6 +103,7 @@ export function ConnectionsPanel() {
         body: JSON.stringify({ num_ctx: value === 0 ? null : value }),
       });
       await loadContext();
+      onLiveConfigChange?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to set context');
     } finally {
@@ -114,6 +123,7 @@ export function ConnectionsPanel() {
         }),
       });
       await loadContext();
+      onLiveConfigChange?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to set GPU layers');
     } finally {
@@ -351,16 +361,16 @@ export function ConnectionsPanel() {
             <span>auto</span>
             <span>{(ctx.max / 1024).toFixed(0)}k</span>
           </div>
-          <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
-            <div className="rounded-lg border border-gray-800 bg-gray-950 p-2">
+          <div className="mt-3 grid grid-cols-3 divide-x divide-gray-800 rounded-lg border border-gray-800 bg-gray-950 text-xs">
+            <div className="p-2">
               <div className="text-gray-500">Persona .md</div>
               <div className="font-mono text-gray-300">~{ctx.budget.persona_md_tokens} tok</div>
             </div>
-            <div className="rounded-lg border border-gray-800 bg-gray-950 p-2">
+            <div className="p-2">
               <div className="text-gray-500">Tools ({ctx.budget.tool_count})</div>
               <div className="font-mono text-gray-300">~{ctx.budget.tool_schema_tokens} tok</div>
             </div>
-            <div className="rounded-lg border border-gray-800 bg-gray-950 p-2">
+            <div className="p-2">
               <div className="text-gray-500">Fixed prompt</div>
               <div className="font-mono text-amber-300">~{ctx.budget.fixed_prompt_tokens_est} tok</div>
             </div>
@@ -404,18 +414,18 @@ export function ConnectionsPanel() {
           {/* Ollama server knobs (apply on redeploy) */}
           <div className="mt-4 border-t border-gray-800 pt-3">
             <div className="text-sm text-gray-300 mb-2">Ollama server (applies on redeploy)</div>
-            <div className="grid grid-cols-3 gap-2 text-xs">
-              <div className="rounded-lg border border-gray-800 bg-gray-950 p-2">
+            <div className="grid grid-cols-3 divide-x divide-gray-800 rounded-lg border border-gray-800 bg-gray-950 text-xs">
+              <div className="p-2">
                 <div className="text-gray-500">Max loaded models</div>
                 <div className={`font-mono ${ctx.server.max_loaded_models === '1' ? 'text-amber-300' : 'text-gray-300'}`}>
                   {ctx.server.max_loaded_models ?? '—'}
                 </div>
               </div>
-              <div className="rounded-lg border border-gray-800 bg-gray-950 p-2">
+              <div className="p-2">
                 <div className="text-gray-500">Keep alive</div>
                 <div className="font-mono text-gray-300">{ctx.server.keep_alive ?? '—'}</div>
               </div>
-              <div className="rounded-lg border border-gray-800 bg-gray-950 p-2">
+              <div className="p-2">
                 <div className="text-gray-500">KV cache</div>
                 <div className="font-mono text-gray-300">{ctx.server.kv_cache_type ?? '—'}</div>
               </div>

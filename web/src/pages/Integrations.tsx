@@ -279,110 +279,102 @@ export function IntegrationsPanel() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-        <div className="rounded-xl border border-gray-800 bg-gray-900 p-5 xl:col-span-2">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2">
-                <Server className="h-5 w-5 text-emerald-400" />
-                <h3 className="text-base font-semibold text-white">Live Model Switch</h3>
-              </div>
-              <p className="mt-2 text-sm text-gray-400">
-                Apply a different installed model without restarting the gateway.
-              </p>
+      <div className="rounded-xl border border-gray-800 bg-gray-900 p-5">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <Server className="h-5 w-5 text-emerald-400" />
+              <h3 className="text-base font-semibold text-white">Live Model Switch</h3>
+              <span
+                className="cursor-help text-gray-600"
+                title="Installed model choices come from the configured Ollama endpoint. Quick Apply writes default_model and default_temperature into the live runtime. Use Edit Connection to change endpoint, temperature, or set an API key for a remote host."
+              >
+                <Package className="h-3.5 w-3.5" />
+              </span>
             </div>
-            <span className="inline-flex items-center gap-1 rounded-full border border-green-700/60 bg-green-900/30 px-2.5 py-1 text-xs font-medium text-green-300">
-              <CheckCircle2 className="h-3.5 w-3.5" />
-              Ollama only
-            </span>
+            <p className="mt-2 text-sm text-gray-400">
+              Apply a different installed model without restarting the gateway.
+            </p>
+          </div>
+          <span className="inline-flex items-center gap-1 rounded-full border border-green-700/60 bg-green-900/30 px-2.5 py-1 text-xs font-medium text-green-300">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            Ollama only
+          </span>
+        </div>
+
+        <div className="mt-5 grid grid-cols-2 divide-y divide-gray-800 rounded-lg border border-gray-800 bg-gray-950/50 md:grid-cols-4 md:divide-x md:divide-y-0">
+          <div className="p-4">
+            <span className="text-xs uppercase tracking-[0.2em] text-gray-500">Current model</span>
+            <p className="mt-2 break-all text-sm font-semibold text-white">{currentModel}</p>
+            <p className="mt-2 text-xs text-gray-500">
+              {status.ollama.active_model_loaded ? 'Loaded now' : 'Configured, waiting to load'}
+            </p>
           </div>
 
-          <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <div className="rounded-lg border border-gray-800 bg-gray-950/50 p-4">
-              <span className="text-xs uppercase tracking-[0.2em] text-gray-500">Current model</span>
-              <p className="mt-2 break-all text-sm font-semibold text-white">{currentModel}</p>
-              <p className="mt-2 text-xs text-gray-500">
-                {status.ollama.active_model_loaded ? 'Loaded now' : 'Configured, waiting to load'}
-              </p>
-            </div>
-
-            <div className="rounded-lg border border-gray-800 bg-gray-950/50 p-4">
-              <span className="text-xs uppercase tracking-[0.2em] text-gray-500">Endpoint</span>
-              <p className="mt-2 break-all text-sm font-semibold text-white">{currentEndpoint}</p>
-              <p className="mt-2 text-xs text-gray-500">{installedModels.length} installed models</p>
-            </div>
-
-            <div className="rounded-lg border border-gray-800 bg-gray-950/50 p-4">
-              <span className="text-xs uppercase tracking-[0.2em] text-gray-500">Temperature</span>
-              <p className="mt-2 text-sm font-semibold text-white">{currentTemperatureText}</p>
-              <p className="mt-2 text-xs text-gray-500">Live runtime sampling setting</p>
-            </div>
-
-            <div className="rounded-lg border border-gray-800 bg-gray-950/50 p-4">
-              <span className="text-xs uppercase tracking-[0.2em] text-gray-500">Loaded models</span>
-              <p className="mt-2 text-sm font-semibold text-white">{currentLoadedModels.length}</p>
-              <p className="mt-2 text-xs text-gray-500">Reported by the active Ollama runtime</p>
-            </div>
+          <div className="p-4">
+            <span className="text-xs uppercase tracking-[0.2em] text-gray-500">Endpoint</span>
+            <p className="mt-2 break-all text-sm font-semibold text-white">{currentEndpoint}</p>
+            <p className="mt-2 text-xs text-gray-500">{installedModels.length} installed models</p>
           </div>
 
-          <div className="mt-5 flex flex-col gap-3 rounded-lg border border-gray-800 bg-gray-950/50 p-4 lg:flex-row lg:items-center">
-            <select
-              value={quickModel}
-              onChange={(event) => setQuickModel(event.target.value)}
-              disabled={quickSaveBusy}
-              className="min-w-0 flex-1 rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              {[
-                ...(currentModel && !installedModels.includes(currentModel) ? [currentModel] : []),
-                ...installedModels,
-              ].map((model) => (
-                <option key={model} value={model}>
-                  {model}
-                </option>
-              ))}
-            </select>
-            <input
-              type="number"
-              min="0"
-              max="2"
-              step="0.1"
-              value={quickTemperature}
-              onChange={(event) => setQuickTemperature(event.target.value)}
-              disabled={quickSaveBusy}
-              className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 lg:w-32"
-            />
-            <button
-              onClick={() => void saveQuickRuntime()}
-              disabled={
-                quickSaveBusy ||
-                !quickModel ||
-                quickTemperatureState.error !== null ||
-                !quickSettingsChanged
-              }
-              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
-            >
-              {quickSaveBusy ? 'Applying...' : 'Apply Live Settings'}
-            </button>
-            <button
-              onClick={openEditor}
-              className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-700 px-4 py-2 text-sm text-gray-300 transition-colors hover:bg-gray-800 hover:text-white"
-            >
-              <Pencil className="h-4 w-4" />
-              Edit Connection
-            </button>
+          <div className="p-4">
+            <span className="text-xs uppercase tracking-[0.2em] text-gray-500">Temperature</span>
+            <p className="mt-2 text-sm font-semibold text-white">{currentTemperatureText}</p>
+            <p className="mt-2 text-xs text-gray-500">Live runtime sampling setting</p>
+          </div>
+
+          <div className="p-4">
+            <span className="text-xs uppercase tracking-[0.2em] text-gray-500">Loaded models</span>
+            <p className="mt-2 text-sm font-semibold text-white">{currentLoadedModels.length}</p>
+            <p className="mt-2 text-xs text-gray-500">Reported by the active Ollama runtime</p>
           </div>
         </div>
 
-        <div className="rounded-xl border border-gray-800 bg-gray-900 p-5">
-          <div className="flex items-center gap-2">
-            <Package className="h-5 w-5 text-orange-400" />
-            <h3 className="text-base font-semibold text-white">Runtime Notes</h3>
-          </div>
-          <ul className="mt-4 space-y-3 text-sm text-gray-400">
-            <li>Installed model choices come from the configured Ollama endpoint.</li>
-            <li>Quick Apply writes `default_model` and `default_temperature` into the live runtime snapshot.</li>
-            <li>Use Edit Connection to change endpoint, temperature, or set an Ollama API key for a remote host.</li>
-          </ul>
+        <div className="mt-5 flex flex-col gap-3 rounded-lg border border-gray-800 bg-gray-950/50 p-4 lg:flex-row lg:items-center">
+          <select
+            value={quickModel}
+            onChange={(event) => setQuickModel(event.target.value)}
+            disabled={quickSaveBusy}
+            className="min-w-0 flex-1 rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            {[
+              ...(currentModel && !installedModels.includes(currentModel) ? [currentModel] : []),
+              ...installedModels,
+            ].map((model) => (
+              <option key={model} value={model}>
+                {model}
+              </option>
+            ))}
+          </select>
+          <input
+            type="number"
+            min="0"
+            max="2"
+            step="0.1"
+            value={quickTemperature}
+            onChange={(event) => setQuickTemperature(event.target.value)}
+            disabled={quickSaveBusy}
+            className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 lg:w-32"
+          />
+          <button
+            onClick={() => void saveQuickRuntime()}
+            disabled={
+              quickSaveBusy ||
+              !quickModel ||
+              quickTemperatureState.error !== null ||
+              !quickSettingsChanged
+            }
+            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
+          >
+            {quickSaveBusy ? 'Applying...' : 'Apply Live Settings'}
+          </button>
+          <button
+            onClick={openEditor}
+            className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-700 px-4 py-2 text-sm text-gray-300 transition-colors hover:bg-gray-800 hover:text-white"
+          >
+            <Pencil className="h-4 w-4" />
+            Edit Connection
+          </button>
         </div>
       </div>
 
@@ -575,9 +567,4 @@ export function IntegrationsPanel() {
       )}
     </div>
   );
-}
-
-
-export default function Integrations() {
-  return <IntegrationsPanel />;
 }

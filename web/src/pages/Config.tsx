@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle,
+  ChevronDown,
+  ChevronRight,
   RefreshCcw,
   Save,
   Settings,
@@ -23,6 +25,21 @@ export default function Config() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [rawEditorOpen, setRawEditorOpen] = useState(false);
+
+  const reloadLiveConfig = () => {
+    getConfig()
+      .then((currentConfig) => {
+        setLiveConfig(currentConfig);
+        // Only overwrite the editor if the user has no unsaved raw edits in
+        // flight — otherwise a live change from the panel above would
+        // silently clobber what they're mid-typing.
+        setConfig((prev) => (prev === liveConfig ? currentConfig : prev));
+      })
+      .catch(() => {
+        /* non-fatal: editor just stays on its last-loaded snapshot */
+      });
+  };
 
   useEffect(() => {
     Promise.all([getConfig(), getConfigPresets()])
@@ -113,7 +130,7 @@ export default function Config() {
 
   return (
     <div className="space-y-6 p-6">
-      <ConnectionsPanel />
+      <ConnectionsPanel onLiveConfigChange={reloadLiveConfig} />
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="space-y-2">
           <div className="flex items-center gap-2">
@@ -252,17 +269,6 @@ export default function Config() {
         </div>
       </div>
 
-      <div className="flex items-start gap-3 rounded-lg border border-yellow-700/40 bg-yellow-900/20 p-4">
-        <ShieldAlert className="mt-0.5 h-5 w-5 flex-shrink-0 text-yellow-400" />
-        <div>
-          <p className="text-sm font-medium text-yellow-300">Sensitive fields are masked</p>
-          <p className="mt-0.5 text-sm text-yellow-400/70">
-            API keys, tokens, and passwords are hidden for security. To update a masked field,
-            replace the entire masked value with your new value.
-          </p>
-        </div>
-      </div>
-
       {success && (
         <div className="flex items-center gap-2 rounded-lg border border-green-700 bg-green-900/30 p-3">
           <CheckCircle className="h-4 w-4 flex-shrink-0 text-green-400" />
@@ -278,25 +284,47 @@ export default function Config() {
       )}
 
       <div className="overflow-hidden rounded-2xl border border-gray-800 bg-gray-900">
-        <div className="flex items-center justify-between border-b border-gray-800 bg-gray-800/50 px-4 py-3">
-          <div>
-            <span className="text-xs font-medium uppercase tracking-wider text-gray-400">
-              TOML Configuration
-            </span>
-            <p className="mt-1 text-xs text-gray-500">
-              Safe stays autonomous inside tighter guardrails. God widens budgets, system reach,
-              and persona aggression.
-            </p>
+        <button
+          type="button"
+          onClick={() => setRawEditorOpen((prev) => !prev)}
+          className="flex w-full items-center justify-between gap-3 border-b border-gray-800 bg-gray-800/50 px-4 py-3 text-left"
+        >
+          <div className="flex items-center gap-2">
+            {rawEditorOpen ? (
+              <ChevronDown className="h-4 w-4 flex-shrink-0 text-gray-500" />
+            ) : (
+              <ChevronRight className="h-4 w-4 flex-shrink-0 text-gray-500" />
+            )}
+            <div>
+              <span className="text-xs font-medium uppercase tracking-wider text-gray-400">
+                Raw TOML Configuration
+              </span>
+              <p className="mt-1 text-xs text-gray-500">
+                Advanced — the presets above cover most changes. {isDirty ? 'Unsaved edits pending.' : ''}
+              </p>
+            </div>
           </div>
-          <span className="text-xs text-gray-500">{lineCount} lines</span>
-        </div>
-        <textarea
-          value={config}
-          onChange={(event) => setConfig(event.target.value)}
-          spellCheck={false}
-          className="min-h-[560px] w-full resize-y bg-gray-950 p-4 font-mono text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-inset"
-          style={{ tabSize: 4 }}
-        />
+          <span className="flex-shrink-0 text-xs text-gray-500">{lineCount} lines</span>
+        </button>
+        {rawEditorOpen && (
+          <>
+            <div className="flex items-start gap-3 border-b border-gray-800 bg-yellow-900/20 p-4">
+              <ShieldAlert className="mt-0.5 h-4 w-4 flex-shrink-0 text-yellow-400" />
+              <p className="text-xs text-yellow-400/80">
+                API keys, tokens, and passwords are masked. To update a masked field, replace the
+                entire masked value with your new value.
+              </p>
+            </div>
+            <textarea
+              value={config}
+              onChange={(event) => setConfig(event.target.value)}
+              spellCheck={false}
+              autoFocus
+              className="min-h-[560px] w-full resize-y bg-gray-950 p-4 font-mono text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-inset"
+              style={{ tabSize: 4 }}
+            />
+          </>
+        )}
       </div>
       <div className="mt-8 border-t border-gray-800 pt-2">
         <IntegrationsPanel />

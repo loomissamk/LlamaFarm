@@ -77,6 +77,7 @@ pub mod subagent_manage;
 pub mod subagent_registry;
 pub mod subagent_spawn;
 pub mod task_plan;
+pub mod terminai_plan;
 pub mod traits;
 pub mod url_validation;
 pub mod wasm_module;
@@ -86,6 +87,7 @@ pub mod web_search_tool;
 
 pub use apply_patch::ApplyPatchTool;
 pub use arxiv_search::ArxivSearchTool;
+pub use terminai_plan::TerminAiPlanTool;
 pub use browser::{BrowserTool, ComputerUseConfig};
 pub use browser_open::BrowserOpenTool;
 pub use code_run::CodeRunTool;
@@ -595,6 +597,13 @@ pub fn all_tools_with_runtime_and_federation(
     // Vision tools are always available
     tool_arcs.push(Arc::new(ScreenshotTool::new(security.clone())));
     tool_arcs.push(Arc::new(ImageInfoTool::new(security.clone())));
+
+    // TerminAI local planner model — registered only when the compiled binary and a
+    // trained checkpoint are both present (see TERMINAI_BINARY_PATH / TERMINAI_MODEL_PATH).
+    let terminai_tool = TerminAiPlanTool::from_env();
+    if terminai_tool.is_available() {
+        tool_arcs.push(Arc::new(terminai_tool));
+    }
 
     if let Some(key) = composio_key {
         if !key.is_empty() {

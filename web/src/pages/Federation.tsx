@@ -494,7 +494,7 @@ export default function FederationPage() {
               </div>
             </div>
 
-            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
               <div className="rounded-xl border border-gray-800 bg-gray-950/70 p-3">
                 <p className="text-[11px] uppercase tracking-wide text-gray-500">Status</p>
                 <div className="mt-2 flex items-center gap-2 text-sm font-medium text-white">
@@ -507,23 +507,16 @@ export default function FederationPage() {
                 </div>
               </div>
 
-              <div className="rounded-xl border border-gray-800 bg-gray-950/70 p-3">
+              <div
+                className="rounded-xl border border-gray-800 bg-gray-950/70 p-3"
+                title={`Discovery: ${federation?.local_node.discovery_mode ?? 'mdns'} (${federation?.local_node.service_name ?? '_llamafarm._tcp'})`}
+              >
                 <p className="text-[11px] uppercase tracking-wide text-gray-500">Local node</p>
                 <p className="mt-2 text-sm font-medium text-white">
                   {federation?.local_node.display_name ?? 'llamafarm-node'}
                 </p>
                 <p className="mt-1 text-xs text-gray-500">
-                  :{federation?.local_node.api_port ?? 42617} · role {federation?.local_node.role ?? 'both'}
-                </p>
-              </div>
-
-              <div className="rounded-xl border border-gray-800 bg-gray-950/70 p-3">
-                <p className="text-[11px] uppercase tracking-wide text-gray-500">Discovery</p>
-                <p className="mt-2 text-sm font-medium text-white">
-                  {federation?.local_node.discovery_mode ?? 'mdns'}
-                </p>
-                <p className="mt-1 text-xs text-gray-500">
-                  {federation?.local_node.service_name ?? '_llamafarm._tcp'}
+                  :{federation?.local_node.api_port ?? 42617} · role {federation?.local_node.role ?? 'both'} · {federation?.local_node.discovery_mode ?? 'mdns'}
                 </p>
               </div>
 
@@ -741,13 +734,18 @@ allow_public_bind = true`}
                     </div>
                     <p className="mt-2 text-sm text-gray-200">{task.message}</p>
                     {task.content && (
-                      <pre className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg border border-gray-800 bg-gray-900 p-2 text-xs text-gray-300">
-                        {task.content}
-                      </pre>
+                      <details className="mt-2 group">
+                        <summary className="cursor-pointer select-none text-[11px] uppercase tracking-wide text-gray-500 hover:text-gray-300">
+                          Raw output
+                        </summary>
+                        <pre className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg border border-gray-800 bg-gray-900 p-2 text-xs text-gray-300">
+                          {task.content}
+                        </pre>
+                      </details>
                     )}
                     {task.lastToolName && (
-                      <div className="mt-2 rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-xs text-gray-400">
-                        <div className="flex flex-wrap items-center gap-2">
+                      <details className="mt-2 group">
+                        <summary className="flex cursor-pointer select-none flex-wrap items-center gap-2 rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-xs text-gray-400 hover:text-gray-200">
                           <span className="text-gray-200">{task.lastToolName}</span>
                           {typeof task.lastToolSuccess === 'boolean' && (
                             <span>{task.lastToolSuccess ? 'success' : 'failed'}</span>
@@ -755,13 +753,13 @@ allow_public_bind = true`}
                           {typeof task.lastToolDurationSecs === 'number' && (
                             <span>{task.lastToolDurationSecs}s</span>
                           )}
-                        </div>
+                        </summary>
                         {task.lastToolOutput && (
-                          <p className="mt-1 whitespace-pre-wrap break-words">
+                          <p className="mt-1 whitespace-pre-wrap break-words rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-xs text-gray-400">
                             {task.lastToolOutput}
                           </p>
                         )}
-                      </div>
+                      </details>
                     )}
                     <p className="mt-2 text-[11px] text-gray-600">
                       {task.updatedAt.toLocaleTimeString()}

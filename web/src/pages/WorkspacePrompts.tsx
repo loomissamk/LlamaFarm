@@ -3,25 +3,22 @@ import { BookText, RefreshCw, Save } from 'lucide-react';
 import type { WorkspaceFileResponse } from '@/types/api';
 import { getWorkspaceFile, putWorkspaceFile } from '@/lib/api';
 
-type WorkspaceFileName = 'AGENTS.md';
-
-const WORKSPACE_FILES: WorkspaceFileName[] = ['AGENTS.md'];
+const FILE_NAME = 'AGENTS.md';
 
 export default function WorkspacePrompts() {
-  const [activeFile, setActiveFile] = useState<WorkspaceFileName>('AGENTS.md');
-  const [files, setFiles] = useState<Record<WorkspaceFileName, WorkspaceFileResponse>>({
-    'AGENTS.md': { name: 'AGENTS.md', content: '', exists: false },
+  const [file, setFile] = useState<WorkspaceFileResponse>({
+    name: FILE_NAME,
+    content: '',
+    exists: false,
   });
-  const [drafts, setDrafts] = useState<Record<WorkspaceFileName, string>>({
-    'AGENTS.md': '',
-  });
+  const [draft, setDraft] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const loadFiles = async (showLoading = true) => {
+  const loadFile = async (showLoading = true) => {
     if (showLoading) {
       setLoading(true);
     } else {
@@ -29,20 +26,11 @@ export default function WorkspacePrompts() {
     }
     setError(null);
     try {
-      const results = await Promise.all(WORKSPACE_FILES.map((name) => getWorkspaceFile(name)));
-      const nextFiles = {
-        'AGENTS.md': results.find((file) => file.name === 'AGENTS.md') ?? {
-          name: 'AGENTS.md',
-          content: '',
-          exists: false,
-        },
-      };
-      setFiles(nextFiles);
-      setDrafts({
-        'AGENTS.md': nextFiles['AGENTS.md'].content,
-      });
+      const result = await getWorkspaceFile(FILE_NAME);
+      setFile(result);
+      setDraft(result.content);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to load workspace prompt files');
+      setError(err instanceof Error ? err.message : 'Failed to load workspace prompt file');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -50,7 +38,7 @@ export default function WorkspacePrompts() {
   };
 
   useEffect(() => {
-    void loadFiles();
+    void loadFile();
   }, []);
 
   useEffect(() => {
@@ -64,20 +52,18 @@ export default function WorkspacePrompts() {
     setError(null);
     setSuccess(null);
     try {
-      const saved = await putWorkspaceFile(activeFile, drafts[activeFile]);
-      setFiles((prev) => ({ ...prev, [activeFile]: saved }));
-      setDrafts((prev) => ({ ...prev, [activeFile]: saved.content }));
-      setSuccess(`${activeFile} saved to the live workspace.`);
+      const saved = await putWorkspaceFile(FILE_NAME, draft);
+      setFile(saved);
+      setDraft(saved.content);
+      setSuccess(`${FILE_NAME} saved to the live workspace.`);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : `Failed to save ${activeFile}`);
+      setError(err instanceof Error ? err.message : `Failed to save ${FILE_NAME}`);
     } finally {
       setSaving(false);
     }
   };
 
-  const currentFile = files[activeFile];
-  const currentDraft = drafts[activeFile];
-  const isDirty = currentDraft !== currentFile.content;
+  const isDirty = draft !== file.content;
 
   if (loading) {
     return (
@@ -89,31 +75,29 @@ export default function WorkspacePrompts() {
 
   return (
     <div className="space-y-6 p-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <BookText className="h-5 w-5 text-blue-400" />
-            <h2 className="text-base font-semibold text-white">Prompt Files</h2>
-          </div>
-          <p className="mt-2 max-w-3xl text-sm text-gray-400">
-            Edit the live workspace copy of <code>AGENTS.md</code>. New agent turns pick up this
-            file directly from the running workspace after save.
-          </p>
+      <div>
+        <div className="flex items-center gap-2">
+          <BookText className="h-5 w-5 text-blue-400" />
+          <h2 className="text-base font-semibold text-white">Prompt Files</h2>
         </div>
+        <p className="mt-2 max-w-3xl text-sm text-gray-400">
+          Edit the live workspace copy of <code>{FILE_NAME}</code>. New agent turns pick up this
+          file directly from the running workspace after save.
+        </p>
       </div>
 
       <div className="rounded-xl border border-gray-800 bg-gray-900">
-        <div className="flex items-start justify-between gap-4 border-b border-gray-800 px-4 py-4">
-          <div>
-            <h3 className="text-sm font-semibold text-white">Live Prompt Editor</h3>
-            <p className="mt-1 max-w-2xl text-sm text-gray-400">
-              Keep agent behavior files separate from general workspace file management.
-            </p>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-800 px-4 py-3">
+          <div className="flex items-center gap-3 text-xs text-gray-500">
+            <span className="text-sm font-medium text-white">{FILE_NAME}</span>
+            {isDirty && <span className="text-amber-400">unsaved changes</span>}
+            <span>{draft.split('\n').length} lines</span>
+            <span>{file.exists ? 'live file exists' : 'missing; save will create it'}</span>
           </div>
 
           <div className="flex items-center gap-2">
             <button
-              onClick={() => void loadFiles(false)}
+              onClick={() => void loadFile(false)}
               disabled={refreshing || saving}
               className="inline-flex items-center gap-2 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-300 transition-colors hover:bg-gray-800 hover:text-white disabled:opacity-50"
             >
@@ -143,44 +127,9 @@ export default function WorkspacePrompts() {
           </div>
         )}
 
-        <div className="flex flex-wrap items-center gap-2 border-b border-gray-800 px-4 py-3">
-          {WORKSPACE_FILES.map((fileName) => {
-            const file = files[fileName];
-            const dirty = drafts[fileName] !== file.content;
-            return (
-              <button
-                key={fileName}
-                onClick={() => setActiveFile(fileName)}
-                className={[
-                  'rounded-lg px-3 py-2 text-sm transition-colors',
-                  activeFile === fileName
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-950 text-gray-300 hover:bg-gray-800 hover:text-white',
-                ].join(' ')}
-              >
-                {fileName}
-                {dirty ? ' *' : ''}
-              </button>
-            );
-          })}
-          <div className="ml-auto text-xs text-gray-500">
-            {currentFile.exists ? 'Live file exists' : 'Missing file; save will create it'}
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between border-b border-gray-800 px-4 py-2 text-xs text-gray-500">
-          <span>{activeFile}</span>
-          <span>{currentDraft.split('\n').length} lines</span>
-        </div>
-
         <textarea
-          value={currentDraft}
-          onChange={(event) =>
-            setDrafts((prev) => ({
-              ...prev,
-              [activeFile]: event.target.value,
-            }))
-          }
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
           spellCheck={false}
           className="min-h-[520px] w-full resize-y bg-gray-950 p-4 font-mono text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-inset"
           style={{ tabSize: 4 }}

@@ -19,6 +19,7 @@ import {
   Pencil,
   CheckCircle,
   Radar,
+  PanelLeftOpen,
 } from 'lucide-react';
 import type {
   DbConnection,
@@ -454,6 +455,11 @@ function CellValue({ raw }: { raw: string | null }) {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function DatabasePage() {
+  const [sidebarOpen, setSidebarOpen] = useState(() =>
+    typeof globalThis.window === 'undefined'
+      ? true
+      : !globalThis.window.matchMedia('(max-width: 767px)').matches,
+  );
   const [connections, setConnections] = useState<DbConnection[]>([]);
   const [loadingConns, setLoadingConns] = useState(true);
   const [connsError, setConnsError] = useState<string | null>(null);
@@ -676,8 +682,23 @@ export default function DatabasePage() {
         />
       )}
 
+      {/* Backdrop for the mobile connections/schema drawer */}
+      {sidebarOpen && (
+        <div
+          onClick={() => setSidebarOpen(false)}
+          className="fixed inset-x-0 top-14 bottom-0 z-40 bg-black/50 md:hidden"
+          aria-hidden="true"
+        />
+      )}
+
       {/* Left sidebar */}
-      <div className="w-52 flex-shrink-0 border-r border-gray-800 flex flex-col bg-gray-950 overflow-hidden">
+      <div
+        className={`w-72 md:w-52 flex-shrink-0 flex-col border-r border-gray-800 bg-gray-950 overflow-hidden ${
+          sidebarOpen
+            ? 'flex fixed left-0 top-14 bottom-0 z-50 shadow-2xl md:static md:shadow-none'
+            : 'hidden md:flex'
+        }`}
+      >
         {/* Connections header */}
         <div className="flex items-center gap-1.5 px-2 py-2 border-b border-gray-800 flex-shrink-0">
           <Database className="h-3.5 w-3.5 text-gray-500" />
@@ -696,6 +717,14 @@ export default function DatabasePage() {
             title="Add connection"
           >
             <Plus className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={() => setSidebarOpen(false)}
+            className="p-0.5 text-gray-600 hover:text-gray-300 rounded md:hidden"
+            title="Close panel"
+            aria-label="Close panel"
+          >
+            <X className="h-3.5 w-3.5" />
           </button>
         </div>
 
@@ -754,10 +783,10 @@ export default function DatabasePage() {
               </span>
               <button
                 onClick={() => setDiscovered(null)}
-                className="text-gray-600 hover:text-gray-300 text-xs"
+                className="text-gray-600 hover:text-gray-300"
                 title="Dismiss"
               >
-                ✕
+                <X className="h-3.5 w-3.5" />
               </button>
             </div>
             {discovered.length === 0 ? (
@@ -862,6 +891,15 @@ export default function DatabasePage() {
       {/* Main panel: agent memory browser, or the SQL/Mongo explorer */}
       {activeConn === MEMORY_CONN ? (
         <div className="flex-1 overflow-y-auto p-6">
+          {!sidebarOpen && (
+            <button
+              onClick={() => setSidebarOpen(true)}
+              className="mb-4 inline-flex items-center gap-1.5 rounded-lg border border-gray-700 px-2.5 py-1.5 text-xs text-gray-300 hover:bg-gray-800 hover:text-white md:hidden"
+            >
+              <PanelLeftOpen className="h-3.5 w-3.5" />
+              Connections
+            </button>
+          )}
           <MemoryPanel />
         </div>
       ) : (
@@ -869,6 +907,16 @@ export default function DatabasePage() {
         {/* Query bar */}
         <div className="border-b border-gray-800 flex-shrink-0">
           <div className="flex items-center gap-2 px-3 py-1 border-b border-gray-800/50 bg-gray-950/50">
+            {!sidebarOpen && (
+              <button
+                onClick={() => setSidebarOpen(true)}
+                className="p-0.5 text-gray-500 hover:text-white md:hidden"
+                title="Show connections"
+                aria-label="Show connections"
+              >
+                <PanelLeftOpen className="h-3.5 w-3.5" />
+              </button>
+            )}
             <span className="text-xs text-gray-600 font-mono flex-1">
               {isMongo ? 'MongoDB JSON: {"collection":"…","filter":{},"limit":N}' : 'SQL · ⌘↵ to run'}
             </span>
