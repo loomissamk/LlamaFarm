@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   AlertCircle,
   Bot,
@@ -578,13 +578,14 @@ function ideGridTemplate(
 
 function loadFederationBarCollapsed(): boolean {
   if (typeof globalThis.window === 'undefined') {
-    return false;
+    return true;
   }
 
   try {
-    return localStorage.getItem(CHAT_FEDERATION_COLLAPSED_STORAGE_KEY) === '1';
+    const stored = localStorage.getItem(CHAT_FEDERATION_COLLAPSED_STORAGE_KEY);
+    return stored === null || stored === '1';
   } catch {
-    return false;
+    return true;
   }
 }
 
@@ -833,6 +834,13 @@ export default function AgentChat() {
     Record<string, boolean>
   >({});
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => loadSidebarCollapsed());
+  const [mobileHistoryOpen, setMobileHistoryOpen] = useState(false);
+  const [mobileViewport, setMobileViewport] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches,
+  );
+  const historyToggleRef = useRef<HTMLButtonElement>(null);
+  const historyCloseRef = useRef<HTMLButtonElement>(null);
+  const historyDrawerRef = useRef<HTMLElement>(null);
   const [ideOpen, setIdeOpen] = useState(() => loadIdeOpen());
   const [ideWidth, setIdeWidth] = useState(() => loadIdeWidth());
   const [ideMaximized, setIdeMaximized] = useState(() => loadIdeMaximized());
@@ -1098,6 +1106,8 @@ export default function AgentChat() {
   }, []);
 
   const openSession = async (sessionId: string) => {
+    setMobileHistoryOpen(false);
+    if (mobileViewport) historyToggleRef.current?.focus();
     if (!remoteOnlySessionIds.has(sessionId)) {
       setActiveSessionId(sessionId);
       setConfirmDeleteSessionId(null);
@@ -1738,6 +1748,49 @@ export default function AgentChat() {
   }, [sidebarCollapsed]);
 
   useEffect(() => {
+    const query = window.matchMedia('(max-width: 767px)');
+    const updateViewport = () => {
+      setMobileViewport(query.matches);
+      if (!query.matches) setMobileHistoryOpen(false);
+    };
+    query.addEventListener('change', updateViewport);
+    return () => query.removeEventListener('change', updateViewport);
+  }, []);
+
+  useEffect(() => {
+    if (!mobileHistoryOpen || !mobileViewport) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    historyCloseRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setMobileHistoryOpen(false);
+        historyToggleRef.current?.focus();
+      } else if (event.key === 'Tab' && historyDrawerRef.current) {
+        const focusable = Array.from(
+          historyDrawerRef.current.querySelectorAll<HTMLElement>('button:not([disabled]), a[href]'),
+        ).filter((element) => element.getClientRects().length > 0);
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (first && last) {
+          if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
+        }
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [mobileHistoryOpen, mobileViewport]);
+
+  useEffect(() => {
     try {
       localStorage.setItem(CHAT_IDE_OPEN_STORAGE_KEY, ideOpen ? '1' : '0');
     } catch {
@@ -1813,6 +1866,7 @@ export default function AgentChat() {
   }, [activeMessages, activeSessionTyping, activeStreamingContent]);
 
   const createAndSelectSession = (temporary: boolean) => {
+    setMobileHistoryOpen(false);
     const session = createChatSession(temporary);
     setSessions((prev) => sortSessions([session, ...prev]));
     setActiveSessionId(session.id);
@@ -2114,16 +2168,41 @@ export default function AgentChat() {
   const onlineFederationPeers = availableFederationPeers.filter((peer) => peer.online).length;
   const selectedFederationWorkerCount = federationEnabled ? selectedFederationPeerIds.length : 0;
   const latestFederationTask = visibleFederationTasks[0];
+  const ideFullscreen = ideOpen && ideMaximized && !mobileViewport;
+  const historyToggleLabel = mobileViewport
+    ? mobileHistoryOpen ? 'Hide chat history' : 'Show chat history'
+    : sidebarCollapsed ? 'Show chat history' : 'Hide chat history';
+  const historyIsClosed = mobileViewport ? !mobileHistoryOpen : sidebarCollapsed;
 
   return (
     <div
-      className="grid h-[calc(100vh-3.5rem)] min-h-0 grid-cols-1"
-      style={{ gridTemplateColumns: ideGridTemplate(sidebarCollapsed, ideOpen, ideMaximized, ideWidth) }}
+      className="grid h-[calc(100dvh-3.5rem)] min-h-0 grid-cols-1 md:[grid-template-columns:var(--lf-grid-cols)]"
+      style={{ '--lf-grid-cols': ideGridTemplate(sidebarCollapsed, ideOpen, ideMaximized, ideWidth) } as CSSProperties}
     >
+      {mobileHistoryOpen && !ideFullscreen && (
+        <button
+          type="button"
+          onClick={() => {
+            setMobileHistoryOpen(false);
+            historyToggleRef.current?.focus();
+          }}
+          className="fixed inset-x-0 top-14 bottom-0 z-40 bg-black/50 md:hidden"
+          aria-label="Close chat history"
+          tabIndex={-1}
+        />
+      )}
       <aside
-        className={`min-h-0 flex-col border-b border-gray-800 bg-gray-950 md:border-b-0 md:border-r ${
-          sidebarCollapsed || (ideOpen && ideMaximized) ? 'hidden' : 'flex'
-        }`}
+        ref={historyDrawerRef}
+        id="chat-history"
+        aria-label="Chat history"
+        aria-hidden={mobileViewport && !mobileHistoryOpen}
+        aria-modal={mobileViewport && mobileHistoryOpen ? true : undefined}
+        role={mobileViewport && mobileHistoryOpen ? 'dialog' : undefined}
+        className={`min-h-0 flex-col border-b border-gray-800 bg-gray-950 md:static md:z-auto md:w-auto md:border-b-0 md:border-r ${
+          mobileHistoryOpen && !ideFullscreen
+            ? 'fixed left-0 top-14 bottom-0 z-50 flex w-[85vw] max-w-xs shadow-2xl'
+            : 'hidden'
+        } ${!sidebarCollapsed && !ideFullscreen ? 'md:flex' : 'md:hidden'}`}
       >
         <div className="border-b border-gray-800 p-4">
           <div className="flex items-center gap-2">
@@ -2139,6 +2218,19 @@ export default function AgentChat() {
               ) : (
                 <ChevronUp className="h-4 w-4" />
               )}
+            </button>
+            <button
+              ref={historyCloseRef}
+              type="button"
+              onClick={() => {
+                setMobileHistoryOpen(false);
+                historyToggleRef.current?.focus();
+              }}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-md text-gray-300 hover:bg-gray-800 md:hidden"
+              title="Hide chat history"
+              aria-label="Hide chat history"
+            >
+              <PanelLeftClose className="h-5 w-5" aria-hidden="true" />
             </button>
           </div>
           {!chatControlsCollapsed && (
@@ -2275,22 +2367,30 @@ export default function AgentChat() {
         </div>
       </aside>
 
-      <section className={`min-h-0 flex-col ${ideOpen && ideMaximized ? 'hidden' : 'flex'}`}>
+      <section className={`min-h-0 min-w-0 flex-col ${ideFullscreen ? 'hidden' : 'flex'}`}>
         <div className="border-b border-gray-800 bg-gray-950 px-4 py-2">
           <div className="flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-2">
               <button
-                onClick={() => setSidebarCollapsed((prev) => !prev)}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-gray-700 px-2.5 text-sm text-gray-300 transition-colors hover:bg-gray-900 hover:text-white"
-                title={sidebarCollapsed ? 'Show chat history' : 'Hide chat history'}
+                ref={historyToggleRef}
+                type="button"
+                onClick={() => {
+                  if (mobileViewport) setMobileHistoryOpen((prev) => !prev);
+                  else setSidebarCollapsed((prev) => !prev);
+                }}
+                className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-gray-700 text-sm text-gray-300 transition-colors hover:bg-gray-900 hover:text-white sm:h-9 sm:w-auto sm:gap-1.5 sm:px-2.5"
+                aria-controls="chat-history"
+                aria-expanded={mobileViewport ? mobileHistoryOpen : !sidebarCollapsed}
+                aria-label={historyToggleLabel}
+                title={historyToggleLabel}
               >
-                {sidebarCollapsed ? (
+                {historyIsClosed ? (
                   <PanelLeftOpen className="h-4 w-4" />
                 ) : (
                   <PanelLeftClose className="h-4 w-4" />
                 )}
                 <span className="hidden sm:inline text-xs">
-                  {sidebarCollapsed ? 'Show history' : 'Hide history'}
+                  {historyIsClosed ? 'Show history' : 'Hide history'}
                 </span>
               </button>
 
@@ -2298,10 +2398,10 @@ export default function AgentChat() {
                 {activeSession?.title ?? 'Agent Chat'}
               </h2>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex shrink-0 items-center gap-2">
               {realMetrics ? (
                 <span
-                  className="font-mono text-xs tabular-nums text-green-400"
+                  className="hidden font-mono text-xs tabular-nums text-green-400 sm:inline"
                   title="Measured decode throughput and time-to-first-token from the model runtime"
                 >
                   {realMetrics.generationTps.toFixed(1)} t/s
@@ -2314,14 +2414,14 @@ export default function AgentChat() {
                 streaming &&
                 tps > 0 && (
                   <span
-                    className="font-mono text-xs tabular-nums text-green-400"
+                    className="hidden font-mono text-xs tabular-nums text-green-400 sm:inline"
                     title="Estimated tokens per second while the current reply is streaming"
                   >
                     ~{tps} t/s live
                   </span>
                 )
               )}
-              <div className="rounded-full border border-gray-800 px-3 py-1 text-xs text-gray-400">
+              <div className="hidden rounded-full border border-gray-800 px-3 py-1 text-xs text-gray-400 sm:block">
                 {activeMessages.length} messages
               </div>
               <button
@@ -2353,7 +2453,7 @@ export default function AgentChat() {
         <div className="border-b border-gray-800 bg-gray-950/70 px-4 py-2">
           <div className="flex min-w-0 items-center gap-2">
             <Network className="h-4 w-4 flex-shrink-0 text-cyan-400" />
-            <span className="text-sm font-semibold text-white">Federation</span>
+            <span className="hidden text-sm font-semibold text-white sm:inline">Federation</span>
             <span
               className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${
                 federationEnabled
@@ -2376,7 +2476,7 @@ export default function AgentChat() {
               value={agentMode}
               onChange={(event) => setAgentMode(event.target.value)}
               title="Chat mode: how this turn's system prompt and tools are built"
-              className={`ml-auto rounded-full border px-2 py-0.5 text-[11px] ${
+              className={`ml-auto min-w-0 max-w-[55vw] rounded-full border px-2 py-1 text-[11px] sm:max-w-none ${
                 agentMode === 'agent'
                   ? 'border-gray-700 bg-gray-900 text-gray-300'
                   : 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
@@ -2394,8 +2494,9 @@ export default function AgentChat() {
             </select>
             <button
               onClick={() => setFederationBarCollapsed((prev) => !prev)}
-              className="rounded p-0.5 text-gray-500 transition-colors hover:bg-gray-800 hover:text-gray-300"
+              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded text-gray-500 transition-colors hover:bg-gray-800 hover:text-gray-300 sm:h-7 sm:w-7"
               title={federationBarCollapsed ? 'Expand federation bar' : 'Collapse federation bar'}
+              aria-label={federationBarCollapsed ? 'Expand federation bar' : 'Collapse federation bar'}
             >
               {federationBarCollapsed ? (
                 <ChevronDown className="h-4 w-4" />
@@ -2571,7 +2672,7 @@ export default function AgentChat() {
 
         <div className="border-t border-gray-800 bg-gray-900 p-4">
           <div className="mx-auto flex max-w-5xl items-center gap-3">
-            <div className="flex-1">
+            <div className="min-w-0 flex-1">
               <textarea
                 ref={inputRef}
                 data-testid="agent-chat-input"
