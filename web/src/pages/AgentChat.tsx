@@ -2226,11 +2226,12 @@ export default function AgentChat() {
                 setMobileHistoryOpen(false);
                 historyToggleRef.current?.focus();
               }}
-              className="inline-flex h-10 w-10 items-center justify-center rounded-md text-gray-300 hover:bg-gray-800 md:hidden"
+              className="inline-flex h-10 items-center justify-center gap-1 rounded-md px-2 text-sm text-gray-300 hover:bg-gray-800 md:hidden"
               title="Hide chat history"
               aria-label="Hide chat history"
             >
               <PanelLeftClose className="h-5 w-5" aria-hidden="true" />
+              Close
             </button>
           </div>
           {!chatControlsCollapsed && (
@@ -2421,9 +2422,6 @@ export default function AgentChat() {
                   </span>
                 )
               )}
-              <div className="hidden rounded-full border border-gray-800 px-3 py-1 text-xs text-gray-400 sm:block">
-                {activeMessages.length} messages
-              </div>
               <button
                 onClick={() => setIdeOpen((prev) => !prev)}
                 className={`hidden h-8 items-center gap-1.5 rounded-lg border px-2.5 text-sm transition-colors md:inline-flex ${
