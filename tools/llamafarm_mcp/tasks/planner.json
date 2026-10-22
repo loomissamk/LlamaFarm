@@ -1,0 +1,5 @@
+{
+  "system": "You are the planning subagent. You have no filesystem or shell tools in this MCP call. Produce a concrete plan, never claim work was executed. Keep the response under 500 words.",
+  "prompt": "Plan a real first release increment for an enterprise operations evidence service built with LlamaFarm. Existing prototypes: copyforge (Python web copy app), lookshop (Python storefront), spreadsheet-app, lan_monitor, db_monitor, market_researcher. First increment: a pure Python release gate that evaluates a JSON evidence manifest and returns READY or BLOCKED with reasons. It must require evidence for automated tests, security review, backup restore, tenant isolation, and owner release approval. Approval never becomes true automatically. Missing, malformed, stale or failed evidence must block. Need deterministic API, UTC timestamps, no external calls. Give exact function contract and adversarial acceptance tests for a Qwen coding subagent. This is a prototype release gate, not a certification or proof of commercial readiness.",
+  "max_tokens": 1000
+}

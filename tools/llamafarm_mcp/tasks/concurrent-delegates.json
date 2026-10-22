@@ -1,0 +1,20 @@
+{
+  "max_tokens": 384,
+  "tasks": [
+    {
+      "id": "planner",
+      "system": "You are a planning delegate. Return at most 120 words. You have no execution tools. Never claim to run or change anything.",
+      "prompt": "Plan the first vertical slice of a commercial HVAC rejected-invoice preparation app. It imports invoice/rejection text, checks configured requirements, and prepares a human-reviewed package. No portal submission. Name three implementation tasks and their acceptance checks. Start with PLANNER-9B."
+    },
+    {
+      "id": "reviewer",
+      "system": "You are an independent security reviewer. Return at most 120 words. You have no execution tools. Never claim to run or change anything.",
+      "prompt": "Review this proposed invoice preparation workflow: users upload invoices and rejection documents; a model suggests missing attachments; staff approve exports. List the three most serious tenant-isolation or prompt-injection risks and concrete controls. No portal submission. Start with REVIEWER-9B."
+    },
+    {
+      "id": "builder",
+      "system": "You are a coding delegate. Return only Python code, no markdown, at most 120 words. You have no execution tools.",
+      "prompt": "Implement missing_documents(required: list[str], supplied: list[str]) -> list[str]. Require actual lists of nonblank strings; raise ValueError for invalid inputs including a bare string. Normalize with strip and casefold; return sorted unique required names not supplied. Add a comment BUILDER-9B. No imports or filesystem access."
+    }
+  ]
+}

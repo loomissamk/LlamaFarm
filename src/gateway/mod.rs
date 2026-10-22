@@ -1447,6 +1447,26 @@ async fn handle_agent(
         .clone()
         .unwrap_or_else(|| "unknown".to_string());
     let model_label = runtime.model.clone();
+    let workspace_dir = state.config.lock().workspace_dir.clone();
+    let run_id = Uuid::new_v4().to_string();
+    let ledger = match crate::agent::run_ledger::RunLedger::open_or_create(
+        &workspace_dir,
+        &run_id,
+        None,
+        "agent_api",
+        &provider_label,
+        &model_label,
+        "agent",
+    ) {
+        Ok(ledger) => ledger,
+        Err(error) => {
+            tracing::error!(%error, "could not persist /agent run ledger");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Could not start a durable agent run"})),
+            );
+        }
+    };
     let started_at = Instant::now();
 
     state
@@ -1463,8 +1483,19 @@ async fn handle_agent(
             messages_count: 1,
         });
 
-    let response = match run_gateway_chat_with_tools(&state, message).await {
+    let result = crate::agent::run_ledger::RUN_LEDGER
+        .scope(Some(ledger.clone()), run_gateway_chat_with_tools(&state, message))
+        .await;
+    let response = match result {
         Ok(response) => {
+            let status = if !crate::agent::loop_::is_planning_only_request(message)
+                && ledger.unverified_plan_summary().is_some()
+            {
+                crate::agent::run_ledger::RunStatus::CompletedUnverified
+            } else {
+                crate::agent::run_ledger::RunStatus::Completed
+            };
+            ledger.finalize(status);
             let safe = sanitize_gateway_response(&response, runtime.tools_registry_exec.as_ref());
             state
                 .observer
@@ -1483,6 +1514,7 @@ async fn handle_agent(
             safe
         }
         Err(e) => {
+            ledger.finalize(crate::agent::run_ledger::RunStatus::Failed);
             let sanitized = crate::providers::sanitize_api_error(&e.to_string());
             state
                 .observer
@@ -1497,7 +1529,8 @@ async fn handle_agent(
                 });
 
             let err = serde_json::json!({
-                "error": format!("Provider error: {sanitized}")
+                "error": format!("Provider error: {sanitized}"),
+                "run_id": run_id,
             });
             return (StatusCode::BAD_GATEWAY, Json(err));
         }
@@ -1516,7 +1549,8 @@ async fn handle_agent(
     (
         StatusCode::OK,
         Json(serde_json::json!({
-            "response": response
+            "response": response,
+            "run_id": run_id,
         })),
     )
 }
@@ -3016,8 +3050,11 @@ Reminder set successfully."#;
         let memory: Arc<dyn Memory> = Arc::new(MockMemory);
         let paired_token = "zc_test_token".to_string();
 
+        let workspace_dir = std::env::temp_dir().join(format!("llamafarm-agent-ledger-{}", Uuid::new_v4()));
+        let mut config = Config::default();
+        config.workspace_dir = workspace_dir.clone();
         let state = AppState {
-            config: Arc::new(Mutex::new(Config::default())),
+            config: Arc::new(Mutex::new(config)),
             provider,
             model: "test-model".into(),
             temperature: 0.0,
@@ -3050,7 +3087,7 @@ Reminder set successfully."#;
         };
 
         let unauthorized = handle_agent(
-            State(state),
+            State(state.clone()),
             test_connect_info(),
             HeaderMap::new(),
             Ok(Json(AgentBody {
@@ -3060,6 +3097,30 @@ Reminder set successfully."#;
         .await
         .into_response();
         assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer zc_test_token"));
+        let authorized = handle_agent(
+            State(state),
+            test_connect_info(),
+            headers,
+            Ok(Json(AgentBody { message: "hello".into() })),
+        )
+        .await
+        .into_response();
+        // The /agent handler creates a fresh process_message runtime from
+        // Config, so this in-memory MockProvider cannot satisfy the turn.
+        // The failure still must have a durable, inspectable run ID.
+        assert_eq!(authorized.status(), StatusCode::BAD_GATEWAY);
+        let payload = authorized.into_body().collect().await.unwrap().to_bytes();
+        let parsed: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+        assert!(parsed["error"].as_str().is_some());
+        let run_id = parsed["run_id"].as_str().unwrap();
+        assert!(Uuid::parse_str(run_id).is_ok());
+        let ledger_path = workspace_dir.join("state/runs").join(format!("{run_id}.ledger.json"));
+        let ledger: serde_json::Value = serde_json::from_slice(&std::fs::read(ledger_path).unwrap()).unwrap();
+        assert_eq!(ledger["meta"]["status"], "failed");
+        let _ = std::fs::remove_dir_all(workspace_dir);
     }
 
     #[tokio::test]
