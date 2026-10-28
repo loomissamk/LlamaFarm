@@ -1,8 +1,8 @@
 {
   "$schema": "https://app.kilo.ai/config.json",
   "enabled_providers": ["llamafarm-v100"],
-  "model": "llamafarm-v100/qwen3.8:27b-128k",
-  "small_model": "llamafarm-v100/qwen3.8:27b-128k",
+  "model": "llamafarm-v100/qwen3.8:27b-256k",
+  "small_model": "llamafarm-v100/qwen3.8:27b-256k",
   "provider": {
     "llamafarm-v100": {
       "npm": "@ai-sdk/openai-compatible",
@@ -11,6 +11,11 @@
         "apiKey": "none"
       },
       "models": {
+        "qwen3.8:27b-256k": {
+          "name": "Qwen 3.8 27B 256K on V100 via Tailscale",
+          "tool_call": true,
+          "limit": { "context": 262144, "output": 4096 }
+        },
         "qwen3.8:27b-128k": {
           "name": "Qwen 3.8 27B 128K on V100 via Tailscale",
           "tool_call": true,
@@ -25,7 +30,7 @@
       "command": ["/ABS/PATH/TO/venv/bin/python", "/ABS/PATH/TO/LlamaFarm/tools/llamafarm_mcp/server.py"],
       "environment": {
         "LLAMAFARM_BASE_URL": "http://TAILSCALE_HOST:42617",
-        "LLAMAFARM_MODEL": "qwen3.8:27b-128k",
+        "LLAMAFARM_MODEL": "qwen3.8:27b-256k",
         "LLAMAFARM_TIMEOUT": "300"
       },
       "enabled": true,
@@ -33,13 +38,13 @@
     }
   },
   "agent": {
-    "code": { "model": "llamafarm-v100/qwen3.8:27b-128k", "temperature": 0.2 },
-    "plan": { "model": "llamafarm-v100/qwen3.8:27b-128k", "temperature": 0.2 },
-    "debug": { "model": "llamafarm-v100/qwen3.8:27b-128k", "temperature": 0.2 },
+    "code": { "model": "llamafarm-v100/qwen3.8:27b-256k", "temperature": 0.2 },
+    "plan": { "model": "llamafarm-v100/qwen3.8:27b-256k", "temperature": 0.2 },
+    "debug": { "model": "llamafarm-v100/qwen3.8:27b-256k", "temperature": 0.2 },
     "review": {
       "description": "Read-only code reviewer for independent worktrees",
       "mode": "all",
-      "model": "llamafarm-v100/qwen3.8:27b-128k",
+      "model": "llamafarm-v100/qwen3.8:27b-256k",
       "temperature": 0.1,
       "prompt": "Review changes using repository files and diffs. Report findings with file paths and evidence. Do not edit files or run commands.",
       "permission": { "edit": "deny", "bash": "deny" }

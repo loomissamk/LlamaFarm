@@ -1,0 +1,442 @@
+{
+  "date": "2026-10-28",
+  "method": "Direct Ollama /api/chat; serial tests; 256K prefill had a nonce prepended to bypass prompt cache",
+  "cases": [
+    {
+      "model": "qwen3.8:27b-128k",
+      "context_requested": 131072,
+      "kind": "text",
+      "http_status": 200,
+      "wall_s": 3.498,
+      "error": null,
+      "prompt_eval_count": 43,
+      "eval_count": 160,
+      "load_duration_ns": 913893,
+      "prompt_eval_duration_ns": 230426000,
+      "eval_duration_ns": 2907876000,
+      "total_duration_ns": 3483302087,
+      "prefill_tps": 186.61,
+      "decode_tps": 55.02,
+      "ttft_backend_ms": 231.34,
+      "tool_calls": [],
+      "tool_call_correct": false,
+      "response_excerpt": "1. Verify that all public functions have doc comments.\n2. Check for unused variables or imports.\n3. Ensure error handling uses `?` operator where appropriate.\n4. Confirm that `unsafe` blocks are justified and documented.\n5. Look for potential integer overflow in arithmetic operations.\n6. Verify that",
+      "gpu_samples": [
+        {
+          "elapsed_s": 0.01,
+          "memory_mib": 23772,
+          "utilization_pct": 0
+        },
+        {
+          "elapsed_s": 0.53,
+          "memory_mib": 23774,
+          "utilization_pct": 87
+        },
+        {
+          "elapsed_s": 1.04,
+          "memory_mib": 23774,
+          "utilization_pct": 99
+        },
+        {
+          "elapsed_s": 1.55,
+          "memory_mib": 23774,
+          "utilization_pct": 99
+        },
+        {
+          "elapsed_s": 2.06,
+          "memory_mib": 23774,
+          "utilization_pct": 99
+        },
+        {
+          "elapsed_s": 2.57,
+          "memory_mib": 23774,
+          "utilization_pct": 98
+        },
+        {
+          "elapsed_s": 3.08,
+          "memory_mib": 23774,
+          "utilization_pct": 99
+        }
+      ],
+      "peak_gpu_memory_mib": 23774,
+      "peak_gpu_utilization_pct": 99
+    },
+    {
+      "model": "qwen3.8:27b-128k",
+      "context_requested": 131072,
+      "kind": "prefill",
+      "http_status": 200,
+      "wall_s": 11.356,
+      "error": null,
+      "prompt_eval_count": 7697,
+      "eval_count": 19,
+      "load_duration_ns": 1221993,
+      "prompt_eval_duration_ns": 10887661000,
+      "eval_duration_ns": 378045000,
+      "total_duration_ns": 11354565159,
+      "prefill_tps": 706.95,
+      "decode_tps": 50.26,
+      "ttft_backend_ms": 10888.88,
+      "tool_calls": [],
+      "tool_call_correct": false,
+      "response_excerpt": "No code was provided to review; please supply the Rust source code to evaluate the invariant.",
+      "gpu_samples": [
+        {
+          "elapsed_s": 0.01,
+          "memory_mib": 23774,
+          "utilization_pct": 99
+        },
+        {
+          "elapsed_s": 0.52,
+          "memory_mib": 23774,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 1.03,
+          "memory_mib": 23774,
+          "utilization_pct": 97
+        },
+        {
+          "elapsed_s": 1.54,
+          "memory_mib": 23774,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 2.05,
+          "memory_mib": 23774,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 2.57,
+          "memory_mib": 23774,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 3.08,
+          "memory_mib": 23774,
+          "utilization_pct": 98
+        },
+        {
+          "elapsed_s": 3.59,
+          "memory_mib": 23774,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 4.1,
+          "memory_mib": 23774,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 4.61,
+          "memory_mib": 23774,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 5.12,
+          "memory_mib": 23774,
+          "utilization_pct": 98
+        },
+        {
+          "elapsed_s": 5.64,
+          "memory_mib": 23774,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 6.15,
+          "memory_mib": 23774,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 6.66,
+          "memory_mib": 23774,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 7.17,
+          "memory_mib": 23774,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 7.68,
+          "memory_mib": 23774,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 8.19,
+          "memory_mib": 23774,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 8.7,
+          "memory_mib": 23774,
+          "utilization_pct": 98
+        },
+        {
+          "elapsed_s": 9.21,
+          "memory_mib": 23774,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 9.73,
+          "memory_mib": 23774,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 10.24,
+          "memory_mib": 23774,
+          "utilization_pct": 84
+        },
+        {
+          "elapsed_s": 10.75,
+          "memory_mib": 23774,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 11.26,
+          "memory_mib": 23774,
+          "utilization_pct": 99
+        }
+      ],
+      "peak_gpu_memory_mib": 23774,
+      "peak_gpu_utilization_pct": 100
+    },
+    {
+      "model": "qwen3.8:27b",
+      "context_requested": 262144,
+      "kind": "text",
+      "http_status": 200,
+      "wall_s": 7.539,
+      "error": null,
+      "prompt_eval_count": 43,
+      "eval_count": 160,
+      "load_duration_ns": 4280934419,
+      "prompt_eval_duration_ns": 310623000,
+      "eval_duration_ns": 2930761000,
+      "total_duration_ns": 7523919733,
+      "prefill_tps": 138.43,
+      "decode_tps": 54.59,
+      "ttft_backend_ms": 4591.56,
+      "tool_calls": [],
+      "tool_call_correct": false,
+      "response_excerpt": "1. Verify that all public functions have doc comments.\n2. Check for unused variables or imports.\n3. Ensure error handling uses `?` operator where appropriate.\n4. Confirm that `unsafe` blocks are justified and documented.\n5. Look for potential integer overflow in arithmetic operations.\n6. Verify that",
+      "gpu_samples": [
+        {
+          "elapsed_s": 0.01,
+          "memory_mib": 24328,
+          "utilization_pct": 0
+        },
+        {
+          "elapsed_s": 0.53,
+          "memory_mib": 286,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 1.05,
+          "memory_mib": 283,
+          "utilization_pct": 1
+        },
+        {
+          "elapsed_s": 1.56,
+          "memory_mib": 286,
+          "utilization_pct": 21
+        },
+        {
+          "elapsed_s": 2.07,
+          "memory_mib": 286,
+          "utilization_pct": 0
+        },
+        {
+          "elapsed_s": 2.59,
+          "memory_mib": 15626,
+          "utilization_pct": 98
+        },
+        {
+          "elapsed_s": 3.1,
+          "memory_mib": 15626,
+          "utilization_pct": 98
+        },
+        {
+          "elapsed_s": 3.61,
+          "memory_mib": 15626,
+          "utilization_pct": 98
+        },
+        {
+          "elapsed_s": 4.13,
+          "memory_mib": 28986,
+          "utilization_pct": 40
+        },
+        {
+          "elapsed_s": 4.64,
+          "memory_mib": 28996,
+          "utilization_pct": 70
+        },
+        {
+          "elapsed_s": 5.15,
+          "memory_mib": 29014,
+          "utilization_pct": 99
+        },
+        {
+          "elapsed_s": 5.66,
+          "memory_mib": 29014,
+          "utilization_pct": 99
+        },
+        {
+          "elapsed_s": 6.17,
+          "memory_mib": 29014,
+          "utilization_pct": 99
+        },
+        {
+          "elapsed_s": 6.69,
+          "memory_mib": 29014,
+          "utilization_pct": 99
+        },
+        {
+          "elapsed_s": 7.2,
+          "memory_mib": 29014,
+          "utilization_pct": 99
+        }
+      ],
+      "peak_gpu_memory_mib": 29014,
+      "peak_gpu_utilization_pct": 100
+    },
+    {
+      "model": "qwen3.8:27b-256k",
+      "context_requested": 262144,
+      "kind": "prefill",
+      "http_status": 200,
+      "wall_s": 11.668,
+      "error": null,
+      "prompt_eval_count": 7720,
+      "eval_count": 19,
+      "load_duration_ns": 1538295,
+      "prompt_eval_duration_ns": 10954644000,
+      "eval_duration_ns": 506864000,
+      "total_duration_ns": 11652709789,
+      "prefill_tps": 704.72,
+      "decode_tps": 37.49,
+      "ttft_backend_ms": 10956.18,
+      "tool_calls": [],
+      "tool_call_correct": false,
+      "response_excerpt": "No Rust code was provided to review; please supply the source code to evaluate the invariant.",
+      "gpu_samples": [
+        {
+          "elapsed_s": 0.01,
+          "memory_mib": 29404,
+          "utilization_pct": 0
+        },
+        {
+          "elapsed_s": 0.52,
+          "memory_mib": 29404,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 1.03,
+          "memory_mib": 29404,
+          "utilization_pct": 97
+        },
+        {
+          "elapsed_s": 1.55,
+          "memory_mib": 29404,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 2.06,
+          "memory_mib": 29404,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 2.57,
+          "memory_mib": 29404,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 3.08,
+          "memory_mib": 29404,
+          "utilization_pct": 98
+        },
+        {
+          "elapsed_s": 3.59,
+          "memory_mib": 29404,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 4.1,
+          "memory_mib": 29404,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 4.61,
+          "memory_mib": 29404,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 5.13,
+          "memory_mib": 29404,
+          "utilization_pct": 98
+        },
+        {
+          "elapsed_s": 5.64,
+          "memory_mib": 29404,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 6.15,
+          "memory_mib": 29404,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 6.66,
+          "memory_mib": 29404,
+          "utilization_pct": 98
+        },
+        {
+          "elapsed_s": 7.17,
+          "memory_mib": 29404,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 7.68,
+          "memory_mib": 29404,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 8.19,
+          "memory_mib": 29404,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 8.7,
+          "memory_mib": 29404,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 9.22,
+          "memory_mib": 29404,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 9.73,
+          "memory_mib": 29404,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 10.24,
+          "memory_mib": 29406,
+          "utilization_pct": 98
+        },
+        {
+          "elapsed_s": 10.75,
+          "memory_mib": 29406,
+          "utilization_pct": 100
+        },
+        {
+          "elapsed_s": 11.26,
+          "memory_mib": 29406,
+          "utilization_pct": 90
+        }
+      ],
+      "peak_gpu_memory_mib": 29406,
+      "peak_gpu_utilization_pct": 100
+    }
+  ]
+}
