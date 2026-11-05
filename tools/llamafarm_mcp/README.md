@@ -8,7 +8,7 @@ client machine and calls the remote LlamaFarm gateway over the configured URL.
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 export LLAMAFARM_BASE_URL=http://V100_TAILSCALE_IP:42617
-export LLAMAFARM_MODEL=qwen3.5:9b
+export LLAMAFARM_MODEL=orcarouter-qwen3.8:27b-256k
 .venv/bin/python server.py
 ```
 
@@ -19,7 +19,8 @@ client. Set `LLAMAFARM_BASE_URL`, `LLAMAFARM_MODEL`, and optionally
 (minimum `/agent` timeout even when a client requests less) in that client registration. Set the
 client's MCP tool-call timeout longer than either backend timeout. `profiles/` has example
 values for the V100 node. The `fast` and `heavy` profiles point to the same
-gateway; they do not create separate GPU workers.
+gateway; they do not create separate GPU workers. `/agent` uses the gateway's
+saved default model, regardless of the MCP client's `LLAMAFARM_MODEL` value.
 
 `llamafarm_delegate_batch` runs 1–4 text-only delegates. For real node-side
 tool use, `llamafarm_agent_batch` runs 1–4 independent `/agent` requests and
