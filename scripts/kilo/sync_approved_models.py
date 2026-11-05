@@ -25,7 +25,7 @@ CATALOG = "http://127.0.0.1:11435/api/tags"
 PROVIDER = "llamafarm-v100"
 MODELS = {
     "qwen3.8:27b-256k": ("Qwen 3.8 27B", 262144),
-    "orcarouter-qwen3.8:27b-256k": ("UnQwen 3.8 27B", 262144),
+    "qwen3.8-unqwen:27b-256k": ("UnQwen 3.8 27B", 262144),
 }
 
 

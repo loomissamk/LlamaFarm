@@ -8,7 +8,7 @@ client machine and calls the remote LlamaFarm gateway over the configured URL.
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 export LLAMAFARM_BASE_URL=http://V100_TAILSCALE_IP:42617
-export LLAMAFARM_MODEL=orcarouter-qwen3.8:27b-256k
+export LLAMAFARM_MODEL=qwen3.8-unqwen:27b-256k
 .venv/bin/python server.py
 ```
 

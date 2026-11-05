@@ -7,7 +7,7 @@ Ollama server.
 | Profile | Model | Intended use |
 |---|---|---|
 | `fast` | `qwen3.5:9b-256k` | short delegation, planning, code inspection, quick second opinions |
-| `heavy` | `orcarouter-qwen3.8:27b-256k` | harder reasoning, longer synthesis, final review |
+| `heavy` | `qwen3.8-unqwen:27b-256k` | harder reasoning, longer synthesis, final review |
 
 The single V100 can keep one 27B model resident. The gateway's saved default
 is UnQwen 3.8 27B; switching to the fast profile can cause a cold-load pause.
