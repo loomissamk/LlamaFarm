@@ -47,6 +47,15 @@ class AgentBatchTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["results"][1]["http_status"], 502)
         self.assertEqual(data["results"][1]["run_id"], "failed-run")
 
+    async def test_configured_minimum_overrides_short_batch_request(self):
+        def backend(prompt, timeout):
+            self.assertEqual(timeout, 900)
+            return {"ok": True, "http_status": 200, "response": "ok"}
+
+        with patch.object(server, "MIN_AGENT_TIMEOUT", 900), patch.object(server, "_post_agent_batch_task", backend):
+            data = json.loads(await server.llamafarm_agent_batch([{"id": "one", "prompt": "read status"}], 300))
+        self.assertTrue(data["all_ok"])
+
     async def test_validation_before_dispatch(self):
         bad_batches = [[], [{"id": "x", "prompt": "p"}] * 5,
                        [{"id": "x", "prompt": "p"}] * 2,

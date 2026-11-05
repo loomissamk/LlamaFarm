@@ -14,7 +14,10 @@ export LLAMAFARM_MODEL=qwen3.5:9b
 
 Register `.venv/bin/python` with `server.py` as its argument in the MCP
 client. Set `LLAMAFARM_BASE_URL`, `LLAMAFARM_MODEL`, and optionally
-`LLAMAFARM_TIMEOUT` in that client registration. `profiles/` has example
+`LLAMAFARM_TIMEOUT` (chat requests), `LLAMAFARM_AGENT_TIMEOUT` (default
+`/agent` request timeout, in seconds), and `LLAMAFARM_AGENT_MIN_TIMEOUT`
+(minimum `/agent` timeout even when a client requests less) in that client registration. Set the
+client's MCP tool-call timeout longer than either backend timeout. `profiles/` has example
 values for the V100 node. The `fast` and `heavy` profiles point to the same
 gateway; they do not create separate GPU workers.
 

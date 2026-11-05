@@ -108,7 +108,7 @@ def main() -> None:
         name: {
             "name": f"{label} | {context // 1024}K | V100 via Tailscale",
             "tool_call": True,
-            "limit": {"context": context, "output": 4096},
+            "limit": {"context": context, "output": context // 2},
         }
         for name, (label, context) in MODELS.items()
         if name in available

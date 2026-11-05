@@ -35,6 +35,8 @@ from mcp.server.mcpserver import MCPServer
 BASE_URL = os.environ.get("LLAMAFARM_BASE_URL", "http://127.0.0.1:42617").rstrip("/")
 MODEL = os.environ.get("LLAMAFARM_MODEL", "qwen3.8:27b")
 DEFAULT_TIMEOUT = float(os.environ.get("LLAMAFARM_TIMEOUT", "120"))
+DEFAULT_AGENT_TIMEOUT = int(os.environ.get("LLAMAFARM_AGENT_TIMEOUT", "300"))
+MIN_AGENT_TIMEOUT = int(os.environ.get("LLAMAFARM_AGENT_MIN_TIMEOUT", "0"))
 DELEGATE_SLOTS = asyncio.Semaphore(4)
 AGENT_SLOTS = asyncio.Semaphore(4)
 
@@ -161,7 +163,7 @@ def llamafarm_chat(prompt: str, system: str = "", max_tokens: int = 1024) -> str
 
 
 @mcp.tool()
-def llamafarm_agent(prompt: str, timeout_seconds: int = 300) -> str:
+def llamafarm_agent(prompt: str, timeout_seconds: int = DEFAULT_AGENT_TIMEOUT) -> str:
     """Run a tool-capable LlamaFarm task on the remote node.
 
     Unlike llamafarm_chat, this calls POST /agent and may execute LlamaFarm's
@@ -170,13 +172,14 @@ def llamafarm_agent(prompt: str, timeout_seconds: int = 300) -> str:
 
     Args:
         prompt: Complete task instruction for the remote agent.
-        timeout_seconds: Maximum wait for the synchronous agent response (1-3600).
+        timeout_seconds: Requested wait for the synchronous agent response (1-3600).
+            LLAMAFARM_AGENT_MIN_TIMEOUT can set a higher minimum for this MCP server.
     """
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 64000:
         raise ValueError("prompt must be nonempty and at most 64000 characters")
     if type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 3600:
         raise ValueError("timeout_seconds must be an integer from 1 to 3600")
-    return _post_agent(prompt, timeout_seconds)
+    return _post_agent(prompt, max(timeout_seconds, MIN_AGENT_TIMEOUT))
 
 
 @mcp.tool()
@@ -264,7 +267,7 @@ async def llamafarm_delegate_batch(tasks: list[dict[str, str]], max_tokens: int 
 
 
 @mcp.tool()
-async def llamafarm_agent_batch(tasks: list[dict[str, str]], timeout_seconds: int = 300) -> str:
+async def llamafarm_agent_batch(tasks: list[dict[str, str]], timeout_seconds: int = DEFAULT_AGENT_TIMEOUT) -> str:
     """Run 1-4 independent tool-capable LlamaFarm agents via POST /agent.
 
     Each task has a unique id and a complete prompt. Tasks have separate agent
@@ -276,12 +279,14 @@ async def llamafarm_agent_batch(tasks: list[dict[str, str]], timeout_seconds: in
 
     Args:
         tasks: One to four objects containing only id and prompt strings.
-        timeout_seconds: Per-agent synchronous request timeout (1-3600).
+        timeout_seconds: Requested per-agent synchronous request timeout (1-3600).
+            LLAMAFARM_AGENT_MIN_TIMEOUT can set a higher minimum for this MCP server.
     """
     if not isinstance(tasks, list) or not 1 <= len(tasks) <= 4:
         raise ValueError("provide 1-4 tasks")
     if type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 3600:
         raise ValueError("timeout_seconds must be an integer from 1 to 3600")
+    timeout_seconds = max(timeout_seconds, MIN_AGENT_TIMEOUT)
     seen: set[str] = set()
     for task in tasks:
         if not isinstance(task, dict) or set(task) != {"id", "prompt"}:
