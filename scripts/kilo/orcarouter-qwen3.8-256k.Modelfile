@@ -1,0 +1,2 @@
+FROM orcarouter/Qwen3.8-27B-Uncensored
+PARAMETER num_ctx 262144
