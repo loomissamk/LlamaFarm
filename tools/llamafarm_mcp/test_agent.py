@@ -27,6 +27,11 @@ class AgentTest(unittest.TestCase):
                     server.llamafarm_agent(prompt, timeout)
             post.assert_not_called()
 
+    def test_configured_minimum_overrides_short_request(self):
+        with patch.object(server, "MIN_AGENT_TIMEOUT", 900), patch.object(server, "_post_agent", return_value="ok") as post:
+            self.assertEqual(server.llamafarm_agent("read status", 300), "ok")
+            post.assert_called_once_with("read status", 900)
+
     def test_run_tools_use_existing_ledger_routes(self):
         run_id = str(uuid4())
         with patch.object(server, "_get", return_value={"runs": [], "live": []}) as get:
