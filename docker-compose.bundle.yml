@@ -113,6 +113,9 @@ services:
       - LLAMAFARM_HOST_HOME=${HOME}
       - LLAMAFARM_HOST_RUNNER_MAX_TIMEOUT_SECS=${LLAMAFARM_HOST_RUNNER_MAX_TIMEOUT_SECS:-0}
       - OLLAMA_HOST=0.0.0.0:11434
+      # Bind only the bundled Ollama process; keep all GPUs visible to the
+      # gateway so the dashboard can assign other cards to managed workers.
+      - LLAMAFARM_OLLAMA_GPU_DEVICES=${LLAMAFARM_OLLAMA_GPU_DEVICES:-}
       # This platform is local-first: never route inference to an Ollama cloud
       # model. Model pulls still use the registry, while generation stays on
       # the GPU attached to this node.

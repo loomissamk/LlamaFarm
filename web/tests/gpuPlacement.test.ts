@@ -62,6 +62,14 @@ test('primary runtime label identifies a single detected GPU without hard-coding
     ]),
     'Primary · 2 visible GPUs',
   );
+  assert.equal(
+    primaryRuntimeLabel([
+      { index: 0, uuid: 'GPU-a', name: 'GPU A', memory_total_mb: 32_768 },
+      { index: 1, uuid: 'GPU-b', name: 'GPU B', memory_total_mb: 32_768 },
+    ], 'GPU-a'),
+    'Primary · GPU 0 · GPU A',
+  );
+  assert.equal(primaryRuntimeLabel([], '-1'), 'Primary · CPU only');
 });
 
 test('GPU placement UI keeps the full editor advanced and supports external runtimes', () => {

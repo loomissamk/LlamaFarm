@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type DragEvent } from 'react';
 import { Cpu, Plus, Save, Trash2, Zap } from 'lucide-react';
 import {
   getOllamaGpuPlacement,
@@ -57,6 +57,7 @@ export default function OllamaGpuPlacementPanel({
         endpoint: managed ? workerEndpoint(id) : '',
         gpu_ids: [],
         spread: false,
+        cpu_only: false,
         managed,
       },
     ]);
@@ -92,12 +93,12 @@ export default function OllamaGpuPlacementPanel({
   const savePreference = async (workerId: string) => {
     if (!currentModel || !data) return;
     setBusy(`preference:${currentModel}`); setMessage('');
-    const nextPlacements = withModelPlacement(data.placements, currentModel, workerId);
+    const nextPlacements = withModelPlacement(placements, currentModel, workerId);
     try {
-      await putOllamaGpuPlacement({ workers: data.workers, placements: nextPlacements });
-      const selectedWorker = data.workers.find((worker) => worker.id === workerId);
+      await putOllamaGpuPlacement({ workers, placements: nextPlacements });
+      const selectedWorker = workers.find((worker) => worker.id === workerId);
       setMessage(
-        `${currentModel} now prefers ${selectedWorker?.label || selectedWorker?.id || primaryRuntimeLabel(data.gpus)}.`,
+        `${currentModel} now prefers ${selectedWorker?.label || selectedWorker?.id || primaryRuntimeLabel(data.gpus, data.primary_gpu_devices)}.`,
       );
       await refresh();
     } catch (error) {
@@ -121,7 +122,7 @@ export default function OllamaGpuPlacementPanel({
     finally { setBusy(''); }
   };
 
-  const primaryLabel = primaryRuntimeLabel(data?.gpus ?? []);
+  const primaryLabel = primaryRuntimeLabel(data?.gpus ?? [], data?.primary_gpu_devices);
   const currentWorkerId = placementWorkerId(data?.placements ?? placements, currentModel);
   const missingCurrentWorker = currentWorkerId
     && !workers.some((worker) => worker.id === currentWorkerId);
@@ -129,6 +130,13 @@ export default function OllamaGpuPlacementPanel({
     && !models.some((model) => canonicalOllamaModel(model) === canonicalOllamaModel(currentModel))
     ? [currentModel, ...models]
     : models;
+  const routeDroppedModel = (event: DragEvent<HTMLElement>, workerId: string) => {
+    event.preventDefault();
+    const model = event.dataTransfer.getData('text/plain');
+    if (!routableModels.includes(model)) return;
+    setPlacements((current) => withModelPlacement(current, model, workerId));
+    setMessage(`${model} route staged. Save to apply.`);
+  };
 
   return (
     <section className="rounded-xl border border-gray-800 bg-gray-900 p-5">
@@ -166,8 +174,13 @@ export default function OllamaGpuPlacementPanel({
         </div>
       </div>
       <p className="mt-3 text-xs text-gray-500">
-        Primary endpoint: {data?.primary_endpoint ?? 'loading…'}
+        Primary endpoint: {data?.primary_endpoint ?? 'loading…'} · GPU binding: {data?.primary_gpu_devices || 'automatic'}
       </p>
+      {data && data.gpus.length > 1 && !data.primary_gpu_devices && (
+        <p className="mt-2 text-xs text-amber-300">
+          The bundled Ollama process can use every GPU. Set LLAMAFARM_OLLAMA_GPU_DEVICES to a GPU UUID before reserving another card for a worker or training.
+        </p>
+      )}
 
       <details className="group mt-5 border-t border-gray-800 pt-4">
         <summary className="cursor-pointer select-none text-sm font-medium text-gray-300 hover:text-white">
@@ -177,6 +190,13 @@ export default function OllamaGpuPlacementPanel({
           </span>
         </summary>
         <div className="mt-4">
+          <div
+            className="rounded-lg border border-dashed border-gray-600 p-3 text-sm text-gray-300"
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => routeDroppedModel(event, '')}
+          >
+            Drop a model here for {primaryLabel}.
+          </div>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <p className="max-w-3xl text-sm text-gray-400">
               A managed runtime binds a local GPU set. An external runtime can point to another Ollama-compatible endpoint.
@@ -187,7 +207,8 @@ export default function OllamaGpuPlacementPanel({
           </div>
           <div className="mt-4 space-y-3">
             {workers.map((worker, index) => (
-              <div key={worker.id} className="rounded-lg border border-gray-800 bg-gray-950 p-4">
+              <div key={worker.id} className="rounded-lg border border-gray-800 bg-gray-950 p-4" onDragOver={(event) => event.preventDefault()} onDrop={(event) => routeDroppedModel(event, worker.id)}>
+                <p className="mb-2 text-xs text-gray-500">Drop a model here to assign it to this runtime.</p>
                 <div className="grid gap-3 lg:grid-cols-[0.8fr_1fr_1.4fr_auto]">
                   <div>
                     <label htmlFor={`ollama-worker-id-${index}`} className="text-xs text-gray-500">Runtime ID</label>
@@ -220,7 +241,7 @@ export default function OllamaGpuPlacementPanel({
                       const managed = event.target.value === 'managed';
                       updateWorker(index, managed
                         ? { managed: true, endpoint: workerEndpoint(worker.id) }
-                        : { managed: false, endpoint: '', gpu_ids: [], spread: false });
+                        : { managed: false, endpoint: '', gpu_ids: [], spread: false, cpu_only: false });
                     }}
                     className="rounded border border-gray-700 bg-gray-900 px-2 py-1.5 text-sm text-gray-200"
                   >
@@ -229,6 +250,12 @@ export default function OllamaGpuPlacementPanel({
                   </select>
                   {worker.managed ? (
                     <>
+                      <label className="flex items-center gap-2 text-sm text-gray-300">
+                        <input type="checkbox" checked={worker.cpu_only ?? false} onChange={(event) => updateWorker(index, { cpu_only: event.target.checked, gpu_ids: event.target.checked ? [] : worker.gpu_ids, spread: event.target.checked ? false : worker.spread })} />
+                        CPU only
+                      </label>
+                      {!worker.cpu_only && (
+                        <>
                       {data?.gpus.map((gpu) => (
                         <label key={gpu.uuid} className="flex items-center gap-2 rounded border border-gray-800 px-3 py-2 text-sm text-gray-300">
                           <input type="checkbox" checked={worker.gpu_ids.includes(gpu.uuid)} onChange={(event) => updateWorker(index, { gpu_ids: event.target.checked ? [...worker.gpu_ids, gpu.uuid] : worker.gpu_ids.filter((id) => id !== gpu.uuid) })} />
@@ -239,6 +266,8 @@ export default function OllamaGpuPlacementPanel({
                         <input type="checkbox" checked={worker.spread} onChange={(event) => updateWorker(index, { spread: event.target.checked })} />
                         Spread across selected GPUs
                       </label>
+                        </>
+                      )}
                     </>
                   ) : (
                     <span className="text-xs text-gray-500">The external Ollama-compatible service owns its GPU allocation.</span>
@@ -258,7 +287,7 @@ export default function OllamaGpuPlacementPanel({
                 const workerId = placementWorkerId(placements, model);
                 return (
                   <div key={model} className="grid items-center gap-2 rounded-lg border border-gray-800 px-3 py-2 md:grid-cols-[1fr_1fr_auto]">
-                    <span className="break-all text-sm text-gray-200">{model}</span>
+                    <span className="cursor-grab break-all text-sm text-gray-200" draggable onDragStart={(event) => event.dataTransfer.setData('text/plain', model)} title="Drag to a runtime above">{model}</span>
                     <select value={workerId} onChange={(event) => setPlacements(withModelPlacement(placements, model, event.target.value))} className="rounded border border-gray-700 bg-gray-950 px-2 py-2 text-sm text-gray-200">
                       <option value="">{primaryLabel}</option>
                       {workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.label || worker.id}</option>)}

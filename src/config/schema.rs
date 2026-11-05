@@ -429,6 +429,9 @@ pub struct OllamaWorkerConfig {
     /// Ask Ollama to spread a model across every GPU exposed to this worker.
     #[serde(default)]
     pub spread: bool,
+    /// Run the managed Ollama worker on CPU instead of exposing a GPU.
+    #[serde(default)]
+    pub cpu_only: bool,
     /// Whether LlamaFarm may provision this worker as a sibling container.
     #[serde(default)]
     pub managed: bool,
@@ -6716,9 +6719,14 @@ impl Config {
             if !matches!(endpoint.scheme(), "http" | "https") {
                 anyhow::bail!("provider.ollama_workers[{index}].endpoint must use http or https");
             }
-            if worker.managed && worker.gpu_ids.is_empty() {
+            if worker.managed && !worker.cpu_only && worker.gpu_ids.is_empty() {
                 anyhow::bail!(
                     "provider.ollama_workers[{index}].gpu_ids must not be empty for a managed worker"
+                );
+            }
+            if worker.cpu_only && (!worker.managed || !worker.gpu_ids.is_empty() || worker.spread) {
+                anyhow::bail!(
+                    "provider.ollama_workers[{index}].cpu_only requires a managed worker without GPU ids or spread"
                 );
             }
             if worker.gpu_ids.iter().any(|gpu| gpu.trim().is_empty()) {
@@ -12270,6 +12278,43 @@ baseline_syscalls = ["read", "write", "openat", "close"]
         let config = Config::default();
         assert!(!config.workspaces.enabled);
         assert!(config.workspaces.root.is_none());
+    }
+
+    #[test]
+    async fn managed_cpu_worker_requires_no_gpu_assignment() {
+        let mut config = Config::default();
+        config.provider.ollama_workers.push(OllamaWorkerConfig {
+            id: "cpu".into(),
+            endpoint: "http://llamafarm-ollama-worker-cpu:11434".into(),
+            label: None,
+            gpu_ids: vec![],
+            spread: false,
+            cpu_only: true,
+            managed: true,
+        });
+        config.validate().expect("CPU worker should be valid");
+        config.provider.ollama_workers[0].gpu_ids = vec!["GPU-example".into()];
+        assert!(config.validate().is_err());
+        config.provider.ollama_workers[0].gpu_ids.clear();
+        config.provider.ollama_workers[0].spread = true;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    async fn managed_gpu_worker_requires_gpu_selection() {
+        let mut config = Config::default();
+        config.provider.ollama_workers.push(OllamaWorkerConfig {
+            id: "gpu".into(),
+            endpoint: "http://llamafarm-ollama-worker-gpu:11434".into(),
+            label: None,
+            gpu_ids: vec![],
+            spread: false,
+            cpu_only: false,
+            managed: true,
+        });
+        assert!(config.validate().is_err());
+        config.provider.ollama_workers[0].gpu_ids = vec!["GPU-example".into()];
+        config.validate().expect("GPU worker should be valid");
     }
 
     #[test]

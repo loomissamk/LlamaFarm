@@ -324,7 +324,11 @@ start_stock_app() {
 }
 
 start_ollama() {
-  /usr/bin/ollama serve >/tmp/ollama.log 2>&1 &
+  if [ -n "${LLAMAFARM_OLLAMA_GPU_DEVICES:-}" ]; then
+    CUDA_VISIBLE_DEVICES="$LLAMAFARM_OLLAMA_GPU_DEVICES" /usr/bin/ollama serve >/tmp/ollama.log 2>&1 &
+  else
+    /usr/bin/ollama serve >/tmp/ollama.log 2>&1 &
+  fi
   OLLAMA_PID=$!
 }
 

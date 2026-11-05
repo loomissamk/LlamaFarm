@@ -4480,6 +4480,15 @@ fn managed_ollama_worker_container_name(worker_id: &str) -> String {
     )
 }
 
+fn docker_gpu_device_request(gpu_ids: &[String]) -> String {
+    let devices = gpu_ids.join(",");
+    if gpu_ids.len() > 1 {
+        format!("\"device={devices}\"")
+    } else {
+        format!("device={devices}")
+    }
+}
+
 fn run_docker_command(arguments: &[String]) -> Result<String, String> {
     let output = std::process::Command::new("docker")
         .args(arguments)
@@ -4524,20 +4533,14 @@ fn provision_managed_ollama_worker(worker: &OllamaWorkerConfig) -> Result<String
     // only way to change the GPU visibility of an already-running process.
     let _ = run_docker_command(&["rm".to_string(), "-f".to_string(), container_name.clone()]);
 
-    let gpu_devices = worker
-        .gpu_ids
-        .iter()
-        .map(|gpu| gpu.trim())
-        .filter(|gpu| !gpu.is_empty())
-        .collect::<Vec<_>>()
-        .join(",");
+    let gpu_devices = docker_gpu_device_request(&worker.gpu_ids);
     let kv_cache_type = std::env::var("OLLAMA_KV_CACHE_TYPE")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "q8_0".to_string());
     let spread = if worker.spread { "1" } else { "0" };
 
-    let arguments = vec![
+    let mut arguments = vec![
         "run".to_string(),
         "-d".to_string(),
         "--name".to_string(),
@@ -4552,8 +4555,6 @@ fn provision_managed_ollama_worker(worker: &OllamaWorkerConfig) -> Result<String
         network,
         "--volumes-from".to_string(),
         "LlamaFarm:rw".to_string(),
-        "--gpus".to_string(),
-        format!("device={gpu_devices}"),
         "-e".to_string(),
         "HOME=/llamafarm-data".to_string(),
         "-e".to_string(),
@@ -4570,11 +4571,18 @@ fn provision_managed_ollama_worker(worker: &OllamaWorkerConfig) -> Result<String
         format!("OLLAMA_KV_CACHE_TYPE={kv_cache_type}"),
         "-e".to_string(),
         format!("OLLAMA_SCHED_SPREAD={spread}"),
+    ];
+    if worker.cpu_only {
+        arguments.extend(["-e".to_string(), "CUDA_VISIBLE_DEVICES=-1".to_string()]);
+    } else {
+        arguments.extend(["--gpus".to_string(), gpu_devices]);
+    }
+    arguments.extend([
         "--entrypoint".to_string(),
         "/usr/bin/ollama".to_string(),
         image,
         "serve".to_string(),
-    ];
+    ]);
     run_docker_command(&arguments)?;
     Ok(container_name)
 }
@@ -4630,6 +4638,7 @@ async fn ollama_worker_runtime_status(worker: &OllamaWorkerConfig) -> serde_json
         "label": worker.label,
         "gpu_ids": worker.gpu_ids,
         "spread": worker.spread,
+        "cpu_only": worker.cpu_only,
         "managed": worker.managed,
         "reachable": reachable,
         "loaded_models": loaded_models,
@@ -4652,6 +4661,7 @@ pub async fn handle_api_ollama_gpu_placement_get(
     }
     Json(serde_json::json!({
         "primary_endpoint": normalize_ollama_base_url(&config),
+        "primary_gpu_devices": std::env::var("LLAMAFARM_OLLAMA_GPU_DEVICES").ok().filter(|value| !value.trim().is_empty()),
         "gpus": query_ollama_gpu_devices(),
         "workers": workers,
         "placements": config.provider.ollama_model_placements,
@@ -7112,6 +7122,18 @@ mod tests {
         );
         assert_eq!(parse_gpu_memory_output(""), None);
         assert_eq!(parse_gpu_memory_output("not, valid, values\n"), None);
+    }
+
+    #[test]
+    fn docker_gpu_request_quotes_multiple_device_ids() {
+        assert_eq!(
+            docker_gpu_device_request(&["GPU-a".into()]),
+            "device=GPU-a"
+        );
+        assert_eq!(
+            docker_gpu_device_request(&["GPU-a".into(), "GPU-b".into()]),
+            "\"device=GPU-a,GPU-b\""
+        );
     }
 
     #[test]

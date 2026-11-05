@@ -89,6 +89,7 @@ export interface OllamaGpuWorker {
   label?: string | null;
   gpu_ids: string[];
   spread: boolean;
+  cpu_only: boolean;
   managed: boolean;
   reachable?: boolean;
   loaded_models?: string[];
@@ -102,6 +103,7 @@ export interface OllamaModelPlacement {
 
 export interface OllamaGpuPlacement {
   primary_endpoint: string;
+  primary_gpu_devices?: string | null;
   gpus: OllamaGpuDevice[];
   workers: OllamaGpuWorker[];
   placements: OllamaModelPlacement[];
