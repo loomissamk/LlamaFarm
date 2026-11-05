@@ -24,17 +24,8 @@ STATE = Path.home() / ".config/kilo/.approved-models-reloaded.json"
 CATALOG = "http://127.0.0.1:11435/api/tags"
 PROVIDER = "llamafarm-v100"
 MODELS = {
-    "qwen3.5:9b-256k": ("Qwen 3.5 9B", 262144),
-    "qwen3.5:9b-128k": ("Qwen 3.5 9B", 131072),
     "qwen3.8:27b-256k": ("Qwen 3.8 27B", 262144),
-    "qwen3.8:27b-128k": ("Qwen 3.8 27B", 131072),
-    "qwen3.8:27b": ("Qwen 3.8 27B", 32768),
-    "orcarouter-qwen3.8:27b-256k": ("OrcaRouter Qwen 3.8 27B Uncensored", 262144),
-    "orcarouter-qwen3.8:27b-128k": ("OrcaRouter Qwen 3.8 27B Uncensored", 131072),
-    "orcarouter-qwen3.8:27b": ("OrcaRouter Qwen 3.8 27B Uncensored", 32768),
-    "qwen3.5:9b": ("Qwen 3.5 9B", 32768),
-    "gpt-oss:20b-128k": ("GPT-OSS 20B", 131072),
-    "muse-glimmer:30b-128k": ("Muse Glimmer 30B", 131072),
+    "orcarouter-qwen3.8:27b-256k": ("UnQwen 3.8 27B", 262144),
 }
 
 
