@@ -26,6 +26,7 @@ PROVIDER = "llamafarm-v100"
 MODELS = {
     "qwen3.8:27b-256k": ("Qwen 3.8 27B", 262144),
     "qwen3.8-unqwen:27b-256k": ("UnQwen 3.8 27B", 262144),
+    "qwen3.8-unqwen-gpu1:27b-256k": ("UnQwen 3.8 27B (GPU1)", 262144),
 }
 
 
