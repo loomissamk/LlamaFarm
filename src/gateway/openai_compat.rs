@@ -39,6 +39,10 @@ pub struct ChatCompletionsRequest {
     /// Whether to stream the response as SSE events.
     #[serde(default)]
     pub stream: Option<bool>,
+    /// Maximum number of tokens to generate. Falls back to the provider's
+    /// configured default when absent.
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -210,6 +214,7 @@ pub async fn handle_v1_chat_completions(
         .to_string();
     let temperature = request.temperature.unwrap_or(runtime.temperature);
     let stream = request.stream.unwrap_or(false);
+    let max_tokens = request.max_tokens;
 
     // Convert messages to provider format
     let messages: Vec<ChatMessage> = request
@@ -244,6 +249,7 @@ pub async fn handle_v1_chat_completions(
             messages,
             model,
             temperature,
+            max_tokens,
             provider_label,
             started_at,
         )
@@ -255,6 +261,7 @@ pub async fn handle_v1_chat_completions(
             messages,
             model,
             temperature,
+            max_tokens,
             provider_label,
             started_at,
         )
@@ -270,12 +277,13 @@ async fn handle_non_streaming(
     messages: Vec<ChatMessage>,
     model: String,
     temperature: f64,
+    max_tokens: Option<u32>,
     provider_label: String,
     started_at: Instant,
 ) -> impl IntoResponse {
     match runtime
         .provider
-        .chat_with_history(&messages, &model, temperature)
+        .chat_with_history_capped(&messages, &model, temperature, max_tokens)
         .await
     {
         Ok(response_text) => {
@@ -338,6 +346,7 @@ fn handle_streaming(
     messages: Vec<ChatMessage>,
     model: String,
     temperature: f64,
+    max_tokens: Option<u32>,
     provider_label: String,
     started_at: Instant,
 ) -> impl IntoResponse {
@@ -352,7 +361,7 @@ fn handle_streaming(
 
         let stream = futures_util::stream::once(async move {
             match provider
-                .chat_with_history(&messages, &model_clone, temperature)
+                .chat_with_history_capped(&messages, &model_clone, temperature, max_tokens)
                 .await
             {
                 Ok(text) => {
@@ -614,13 +623,22 @@ mod tests {
                 {"role": "user", "content": "Hi"}
             ],
             "temperature": 0.5,
-            "stream": true
+            "stream": true,
+            "max_tokens": 400
         }"#;
         let req: ChatCompletionsRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.model.as_deref(), Some("anthropic/claude-sonnet-4"));
         assert_eq!(req.temperature, Some(0.5));
         assert_eq!(req.stream, Some(true));
+        assert_eq!(req.max_tokens, Some(400));
         assert_eq!(req.messages.len(), 2);
+    }
+
+    #[test]
+    fn chat_completions_request_max_tokens_defaults_to_none() {
+        let json = r#"{"messages": [{"role": "user", "content": "Hello"}]}"#;
+        let req: ChatCompletionsRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.max_tokens, None);
     }
 
     #[test]

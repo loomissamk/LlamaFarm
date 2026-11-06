@@ -501,6 +501,17 @@ impl Provider for ReliableProvider {
         model: &str,
         temperature: f64,
     ) -> anyhow::Result<String> {
+        self.chat_with_history_capped(messages, model, temperature, None)
+            .await
+    }
+
+    async fn chat_with_history_capped(
+        &self,
+        messages: &[ChatMessage],
+        model: &str,
+        temperature: f64,
+        max_tokens: Option<u32>,
+    ) -> anyhow::Result<String> {
         let models = self.model_chain(model);
         let mut failures = Vec::new();
 
@@ -513,7 +524,7 @@ impl Provider for ReliableProvider {
 
                     for attempt in 0..=self.max_retries {
                         match provider
-                            .chat_with_history(messages, sent_model, temperature)
+                            .chat_with_history_capped(messages, sent_model, temperature, max_tokens)
                             .await
                         {
                             Ok(resp) => {

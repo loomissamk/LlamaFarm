@@ -766,6 +766,7 @@ impl OllamaProvider {
         temperature: f64,
         tools: Option<&[serde_json::Value]>,
         num_ctx: u32,
+        max_tokens_override: Option<u32>,
     ) -> ChatRequest {
         ChatRequest {
             model: model.to_string(),
@@ -776,7 +777,10 @@ impl OllamaProvider {
                 num_gpu: self.gpu_layers,
                 main_gpu: self.main_gpu,
                 num_ctx: Some(num_ctx),
-                num_predict: self.max_output_tokens.map(i64::from).unwrap_or(-1),
+                num_predict: max_tokens_override
+                    .or(self.max_output_tokens)
+                    .map(i64::from)
+                    .unwrap_or(-1),
             },
             keep_alive: Some(resolve_keep_alive()),
             // Only send think:true when the model reports "thinking" capability.
@@ -941,6 +945,21 @@ impl OllamaProvider {
         should_auth: bool,
         tools: Option<&[serde_json::Value]>,
     ) -> anyhow::Result<ApiChatResponse> {
+        self.send_request_capped(messages, model, temperature, should_auth, tools, None)
+            .await
+    }
+
+    /// Same as `send_request`, with an optional per-request cap on generated
+    /// tokens that takes precedence over the configured `max_output_tokens`.
+    async fn send_request_capped(
+        &self,
+        messages: Vec<Message>,
+        model: &str,
+        temperature: f64,
+        should_auth: bool,
+        tools: Option<&[serde_json::Value]>,
+        max_tokens_override: Option<u32>,
+    ) -> anyhow::Result<ApiChatResponse> {
         let mut num_ctx = self.resolve_num_ctx(model, &messages, tools).await;
         let may_grow_context =
             !self.num_ctx_is_explicit && (self.adaptive_context || self.num_ctx.is_none());
@@ -950,8 +969,14 @@ impl OllamaProvider {
         let should_auth =
             should_auth || (self.api_key.is_some() && !Self::is_local_endpoint_url(endpoint));
         loop {
-            let request =
-                self.build_chat_request(messages.clone(), model, temperature, tools, num_ctx);
+            let request = self.build_chat_request(
+                messages.clone(),
+                model,
+                temperature,
+                tools,
+                num_ctx,
+                max_tokens_override,
+            );
 
             tracing::debug!(
                 "Ollama request: url={} model={} message_count={} temperature={} think={:?} tool_count={} num_ctx={} num_predict={:?}",
@@ -1501,6 +1526,47 @@ impl Provider for OllamaProvider {
         }
 
         // Plain text response
+        let content = response.message.content;
+        if let Some(content) = Self::normalize_response_text(content) {
+            return Ok(content);
+        }
+
+        Ok(Self::fallback_text_for_empty_content(
+            &normalized_model,
+            response.message.thinking.as_deref(),
+        ))
+    }
+
+    async fn chat_with_history_capped(
+        &self,
+        messages: &[crate::providers::ChatMessage],
+        model: &str,
+        temperature: f64,
+        max_tokens: Option<u32>,
+    ) -> anyhow::Result<String> {
+        let (normalized_model, should_auth) = self.resolve_request_details(model)?;
+
+        let api_messages = self.convert_messages(messages);
+
+        let response = self
+            .send_request_capped(
+                api_messages,
+                &normalized_model,
+                temperature,
+                should_auth,
+                None,
+                max_tokens,
+            )
+            .await?;
+
+        if !response.message.tool_calls.is_empty() {
+            tracing::debug!(
+                "Ollama returned {} tool call(s), formatting for loop parser",
+                response.message.tool_calls.len()
+            );
+            return Ok(self.format_tool_calls_for_loop(&response.message.tool_calls));
+        }
+
         let content = response.message.content;
         if let Some(content) = Self::normalize_response_text(content) {
             return Ok(content);
@@ -2343,10 +2409,72 @@ mod tests {
             0.7,
             None,
             32_768,
+            None,
         );
 
         let json = serde_json::to_value(request).unwrap();
         assert!(json.get("think").is_none());
+    }
+
+    #[test]
+    fn request_per_call_max_tokens_override_wins_over_configured_default() {
+        // Configured default is 2_048, but a per-request cap of 50 must win.
+        let provider = OllamaProvider::new_full(
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(32_768),
+            Some(2_048),
+        );
+        let request = provider.build_chat_request(
+            vec![Message {
+                role: "user".to_string(),
+                content: Some("hello".to_string()),
+                images: None,
+                tool_calls: None,
+                tool_name: None,
+            }],
+            "llama3",
+            0.7,
+            None,
+            32_768,
+            Some(50),
+        );
+
+        let json = serde_json::to_value(request).unwrap();
+        assert_eq!(json["options"]["num_predict"], serde_json::json!(50));
+    }
+
+    #[test]
+    fn request_without_per_call_override_falls_back_to_configured_default() {
+        let provider = OllamaProvider::new_full(
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(32_768),
+            Some(2_048),
+        );
+        let request = provider.build_chat_request(
+            vec![Message {
+                role: "user".to_string(),
+                content: Some("hello".to_string()),
+                images: None,
+                tool_calls: None,
+                tool_name: None,
+            }],
+            "llama3",
+            0.7,
+            None,
+            32_768,
+            None,
+        );
+
+        let json = serde_json::to_value(request).unwrap();
+        assert_eq!(json["options"]["num_predict"], serde_json::json!(2_048));
     }
 
     #[test]
@@ -2364,6 +2492,7 @@ mod tests {
             0.7,
             None,
             32_768,
+            None,
         );
 
         let json = serde_json::to_value(request).unwrap();
@@ -2393,6 +2522,7 @@ mod tests {
             0.2,
             None,
             32_768,
+            None,
         );
 
         let json = serde_json::to_value(request).unwrap();
@@ -2420,6 +2550,7 @@ mod tests {
             0.2,
             None,
             32_768,
+            None,
         );
 
         let json = serde_json::to_value(request).unwrap();

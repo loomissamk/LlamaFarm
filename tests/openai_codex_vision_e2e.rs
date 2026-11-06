@@ -158,6 +158,7 @@ async fn openai_codex_second_vision_support() -> Result<()> {
         ollama_gpu_layers: None,
         ollama_main_gpu: None,
         ollama_num_ctx: None,
+        ollama_model_routes: std::collections::HashMap::new(),
     };
 
     let provider = llamafarm::providers::create_provider_with_options("openai-codex", None, &opts)?;

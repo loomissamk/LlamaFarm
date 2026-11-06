@@ -348,6 +348,20 @@ pub trait Provider: Send + Sync {
             .await
     }
 
+    /// Multi-turn conversation with an optional per-request cap on generated
+    /// tokens. Providers that don't support a per-call cap ignore `max_tokens`
+    /// and fall back to `chat_with_history`'s existing (config-level) behavior.
+    async fn chat_with_history_capped(
+        &self,
+        messages: &[ChatMessage],
+        model: &str,
+        temperature: f64,
+        max_tokens: Option<u32>,
+    ) -> anyhow::Result<String> {
+        let _ = max_tokens;
+        self.chat_with_history(messages, model, temperature).await
+    }
+
     /// Structured chat API for agent loop callers.
     async fn chat(
         &self,
