@@ -48,7 +48,38 @@ pub struct ChatCompletionsRequest {
 #[derive(Debug, Deserialize)]
 pub struct ChatCompletionsMessage {
     pub role: String,
+    /// Accepts either a plain string or OpenAI's multi-part content array
+    /// (`[{"type":"text","text":"..."}]`, as Kilo sends once a conversation
+    /// grows past a certain size) — joins any text parts, since this backend
+    /// only forwards plain text to Ollama regardless of wire format.
+    #[serde(deserialize_with = "deserialize_message_content")]
     pub content: String,
+}
+
+fn deserialize_message_content<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum ContentValue {
+        Text(String),
+        Parts(Vec<ContentPart>),
+    }
+    #[derive(Deserialize)]
+    struct ContentPart {
+        #[serde(default)]
+        text: Option<String>,
+    }
+
+    match ContentValue::deserialize(deserializer)? {
+        ContentValue::Text(text) => Ok(text),
+        ContentValue::Parts(parts) => Ok(parts
+            .into_iter()
+            .filter_map(|part| part.text)
+            .collect::<Vec<_>>()
+            .join("")),
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -601,6 +632,36 @@ fn record_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chat_completions_message_content_accepts_multi_part_array() {
+        let json = r#"{"messages": [{"role": "user", "content": [{"type":"text","text":"Hello "},{"type":"text","text":"world"}]}]}"#;
+        let req: ChatCompletionsRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.messages[0].content, "Hello world");
+    }
+
+    #[test]
+    fn chat_completions_message_content_still_accepts_plain_string() {
+        let json = r#"{"messages": [{"role": "user", "content": "Hello"}]}"#;
+        let req: ChatCompletionsRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.messages[0].content, "Hello");
+    }
+
+    #[test]
+    fn chat_completions_request_with_mixed_string_and_array_content_in_history() {
+        // Matches the exact real failure: a multi-turn conversation where one
+        // message is a plain string and another is a multi-part array.
+        let json = r#"{"messages": [
+            {"role": "user", "content": [{"type":"text","text":"My favorite number is 42."}]},
+            {"role": "assistant", "content": "Got it, 42."},
+            {"role": "user", "content": [{"type":"text","text":"What is it?"}]}
+        ]}"#;
+        let req: ChatCompletionsRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.messages.len(), 3);
+        assert_eq!(req.messages[0].content, "My favorite number is 42.");
+        assert_eq!(req.messages[1].content, "Got it, 42.");
+        assert_eq!(req.messages[2].content, "What is it?");
+    }
 
     #[test]
     fn chat_completions_request_deserializes_minimal() {
