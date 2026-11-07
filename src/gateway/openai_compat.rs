@@ -6,6 +6,8 @@
 
 use super::AppState;
 use crate::providers::traits::{ChatMessage, StreamOptions};
+#[cfg(test)]
+use crate::providers::traits::ChatResponse;
 use axum::{
     body::Body,
     extract::{ConnectInfo, State},
@@ -43,6 +45,14 @@ pub struct ChatCompletionsRequest {
     /// configured default when absent.
     #[serde(default)]
     pub max_tokens: Option<u32>,
+    /// OpenAI-format tool definitions (`[{"type":"function","function":{...}}]`).
+    /// Passed through verbatim to the provider's native tool-calling path.
+    #[serde(default)]
+    pub tools: Option<Vec<serde_json::Value>>,
+    /// Accepted for OpenAI compatibility; not currently enforced (the
+    /// underlying provider call always allows the model to choose freely).
+    #[serde(default)]
+    pub tool_choice: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -52,8 +62,19 @@ pub struct ChatCompletionsMessage {
     /// (`[{"type":"text","text":"..."}]`, as Kilo sends once a conversation
     /// grows past a certain size) — joins any text parts, since this backend
     /// only forwards plain text to Ollama regardless of wire format.
-    #[serde(deserialize_with = "deserialize_message_content")]
+    /// Defaults to empty: an assistant message that only carries tool_calls
+    /// often omits content (or sends it as null) entirely.
+    #[serde(default, deserialize_with = "deserialize_message_content")]
     pub content: String,
+    /// Tool calls the assistant made in a prior turn, as sent back by the
+    /// client for history (OpenAI format). Not re-validated — folded into a
+    /// textual summary when building provider history, since the underlying
+    /// `ChatMessage` type carries only role+content.
+    #[serde(default)]
+    pub tool_calls: Option<Vec<serde_json::Value>>,
+    /// For `role: "tool"` messages: which call this result answers.
+    #[serde(default)]
+    pub tool_call_id: Option<String>,
 }
 
 fn deserialize_message_content<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -102,7 +123,25 @@ pub struct ChatCompletionsChoice {
 #[derive(Debug, Serialize)]
 pub struct ChatCompletionsResponseMessage {
     pub role: &'static str,
-    pub content: String,
+    /// Null when the response is tool calls only, matching OpenAI's wire format.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ResponseToolCall>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResponseToolCall {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub call_type: &'static str,
+    pub function: ResponseToolCallFunction,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResponseToolCallFunction {
+    pub name: String,
+    pub arguments: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -246,14 +285,63 @@ pub async fn handle_v1_chat_completions(
     let temperature = request.temperature.unwrap_or(runtime.temperature);
     let stream = request.stream.unwrap_or(false);
     let max_tokens = request.max_tokens;
+    let tools = request.tools.clone().filter(|t| !t.is_empty());
 
-    // Convert messages to provider format
+    tracing::info!(
+        "/v1/chat/completions: model={} stream={} tools_present={} tools_count={} messages={}",
+        model,
+        stream,
+        tools.is_some(),
+        tools.as_ref().map_or(0, Vec::len),
+        request.messages.len()
+    );
+
+    // Convert messages to provider format. ChatMessage only carries
+    // role+content, so a prior assistant tool_calls turn and its matching
+    // tool-result turn are folded into readable text rather than dropped.
     let messages: Vec<ChatMessage> = request
         .messages
         .iter()
-        .map(|m| ChatMessage {
-            role: m.role.clone(),
-            content: m.content.clone(),
+        .map(|m| {
+            if let Some(calls) = m.tool_calls.as_ref().filter(|c| !c.is_empty()) {
+                let summary = calls
+                    .iter()
+                    .map(|c| {
+                        let name = c
+                            .get("function")
+                            .and_then(|f| f.get("name"))
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("unknown_tool");
+                        let args = c
+                            .get("function")
+                            .and_then(|f| f.get("arguments"))
+                            .and_then(|a| a.as_str())
+                            .unwrap_or("{}");
+                        format!("{name}({args})")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let content = if m.content.is_empty() {
+                    format!("[called tools: {summary}]")
+                } else {
+                    format!("{}\n[called tools: {summary}]", m.content)
+                };
+                ChatMessage {
+                    role: m.role.clone(),
+                    content,
+                }
+            } else if m.role == "tool" {
+                let id = m.tool_call_id.as_deref().unwrap_or("unknown");
+                ChatMessage {
+                    role: "tool".to_string(),
+                    content: format!("[tool result for call {id}]\n{}", m.content),
+                }
+            } else {
+                ChatMessage {
+                    role: m.role.clone(),
+                    content: m.content.clone(),
+                }
+            }
         })
         .collect();
 
@@ -293,6 +381,7 @@ pub async fn handle_v1_chat_completions(
             model,
             temperature,
             max_tokens,
+            tools,
             provider_label,
             started_at,
         )
@@ -309,9 +398,84 @@ async fn handle_non_streaming(
     model: String,
     temperature: f64,
     max_tokens: Option<u32>,
+    tools: Option<Vec<serde_json::Value>>,
     provider_label: String,
     started_at: Instant,
 ) -> impl IntoResponse {
+    if let Some(tools) = tools {
+        return match runtime
+            .provider
+            .chat_with_tools(&messages, &tools, &model, temperature)
+            .await
+        {
+            Ok(response) => {
+                let duration = started_at.elapsed();
+                record_success(&state, &provider_label, &model, duration);
+
+                let response_tool_calls: Vec<ResponseToolCall> = response
+                    .tool_calls
+                    .iter()
+                    .map(|tc| ResponseToolCall {
+                        id: tc.id.clone(),
+                        call_type: "function",
+                        function: ResponseToolCallFunction {
+                            name: tc.name.clone(),
+                            arguments: tc.arguments.clone(),
+                        },
+                    })
+                    .collect();
+                let has_tool_calls = !response_tool_calls.is_empty();
+
+                #[allow(clippy::cast_possible_truncation)]
+                let completion_tokens = (response.text_or_empty().len() / 4) as u32;
+                #[allow(clippy::cast_possible_truncation)]
+                let prompt_tokens =
+                    messages.iter().map(|m| m.content.len() / 4).sum::<usize>() as u32;
+
+                let api_response = ChatCompletionsResponse {
+                    id: format!("chatcmpl-{}", Uuid::new_v4()),
+                    object: "chat.completion",
+                    created: unix_timestamp(),
+                    model: model.clone(),
+                    choices: vec![ChatCompletionsChoice {
+                        index: 0,
+                        message: ChatCompletionsResponseMessage {
+                            role: "assistant",
+                            content: response.text.filter(|t| !t.is_empty()),
+                            tool_calls: has_tool_calls.then_some(response_tool_calls),
+                        },
+                        finish_reason: if has_tool_calls { "tool_calls" } else { "stop" },
+                    }],
+                    usage: ChatCompletionsUsage {
+                        prompt_tokens,
+                        completion_tokens,
+                        total_tokens: prompt_tokens + completion_tokens,
+                    },
+                };
+
+                (
+                    StatusCode::OK,
+                    Json(serde_json::to_value(api_response).unwrap()),
+                )
+                    .into_response()
+            }
+            Err(e) => {
+                let duration = started_at.elapsed();
+                let sanitized = crate::providers::sanitize_api_error(&e.to_string());
+                record_failure(&state, &provider_label, &model, duration, &sanitized);
+                tracing::error!("/v1/chat/completions (tools) provider error: {sanitized}");
+                let err = serde_json::json!({
+                    "error": {
+                        "message": "LLM request failed",
+                        "type": "server_error",
+                        "code": "provider_error"
+                    }
+                });
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(err)).into_response()
+            }
+        };
+    }
+
     match runtime
         .provider
         .chat_with_history_capped(&messages, &model, temperature, max_tokens)
@@ -335,7 +499,8 @@ async fn handle_non_streaming(
                     index: 0,
                     message: ChatCompletionsResponseMessage {
                         role: "assistant",
-                        content: response_text,
+                        content: Some(response_text),
+                        tool_calls: None,
                     },
                     finish_reason: "stop",
                 }],
@@ -703,6 +868,77 @@ mod tests {
     }
 
     #[test]
+    fn chat_completions_request_parses_tools() {
+        let json = r#"{
+            "messages": [{"role":"user","content":"read a file"}],
+            "tools": [{"type":"function","function":{"name":"file_read","description":"Read a file","parameters":{"type":"object"}}}]
+        }"#;
+        let req: ChatCompletionsRequest = serde_json::from_str(json).unwrap();
+        let tools = req.tools.expect("tools should be present");
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["function"]["name"], "file_read");
+    }
+
+    #[test]
+    fn chat_completions_message_without_tools_has_none() {
+        let json = r#"{"messages": [{"role":"user","content":"hi"}]}"#;
+        let req: ChatCompletionsRequest = serde_json::from_str(json).unwrap();
+        assert!(req.tools.is_none());
+    }
+
+    #[test]
+    fn assistant_message_with_tool_calls_and_no_content_parses() {
+        // Matches real OpenAI wire format: an assistant turn that only
+        // calls tools often omits content (or sends it null) entirely.
+        let json = r#"{"messages": [
+            {"role":"user","content":"read requirements.txt"},
+            {"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"file_read","arguments":"{\"path\":\"requirements.txt\"}"}}]},
+            {"role":"tool","tool_call_id":"call_1","content":"fastapi>=0.110"}
+        ]}"#;
+        let req: ChatCompletionsRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.messages.len(), 3);
+        assert_eq!(req.messages[1].content, "");
+        assert_eq!(req.messages[1].tool_calls.as_ref().unwrap().len(), 1);
+        assert_eq!(req.messages[2].role, "tool");
+        assert_eq!(req.messages[2].tool_call_id.as_deref(), Some("call_1"));
+    }
+
+    #[test]
+    fn response_with_tool_calls_sets_finish_reason_and_omits_empty_content() {
+        let response = ChatResponse {
+            text: None,
+            tool_calls: vec![crate::providers::traits::ToolCall {
+                id: "call_1".to_string(),
+                name: "file_read".to_string(),
+                arguments: "{\"path\":\"requirements.txt\"}".to_string(),
+            }],
+            usage: None,
+            metrics: None,
+            reasoning_content: None,
+        };
+        let response_tool_calls: Vec<ResponseToolCall> = response
+            .tool_calls
+            .iter()
+            .map(|tc| ResponseToolCall {
+                id: tc.id.clone(),
+                call_type: "function",
+                function: ResponseToolCallFunction {
+                    name: tc.name.clone(),
+                    arguments: tc.arguments.clone(),
+                },
+            })
+            .collect();
+        let message = ChatCompletionsResponseMessage {
+            role: "assistant",
+            content: response.text.filter(|t| !t.is_empty()),
+            tool_calls: Some(response_tool_calls),
+        };
+        let json = serde_json::to_value(&message).unwrap();
+        assert!(json.get("content").is_none(), "empty content should be omitted, not null");
+        assert_eq!(json["tool_calls"][0]["function"]["name"], "file_read");
+    }
+
+    #[test]
     fn chat_completions_response_serializes() {
         let response = ChatCompletionsResponse {
             id: "chatcmpl-test".to_string(),
@@ -713,7 +949,8 @@ mod tests {
                 index: 0,
                 message: ChatCompletionsResponseMessage {
                     role: "assistant",
-                    content: "Hello!".to_string(),
+                    content: Some("Hello!".to_string()),
+                    tool_calls: None,
                 },
                 finish_reason: "stop",
             }],
