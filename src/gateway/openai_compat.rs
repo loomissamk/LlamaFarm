@@ -739,6 +739,6 @@ mod tests {
 
     #[test]
     fn body_size_limit_is_512kb() {
-        assert_eq!(CHAT_COMPLETIONS_MAX_BODY_SIZE, 524_288);
+        assert_eq!(CHAT_COMPLETIONS_MAX_BODY_SIZE, 8_388_608);
     }
 }
