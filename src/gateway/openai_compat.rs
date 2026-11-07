@@ -174,6 +174,23 @@ struct ChunkDelta {
     role: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<DeltaToolCall>>,
+}
+
+/// A tool call delta. Sent whole (not incrementally split across chunks) —
+/// this gateway doesn't token-stream tool-call argument JSON, it runs one
+/// real non-streaming provider call and emits the complete result as a
+/// single SSE chunk. Clients built around OpenAI's incremental delta format
+/// (argument fragments arriving across many chunks) still parse a one-shot
+/// complete delta correctly; they just see it all arrive at once.
+#[derive(Debug, Serialize)]
+struct DeltaToolCall {
+    index: u32,
+    id: String,
+    #[serde(rename = "type")]
+    call_type: &'static str,
+    function: ResponseToolCallFunction,
 }
 
 #[derive(Debug, Serialize)]
@@ -369,6 +386,7 @@ pub async fn handle_v1_chat_completions(
             model,
             temperature,
             max_tokens,
+            tools,
             provider_label,
             started_at,
         )
@@ -543,11 +561,90 @@ fn handle_streaming(
     model: String,
     temperature: f64,
     max_tokens: Option<u32>,
+    tools: Option<Vec<serde_json::Value>>,
     provider_label: String,
     started_at: Instant,
 ) -> impl IntoResponse {
     let request_id = format!("chatcmpl-{}", Uuid::new_v4());
     let created = unix_timestamp();
+
+    if let Some(tools) = tools {
+        // Tool-bearing requests never token-stream here: there's no delta
+        // format for incremental tool-call argument JSON wired up, so this
+        // runs one real non-streaming chat_with_tools call and emits the
+        // complete result as a single SSE chunk instead of silently
+        // dropping tools the way the old code path did.
+        let model_clone = model.clone();
+        let id = request_id.clone();
+        let provider = std::sync::Arc::clone(&runtime.provider);
+
+        let stream = futures_util::stream::once(async move {
+            match provider
+                .chat_with_tools(&messages, &tools, &model_clone, temperature)
+                .await
+            {
+                Ok(response) => {
+                    let duration = started_at.elapsed();
+                    record_success(&state, &provider_label, &model_clone, duration);
+
+                    let delta_tool_calls: Vec<DeltaToolCall> = response
+                        .tool_calls
+                        .iter()
+                        .enumerate()
+                        .map(|(i, tc)| DeltaToolCall {
+                            index: u32::try_from(i).unwrap_or(0),
+                            id: tc.id.clone(),
+                            call_type: "function",
+                            function: ResponseToolCallFunction {
+                                name: tc.name.clone(),
+                                arguments: tc.arguments.clone(),
+                            },
+                        })
+                        .collect();
+                    let has_tool_calls = !delta_tool_calls.is_empty();
+
+                    let chunk = ChatCompletionsChunk {
+                        id: id.clone(),
+                        object: "chat.completion.chunk",
+                        created,
+                        model: model_clone,
+                        choices: vec![ChunkChoice {
+                            index: 0,
+                            delta: ChunkDelta {
+                                role: Some("assistant"),
+                                content: response.text.filter(|t| !t.is_empty()),
+                                tool_calls: has_tool_calls.then_some(delta_tool_calls),
+                            },
+                            finish_reason: Some(if has_tool_calls { "tool_calls" } else { "stop" }),
+                        }],
+                    };
+                    let json = serde_json::to_string(&chunk).unwrap_or_else(|_| "{}".to_string());
+                    let mut output = format!("data: {json}\n\n");
+                    output.push_str("data: [DONE]\n\n");
+                    Ok::<_, std::io::Error>(axum::body::Bytes::from(output))
+                }
+                Err(e) => {
+                    let duration = started_at.elapsed();
+                    let sanitized = crate::providers::sanitize_api_error(&e.to_string());
+                    record_failure(&state, &provider_label, &model_clone, duration, &sanitized);
+                    tracing::error!("/v1/chat/completions (streaming+tools) provider error: {sanitized}");
+
+                    let error_json = serde_json::json!({"error": sanitized});
+                    let output = format!("data: {error_json}\n\ndata: [DONE]\n\n");
+                    Ok(axum::body::Bytes::from(output))
+                }
+            }
+        });
+
+        return axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/event-stream")
+            .header(header::CACHE_CONTROL, "no-cache")
+            .header(header::CONNECTION, "keep-alive")
+            .body(Body::from_stream(stream))
+            .unwrap()
+            .into_response();
+    }
 
     if !runtime.provider.supports_streaming() {
         // Provider doesn't support streaming — fall back to a single-chunk response
@@ -574,6 +671,7 @@ fn handle_streaming(
                             delta: ChunkDelta {
                                 role: Some("assistant"),
                                 content: Some(text),
+                                tool_calls: None,
                             },
                             finish_reason: Some("stop"),
                         }],
@@ -654,6 +752,7 @@ fn handle_streaming(
                         } else {
                             Some(chunk.delta)
                         },
+                        tool_calls: None,
                     },
                     finish_reason: None,
                 }],
@@ -996,6 +1095,7 @@ mod tests {
                 delta: ChunkDelta {
                     role: Some("assistant"),
                     content: Some("Hello".to_string()),
+                    tool_calls: None,
                 },
                 finish_reason: None,
             }],
@@ -1018,6 +1118,7 @@ mod tests {
                 delta: ChunkDelta {
                     role: None,
                     content: None,
+                    tool_calls: None,
                 },
                 finish_reason: None,
             }],
