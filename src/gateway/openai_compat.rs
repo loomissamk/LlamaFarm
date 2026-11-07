@@ -18,9 +18,9 @@ use std::net::SocketAddr;
 use std::time::Instant;
 use uuid::Uuid;
 
-/// Maximum body size for chat completions requests (512KB).
-/// Chat histories with many messages can be much larger than the default 64KB gateway limit.
-pub const CHAT_COMPLETIONS_MAX_BODY_SIZE: usize = 524_288;
+/// Body size cap for chat completions requests (8MB), sized for this node's
+/// 262144-token context models.
+pub const CHAT_COMPLETIONS_MAX_BODY_SIZE: usize = 8_388_608;
 
 // ══════════════════════════════════════════════════════════════════════════════
 // REQUEST / RESPONSE TYPES

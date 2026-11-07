@@ -49,8 +49,8 @@ use std::time::{Duration, Instant};
 use tower_http::limit::RequestBodyLimitLayer;
 use uuid::Uuid;
 
-/// Maximum request body size (64KB) — prevents memory exhaustion
-pub const MAX_BODY_SIZE: usize = 65_536;
+/// Maximum request body size (8MB) — sized for 256K-token context models.
+pub const MAX_BODY_SIZE: usize = 8_388_608;
 /// Sliding window used by gateway rate limiting.
 pub const RATE_LIMIT_WINDOW_SECS: u64 = 60;
 /// Fallback max distinct client keys tracked in gateway rate limiter.
