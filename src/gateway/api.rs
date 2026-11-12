@@ -5445,6 +5445,8 @@ pub async fn handle_api_run_cancel(
     let mut live_cancelled = false;
     if let Some(session_id) = snapshot.meta.session_id.as_deref() {
         live_cancelled = crate::gateway::ws::cancel_run_by_session(session_id).await;
+    } else if snapshot.meta.channel == "agent_api" {
+        live_cancelled = super::cancel_agent_api_run(&run_id);
     }
     let forced = crate::agent::run_ledger::force_cancel_on_disk(&workspace_dir, &run_id);
 
