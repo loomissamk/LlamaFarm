@@ -44,10 +44,41 @@ use axum::{
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 use tower_http::limit::RequestBodyLimitLayer;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+
+static AGENT_API_CANCELLATIONS: LazyLock<RwLock<HashMap<String, CancellationToken>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+fn cancel_agent_api_run(run_id: &str) -> bool {
+    let token = AGENT_API_CANCELLATIONS.read().get(run_id).cloned();
+    if let Some(token) = token {
+        token.cancel();
+        true
+    } else {
+        false
+    }
+}
+
+struct AgentApiRunGuard {
+    run_id: String,
+    ledger: Arc<crate::agent::run_ledger::RunLedger>,
+}
+
+impl Drop for AgentApiRunGuard {
+    fn drop(&mut self) {
+        AGENT_API_CANCELLATIONS.write().remove(&self.run_id);
+        if crate::agent::run_ledger::live_snapshot(&self.run_id)
+            .is_some_and(|run| run.meta.status == crate::agent::run_ledger::RunStatus::Running)
+        {
+            self.ledger
+                .finalize(crate::agent::run_ledger::RunStatus::Cancelled);
+        }
+    }
+}
 
 /// Maximum request body size (64KB) — prevents memory exhaustion
 pub const MAX_BODY_SIZE: usize = 65_536;
@@ -1467,6 +1498,14 @@ async fn handle_agent(
             );
         }
     };
+    let cancellation = CancellationToken::new();
+    AGENT_API_CANCELLATIONS
+        .write()
+        .insert(run_id.clone(), cancellation.clone());
+    let _run_guard = AgentApiRunGuard {
+        run_id: run_id.clone(),
+        ledger: ledger.clone(),
+    };
     let started_at = Instant::now();
 
     state
@@ -1483,9 +1522,25 @@ async fn handle_agent(
             messages_count: 1,
         });
 
-    let result = crate::agent::run_ledger::RUN_LEDGER
-        .scope(Some(ledger.clone()), run_gateway_chat_with_tools(&state, message))
-        .await;
+    let result = tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => {
+            ledger.finalize(crate::agent::run_ledger::RunStatus::Cancelled);
+            return (StatusCode::CONFLICT, Json(serde_json::json!({
+                "error": "Agent run cancelled",
+                "run_id": run_id,
+            })));
+        }
+        result = crate::agent::run_ledger::RUN_LEDGER
+            .scope(Some(ledger.clone()), run_gateway_chat_with_tools(&state, message)) => result,
+    };
+    if cancellation.is_cancelled() {
+        ledger.finalize(crate::agent::run_ledger::RunStatus::Cancelled);
+        return (StatusCode::CONFLICT, Json(serde_json::json!({
+            "error": "Agent run cancelled",
+            "run_id": run_id,
+        })));
+    }
     let response = match result {
         Ok(response) => {
             let status = if !crate::agent::loop_::is_planning_only_request(message)
@@ -2200,6 +2255,44 @@ mod tests {
         let missing = r#"{"other": "field"}"#;
         let parsed: Result<AgentBody, _> = serde_json::from_str(missing);
         assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn agent_api_cancel_stops_live_token_and_guard_closes_ledger() {
+        let run_id = Uuid::new_v4().to_string();
+        let workspace_dir = std::env::temp_dir().join(format!("llamafarm-agent-cancel-{run_id}"));
+        let ledger = crate::agent::run_ledger::RunLedger::open_or_create(
+            &workspace_dir,
+            &run_id,
+            None,
+            "agent_api",
+            "test",
+            "test",
+            "agent",
+        )
+        .unwrap();
+        let cancellation = CancellationToken::new();
+        AGENT_API_CANCELLATIONS
+            .write()
+            .insert(run_id.clone(), cancellation.clone());
+        let guard = AgentApiRunGuard {
+            run_id: run_id.clone(),
+            ledger,
+        };
+
+        assert!(cancel_agent_api_run(&run_id));
+        assert!(cancellation.is_cancelled());
+        drop(guard);
+        assert!(!cancel_agent_api_run(&run_id));
+        assert!(!crate::agent::run_ledger::live_run_ids().contains(&run_id));
+        assert_eq!(
+            crate::agent::run_ledger::load_snapshot(&workspace_dir, &run_id)
+                .unwrap()
+                .meta
+                .status,
+            crate::agent::run_ledger::RunStatus::Cancelled
+        );
+        std::fs::remove_dir_all(workspace_dir).unwrap();
     }
 
     #[test]
