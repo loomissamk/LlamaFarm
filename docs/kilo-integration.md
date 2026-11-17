@@ -55,11 +55,11 @@ webchat/cron/agent_api features — just not Kilo.
    ```jsonc
    {
      "$schema": "https://app.kilo.ai/config.json",
-     "enabled_providers": ["ollama-v100"],
-     "model": "ollama-v100/qwen3.8-unqwen:27b-256k",
-     "small_model": "ollama-v100/qwen3.5-rana:9b-256k",
+     "enabled_providers": ["ollamav100"],
+     "model": "ollamav100/qwen3.8-unqwen:27b-256k",
+     "small_model": "ollamav100/qwen3.5-rana:9b-256k",
      "provider": {
-       "ollama-v100": {
+       "ollamav100": {
          "npm": "@ai-sdk/openai-compatible",
          "options": {
            "baseURL": "http://100.107.226.49:11434/v1",
@@ -82,13 +82,13 @@ webchat/cron/agent_api features — just not Kilo.
        }
      },
      "agent": {
-       "code": { "model": "ollama-v100/qwen3.8-unqwen:27b-256k", "temperature": 0.2 },
-       "plan": { "model": "ollama-v100/qwen3.8-unqwen:27b-256k", "temperature": 0.2 },
-       "debug": { "model": "ollama-v100/qwen3.8-unqwen:27b-256k", "temperature": 0.2 },
+       "code": { "model": "ollamav100/qwen3.8-unqwen:27b-256k", "temperature": 0.2 },
+       "plan": { "model": "ollamav100/qwen3.8-unqwen:27b-256k", "temperature": 0.2 },
+       "debug": { "model": "ollamav100/qwen3.8-unqwen:27b-256k", "temperature": 0.2 },
        "review": {
          "description": "Read-only code reviewer for independent worktrees",
          "mode": "all",
-         "model": "ollama-v100/qwen3.8-unqwen:27b-256k",
+         "model": "ollamav100/qwen3.8-unqwen:27b-256k",
          "temperature": 0.1,
          "prompt": "Review changes using repository files and diffs. Report findings with file paths and evidence. Do not edit files or run commands.",
          "permission": { "edit": "deny", "bash": "deny" }
@@ -164,3 +164,72 @@ local VS Code app, rather than installing/running a second desktop VS Code
 on the headless box. Kilo then runs in the remote extension host with
 `baseURL` simplified to `http://127.0.0.1:11434/v1` (no Tailscale Serve
 indirection needed at all, since client and server are the same machine).
+
+(Decided against setting this up for now — Tailscale latency measured at
+2-5ms made the main justification moot. Revisit if a coding task's actual
+files start living on pop-os-1.)
+
+## Status + self-repair scripts
+
+Two companion scripts, one per side, each ending in a clean status table:
+
+- **`scripts/kilo/moab.sh`** — run on pop-os-1 (or via
+  `ssh bat@100.107.226.49 'bash ~/LlamaFarm-dual-v100-deploy/scripts/kilo/moab.sh'`).
+  Checks and auto-repairs: the LlamaFarm container, debris containers
+  matching known junk patterns, gateway health, `api_url` sanity (the
+  `gpu_router` failure mode specifically), Tailscale Serve exposure for
+  port 11434, both model tags' `num_ctx`, and reports both GPUs'
+  free/busy state.
+
+  Subcommands:
+  - `./moab.sh` — status + repair (default, safe to run anytime)
+  - `./moab.sh enable-gpu1` — starts a second Ollama worker pinned to
+    GPU1 (`llamafarm-ollama-worker-gpu1`, port 11436) and exposes it over
+    Tailscale. Refuses loudly if GPU1 is still busy (>20% util) — will
+    not silently queue or interfere with a running training job.
+  - `./moab.sh disable-gpu1` — tears it back down.
+
+- **`scripts/kilo/moabKilo.sh`** — run locally on any laptop
+  (`bash ~/.config/kilo/moabKilo.sh`). Checks `kilo.jsonc` exists and
+  points at direct Ollama (not the gateway's port 42617 — that specific
+  regression is checked for explicitly), confirms Tailscale sees
+  pop-os-1, confirms Ollama is actually reachable, confirms the Kilo
+  extension is installed. Auto-repairs `kilo.jsonc` from a canonical
+  template (backing up whatever was there first) if anything's missing
+  or drifted.
+
+Run `moabKilo.sh` first on a new laptop (it writes a working `kilo.jsonc`
+from scratch if none exists), then `moab.sh` on pop-os-1 to confirm the
+server side is healthy too.
+
+## Using two GPUs (when GPU1 isn't busy with training)
+
+A real GPU-placement dashboard already exists — no new infrastructure
+needed. It's embedded directly in the LlamaFarm gateway binary and is
+live right now at **`http://100.107.226.49:42617/`**. It talks to a real
+backend (`GET`/`PUT /api/ollama/gpu-placement`), not a mockup.
+
+Current state (deliberately minimal and safe): one worker, `gpu0`
+(the existing primary instance, `managed = false`), `ollama_auto_workers
+= false`, no model placements configured. The containers that broke
+(`gpu_router`, `llamafarm-ollama-worker-gpu1`) were from an earlier,
+separate hand-rolled attempt — not from this mechanism, which was never
+actually exercised.
+
+To bring GPU1 online once it's free:
+
+1. Check it's actually free: `nvidia-smi` on pop-os-1, or `moab.sh`'s
+   status table (GPU1 UUID is `GPU-4dda4033-eb45-c5a7-fe70-16979f13147c`).
+2. Either run `moab.sh enable-gpu1`, or add a `gpu1` worker through the
+   dashboard at the URL above.
+3. Point a **second** provider entry in `kilo.jsonc` directly at that
+   worker's own endpoint (e.g. `http://100.107.226.49:11436/v1`) — same
+   principle as the primary setup: Kilo talks straight to the Ollama
+   instance, never through the gateway's routing layer. This keeps GPU1
+   usable for a second Kilo window, or a dedicated `review` agent role
+   running on separate hardware from the main `code` agent.
+
+Deliberately **not** automated (no watcher polling GPU state and flipping
+routing on its own) — that reintroduces the exact category of fragility
+that broke the setup before, just with better process supervision. Manual
+is simple, visible, and nothing can drift silently.
