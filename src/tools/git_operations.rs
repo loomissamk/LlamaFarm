@@ -37,6 +37,126 @@ impl GitOperationsTool {
             .is_some()
     }
 
+    /// Canonical form of the workspace root (symlinks resolved).
+    fn canonical_workspace_root(&self) -> anyhow::Result<std::path::PathBuf> {
+        std::fs::canonicalize(&self.workspace_dir)
+            .map_err(|_| anyhow::anyhow!("could not canonicalize workspace directory"))
+    }
+
+    /// True when the workspace (or a parent of it) is a git repository.
+    fn workspace_has_git_repo(&self) -> bool {
+        if self.workspace_dir.join(".git").exists() {
+            return true;
+        }
+        let mut current_dir = self.workspace_dir.as_path();
+        while current_dir.parent().is_some() {
+            if current_dir.join(".git").exists() {
+                return true;
+            }
+            current_dir = current_dir.parent().unwrap();
+        }
+        false
+    }
+
+    /// Resolve the target repository for an operation from the optional
+    /// `repo_path` argument.
+    ///
+    /// A relative path resolves against the workspace root; the result is
+    /// canonicalized (symlinks and `..` resolved) and must be an existing
+    /// directory that belongs to a git repository. The repository's top level
+    /// is returned, so every subsequent command operates on exactly that
+    /// repository — never silently substituting the workspace repository for
+    /// the intended target.
+    fn resolve_repo_dir(&self, args: &serde_json::Value) -> anyhow::Result<std::path::PathBuf> {
+        let raw = match args.get("repo_path").and_then(|v| v.as_str()) {
+            Some(p) if !p.trim().is_empty() => p.trim().to_string(),
+            _ => anyhow::bail!("repo_path must not be empty"),
+        };
+
+        let candidate = if std::path::Path::new(&raw).is_absolute() {
+            std::path::PathBuf::from(&raw)
+        } else {
+            self.workspace_dir.join(&raw)
+        };
+
+        let metadata = std::fs::metadata(&candidate).map_err(|_| {
+            anyhow::anyhow!("repo_path '{}' does not exist or is not a directory", raw)
+        })?;
+        if !metadata.is_dir() {
+            anyhow::bail!("repo_path '{}' is not a directory", raw);
+        }
+
+        let dir = std::fs::canonicalize(&candidate)
+            .map_err(|_| anyhow::anyhow!("could not canonicalize repo_path '{}'", raw))?;
+
+        // The directory must belong to a git repository. This also accepts git
+        // worktrees, whose `.git` is a file rather than a directory.
+        let output = std::process::Command::new("git")
+            .args([
+                "-C",
+                dir.to_string_lossy().as_ref(),
+                "rev-parse",
+                "--show-toplevel",
+            ])
+            .output()
+            .map_err(|e| anyhow::anyhow!("failed to inspect repository at '{}': {e}", raw))?;
+        if !output.status.success() {
+            anyhow::bail!("repo_path '{}' is not inside a git repository", raw);
+        }
+        let toplevel = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let toplevel_path = std::fs::canonicalize(&toplevel)
+            .map_err(|_| anyhow::anyhow!("could not canonicalize repository top level"))?;
+        Ok(toplevel_path)
+    }
+
+    /// Resolve and validate the clone destination. Clone destinations are
+    /// separate from existing repository targets: the destination must stay
+    /// inside the workspace root, and if it already exists it must be an
+    /// empty directory.
+    fn resolve_clone_destination(
+        &self,
+        args: &serde_json::Value,
+    ) -> anyhow::Result<std::path::PathBuf> {
+        let raw = args.get("directory").and_then(|v| v.as_str()).unwrap_or("");
+        if raw.trim().is_empty() {
+            // Default clone target is a fresh subdirectory of the workspace,
+            // created by git itself.
+            return Ok(self.workspace_dir.clone());
+        }
+        let raw = raw.trim();
+        let candidate = if std::path::Path::new(raw).is_absolute() {
+            std::path::PathBuf::from(raw)
+        } else {
+            self.workspace_dir.join(raw)
+        };
+        let workspace_root = self.canonical_workspace_root()?;
+
+        if candidate.exists() {
+            let dir = std::fs::canonicalize(&candidate)
+                .map_err(|_| anyhow::anyhow!("could not canonicalize clone destination '{}'", raw))?;
+            if !dir.starts_with(&workspace_root) {
+                anyhow::bail!("clone destination '{}' is outside the node workspace", raw);
+            }
+            let empty = dir
+                .read_dir()
+                .map(|mut entries| entries.next().is_none())
+                .unwrap_or(false);
+            if !empty {
+                anyhow::bail!("clone destination '{}' exists and is not empty", raw);
+            }
+            return Ok(dir);
+        }
+
+        let parent = candidate.parent().unwrap_or_else(|| std::path::Path::new("/"));
+        let parent_canonical = std::fs::canonicalize(parent).map_err(|_| {
+            anyhow::anyhow!("parent of clone destination '{}' does not exist", raw)
+        })?;
+        if !parent_canonical.starts_with(&workspace_root) {
+            anyhow::bail!("clone destination '{}' is outside the node workspace", raw);
+        }
+        Ok(candidate)
+    }
+
     /// Sanitize git arguments to prevent injection attacks
     fn sanitize_git_args(&self, args: &str) -> anyhow::Result<Vec<String>> {
         let mut result = Vec::new();
@@ -92,10 +212,10 @@ impl GitOperationsTool {
         )
     }
 
-    async fn run_git_command(&self, args: &[&str]) -> anyhow::Result<String> {
+    async fn run_git_command(&self, cwd: &std::path::Path, args: &[&str]) -> anyhow::Result<String> {
         let output = tokio::process::Command::new("git")
             .args(args)
-            .current_dir(&self.workspace_dir)
+            .current_dir(cwd)
             .output()
             .await?;
 
@@ -147,58 +267,84 @@ impl GitOperationsTool {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
 
-    /// clone/pull/fetch/push handler. `url` is required for clone.
+    /// clone handler. `url` is required.
+    ///
+    /// Clone is a destination operation with its own validation, separate
+    /// from existing repository targets.
+    async fn git_clone(&self, args: &serde_json::Value) -> anyhow::Result<ToolResult> {
+        let Some(url) = args.get("url").and_then(|v| v.as_str()) else {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some("'url' is required for clone".into()),
+            });
+        };
+        // Reject option-injection and non-http(s)/git schemes.
+        if url.starts_with('-')
+            || !(url.starts_with("https://")
+                || url.starts_with("http://")
+                || url.starts_with("git@")
+                || url.starts_with("git://"))
+        {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!("Refusing to clone unsafe URL: {url}")),
+            });
+        }
+        // Clone destination is validated separately from repository targets
+        // and must stay inside the workspace.
+        let destination = self.resolve_clone_destination(args)?;
+        let mut git_args = vec!["clone".to_string(), url.to_string()];
+        if args.get("directory").and_then(|v| v.as_str()).is_some() {
+            let raw = args.get("directory").and_then(|v| v.as_str()).unwrap_or("");
+            git_args.push(raw.to_string());
+        }
+        let refs: Vec<&str> = git_args.iter().map(String::as_str).collect();
+        let output = self.run_git_authenticated(&destination, &refs).await;
+        match output {
+            Ok(out) => Ok(ToolResult {
+                success: true,
+                output: if out.trim().is_empty() {
+                    "clone completed".to_string()
+                } else {
+                    out
+                },
+                error: None,
+            }),
+            Err(e) => {
+                let hint = if !self.github_connected() && e.to_string().contains("Authentication")
+                {
+                    " (no GitHub token connected — connect GitHub on the Settings page)"
+                } else {
+                    ""
+                };
+                Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!("{e}{hint}")),
+                })
+            }
+        }
+    }
+
+    /// pull/fetch/push handler against an already-resolved repository target.
     async fn git_remote_op(
         &self,
         operation: &str,
-        args: serde_json::Value,
+        target: &std::path::Path,
+        args: &serde_json::Value,
     ) -> anyhow::Result<ToolResult> {
         let result = match operation {
-            "clone" => {
-                let Some(url) = args.get("url").and_then(|v| v.as_str()) else {
-                    return Ok(ToolResult {
-                        success: false,
-                        output: String::new(),
-                        error: Some("'url' is required for clone".into()),
-                    });
-                };
-                // Reject option-injection and non-http(s)/git schemes.
-                if url.starts_with('-')
-                    || !(url.starts_with("https://")
-                        || url.starts_with("http://")
-                        || url.starts_with("git@")
-                        || url.starts_with("git://"))
-                {
-                    return Ok(ToolResult {
-                        success: false,
-                        output: String::new(),
-                        error: Some(format!("Refusing to clone unsafe URL: {url}")),
-                    });
-                }
-                // Clone into the workspace; optional 'directory' names the target.
-                let mut git_args = vec!["clone".to_string(), url.to_string()];
-                if let Some(dir) = args.get("directory").and_then(|v| v.as_str()) {
-                    git_args.push(dir.to_string());
-                }
-                let refs: Vec<&str> = git_args.iter().map(String::as_str).collect();
-                self.run_git_authenticated(&self.workspace_dir, &refs).await
-            }
-            "pull" => {
-                self.run_git_authenticated(&self.workspace_dir, &["pull", "--ff-only"])
-                    .await
-            }
-            "fetch" => {
-                self.run_git_authenticated(&self.workspace_dir, &["fetch", "--all", "--prune"])
-                    .await
-            }
+            "pull" => self.run_git_authenticated(target, &["pull", "--ff-only"]).await,
+            "fetch" => self.run_git_authenticated(target, &["fetch", "--all", "--prune"]).await,
             "push" => {
                 let mut git_args = vec!["push"];
                 if let Some(branch) = args.get("branch").and_then(|v| v.as_str()) {
                     git_args.push("origin");
                     git_args.push(branch);
                 }
-                self.run_git_authenticated(&self.workspace_dir, &git_args)
-                    .await
+                self.run_git_authenticated(target, &git_args).await
             }
             _ => unreachable!(),
         };
@@ -230,9 +376,9 @@ impl GitOperationsTool {
         }
     }
 
-    async fn git_status(&self, _args: serde_json::Value) -> anyhow::Result<ToolResult> {
+    async fn git_status(&self, cwd: &std::path::Path) -> anyhow::Result<ToolResult> {
         let output = self
-            .run_git_command(&["status", "--porcelain=2", "--branch"])
+            .run_git_command(cwd, &["status", "--porcelain=2", "--branch"])
             .await?;
 
         // Parse git status output into structured format
@@ -281,7 +427,7 @@ impl GitOperationsTool {
         })
     }
 
-    async fn git_diff(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
+    async fn git_diff(&self, cwd: &std::path::Path, args: &serde_json::Value) -> anyhow::Result<ToolResult> {
         let files = args.get("files").and_then(|v| v.as_str()).unwrap_or(".");
         let cached = args
             .get("cached")
@@ -298,7 +444,7 @@ impl GitOperationsTool {
         git_args.push("--");
         git_args.push(files);
 
-        let output = self.run_git_command(&git_args).await?;
+        let output = self.run_git_command(cwd, &git_args).await?;
 
         // Parse diff into structured hunks
         let mut result = serde_json::Map::new();
@@ -360,18 +506,21 @@ impl GitOperationsTool {
         })
     }
 
-    async fn git_log(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
+    async fn git_log(&self, cwd: &std::path::Path, args: &serde_json::Value) -> anyhow::Result<ToolResult> {
         let limit_raw = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10);
         let limit = usize::try_from(limit_raw).unwrap_or(usize::MAX).min(1000);
         let limit_str = limit.to_string();
 
         let output = self
-            .run_git_command(&[
-                "log",
-                &format!("-{limit_str}"),
-                "--pretty=format:%H|%an|%ae|%ad|%s",
-                "--date=iso",
-            ])
+            .run_git_command(
+                cwd,
+                &[
+                    "log",
+                    &format!("-{limit_str}"),
+                    "--pretty=format:%H|%an|%ae|%ad|%s",
+                    "--date=iso",
+                ],
+            )
             .await?;
 
         let mut commits = Vec::new();
@@ -397,9 +546,9 @@ impl GitOperationsTool {
         })
     }
 
-    async fn git_branch(&self, _args: serde_json::Value) -> anyhow::Result<ToolResult> {
+    async fn git_branch(&self, cwd: &std::path::Path) -> anyhow::Result<ToolResult> {
         let output = self
-            .run_git_command(&["branch", "--format=%(refname:short)|%(HEAD)"])
+            .run_git_command(cwd, &["branch", "--format=%(refname:short)|%(HEAD)"])
             .await?;
 
         let mut branches = Vec::new();
@@ -437,7 +586,7 @@ impl GitOperationsTool {
         }
     }
 
-    async fn git_commit(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
+    async fn git_commit(&self, cwd: &std::path::Path, args: &serde_json::Value) -> anyhow::Result<ToolResult> {
         let message = args
             .get("message")
             .and_then(|v| v.as_str())
@@ -458,7 +607,7 @@ impl GitOperationsTool {
         // Limit message length
         let message = Self::truncate_commit_message(&sanitized);
 
-        let output = self.run_git_command(&["commit", "-m", &message]).await;
+        let output = self.run_git_command(cwd, &["commit", "-m", &message]).await;
 
         match output {
             Ok(_) => Ok(ToolResult {
@@ -474,7 +623,7 @@ impl GitOperationsTool {
         }
     }
 
-    async fn git_add(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
+    async fn git_add(&self, cwd: &std::path::Path, args: &serde_json::Value) -> anyhow::Result<ToolResult> {
         let paths = args
             .get("paths")
             .and_then(|v| v.as_str())
@@ -483,7 +632,7 @@ impl GitOperationsTool {
         // Validate paths against injection patterns
         self.sanitize_git_args(paths)?;
 
-        let output = self.run_git_command(&["add", "--", paths]).await;
+        let output = self.run_git_command(cwd, &["add", "--", paths]).await;
 
         match output {
             Ok(_) => Ok(ToolResult {
@@ -499,7 +648,7 @@ impl GitOperationsTool {
         }
     }
 
-    async fn git_checkout(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
+    async fn git_checkout(&self, cwd: &std::path::Path, args: &serde_json::Value) -> anyhow::Result<ToolResult> {
         let branch = args
             .get("branch")
             .and_then(|v| v.as_str())
@@ -519,7 +668,7 @@ impl GitOperationsTool {
             anyhow::bail!("Branch name contains invalid characters");
         }
 
-        let output = self.run_git_command(&["checkout", branch_name]).await;
+        let output = self.run_git_command(cwd, &["checkout", branch_name]).await;
 
         match output {
             Ok(_) => Ok(ToolResult {
@@ -535,24 +684,21 @@ impl GitOperationsTool {
         }
     }
 
-    async fn git_stash(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
+    async fn git_stash(&self, cwd: &std::path::Path, args: &serde_json::Value) -> anyhow::Result<ToolResult> {
         let action = args
             .get("action")
             .and_then(|v| v.as_str())
             .unwrap_or("push");
 
         let output = match action {
-            "push" | "save" => {
-                self.run_git_command(&["stash", "push", "-m", "auto-stash"])
-                    .await
-            }
-            "pop" => self.run_git_command(&["stash", "pop"]).await,
-            "list" => self.run_git_command(&["stash", "list"]).await,
+            "push" | "save" => self.run_git_command(cwd, &["stash", "push", "-m", "auto-stash"]).await,
+            "pop" => self.run_git_command(cwd, &["stash", "pop"]).await,
+            "list" => self.run_git_command(cwd, &["stash", "list"]).await,
             "drop" => {
                 let index_raw = args.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
                 let index = i32::try_from(index_raw)
                     .map_err(|_| anyhow::anyhow!("stash index too large: {index_raw}"))?;
-                self.run_git_command(&["stash", "drop", &format!("stash@{{{index}}}")])
+                self.run_git_command(cwd, &["stash", "drop", &format!("stash@{{{index}}}")])
                     .await
             }
             _ => anyhow::bail!("Unknown stash action: {action}. Use: push, pop, list, drop"),
@@ -580,7 +726,7 @@ impl Tool for GitOperationsTool {
     }
 
     fn description(&self) -> &str {
-        "Perform Git operations: status, diff, log, branch, commit, add, checkout, stash, and remote operations clone/pull/fetch/push. Clone/pull/fetch/push against github.com authenticate automatically with the GitHub account connected on the Settings page — use these instead of web_fetch to work with repositories. 'clone' needs a 'url' (and optional 'directory'); 'push' takes an optional 'branch'."
+        "Perform Git operations: status, diff, log, branch, commit, add, checkout, stash, and remote operations clone/pull/fetch/push. Every operation (except clone) targets the repository containing the optional 'repo_path' (absolute, or relative to the node workspace) — pass it when operating on a repository other than the workspace root. 'clone' needs a 'url' (and optional 'directory'); 'push' takes an optional 'branch'. Remote operations against github.com authenticate automatically with the GitHub account connected on the Settings page — use these instead of web_fetch to work with repositories."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -603,6 +749,10 @@ impl Tool for GitOperationsTool {
                 "branch": {
                     "type": "string",
                     "description": "Branch name (for 'checkout' and 'push' operations)"
+                },
+                "repo_path": {
+                    "type": "string",
+                    "description": "Repository to operate on (all operations except 'clone'). Absolute path, or relative to the node workspace; must be a directory inside a git repository. Commands always run against the repository containing this path, so operations target the intended repo (including a sibling repo) and never silently substitute the workspace repo. Omit to operate on the workspace repository (backward compatible)."
                 },
                 "url": {
                     "type": "string",
@@ -650,27 +800,42 @@ impl Tool for GitOperationsTool {
             }
         };
 
-        // Check if we're in a git repository
-        if !self.workspace_dir.join(".git").exists() {
-            // Try to find .git in parent directories
-            let mut current_dir = self.workspace_dir.as_path();
-            let mut found_git = false;
-            while current_dir.parent().is_some() {
-                if current_dir.join(".git").exists() {
-                    found_git = true;
-                    break;
-                }
-                current_dir = current_dir.parent().unwrap();
-            }
+        // Clone targets a destination directory, not an existing repository;
+        // handle it before any repository resolution.
+        if operation == "clone" {
+            return self.git_clone(&args).await;
+        }
 
-            if !found_git {
+        // Resolve the target repository. An explicit `repo_path` names the
+        // repository to operate on; when omitted the workspace repository is
+        // used (backward-compatible default).
+        let target = if let Some(raw) = args.get("repo_path").and_then(|v| v.as_str()) {
+            if raw.trim().is_empty() {
                 return Ok(ToolResult {
                     success: false,
                     output: String::new(),
-                    error: Some("Not in a git repository".into()),
+                    error: Some("repo_path must not be empty".into()),
                 });
             }
-        }
+            match self.resolve_repo_dir(&args) {
+                Ok(dir) => dir,
+                Err(e) => {
+                    return Ok(ToolResult {
+                        success: false,
+                        output: String::new(),
+                        error: Some(e.to_string()),
+                    });
+                }
+            }
+        } else if !self.workspace_has_git_repo() {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some("Not in a git repository (no repo_path given)".into()),
+            });
+        } else {
+            self.workspace_dir.clone()
+        };
 
         // Check autonomy level for write operations
         if self.requires_write_access(operation) {
@@ -705,19 +870,20 @@ impl Tool for GitOperationsTool {
             });
         }
 
-        // Execute the requested operation
+        // Execute the requested operation against the resolved target
+        let target = target.as_path();
         match operation {
-            "status" => self.git_status(args).await,
-            "diff" => self.git_diff(args).await,
-            "log" => self.git_log(args).await,
-            "branch" => self.git_branch(args).await,
-            "commit" => self.git_commit(args).await,
-            "add" => self.git_add(args).await,
-            "checkout" => self.git_checkout(args).await,
-            "stash" => self.git_stash(args).await,
-            "clone" | "pull" | "fetch" | "push" => {
+            "status" => self.git_status(target).await,
+            "diff" => self.git_diff(target, &args).await,
+            "log" => self.git_log(target, &args).await,
+            "branch" => self.git_branch(target).await,
+            "commit" => self.git_commit(target, &args).await,
+            "add" => self.git_add(target, &args).await,
+            "checkout" => self.git_checkout(target, &args).await,
+            "stash" => self.git_stash(target, &args).await,
+            "pull" | "fetch" | "push" => {
                 let op = operation.to_string();
-                self.git_remote_op(&op, args).await
+                self.git_remote_op(&op, target, &args).await
             }
             _ => Ok(ToolResult {
                 success: false,
@@ -734,18 +900,18 @@ mod tests {
     use crate::security::SecurityPolicy;
     use tempfile::TempDir;
 
-    fn test_tool(dir: &std::path::Path) -> GitOperationsTool {
+    fn test_tool(dir: std::path::PathBuf) -> GitOperationsTool {
         let security = Arc::new(SecurityPolicy {
             autonomy: AutonomyLevel::Supervised,
             ..SecurityPolicy::default()
         });
-        GitOperationsTool::new(security, dir.to_path_buf())
+        GitOperationsTool::new(security, dir)
     }
 
     #[test]
     fn sanitize_git_blocks_injection() {
         let tmp = TempDir::new().unwrap();
-        let tool = test_tool(tmp.path());
+        let tool = test_tool(tmp.path().to_path_buf());
 
         // Should block dangerous arguments
         assert!(tool.sanitize_git_args("--exec=rm -rf /").is_err());
@@ -758,7 +924,7 @@ mod tests {
     #[test]
     fn sanitize_git_blocks_pager_editor_injection() {
         let tmp = TempDir::new().unwrap();
-        let tool = test_tool(tmp.path());
+        let tool = test_tool(tmp.path().to_path_buf());
 
         assert!(tool.sanitize_git_args("--pager=less").is_err());
         assert!(tool.sanitize_git_args("--editor=vim").is_err());
@@ -767,7 +933,7 @@ mod tests {
     #[test]
     fn sanitize_git_blocks_config_injection() {
         let tmp = TempDir::new().unwrap();
-        let tool = test_tool(tmp.path());
+        let tool = test_tool(tmp.path().to_path_buf());
 
         // Exact `-c` flag (config injection)
         assert!(tool.sanitize_git_args("-c core.sshCommand=evil").is_err());
@@ -777,7 +943,7 @@ mod tests {
     #[test]
     fn sanitize_git_blocks_no_verify() {
         let tmp = TempDir::new().unwrap();
-        let tool = test_tool(tmp.path());
+        let tool = test_tool(tmp.path().to_path_buf());
 
         assert!(tool.sanitize_git_args("--no-verify").is_err());
     }
@@ -785,7 +951,7 @@ mod tests {
     #[test]
     fn sanitize_git_blocks_redirect_in_args() {
         let tmp = TempDir::new().unwrap();
-        let tool = test_tool(tmp.path());
+        let tool = test_tool(tmp.path().to_path_buf());
 
         assert!(tool.sanitize_git_args("file.txt > /tmp/out").is_err());
     }
@@ -793,7 +959,7 @@ mod tests {
     #[test]
     fn sanitize_git_cached_not_blocked() {
         let tmp = TempDir::new().unwrap();
-        let tool = test_tool(tmp.path());
+        let tool = test_tool(tmp.path().to_path_buf());
 
         // --cached must NOT be blocked by the `-c` check
         assert!(tool.sanitize_git_args("--cached").is_ok());
@@ -804,7 +970,7 @@ mod tests {
     #[test]
     fn sanitize_git_allows_safe() {
         let tmp = TempDir::new().unwrap();
-        let tool = test_tool(tmp.path());
+        let tool = test_tool(tmp.path().to_path_buf());
 
         // Should allow safe arguments
         assert!(tool.sanitize_git_args("main").is_ok());
@@ -817,7 +983,7 @@ mod tests {
     #[test]
     fn requires_write_detection() {
         let tmp = TempDir::new().unwrap();
-        let tool = test_tool(tmp.path());
+        let tool = test_tool(tmp.path().to_path_buf());
 
         assert!(tool.requires_write_access("commit"));
         assert!(tool.requires_write_access("add"));
@@ -831,7 +997,7 @@ mod tests {
     #[test]
     fn branch_is_not_write_gated() {
         let tmp = TempDir::new().unwrap();
-        let tool = test_tool(tmp.path());
+        let tool = test_tool(tmp.path().to_path_buf());
 
         // Branch listing is read-only; it must not require write access
         assert!(!tool.requires_write_access("branch"));
@@ -841,7 +1007,7 @@ mod tests {
     #[test]
     fn is_read_only_detection() {
         let tmp = TempDir::new().unwrap();
-        let tool = test_tool(tmp.path());
+        let tool = test_tool(tmp.path().to_path_buf());
 
         assert!(tool.is_read_only("status"));
         assert!(tool.is_read_only("diff"));
@@ -935,7 +1101,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_missing_operation() {
         let tmp = TempDir::new().unwrap();
-        let tool = test_tool(tmp.path());
+        let tool = test_tool(tmp.path().to_path_buf());
 
         let result = tool.execute(json!({})).await.unwrap();
         assert!(!result.success);
@@ -958,7 +1124,7 @@ mod tests {
             .output()
             .unwrap();
 
-        let tool = test_tool(tmp.path());
+        let tool = test_tool(tmp.path().to_path_buf());
 
         let result = tool
             .execute(json!({"operation": "frobnicate"}))
@@ -982,7 +1148,7 @@ mod tests {
             .current_dir(tmp.path())
             .output()
             .unwrap();
-        let tool = test_tool(tmp.path());
+        let tool = test_tool(tmp.path().to_path_buf());
         let result = tool
             .execute(json!({"operation": "clone", "url": "--upload-pack=touch /tmp/x"}))
             .await
@@ -997,5 +1163,246 @@ mod tests {
         let truncated = GitOperationsTool::truncate_commit_message(&long);
 
         assert_eq!(truncated.chars().count(), 2000);
+    }
+
+    // ---- repo_path target resolution: cross-repository isolation ----
+    //
+    // These tests reproduce the historical defect where a push intended for a
+    // sibling repository (e.g. `St-Clippus`) silently targeted the workspace
+    // repository (e.g. `LlamaFarmWorkspace`) because every operation ran with
+    // the workspace directory as its cwd.
+
+    fn run_git(dir: &std::path::Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .expect("git command should run");
+        assert!(
+            out.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    fn init_repo(base: &std::path::Path) {
+        run_git(base, &["init", "-b", "main"]);
+        run_git(base, &["config", "user.email", "llamafarm_user@example.com"]);
+        run_git(base, &["config", "user.name", "llamafarm_user"]);
+        std::fs::write(base.join("marker.txt"), "marker\n").unwrap();
+        run_git(base, &["add", "--", "marker.txt"]);
+        run_git(base, &["commit", "-m", "initial commit"]);
+    }
+
+    fn head_message(repo: &std::path::Path) -> String {
+        let out = std::process::Command::new("git")
+            .args(["log", "-1", "--pretty=%s"])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[tokio::test]
+    async fn repo_path_add_and_commit_target_sibling_not_workspace() {
+        let base = TempDir::new().unwrap();
+        // Two sibling repositories, as in the real incident.
+        let workspace_repo = base.path().join("LlamaFarmWorkspace");
+        let target_repo = base.path().join("St-Clippus");
+        std::fs::create_dir_all(&workspace_repo).unwrap();
+        std::fs::create_dir_all(&target_repo).unwrap();
+        init_repo(&workspace_repo);
+        init_repo(&target_repo);
+
+        // A new file exists only in the target repository.
+        std::fs::write(target_repo.join("stclippus.txt"), "sibling content").unwrap();
+
+        let tool = test_tool(workspace_repo.clone());
+        let before = head_message(&workspace_repo);
+
+        let add_result = tool
+            .execute(json!({
+                "operation": "add",
+                "repo_path": target_repo.to_str().unwrap(),
+                "paths": "stclippus.txt"
+            }))
+            .await
+            .unwrap();
+        assert!(add_result.success, "add failed: {:?}", add_result.error);
+
+        let commit_result = tool
+            .execute(json!({
+                "operation": "commit",
+                "repo_path": target_repo.to_str().unwrap(),
+                "message": "add stclippus file"
+            }))
+            .await
+            .unwrap();
+        assert!(commit_result.success, "commit failed: {:?}", commit_result.error);
+
+        // The workspace repository HEAD must be unchanged.
+        let after = head_message(&workspace_repo);
+        assert_eq!(
+            before, after,
+            "workspace repository HEAD changed during a sibling commit"
+        );
+        // The new file must be committed in the target repository.
+        assert!(
+            target_repo.join("stclippus.txt").exists(),
+            "sibling commit should have created the file in the target repository"
+        );
+        assert_eq!(
+            head_message(&target_repo),
+            "add stclippus file",
+            "target repository HEAD should be the new commit"
+        );
+        // The workspace repository index must not contain the sibling's file.
+        let ws_status = std::process::Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(&workspace_repo)
+            .output()
+            .unwrap();
+        assert!(
+            !String::from_utf8_lossy(&ws_status.stdout).contains("stclippus.txt"),
+            "sibling file leaked into workspace repository index"
+        );
+    }
+
+    #[tokio::test]
+    async fn repo_path_status_reports_target_repo() {
+        let base = TempDir::new().unwrap();
+        let workspace_repo = base.path().join("LlamaFarmWorkspace");
+        let target_repo = base.path().join("St-Clippus");
+        std::fs::create_dir_all(&workspace_repo).unwrap();
+        std::fs::create_dir_all(&target_repo).unwrap();
+        init_repo(&workspace_repo);
+        init_repo(&target_repo);
+
+        // Create a distinctive untracked file in the target repository only.
+        std::fs::write(target_repo.join("unique_to_target.txt"), "x").unwrap();
+
+        let tool = test_tool(workspace_repo.clone());
+
+        let result = tool
+            .execute(json!({"operation": "status", "repo_path": target_repo.to_str().unwrap()}))
+            .await
+            .unwrap();
+        assert!(result.success, "status failed: {:?}", result.error);
+        assert!(
+            result.output.contains("unique_to_target.txt"),
+            "status did not reflect the target repository: {}",
+            result.output
+        );
+
+        // The workspace repository must still be clean (no leak of the sibling's file).
+        let ws_status = std::process::Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(&workspace_repo)
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&ws_status.stdout).trim().is_empty(),
+            "workspace repository should be clean"
+        );
+    }
+
+    #[tokio::test]
+    async fn repo_path_branch_targets_target_repo() {
+        let base = TempDir::new().unwrap();
+        let workspace_repo = base.path().join("LlamaFarmWorkspace");
+        let target_repo = base.path().join("St-Clippus");
+        std::fs::create_dir_all(&workspace_repo).unwrap();
+        std::fs::create_dir_all(&target_repo).unwrap();
+        init_repo(&workspace_repo);
+        init_repo(&target_repo);
+
+        // Distinct branch names in each repo.
+        run_git(&target_repo, &["checkout", "-b", "stclippus-branch"]);
+        let tool = test_tool(workspace_repo.clone());
+
+        let result = tool
+            .execute(json!({"operation": "branch", "repo_path": target_repo.to_str().unwrap()}))
+            .await
+            .unwrap();
+        assert!(result.success, "branch failed: {:?}", result.error);
+        assert!(
+            result.output.contains("stclippus-branch"),
+            "branch listing did not reflect the target repository: {}",
+            result.output
+        );
+    }
+
+    #[tokio::test]
+    async fn repo_path_commit_targets_exact_sibling_repo() {
+        // Regression: a commit meant for a sibling repository must land in that
+        // repository, not in the workspace repository.
+        let base = TempDir::new().unwrap();
+        let workspace_repo = base.path().join("LlamaFarmWorkspace");
+        let sibling_repo = base.path().join("St-Clippus");
+        std::fs::create_dir_all(&workspace_repo).unwrap();
+        std::fs::create_dir_all(&sibling_repo).unwrap();
+        init_repo(&workspace_repo);
+        init_repo(&sibling_repo);
+
+        // Put a file in the workspace repo so we can prove it is NOT the target.
+        std::fs::write(workspace_repo.join("ws_marker.txt"), "workspace").unwrap();
+        run_git(&workspace_repo, &["add", "--", "ws_marker.txt"]);
+        run_git(&workspace_repo, &["commit", "-m", "workspace commit"]);
+
+        let tool = test_tool(workspace_repo.clone());
+        let ws_head_before = head_message(&workspace_repo);
+
+        // A new file only in the sibling repo.
+        std::fs::write(sibling_repo.join("sibling_new.txt"), "sibling").unwrap();
+        let add = tool
+            .execute(json!({
+                "operation": "add",
+                "repo_path": sibling_repo.to_str().unwrap(),
+                "paths": "sibling_new.txt"
+            }))
+            .await
+            .unwrap();
+        assert!(add.success, "add failed: {:?}", add.error);
+
+        let commit = tool
+            .execute(json!({
+                "operation": "commit",
+                "repo_path": sibling_repo.to_str().unwrap(),
+                "message": "sibling commit"
+            }))
+            .await
+            .unwrap();
+        assert!(commit.success, "commit failed: {:?}", commit.error);
+
+        // Workspace HEAD is unchanged; sibling HEAD is the new commit.
+        assert_eq!(ws_head_before, head_message(&workspace_repo));
+        assert_eq!(head_message(&sibling_repo), "sibling commit");
+        assert!(sibling_repo.join("sibling_new.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn repo_path_nonexistent_is_rejected() {
+        let base = TempDir::new().unwrap();
+        let workspace_repo = base.path().join("LlamaFarmWorkspace");
+        std::fs::create_dir_all(&workspace_repo).unwrap();
+        init_repo(&workspace_repo);
+
+        let tool = test_tool(workspace_repo.clone());
+        let result = tool
+            .execute(json!({
+                "operation": "status",
+                "repo_path": "does-not-exist-xyz"
+            }))
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("does not exist")
+        );
     }
 }
