@@ -1,0 +1,53 @@
+{
+  "concurrency": 3,
+  "wall_s": 14.028333875001408,
+  "results": [
+    {
+      "task": 601,
+      "ok": true,
+      "latency_s": 13.629533084007562,
+      "prompt_tokens": 11809,
+      "output_tokens": 54,
+      "prompt_eval_s": 4.538776,
+      "generation_s": 8.886212,
+      "total_s": 13.540102907,
+      "tool_calls": 1
+    },
+    {
+      "task": 602,
+      "ok": true,
+      "latency_s": 14.023958125006175,
+      "prompt_tokens": 11809,
+      "output_tokens": 54,
+      "prompt_eval_s": 4.948717,
+      "generation_s": 1.068862,
+      "total_s": 13.936401067,
+      "tool_calls": 1
+    },
+    {
+      "task": 603,
+      "ok": true,
+      "latency_s": 13.859810167006799,
+      "prompt_tokens": 11809,
+      "output_tokens": 54,
+      "prompt_eval_s": 5.972986,
+      "generation_s": 4.62783,
+      "total_s": 13.771907964,
+      "tool_calls": 1
+    }
+  ],
+  "completed_tasks_per_min": 12.831174507527319,
+  "output_tokens_per_s": 11.548057056774587,
+  "prompt_tokens_per_s": 2525.388995989835,
+  "gpu0_max_mib": 27014,
+  "gpu1_max_mib": 12000,
+  "gpu0_max_util": 99,
+  "gpu1_max_util": 100,
+  "loaded": [
+    {
+      "name": "qwen3.5-rana:9b-32k",
+      "size_vram": 11171979590,
+      "context_length": 32768
+    }
+  ]
+}

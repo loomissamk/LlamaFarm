@@ -1,0 +1,13 @@
+{
+  "max_stable_parallel": 2,
+  "evidence": "2026-11-17 two-bundle GPU1 distinct coding prompts, 11,809 tokens each",
+  "measured_completed_tasks_per_min": {
+    "2": 13.461,
+    "3": 12.831
+  },
+  "measured_peak_gpu1_mib": {
+    "2": 11494,
+    "3": 12000
+  },
+  "reason": "Three requests were slower than two; prefer the highest tested stable throughput."
+}

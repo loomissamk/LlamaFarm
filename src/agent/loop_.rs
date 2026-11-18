@@ -6585,6 +6585,15 @@ pub async fn run(
 /// Process a single message through the full agent (with tools, peripherals, memory).
 /// Used by channels (Telegram, Discord, etc.) to enable hardware and tool use.
 pub async fn process_message(config: Config, message: &str) -> Result<String> {
+    process_message_with_federation(config, message, None).await
+}
+
+/// Process an API agent turn with optional access to federation peers.
+pub async fn process_message_with_federation(
+    config: Config,
+    message: &str,
+    federation: Option<Arc<crate::federation::remote_subagent::FederationRemoteSubagentAdapter>>,
+) -> Result<String> {
     let observer: Arc<dyn Observer> =
         Arc::from(observability::create_observer(&config.observability));
     let runtime: Arc<dyn runtime::RuntimeAdapter> =
@@ -6608,7 +6617,7 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
     } else {
         (None, None)
     };
-    let mut tools_registry = tools::all_tools_with_runtime(
+    let mut tools_registry = tools::all_tools_with_runtime_and_federation(
         Arc::new(config.clone()),
         &security,
         runtime,
@@ -6622,6 +6631,7 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
         &config.agents,
         config.api_key.as_deref(),
         &config,
+        federation,
     );
     let peripheral_tools: Vec<Box<dyn Tool>> =
         crate::peripherals::create_peripheral_tools(&config.peripherals).await?;

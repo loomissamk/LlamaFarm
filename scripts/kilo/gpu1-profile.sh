@@ -1,75 +1,128 @@
 #!/usr/bin/env bash
-# gpu1-profile.sh -- switch GPU1's single Ollama container between selectable
-# profiles. One user, one GPU1 inference slot by default -- OLLAMA_NUM_PARALLEL
-# is a container-level setting, not per-model, so switching profiles means
-# recreating the container with the right settings, not just swapping models.
-# Rana 9B is the one deliberate exception: it's small enough that a few
-# concurrent slots cost almost nothing, unlike the 27B where concurrency was
-# reserving VRAM for simultaneous users that don't exist.
-#
-# Usage: ./gpu1-profile.sh <profile>
-#   q8-64k   (default) UnQwen 27B Q8, 64K ctx, 1 slot -- 30.2GB, measured fully GPU-resident
-#   q8-32k   UnQwen 27B Q8, 32K ctx, 1 slot -- 28.96GB
-#   q8-80k   UnQwen 27B Q8, 80K ctx, 1 slot -- 31.03GB, ~1.9GB headroom
-#   q8-98k   UnQwen 27B Q8, 98K ctx, 1 slot -- 31.69GB, ~1GB headroom (tight, not recommended as default)
-#   rana     Rana 9B Q8, 32K ctx, 3 slots -- cheap concurrent subagent pool
-#   status   show current model + settings, no change
-
+# Select the model served by the GPU1 LlamaFarm bundle. The Mac wrapper updates
+# its OpenCode and Kilo model selections after this script succeeds.
 set -euo pipefail
-CONTAINER="opencode-ollama-gpu1-c"
-PORT=11436
 
-status() {
-  echo "--- current ---"
-  docker inspect "$CONTAINER" --format 'NUM_PARALLEL env: {{range .Config.Env}}{{if (index (split . "=") 0) eq "OLLAMA_NUM_PARALLEL"}}{{.}}{{end}}{{end}}' 2>/dev/null \
-    | grep OLLAMA_NUM_PARALLEL || docker exec "$CONTAINER" env 2>/dev/null | grep OLLAMA_NUM_PARALLEL
-  curl -s http://127.0.0.1:${PORT}/api/ps 2>/dev/null
-  echo
+cd /home/bat/LlamaFarm-dual-v100-deploy
+compose=(docker compose -f docker-compose.bundle.yml -f docker-compose.dual-v100.yml)
+profile=${1:-status}
+capacity_file=/home/bat/LlamaFarm-dual-v100-deploy/scripts/kilo/gpu1-capacity.json
+capacity() {
+  python3 - "$capacity_file" <<'CAP'
+import json, sys
+with open(sys.argv[1]) as handle:
+    value = int(json.load(handle)["max_stable_parallel"])
+if value not in (1, 2, 3):
+    raise SystemExit("invalid GPU1 stable capacity")
+print(value)
+CAP
 }
 
-recreate() {
-  local parallel="$1"
-  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
-  docker run -d --name "$CONTAINER" --restart unless-stopped \
-    --gpus device=1 \
-    -p 127.0.0.1:${PORT}:11434 \
-    -v llamafarm-bundle-data:/llamafarm-data \
-    -e OLLAMA_MODELS=/llamafarm-data/.ollama/models \
-    -e OLLAMA_HOST=0.0.0.0:11434 \
-    -e OLLAMA_KEEP_ALIVE=24h \
-    -e OLLAMA_NUM_PARALLEL="$parallel" \
-    -e OLLAMA_MAX_LOADED_MODELS=1 \
-    -e OLLAMA_FLASH_ATTENTION=1 \
-    -e OLLAMA_KV_CACHE_TYPE=q8_0 \
-    ollama/ollama:latest >/dev/null
-  sleep 4
-}
-
-load_and_verify() {
-  local model="$1"
-  curl -s http://127.0.0.1:${PORT}/api/generate \
-    -d "{\"model\":\"${model}\",\"prompt\":\"hi\",\"keep_alive\":\"24h\"}" \
-    -o /dev/null -w 'load: %{http_code}\n'
-  sleep 8
-  local ps
-  ps=$(curl -s http://127.0.0.1:${PORT}/api/ps)
-  echo "$ps"
-  python3 -c "
-import json,sys
-d = json.loads('''$ps''')
-for m in d.get('models', []):
-    full = m['size'] == m['size_vram']
-    print(f\"{m['name']}: fully_gpu_resident={full} size_vram={m['size_vram']} size={m['size']}\")
-"
-}
-
-profile="${1:-status}"
 case "$profile" in
-  status) status ;;
-  q8-32k) recreate 1; load_and_verify "qwen3.8-unqwen:27b-q8-32k" ;;
-  q8-64k) recreate 1; load_and_verify "qwen3.8-unqwen:27b-q8-64k" ;;
-  q8-80k) recreate 1; load_and_verify "qwen3.8-unqwen:27b-q8-80k" ;;
-  q8-98k) recreate 1; load_and_verify "qwen3.8-unqwen:27b-q8-98k" ;;
-  rana)   recreate 3; load_and_verify "abliterant/qwen3.5-rana:9b-q8_0" ;;
-  *) echo "Unknown profile: $profile" >&2; echo "Valid: q8-32k q8-64k q8-80k q8-98k rana status" >&2; exit 2 ;;
+  capacity) capacity; exit 0 ;;
+  status)
+    docker inspect LlamaFarm-GPU1 --format 'container={{.State.Status}} device={{json .HostConfig.DeviceRequests}}'
+    docker exec LlamaFarm-GPU1 env | grep -E '^(LLAMAFARM_MODEL|OLLAMA_NUM_PARALLEL|OLLAMA_CONTEXT_LENGTH)='
+    curl -fsS http://127.0.0.1:11436/api/ps
+    echo
+    exit 0
+    ;;
+  q8-32k) model=qwen3.8-unqwen:27b-q8-32k; context=32768; parallel=1; quant=Q8_0 ;;
+  q8-64k|A) model=qwen3.8-unqwen:27b-q8-64k; context=65536; parallel=1; quant=Q8_0 ;;
+  q4-256k) model=qwen3.8-unqwen:27b-256k; context=262144; parallel=1; quant=Q4_K_M ;;
+  rana1|D) model=qwen3.5-rana:9b-32k; context=32768; parallel=1; quant=Q8_0 ;;
+  rana2|B) model=qwen3.5-rana:9b-32k; context=32768; parallel=2; quant=Q8_0 ;;
+  rana3|C) model=qwen3.5-rana:9b-32k; context=32768; parallel=3; quant=Q8_0 ;;
+  rana256|D256) model=qwen3.5-rana:9b-256k; context=262144; parallel=1; quant=Q8_0 ;;
+  *) echo 'usage: gpu1-profile.sh q8-32k|q8-64k|q4-256k|rana1|rana2|rana3|rana256|status' >&2; exit 2 ;;
 esac
+
+if [[ "$model" == qwen3.5-rana:9b-32k ]] && (( parallel > $(capacity) )); then
+  parallel=$(capacity)
+  echo "Requested $profile exceeds tested GPU1 capacity; using $parallel Rana slot(s)" >&2
+fi
+
+if [[ "$(docker inspect -f '{{.State.Running}}' LlamaFarm-GPU1 2>/dev/null || true)" != true ]]; then
+  echo 'LlamaFarm-GPU1 is not running' >&2
+  exit 1
+fi
+docker exec LlamaFarm-GPU1 ollama show "$model" >/dev/null
+util=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits | sed -n '2p' | tr -d ' %')
+if (( util > 20 )); then
+  echo "GPU1 is busy (${util}%); finish the current Kilo/OpenCode request before switching" >&2
+  exit 3
+fi
+
+backup_dir=/home/bat/.local/share/llamafarm-backups
+mkdir -p "$backup_dir"
+backup="$backup_dir/gpu1-profile-env-$(date +%Y%m%d-%H%M%S).env"
+cp -p .env "$backup"
+
+rollback() {
+  trap - ERR
+  echo "Profile switch failed; restoring $backup" >&2
+  cp -p "$backup" .env
+  "${compose[@]}" up -d --no-build --no-deps llamafarm-gpu1 || true
+}
+trap rollback ERR
+
+python3 - "$model" "$context" "$parallel" <<'PY'
+from pathlib import Path
+import os, re, stat, sys
+
+path = Path('.env')
+text = path.read_text()
+changes = {
+    'GPU1_MODEL': sys.argv[1],
+    'GPU1_CONTEXT': sys.argv[2],
+    'GPU1_OLLAMA_NUM_PARALLEL': sys.argv[3],
+}
+for key, value in changes.items():
+    replacement = f'{key}={value}'
+    text, count = re.subn(rf'^{key}=.*$', replacement, text, flags=re.MULTILINE)
+    if not count:
+        text = text.rstrip('\n') + '\n' + replacement + '\n'
+tmp = path.with_suffix('.env.tmp')
+tmp.write_text(text)
+os.chmod(tmp, stat.S_IMODE(path.stat().st_mode))
+os.replace(tmp, path)
+PY
+
+"${compose[@]}" up -d --no-build --no-deps llamafarm-gpu1
+for _ in $(seq 1 90); do
+  if docker exec LlamaFarm-GPU1 curl -fsS --max-time 2 http://127.0.0.1:42617/health >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+docker exec LlamaFarm-GPU1 curl -fsS --max-time 5 http://127.0.0.1:42617/health >/dev/null
+
+python3 - "$model" "$context" "$quant" <<'PY'
+import json, sys, urllib.request
+
+model, context, quant = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+url = 'http://127.0.0.1:11436'
+payload = {'model': model, 'prompt': 'Say OK.', 'stream': False,
+           'think': False, 'options': {'num_ctx': context, 'num_predict': 8},
+           'keep_alive': '24h'}
+request = urllib.request.Request(url + '/api/generate',
+    data=json.dumps(payload).encode(), headers={'Content-Type': 'application/json'})
+with urllib.request.urlopen(request, timeout=240) as response:
+    json.load(response)
+with urllib.request.urlopen(url + '/api/ps', timeout=10) as response:
+    models = json.load(response)['models']
+match = next((item for item in models if item['name'] == model), None)
+if not match or match['size_vram'] != match['size'] or match['context_length'] != context:
+    raise SystemExit(f'Not fully GPU-resident with requested context: {match}')
+if match['details']['quantization_level'] != quant:
+    raise SystemExit(f'Wrong weight quantization: {match["details"]}')
+print(json.dumps({'profile_model': model, 'context': context,
+                  'quantization': quant, 'size_vram': match['size_vram'],
+                  'size': match['size']}))
+PY
+
+docker inspect LlamaFarm-GPU1 --format '{{json .HostConfig.DeviceRequests}}' | python3 -c 'import json,sys; x=json.load(sys.stdin); assert len(x)==1 and x[0]["DeviceIDs"]==["1"],x'
+test "$(docker exec LlamaFarm-GPU1 sh -lc 'printenv OLLAMA_NUM_PARALLEL')" = "$parallel"
+test "$(docker exec LlamaFarm-GPU1 sh -lc 'printenv LLAMAFARM_ADAPTIVE_CONTEXT_MAX')" = "$context"
+trap - ERR
+echo "GPU1 profile=$profile model=$model context=$context parallel=$parallel fully_gpu_resident=true"

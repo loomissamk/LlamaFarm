@@ -7,7 +7,7 @@ set -uo pipefail
 
 KILO_CONF="$HOME/.config/kilo/kilo.jsonc"
 HOST="100.107.226.49"
-PORT=11434
+PORT=11436
 ROWS=()
 REPAIRS=()
 row() { ROWS+=("$1|$2|$3"); }
@@ -16,46 +16,60 @@ repair() { REPAIRS+=("$1"); }
 CANONICAL=$(cat <<'JSON'
 {
   "$schema": "https://app.kilo.ai/config.json",
-  "enabled_providers": ["ollamav100"],
-  "model": "ollamav100/qwen3.8-unqwen:27b-256k",
-  "small_model": "ollamav100/qwen3.5-rana:9b-256k",
+  "enabled_providers": [
+    "ollamav100gpu1"
+  ],
+  "model": "ollamav100gpu1/qwen3.8-unqwen:27b-q8-64k",
+  "small_model": "ollamav100gpu1/qwen3.8-unqwen:27b-q8-64k",
   "provider": {
-    "ollamav100": {
+    "ollamav100gpu1": {
       "npm": "@ai-sdk/openai-compatible",
       "options": {
-        "baseURL": "http://100.107.226.49:11434/v1",
+        "baseURL": "http://100.107.226.49:11436/v1",
         "apiKey": "none",
         "includeUsage": true,
         "timeout": false
       },
       "models": {
-        "qwen3.8-unqwen:27b-256k": {
-          "name": "UnQwen 3.8 27B | 256K | V100 direct Ollama",
+        "qwen3.8-unqwen:27b-q8-64k": {
+          "name": "UnQwen 27B Q8 | 64K | GPU1",
           "tool_call": true,
-          "limit": { "context": 262144, "output": 131072 }
-        },
-        "qwen3.5-rana:9b-256k": {
-          "name": "Rana 3.5 9B | 256K | V100 direct Ollama",
-          "tool_call": true,
-          "limit": { "context": 262144, "output": 131072 }
+          "limit": {
+            "context": 65536,
+            "output": 8192
+          }
         }
       }
     }
   },
   "agent": {
-    "code": { "model": "ollamav100/qwen3.8-unqwen:27b-256k", "temperature": 0.2 },
-    "plan": { "model": "ollamav100/qwen3.8-unqwen:27b-256k", "temperature": 0.2 },
-    "debug": { "model": "ollamav100/qwen3.8-unqwen:27b-256k", "temperature": 0.2 },
+    "code": {
+      "model": "ollamav100gpu1/qwen3.8-unqwen:27b-q8-64k",
+      "temperature": 0.2
+    },
+    "plan": {
+      "model": "ollamav100gpu1/qwen3.8-unqwen:27b-q8-64k",
+      "temperature": 0.2
+    },
+    "debug": {
+      "model": "ollamav100gpu1/qwen3.8-unqwen:27b-q8-64k",
+      "temperature": 0.2
+    },
     "review": {
       "description": "Read-only code reviewer for independent worktrees",
       "mode": "all",
-      "model": "ollamav100/qwen3.8-unqwen:27b-256k",
+      "model": "ollamav100gpu1/qwen3.8-unqwen:27b-q8-64k",
       "temperature": 0.1,
       "prompt": "Review changes using repository files and diffs. Report findings with file paths and evidence. Do not edit files or run commands.",
-      "permission": { "edit": "deny", "bash": "deny" }
+      "permission": {
+        "edit": "deny",
+        "bash": "deny"
+      }
     }
   },
-  "permission": { "*": "allow" },
+  "permission": {
+    "*": "allow"
+  },
   "reasoning_display": "preview",
   "terminal_command_display": "collapsed",
   "code_edit_display": "collapsed",
@@ -68,8 +82,8 @@ JSON
 # --- config file exists and matches canonical shape ---------------------
 if [ -f "$KILO_CONF" ]; then
   row "kilo.jsonc exists" "OK" "$KILO_CONF"
-  if grep -q '"baseURL": "http://100.107.226.49:11434/v1"' "$KILO_CONF" 2>/dev/null; then
-    row "Provider baseURL" "OK" "direct Ollama, port 11434"
+  if grep -q '"baseURL": "http://100.107.226.49:11436/v1"' "$KILO_CONF" 2>/dev/null; then
+    row "Provider baseURL" "OK" "GPU1 Ollama, port 11436"
   elif grep -q '42617' "$KILO_CONF" 2>/dev/null; then
     row "Provider baseURL" "FAIL" "still pointed at LlamaFarm gateway (42617)"
     cp "$KILO_CONF" "${KILO_CONF}.before-moab-autofix-$(date +%Y%m%d-%H%M%S)"

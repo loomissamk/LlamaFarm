@@ -1,0 +1,31 @@
+{
+  "concurrency": 1,
+  "wall_s": 17.26422083300713,
+  "results": [
+    {
+      "task": 401,
+      "ok": true,
+      "latency_s": 17.26028370799031,
+      "prompt_tokens": 11809,
+      "output_tokens": 62,
+      "prompt_eval_s": 14.576089,
+      "generation_s": 2.453974,
+      "total_s": 17.181158008,
+      "tool_calls": 1
+    }
+  ],
+  "completed_tasks_per_min": 3.475395766792276,
+  "output_tokens_per_s": 3.5912422923520184,
+  "prompt_tokens_per_s": 684.0158101674998,
+  "gpu0_max_mib": 27014,
+  "gpu1_max_mib": 30410,
+  "gpu0_max_util": 99,
+  "gpu1_max_util": 100,
+  "loaded": [
+    {
+      "name": "qwen3.8-unqwen:27b-q8-64k",
+      "size_vram": 30377540320,
+      "context_length": 65536
+    }
+  ]
+}

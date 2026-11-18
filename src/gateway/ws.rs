@@ -2835,7 +2835,15 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             let approval_manager = ApprovalManager::from_config(&config.autonomy);
             let max_history_messages = config.agent.max_history_messages;
 
-            let direct_intent = classify_direct_intent(&content);
+            // FULL_TOOL_REGISTRY_FIX:
+            // In explicit full-tool mode, keep the complete tool registry.
+            let direct_intent = if config.agent.tool_routing_enabled
+                && config.agent.tool_routing_top_k > 0
+            {
+                classify_direct_intent(&content)
+            } else {
+                None
+            };
             let forced_file_write = matches!(
                 direct_intent.as_ref(),
                 Some(DirectIntent::ForceTool(DirectForcedToolIntent::FileWrite(_)))

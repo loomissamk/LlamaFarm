@@ -1,0 +1,94 @@
+# Pair one GPU-bound LlamaFarm bundle per V100. The primary publishes the
+# existing gateway and app ports from docker-compose.bundle.yml. The worker
+# publishes only its Ollama port for the Mac's Kilo client; its gateway stays
+# private on the Compose network for federation.
+services:
+  llamafarm:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    environment:
+      - OLLAMA_MODELS=/llamafarm-data/.ollama/models
+      - OLLAMA_NUM_PARALLEL=1
+      - OLLAMA_MAX_LOADED_MODELS=1
+      - OLLAMA_MAX_QUEUE=32
+      - OLLAMA_CONTEXT_LENGTH=262144
+      - OLLAMA_NUM_CTX=262144
+      - OLLAMA_KEEP_ALIVE=24h
+      - LLAMAFARM_REASONING_ENABLED=false
+      - LLAMAFARM_OLLAMA_GPU_DEVICES=GPU-80940ec0-6838-c4da-f698-68a121ce5024
+      - LLAMAFARM_FEDERATION_ENABLED=true
+      - LLAMAFARM_DISCOVERY_MODE=manual
+      - LLAMAFARM_NODE_NAME=llamafarm-gpu0
+      - LLAMAFARM_DEFAULT_ROLE=both
+      - LLAMAFARM_MANUAL_PEERS=http://llamafarm-gpu1:42617
+      - LLAMAFARM_ALLOW_REMOTE_SUBAGENTS=true
+
+  llamafarm-gpu1:
+    image: llamafarm-local:bundle
+    container_name: LlamaFarm-GPU1
+    restart: unless-stopped
+    init: true
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["1"]
+              capabilities: [gpu]
+    environment:
+      - OLLAMA_MODELS=/shared-models/.ollama/models
+      - OLLAMA_HOST=0.0.0.0:11434
+      - OLLAMA_NUM_PARALLEL=${GPU1_OLLAMA_NUM_PARALLEL:-1}
+      - OLLAMA_MAX_LOADED_MODELS=1
+      - OLLAMA_MAX_QUEUE=32
+      - OLLAMA_CONTEXT_LENGTH=${GPU1_CONTEXT:-65536}
+      - OLLAMA_NUM_CTX=${GPU1_CONTEXT:-65536}
+      - LLAMAFARM_ADAPTIVE_CONTEXT=true
+      - LLAMAFARM_ADAPTIVE_CONTEXT_MAX=${GPU1_CONTEXT:-65536}
+      - OLLAMA_KV_CACHE_TYPE=q8_0
+      - OLLAMA_FLASH_ATTENTION=1
+      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_PULL_MODELS=
+      - LLAMAFARM_REASONING_ENABLED=false
+      - LLAMAFARM_MODEL=${GPU1_MODEL:-qwen3.8-unqwen:27b-q8-64k}
+      - LLAMAFARM_INITIAL_MODEL=${GPU1_MODEL:-qwen3.8-unqwen:27b-q8-64k}
+      - LLAMAFARM_GATEWAY_HOST=0.0.0.0
+      - LLAMAFARM_GATEWAY_PORT=42617
+      - LLAMAFARM_API_PORT=42617
+      - LLAMAFARM_ALLOW_PUBLIC_BIND=true
+      - LLAMAFARM_FEDERATION_ENABLED=true
+      - LLAMAFARM_DISCOVERY_MODE=manual
+      - LLAMAFARM_NODE_NAME=llamafarm-gpu1
+      - LLAMAFARM_DEFAULT_ROLE=worker
+      - LLAMAFARM_MANUAL_PEERS=http://llamafarm:42617
+      - LLAMAFARM_ALLOW_REMOTE_SUBAGENTS=true
+      - LLAMAFARM_STOCK_APP_ENABLED=false
+      - LLAMAFARM_HOST_DOCKER=false
+      - LLAMAFARM_OLLAMA_GPU_DEVICES=GPU-4dda4033-eb45-c5a7-fe70-16979f13147c
+    volumes:
+      - llamafarm-gpu1-data:/llamafarm-data
+      - llamafarm-bundle-data:/shared-models
+      - /home/bat:/home/bat
+      - /srv:/srv
+      - /mnt:/mnt
+      - /media:/media
+    ports:
+      - "127.0.0.1:11436:11434"
+    networks:
+      default:
+        aliases: [llamafarm-gpu1]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:42617/health >/dev/null && curl -fsS http://127.0.0.1:11434/api/tags >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
+
+volumes:
+  llamafarm-gpu1-data:

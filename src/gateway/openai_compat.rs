@@ -84,6 +84,11 @@ where
     #[derive(Deserialize)]
     #[serde(untagged)]
     enum ContentValue {
+        // Matches an explicit `"content": null`, sent by clients for an
+        // assistant message that only carries tool_calls. #[serde(default)]
+        // on the containing field only covers a MISSING key, not an
+        // explicit null value, so this variant is required.
+        Null,
         Text(String),
         Parts(Vec<ContentPart>),
     }
@@ -94,6 +99,7 @@ where
     }
 
     match ContentValue::deserialize(deserializer)? {
+        ContentValue::Null => Ok(String::new()),
         ContentValue::Text(text) => Ok(text),
         ContentValue::Parts(parts) => Ok(parts
             .into_iter()

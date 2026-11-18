@@ -23,6 +23,8 @@ WORKDIR /app
 ARG LLAMAFARM_CARGO_FEATURES=""
 ARG LLAMAFARM_BUILD_COMMIT=""
 ARG LLAMAFARM_BUILD_TIME=""
+ARG LLAMAFARM_CARGO_JOBS=4
+ENV CARGO_BUILD_JOBS=${LLAMAFARM_CARGO_JOBS}
 
 # Install build dependencies
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \

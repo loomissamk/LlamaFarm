@@ -23,7 +23,10 @@ use crate::channels::{
 };
 use crate::config::Config;
 use crate::cost::CostTracker;
-use crate::federation::remote_subagent::{FederationRemoteSubagentAdapter, FederationTaskManager};
+use crate::federation::remote_subagent::{
+    with_chat_context, FederationChatContext, FederationRemoteSubagentAdapter,
+    FederationTaskManager,
+};
 use crate::memory::{self, Memory, MemoryCategory};
 use crate::providers::{self, ChatMessage, Provider};
 use crate::runtime;
@@ -1168,7 +1171,8 @@ async fn run_gateway_chat_simple(state: &AppState, message: &str) -> anyhow::Res
 /// Full-featured chat with tools for channel handlers (WhatsApp, Linq, Nextcloud Talk).
 async fn run_gateway_chat_with_tools(state: &AppState, message: &str) -> anyhow::Result<String> {
     let config = state.config.lock().clone();
-    crate::agent::process_message(config, message).await
+    let federation = state.federation.as_ref().map(|service| service.remote_adapter());
+    crate::agent::loop_::process_message_with_federation(config, message, federation).await
 }
 
 fn sanitize_gateway_response(response: &str, tools: &[Box<dyn Tool>]) -> String {
@@ -1483,9 +1487,35 @@ async fn handle_agent(
             messages_count: 1,
         });
 
-    let result = crate::agent::run_ledger::RUN_LEDGER
-        .scope(Some(ledger.clone()), run_gateway_chat_with_tools(&state, message))
-        .await;
+    // REST /agent has no chat tab in which to select federation peers. Make
+    // online worker-eligible peers available to the delegate tool for this
+    // turn; the model still decides whether a useful task merits delegation.
+    let federation_context = state.federation.as_ref().map(|service| {
+        let selected_peer_ids = service
+            .peers_response()
+            .peers
+            .into_iter()
+            .filter(|peer| {
+                peer.online
+                    && peer.assigned_role.allows_worker()
+                    && peer.role_support.allows_worker()
+                    && peer.allow_remote_subagents
+            })
+            .map(|peer| peer.peer_id)
+            .collect();
+        FederationChatContext {
+            session_id: run_id.clone(),
+            selected_peer_ids,
+            event_tx: None,
+            cancellation: None,
+        }
+    });
+    let result = with_chat_context(
+        federation_context,
+        crate::agent::run_ledger::RUN_LEDGER
+            .scope(Some(ledger.clone()), run_gateway_chat_with_tools(&state, message)),
+    )
+    .await;
     let response = match result {
         Ok(response) => {
             let status = if !crate::agent::loop_::is_planning_only_request(message)

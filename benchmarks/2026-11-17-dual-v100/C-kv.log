@@ -1,0 +1,2 @@
+load_tensors: offloaded 33/33 layers to GPU
+llama_kv_cache:      CUDA0 KV buffer size =  1632.00 MiB

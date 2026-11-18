@@ -1,0 +1,17 @@
+{
+  "profile": "UnQwen 27B Q4 256K",
+  "parallel_requests": 2,
+  "context_per_request": 262144,
+  "responses": [
+    "1",
+    "2"
+  ],
+  "latency_seconds_each": 10.12,
+  "size_bytes": 39379040987,
+  "size_vram_bytes": 31968544684,
+  "cpu_spill_bytes": 7410496303,
+  "fully_gpu_resident": false,
+  "restored_parallel_requests": 1,
+  "restored_model_size_bytes": 26816607681,
+  "restored_size_vram_bytes": 26816607681
+}
